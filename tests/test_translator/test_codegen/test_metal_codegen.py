@@ -24364,6 +24364,83 @@ def test_metal_storage_image_local_aliases_preserve_access_for_validation(
         MetalCodeGen().generate(ast)
 
 
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            let alias = target;
+            float value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "requires read-capable storage image access for alias: got access::write",
+        ),
+        (
+            """
+            let alias = source;
+            imageStore(alias, ivec2(0, 0), vec4(1.0));
+            """,
+            "requires write-capable storage image access for alias: got access::read",
+        ),
+        (
+            """
+            let alias = readCounter;
+            uint value = imageAtomicAdd(alias, ivec2(0, 0), 1u);
+            """,
+            "requires read_write storage image access for alias: got access::read",
+        ),
+    ],
+)
+def test_metal_storage_image_inferred_local_aliases_preserve_access_for_validation(
+    statement, match
+):
+    shader = f"""
+    shader StorageImageInferredLocalAliasAccess {{
+        image2D source @readonly;
+        image2D target @writeonly;
+        uimage2D readCounter @r32ui @readonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_storage_image_inferred_local_aliases_preserve_access_for_lowering():
+    shader = """
+    shader StorageImageInferredLocalAliasLowering {
+        image2D source @rgba32f @readonly;
+        image2D target @rgba32f @writeonly;
+
+        compute {
+            void main() {
+                let readAlias = source;
+                vec4 value = imageLoad(readAlias, ivec2(0, 0));
+                let writeAlias = target;
+                imageStore(writeAlias, ivec2(0, 0), value);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture2d<float, access::read> readAlias = source;" in generated_code
+    assert "float4 value = readAlias.read(uint2(int2(0, 0)));" in generated_code
+    assert "texture2d<float, access::write> writeAlias = target;" in generated_code
+    assert "writeAlias.write(value, uint2(int2(0, 0)));" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_metal_storage_image_access_allows_compatible_helper_calls():
     shader = """
     shader StorageImageAccessHelperValid {

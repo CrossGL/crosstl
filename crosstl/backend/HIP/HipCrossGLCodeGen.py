@@ -172,7 +172,9 @@ class HipToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.variable_type_scopes = [{}]
         self.device_property_source_scopes = [{}]
+        self.device_attribute_source_scopes = [{}]
         self.suppress_device_property_member_access = 0
+        self.suppress_device_attribute_value_access = 0
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -188,7 +190,9 @@ class HipToCrossGLConverter:
         self.resource_object_hint_scopes = []
         self.variable_type_scopes = [{}]
         self.device_property_source_scopes = [{}]
+        self.device_attribute_source_scopes = [{}]
         self.suppress_device_property_member_access = 0
+        self.suppress_device_attribute_value_access = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -201,6 +205,9 @@ class HipToCrossGLConverter:
     def generic_visit(self, node):
         """Fallback converter for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
+            attribute_expression = self.format_hip_device_attribute_read(node)
+            if attribute_expression is not None:
+                return attribute_expression
             return node
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
@@ -433,12 +440,15 @@ class HipToCrossGLConverter:
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
         self.device_property_source_scopes.append({})
+        self.device_attribute_source_scopes.append({})
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
         if len(self.device_property_source_scopes) > 1:
             self.device_property_source_scopes.pop()
+        if len(self.device_attribute_source_scopes) > 1:
+            self.device_attribute_source_scopes.pop()
 
     def register_variable_type(self, name, type_name):
         if not name or not type_name:
@@ -446,6 +456,8 @@ class HipToCrossGLConverter:
         if not self.variable_type_scopes:
             self.variable_type_scopes.append({})
         self.variable_type_scopes[-1][name] = type_name
+        self.clear_device_property_source(name)
+        self.clear_device_attribute_source(name)
 
     def lookup_variable_type(self, name):
         for scope in reversed(self.variable_type_scopes):
@@ -460,18 +472,51 @@ class HipToCrossGLConverter:
             self.device_property_source_scopes.append({})
         self.device_property_source_scopes[-1][name] = device_id
 
+    def clear_device_property_source(self, name):
+        if not name:
+            return
+        if not self.device_property_source_scopes:
+            self.device_property_source_scopes.append({})
+        self.device_property_source_scopes[-1][name] = None
+
     def lookup_device_property_source(self, name):
         for scope in reversed(self.device_property_source_scopes):
             if name in scope:
                 return scope[name]
         return None
 
+    def register_device_attribute_source(self, name, attribute_name, device_id):
+        if not name or attribute_name is None or device_id is None:
+            return
+        if not self.device_attribute_source_scopes:
+            self.device_attribute_source_scopes.append({})
+        self.device_attribute_source_scopes[-1][name] = (attribute_name, device_id)
+
+    def clear_device_attribute_source(self, name):
+        if not name:
+            return
+        if not self.device_attribute_source_scopes:
+            self.device_attribute_source_scopes.append({})
+        self.device_attribute_source_scopes[-1][name] = None
+
+    def lookup_device_attribute_source(self, name):
+        for scope in reversed(self.device_attribute_source_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def clear_device_metadata_source(self, name):
+        self.clear_device_property_source(name)
+        self.clear_device_attribute_source(name)
+
     def visit_lvalue_expression(self, node):
         self.suppress_device_property_member_access += 1
+        self.suppress_device_attribute_value_access += 1
         try:
             return self.visit(node)
         finally:
             self.suppress_device_property_member_access -= 1
+            self.suppress_device_attribute_value_access -= 1
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -1537,6 +1582,9 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceGetAttribute":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_attribute_source(output_name, args[1], args[2])
                 return [
                     f"// HIP get device attribute: output: {output}, "
                     f"attribute: {args[1]}, device: {args[2]}"
@@ -3150,9 +3198,11 @@ class HipToCrossGLConverter:
                 return f"var {stmt.name}: {var_type} = {value}"
             return f"var {stmt.name}: {var_type}"
         if isinstance(stmt, AssignmentNode):
-            left = self.visit(stmt.left)
+            left_name = self.get_runtime_pointer_target_name(stmt.left)
+            left = self.visit_lvalue_expression(stmt.left)
             right = self.visit(stmt.right)
             operator = getattr(stmt, "operator", "=")
+            self.clear_device_metadata_source(left_name)
             return f"{left} {operator} {right}"
 
         result = self.visit(stmt)
@@ -3599,6 +3649,7 @@ class HipToCrossGLConverter:
         return self.visit(arg)
 
     def visit_AssignmentNode(self, node):
+        left_name = self.get_runtime_pointer_target_name(node.left)
         left = self.visit_lvalue_expression(node.left)
         operator = getattr(node, "operator", "=")
         runtime_status = (
@@ -3610,10 +3661,12 @@ class HipToCrossGLConverter:
             comments, value = runtime_status
             for comment in comments:
                 self.emit(comment)
+            self.clear_device_metadata_source(left_name)
             self.emit(f"{left} = {value};")
             return
 
         right = self.visit(node.right)
+        self.clear_device_metadata_source(left_name)
         return f"{left} {operator} {right}"
 
     def visit_BinaryOpNode(self, node):
@@ -3622,10 +3675,17 @@ class HipToCrossGLConverter:
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        if node.op == "&" or (isinstance(node.op, str) and node.op.endswith("_POST")):
+        mutates_operand = node.op in {"++", "--"} or (
+            isinstance(node.op, str) and node.op.endswith("_POST")
+        )
+        if node.op == "&" or mutates_operand:
+            operand_name = self.get_runtime_pointer_target_name(node.operand)
             operand = self.visit_lvalue_expression(node.operand)
         else:
+            operand_name = None
             operand = self.visit(node.operand)
+        if mutates_operand:
+            self.clear_device_metadata_source(operand_name)
         if isinstance(node.op, str) and node.op.endswith("_POST"):
             return f"({operand}{node.op[:-5]})"
         elif hasattr(node, "postfix") and node.postfix:
@@ -4235,6 +4295,19 @@ class HipToCrossGLConverter:
         if is_pointer_access:
             return object_type == "ptr<hipDeviceProp_t>"
         return object_type == "hipDeviceProp_t"
+
+    def format_hip_device_attribute_read(self, name):
+        if self.suppress_device_attribute_value_access != 0:
+            return None
+
+        source = self.lookup_device_attribute_source(name)
+        if source is None:
+            return None
+
+        attribute_name, device_id = source
+        return (
+            f"(/* HIP device attribute: {attribute_name}, " f"device: {device_id} */ 0)"
+        )
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)

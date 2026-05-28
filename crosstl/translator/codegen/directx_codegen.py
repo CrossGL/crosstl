@@ -3676,6 +3676,16 @@ class HLSLCodeGen:
                 f"scalar int or uint, got {mapped_type}"
             )
 
+    def validate_hlsl_quad_lane_index_range(self, operation, argument):
+        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        if lane_index is None:
+            return
+        if not 0 <= lane_index <= 3:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' quad lane index must be "
+                f"in the range 0 to 3, got {lane_index}"
+            )
+
     def validate_hlsl_wave_uint4_argument(self, operation, argument, role):
         base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
             argument
@@ -3730,6 +3740,7 @@ class HLSLCodeGen:
             self.validate_hlsl_wave_scalar_int_uint_argument(
                 operation, args[1], "quad lane index"
             )
+            self.validate_hlsl_quad_lane_index_range(operation, args[1])
 
         if operation.startswith("WaveMultiPrefix"):
             self.validate_hlsl_wave_uint4_argument(operation, args[1], "partition mask")

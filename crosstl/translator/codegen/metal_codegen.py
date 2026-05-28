@@ -3120,16 +3120,22 @@ class MetalCodeGen:
         return self.type_name_string(var_type) or "float"
 
     def local_variable_texture_alias_resource_type(self, node, declared_type):
-        declared_type_name = self.type_name_string(declared_type)
-        if not self.is_texture_or_image_resource_type(declared_type_name):
-            return None
-
         initial_value = getattr(node, "initial_value", None)
         if initial_value is None:
             return None
 
         initial_type = self.texture_argument_resource_type(initial_value)
         if initial_type is None or not self.is_storage_image_resource(initial_type):
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if not self.is_texture_or_image_resource_type(declared_type_name):
+            if (
+                self.local_variable_type_node(node) is None
+                and explicit_image_access(node, self.attribute_value_to_string) is None
+                and explicit_image_format(node, self.attribute_value_to_string) is None
+            ):
+                return initial_type
             return None
 
         if (

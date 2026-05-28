@@ -9652,6 +9652,21 @@ def test_directx_wave_intrinsics_validate_argument_types():
     ):
         generate_code(parse_code(tokenize_code(bad_lane_index_code)))
 
+    bad_quad_lane_index_code = """
+    shader BadQuadLaneIndexRange {
+        compute {
+            uint main(uint value) {
+                return QuadReadLaneAt(value, 4u);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="QuadReadLaneAt.*quad lane index.*0.*3",
+    ):
+        generate_code(parse_code(tokenize_code(bad_quad_lane_index_code)))
+
     bad_multi_prefix_mask_code = """
     shader BadWaveMultiPrefixMask {
         compute {
@@ -9704,9 +9719,10 @@ def test_directx_wave_intrinsics_validate_argument_types():
                 uint count = WaveActiveCountBits(predicate);
                 uint prefix = WavePrefixCountBits(true);
                 uint laneValue = WaveReadLaneAt(value, lane);
+                uint quadValue = QuadReadLaneAt(value, 3u);
                 uint multi = WaveMultiPrefixSum(value, mask);
                 uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
-                return count + prefix + laneValue + multi + multiCount;
+                return count + prefix + laneValue + quadValue + multi + multiCount;
             }
         }
     }
@@ -9716,6 +9732,7 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WaveActiveCountBits(predicate)" in generated
     assert "WavePrefixCountBits(true)" in generated
     assert "WaveReadLaneAt(value, lane)" in generated
+    assert "QuadReadLaneAt(value, 3u)" in generated
     assert "WaveMultiPrefixSum(value, mask)" in generated
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 

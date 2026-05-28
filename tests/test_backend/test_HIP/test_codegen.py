@@ -5351,6 +5351,58 @@ class TestHipCodeGen:
         assert "var warp: i32 = props.warpSize;" not in result
         assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
 
+    def test_hip_device_attribute_reads_emit_metadata_expressions(self):
+        """Test hipDeviceGetAttribute output reads lower to explicit metadata."""
+        code = """
+        void host(int device, int* out) {
+            int attr = 0;
+            int other = 0;
+            hipDeviceGetAttribute(
+                &attr, hipDeviceAttributeMaxThreadsPerBlock, device
+            );
+            int maxThreads = attr;
+            out[0] = attr;
+            attr = 7;
+            int manual = attr;
+            hipDeviceGetAttribute(
+                &other, hipDeviceAttributeWarpSize, device + 1
+            );
+            other++;
+            int cleared = other;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get device attribute: output: attr, "
+            "attribute: hipDeviceAttributeMaxThreadsPerBlock, device: device"
+        ) in result
+        assert (
+            "var maxThreads: i32 = (/* HIP device attribute: "
+            "hipDeviceAttributeMaxThreadsPerBlock, device: device */ 0);"
+        ) in result
+        assert (
+            "out[0] = (/* HIP device attribute: "
+            "hipDeviceAttributeMaxThreadsPerBlock, device: device */ 0);"
+        ) in result
+        assert "attr = 7;" in result
+        assert "var manual: i32 = attr;" in result
+        assert (
+            "// HIP get device attribute: output: other, "
+            "attribute: hipDeviceAttributeWarpSize, device: (device + 1)"
+        ) in result
+        assert "(other++);" in result
+        assert "var cleared: i32 = other;" in result
+        assert "var maxThreads: i32 = attr;" not in result
+        assert "out[0] = attr;" not in result
+        assert "var manual: i32 = (/* HIP device attribute:" not in result
+        assert "var cleared: i32 = (/* HIP device attribute:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
