@@ -32,6 +32,7 @@ from .HipAst import (
     TernaryOpNode,
     TypeAliasNode,
     HipBuiltinNode,
+    HipDevicePropertyNode,
 )
 
 
@@ -170,6 +171,8 @@ class HipToCrossGLConverter:
         self.global_resource_object_type_hints = {}
         self.resource_object_hint_scopes = []
         self.variable_type_scopes = [{}]
+        self.device_property_source_scopes = [{}]
+        self.suppress_device_property_member_access = 0
 
     def generate(self, ast_node):
         """Generate complete CrossGL source from a parsed HIP AST."""
@@ -184,6 +187,8 @@ class HipToCrossGLConverter:
         )
         self.resource_object_hint_scopes = []
         self.variable_type_scopes = [{}]
+        self.device_property_source_scopes = [{}]
+        self.suppress_device_property_member_access = 0
         self.visit(ast_node)
         return "\n".join(self.output)
 
@@ -427,10 +432,13 @@ class HipToCrossGLConverter:
 
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
+        self.device_property_source_scopes.append({})
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+        if len(self.device_property_source_scopes) > 1:
+            self.device_property_source_scopes.pop()
 
     def register_variable_type(self, name, type_name):
         if not name or not type_name:
@@ -444,6 +452,26 @@ class HipToCrossGLConverter:
             if name in scope:
                 return scope[name]
         return None
+
+    def register_device_property_source(self, name, device_id):
+        if not name or device_id is None:
+            return
+        if not self.device_property_source_scopes:
+            self.device_property_source_scopes.append({})
+        self.device_property_source_scopes[-1][name] = device_id
+
+    def lookup_device_property_source(self, name):
+        for scope in reversed(self.device_property_source_scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def visit_lvalue_expression(self, node):
+        self.suppress_device_property_member_access += 1
+        try:
+            return self.visit(node)
+        finally:
+            self.suppress_device_property_member_access -= 1
 
     def emit_statement(self, stmt):
         """Render and append one converted statement."""
@@ -1502,6 +1530,9 @@ class HipToCrossGLConverter:
         elif name == "hipGetDeviceProperties":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_property_source(output_name, args[1])
                 return [f"// HIP get device properties: {output}, device: {args[1]}"]
         elif name == "hipDeviceGetAttribute":
             if len(args) >= 3:
@@ -3092,8 +3123,17 @@ class HipToCrossGLConverter:
         if isinstance(arg, CastNode):
             return self.format_runtime_pointer_target(arg.expression)
         if isinstance(arg, UnaryOpNode) and arg.op == "&":
-            return self.visit(arg.operand)
+            return self.visit_lvalue_expression(arg.operand)
         return self.visit(arg)
+
+    def get_runtime_pointer_target_name(self, arg):
+        if isinstance(arg, CastNode):
+            return self.get_runtime_pointer_target_name(arg.expression)
+        if isinstance(arg, UnaryOpNode) and arg.op == "&":
+            return self.get_runtime_pointer_target_name(arg.operand)
+        if isinstance(arg, str):
+            return arg
+        return None
 
     def format_statement_fragment(self, stmt):
         if stmt is None:
@@ -3559,7 +3599,7 @@ class HipToCrossGLConverter:
         return self.visit(arg)
 
     def visit_AssignmentNode(self, node):
-        left = self.visit(node.left)
+        left = self.visit_lvalue_expression(node.left)
         operator = getattr(node, "operator", "=")
         runtime_status = (
             self.format_hip_runtime_status_expression(node.right)
@@ -3582,7 +3622,10 @@ class HipToCrossGLConverter:
         return f"({left} {node.op} {right})"
 
     def visit_UnaryOpNode(self, node):
-        operand = self.visit(node.operand)
+        if node.op == "&" or (isinstance(node.op, str) and node.op.endswith("_POST")):
+            operand = self.visit_lvalue_expression(node.operand)
+        else:
+            operand = self.visit(node.operand)
         if isinstance(node.op, str) and node.op.endswith("_POST"):
             return f"({operand}{node.op[:-5]})"
         elif hasattr(node, "postfix") and node.postfix:
@@ -4162,9 +4205,36 @@ class HipToCrossGLConverter:
         self.emit(f"typedef {alias_type} {node.name};")
 
     def visit_MemberAccessNode(self, node):
+        if self.suppress_device_property_member_access == 0:
+            property_expression = self.format_hip_device_property_member_read(node)
+            if property_expression is not None:
+                return property_expression
+
         obj = self.visit(node.object)
         operator = "->" if getattr(node, "is_pointer", False) else "."
         return f"{obj}{operator}{node.member}"
+
+    def format_hip_device_property_member_read(self, node):
+        if not isinstance(getattr(node, "object", None), str):
+            return None
+
+        object_name = node.object
+        object_type = self.lookup_variable_type(object_name)
+        if not self.is_hip_device_property_object_type(
+            object_type, getattr(node, "is_pointer", False)
+        ):
+            return None
+
+        return self.visit_HipDevicePropertyNode(
+            HipDevicePropertyNode(
+                node.member, self.lookup_device_property_source(object_name)
+            )
+        )
+
+    def is_hip_device_property_object_type(self, object_type, is_pointer_access):
+        if is_pointer_access:
+            return object_type == "ptr<hipDeviceProp_t>"
+        return object_type == "hipDeviceProp_t"
 
     def visit_ArrayAccessNode(self, node):
         array = self.visit(node.array)

@@ -119,6 +119,30 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_hip_device_property_member_names_can_match_builtin_tokens(self):
+        """Test HIP property names still parse after member-access operators."""
+        code = """
+        void host(hipDeviceProp_t* props_ptr) {
+            hipDeviceProp_t props;
+            int warp = props.warpSize;
+            int pointer_warp = props_ptr->warpSize;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        warp_value = body[1].value
+        pointer_warp_value = body[2].value
+
+        assert isinstance(warp_value, MemberAccessNode)
+        assert warp_value.object == "props"
+        assert warp_value.member == "warpSize"
+        assert not warp_value.is_pointer
+        assert isinstance(pointer_warp_value, MemberAccessNode)
+        assert pointer_warp_value.object == "props_ptr"
+        assert pointer_warp_value.member == "warpSize"
+        assert pointer_warp_value.is_pointer
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """

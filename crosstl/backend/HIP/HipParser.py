@@ -77,6 +77,7 @@ class HipParser:
         "HIPBLOCKDIM": "blockDim",
         "HIPGRIDDIM": "gridDim",
     }
+    MEMBER_NAME_TOKENS = {"IDENTIFIER", "WARPSIZE"}
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
         "__DEVICE__",
@@ -1397,11 +1398,11 @@ class HipParser:
                 expr = self.append_template_suffix(expr)
             elif self.match("DOT"):
                 self.consume("DOT")
-                member = self.consume("IDENTIFIER").value
+                member = self.parse_member_name()
                 expr = MemberAccessNode(expr, member, False)
             elif self.match("ARROW"):
                 self.consume("ARROW")
-                member = self.consume("IDENTIFIER").value
+                member = self.parse_member_name()
                 expr = MemberAccessNode(expr, member, True)
             elif self.match("LPAREN"):
                 self.consume("LPAREN")
@@ -1421,6 +1422,13 @@ class HipParser:
                 break
 
         return expr
+
+    def parse_member_name(self):
+        if self.match(*self.MEMBER_NAME_TOKENS):
+            member = self.current_token.value
+            self.advance()
+            return member
+        self.error("Expected member name")
 
     def is_sizeof_type_operand(self):
         saved_pos = self.pos

@@ -665,7 +665,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 383
+        "test_count": 385
       },
       "translator_codegen": {
         "exists": true,
@@ -893,7 +893,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 563
+        "test_count": 564
       },
       "translator_codegen": {
         "exists": true,

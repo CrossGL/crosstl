@@ -2005,7 +2005,9 @@ class RustCodeGen:
                 )
             ):
                 param_name = f"mut {param_name}"
-            params.append(f"{param_name}: {self.map_type(param_type)}")
+            params.append(
+                f"{param_name}: {self.map_function_parameter_type(param_type)}"
+            )
 
         params_str = ", ".join(params) if params else ""
 
@@ -2639,6 +2641,15 @@ class RustCodeGen:
             self.callable_type_uses_trait(bound, "FnMut")
             for bound in generic_constraints.get(param_name, [])
         )
+
+    def map_function_parameter_type(self, param_type):
+        rust_type = self.map_type(param_type)
+        if self.callable_signature_parts(rust_type) is None:
+            return rust_type
+
+        if rust_type.startswith(("impl ", "dyn ")):
+            return rust_type
+        return f"impl {rust_type}"
 
     def generate_param_attributes(self, param):
         """Generate Rust GPU parameter attributes based on semantic"""

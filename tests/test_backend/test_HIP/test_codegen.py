@@ -5315,6 +5315,42 @@ class TestHipCodeGen:
         assert "hipGetLastError(" not in result
         assert "hipPeekAtLastError(" not in result
 
+    def test_hip_device_property_member_reads_emit_metadata_expressions(self):
+        """Test hipDeviceProp_t member reads lower to explicit metadata."""
+        code = """
+        void host(int device, hipDeviceProp_t* propsPtr) {
+            hipDeviceProp_t props;
+            hipGetDeviceProperties(&props, device);
+            int sms = props.multiProcessorCount;
+            int warp = props.warpSize;
+            size_t total = propsPtr->totalGlobalMem;
+            props.multiProcessorCount = 7;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device properties: props, device: device" in result
+        assert (
+            "var sms: i32 = (/* HIP device property: multiProcessorCount, "
+            "device: device */ 0);"
+        ) in result
+        assert (
+            "var warp: i32 = (/* HIP device property: warpSize, "
+            "device: device */ 0);"
+        ) in result
+        assert (
+            "var total: u32 = (/* HIP device property: totalGlobalMem */ 0);"
+        ) in result
+        assert "props.multiProcessorCount = 7;" in result
+        assert "var sms: i32 = props.multiProcessorCount;" not in result
+        assert "var warp: i32 = props.warpSize;" not in result
+        assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

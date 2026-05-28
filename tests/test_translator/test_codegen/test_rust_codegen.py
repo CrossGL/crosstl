@@ -3602,6 +3602,111 @@ def test_reference_pointer_and_function_type_nodes_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "DirectCallableTraitParameters",
+        ExecutionModel.GENERAL_PURPOSE,
+        functions=[
+            FunctionNode(
+                "apply_read",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("Fn(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_mut",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("FnMut(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_once",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("FnOnce(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_generic_mut",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", GenericType("F")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode(
+                        "F",
+                        constraints=[NamedType("FnMut(i32) -> i32")],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_read(input: i32, op: impl Fn(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_mut(input: i32, mut op: impl FnMut(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_once(input: i32, op: impl FnOnce(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_generic_mut<F: FnMut(i32) -> i32>(input: i32, mut op: F)"
+        in generated_code
+    )
+    assert "op: Fn(i32) -> i32" not in generated_code
+    assert "op: FnMut(i32) -> i32" not in generated_code
+    assert "op: FnOnce(i32) -> i32" not in generated_code
+    assert "F: impl FnMut" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_non_copy_member_access_clones_in_value_contexts_and_compile(tmp_path):
     code = """
     shader NonCopyMemberAccess {
