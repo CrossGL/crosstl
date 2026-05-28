@@ -12,6 +12,11 @@ The matrix is intentionally data-driven:
   by `tools/support_matrix.py`.
 - `generated/graphics-backend-roadmap.json` is a focused generated view for the
   DirectX, OpenGL, and Metal roadmap.
+- `tools/support_signals.py` generates transient extraction reports from backend
+  docs, relevant same-site docs links, implementation files, and tests. CI uses
+  those signals to find stale support claims, discover documented API candidates
+  missing from the catalog, and enrich managed GitHub issues without
+  hand-written per-backend evidence files.
 - The generated JSON also records test counts and stable sampled unsupported
   markers from implementation paths for each backend.
 
@@ -28,11 +33,16 @@ python tools/support_matrix.py check
 python tools/support_matrix.py audit
 python tools/support_matrix.py audit --backend directx --backend opengl --backend metal
 python tools/support_matrix.py audit --backend directx --status partial --output /tmp/directx-partial.json
+python tools/support_signals.py docs --output support/generated/backend-docs-report.json
+python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
 ```
 
-The nightly CI job can also fetch official backend documentation URLs and report
-hash/status changes without making the generated matrix depend on fragile live
-scraping.
+The hourly issue-sync CI fetches official backend documentation URLs, crawls a
+bounded set of relevant same-site docs links, extracts API-like candidates, and
+cross-checks them against implementation/test identifiers. The checked-in matrix
+keeps reviewed support statuses conservative; generated support-signal issues
+track missing or uncataloged candidates so coverage gaps do not depend on manual
+lookup.
 
 Process rules:
 

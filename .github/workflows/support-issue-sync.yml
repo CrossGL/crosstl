@@ -15,8 +15,10 @@ on:
       - ".github/workflows/pr-issue-links.yml"
       - "support/**"
       - "tools/support_matrix.py"
+      - "tools/support_signals.py"
       - "tools/sync_support_issues.py"
       - "tools/sync_pr_issue_links.py"
+      - "tests/test_support_signals.py"
       - "tests/test_support_issue_sync.py"
       - "tests/test_pr_issue_links.py"
 
@@ -43,19 +45,35 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependency
-        run: python -m pip install pytest
+        run: python -m pip install pytest pypdf
 
       - name: Validate support matrix artifacts
         run: python tools/support_matrix.py check
 
+      - name: Probe backend documentation signals
+        if: github.event_name != 'pull_request'
+        run: python tools/support_signals.py docs --output support/generated/backend-docs-report.json
+
+      - name: Extract generated support signals
+        run: |
+          if [ -f support/generated/backend-docs-report.json ]; then
+            python tools/support_signals.py extract \
+              --docs-report support/generated/backend-docs-report.json \
+              --output support/generated/support-signals.json
+          else
+            python tools/support_signals.py extract \
+              --output support/generated/support-signals.json
+          fi
+
       - name: Test support automation planners
-        run: python -m pytest -q tests/test_support_issue_sync.py tests/test_pr_issue_links.py
+        run: python -m pytest -q tests/test_support_signals.py tests/test_support_issue_sync.py tests/test_pr_issue_links.py
 
       - name: Dry-run issue sync
         if: github.event_name == 'pull_request'
         run: >
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
+          --signals support/generated/support-signals.json
           --dry-run
 
       - name: Sync GitHub issues
@@ -65,3 +83,4 @@ jobs:
         run: >
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
+          --signals support/generated/support-signals.json

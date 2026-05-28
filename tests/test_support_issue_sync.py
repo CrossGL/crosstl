@@ -82,6 +82,97 @@ def sample_matrix():
     }
 
 
+def sample_signals():
+    return {
+        "features": [
+            {
+                "id": "target.codegen",
+                "support": {
+                    "directx": {
+                        "catalog_status": "supported",
+                        "catalog_evidence_count": 0,
+                        "state": "not_detected",
+                        "docs": [],
+                        "implementation": [],
+                        "tests": [],
+                        "unsupported": [],
+                    }
+                },
+            },
+            {
+                "id": "textures.gather",
+                "support": {
+                    "directx": {
+                        "catalog_status": "partial",
+                        "catalog_evidence_count": 1,
+                        "state": "tested",
+                        "docs": [],
+                        "implementation": [
+                            {
+                                "path": "crosstl/translator/codegen/directx_codegen.py",
+                                "matched_terms": ["gather"],
+                            }
+                        ],
+                        "tests": [
+                            {
+                                "path": "tests/example.py",
+                                "symbol": "test_gather",
+                                "matched_terms": ["gather"],
+                            }
+                        ],
+                        "unsupported": [],
+                    }
+                },
+            },
+        ],
+        "issues": [
+            {
+                "key": (
+                    "extracted:directx:target.codegen:supported_without_detected_tests"
+                ),
+                "kind": "supported_without_detected_tests",
+                "title": "Extractor did not find tests for supported row",
+                "backend_id": "directx",
+                "backend": "DirectX / HLSL",
+                "feature_id": "target.codegen",
+                "feature": "Code generation",
+                "category": "target",
+                "status": "supported",
+                "state": "not_detected",
+            },
+            {
+                "key": (
+                    "extracted:directx:docs.sv-position:documented_candidate_not_detected"
+                ),
+                "kind": "documented_candidate_not_detected",
+                "title": "Triage missing documented API candidate",
+                "backend_id": "directx",
+                "backend": "DirectX / HLSL",
+                "feature_id": "docs.sv-position",
+                "feature": "SV_Position",
+                "category": "docs",
+                "status": "untracked",
+                "state": "docs_only",
+                "signal": {
+                    "state": "docs_only",
+                    "catalog_evidence_count": 0,
+                    "docs": [
+                        {
+                            "source": "HLSL reference",
+                            "url": "https://example.com/hlsl",
+                            "term": "SV_Position",
+                            "count": 3,
+                        }
+                    ],
+                    "implementation": [],
+                    "tests": [],
+                    "unsupported": [],
+                },
+            },
+        ],
+    }
+
+
 class FakeClient:
     def __init__(self, existing=None, subissues=None):
         self.existing = list(existing or [])
@@ -170,6 +261,30 @@ def test_build_desired_issues_creates_backend_frontend_and_backlog_entries():
     assert module.LABEL_BACKLOG in child.labels
     assert "Cube gather is not audited." in child.body
     assert "`tests/example.py::def test_gather`" in child.body
+
+
+def test_build_desired_issues_includes_generated_support_signal_issues():
+    module = load_sync_module()
+
+    desired = module.build_desired_issues(sample_matrix(), sample_signals())
+
+    key = "extracted:directx:target.codegen:supported_without_detected_tests"
+    assert key in desired
+    assert desired[key].parent_key == "parent:directx"
+    assert module.LABEL_EXTRACTED in desired[key].labels
+    assert "Extractor did not find tests for supported row" in desired[key].body
+
+    candidate_key = (
+        "extracted:directx:docs.sv-position:documented_candidate_not_detected"
+    )
+    assert candidate_key in desired
+    assert desired[candidate_key].parent_key == "parent:directx"
+    assert "SV_Position" in desired[candidate_key].body
+    assert "count=3" in desired[candidate_key].body
+
+    child = desired["backlog:directx:textures.gather"]
+    assert "Extractor state: `tested`" in child.body
+    assert "test_gather" in child.body
 
 
 def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches():

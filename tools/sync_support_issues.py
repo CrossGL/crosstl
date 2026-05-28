@@ -25,6 +25,7 @@ from urllib import request
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
+DEFAULT_SIGNALS_PATH = ROOT / "support" / "generated" / "support-signals.json"
 
 API_VERSION = "2026-03-10"
 MARKER_NAME = "crossgl-support-issue-sync"
@@ -33,6 +34,7 @@ MARKER_RE = re.compile(r"<!--\s*{}:\s*([^>\s]+)\s*-->".format(MARKER_NAME))
 LABEL_MANAGED = "support:matrix"
 LABEL_PARENT = "support:parent"
 LABEL_BACKLOG = "support:backlog"
+LABEL_EXTRACTED = "support:extracted"
 LABEL_PREFIX_BACKEND = "support-backend:"
 LABEL_PREFIX_CATEGORY = "support-category:"
 LABEL_PREFIX_STATUS = "support-status:"
@@ -70,6 +72,12 @@ class DesiredIssue:
 
 
 def load_matrix(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_signals(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -115,6 +123,19 @@ def feature_lookup(matrix: dict[str, Any]) -> dict[tuple[str, str], dict[str, An
                 "feature": feature,
                 "support": entry,
             }
+    return lookup
+
+
+def signal_lookup(
+    signals: dict[str, Any] | None,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    lookup = {}
+    if not signals:
+        return lookup
+    for feature in signals.get("features", []):
+        feature_id = feature["id"]
+        for backend_id, entry in feature.get("support", {}).items():
+            lookup[(backend_id, feature_id)] = entry
     return lookup
 
 
@@ -194,6 +215,7 @@ def frontend_parent_body() -> str:
 def child_body(
     item: dict[str, Any],
     lookup: dict[tuple[str, str], dict[str, Any]],
+    signals_lookup: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> str:
     entry = lookup.get((item["backend_id"], item["feature_id"]), {})
     support = entry.get("support", {})
@@ -203,6 +225,11 @@ def child_body(
     if not evidence_text:
         evidence_text = "- No evidence is recorded for this non-supported row."
     notes = item.get("notes") or support.get("notes") or "No notes recorded."
+    signal_text = format_signal_section(
+        signals_lookup.get((item["backend_id"], item["feature_id"]))
+        if signals_lookup
+        else None
+    )
 
     return "\n\n".join(
         [
@@ -223,14 +250,83 @@ def child_body(
             ),
             "## Current Gap\n\n{}".format(notes),
             "## Recorded Evidence\n\n{}".format(evidence_text),
+            "## Extracted Signals\n\n{}".format(signal_text),
             "## Completion Rule\n\nWhen this matrix row becomes `supported`, the next sync will close this managed sub-issue as completed.",
         ]
     )
 
 
-def build_desired_issues(matrix: dict[str, Any]) -> dict[str, DesiredIssue]:
+def format_signal_hits(title: str, hits: list[dict[str, Any]]) -> str:
+    if not hits:
+        return "- {}: none detected.".format(title)
+    rows = []
+    for hit in hits[:8]:
+        label = (
+            hit.get("symbol")
+            or hit.get("path")
+            or hit.get("source")
+            or hit.get("term")
+            or "hit"
+        )
+        terms = ", ".join(hit.get("matched_terms", [])) or hit.get("term") or ""
+        count = hit.get("count")
+        details = terms or "matched"
+        if count is not None:
+            details = "{}, count={}".format(details, count)
+        rows.append("- {}: `{}` ({})".format(title, label, details))
+    return "\n".join(rows)
+
+
+def format_signal_section(signal: dict[str, Any] | None) -> str:
+    if not signal:
+        return "No generated support-signal data was provided for this row."
+    lines = [
+        "Extractor state: `{}`".format(signal.get("state", "unknown")),
+        "Catalog evidence count: `{}`".format(signal.get("catalog_evidence_count", 0)),
+        format_signal_hits("Tests", signal.get("tests", [])),
+        format_signal_hits("Implementation", signal.get("implementation", [])),
+        format_signal_hits("Unsupported markers", signal.get("unsupported", [])),
+        format_signal_hits("Docs", signal.get("docs", [])),
+    ]
+    return "\n".join(lines)
+
+
+def extracted_issue_body(
+    issue: dict[str, Any],
+    signals_lookup: dict[tuple[str, str], dict[str, Any]],
+) -> str:
+    signal = signals_lookup.get((issue["backend_id"], issue["feature_id"]))
+    if signal is None:
+        signal = issue.get("signal")
+    return "\n\n".join(
+        [
+            marker_for(issue["key"]),
+            "# {}: {}".format(issue["backend"], issue["feature"]),
+            "This issue is managed from generated support signals by `tools/sync_support_issues.py`.",
+            markdown_table(
+                ["Field", "Value"],
+                [
+                    ["Backend", issue["backend"]],
+                    ["Feature ID", issue["feature_id"]],
+                    ["Category", issue["category"]],
+                    ["Catalog status", issue["status"]],
+                    ["Extractor state", issue["state"]],
+                    ["Issue kind", issue["kind"]],
+                ],
+            ),
+            "## Required Action\n\n{}".format(issue["title"]),
+            "## Extracted Signals\n\n{}".format(format_signal_section(signal)),
+            "## Completion Rule\n\nThe next sync closes this issue when generated extraction no longer reports this gap.",
+        ]
+    )
+
+
+def build_desired_issues(
+    matrix: dict[str, Any], signals: dict[str, Any] | None = None
+) -> dict[str, DesiredIssue]:
     desired: dict[str, DesiredIssue] = {}
     lookup = feature_lookup(matrix)
+    signals_by_row = signal_lookup(signals)
     rows_by_backend = backlog_by_backend(matrix)
 
     for backend in matrix.get("backends", []):
@@ -277,9 +373,29 @@ def build_desired_issues(matrix: dict[str, Any]) -> dict[str, DesiredIssue]:
             title="[Support Matrix][{}] {} ({})".format(
                 item["backend"], item["feature"], item["status"]
             ),
-            body=child_body(item, lookup),
+            body=child_body(item, lookup, signals_by_row),
             labels=labels,
             parent_key="parent:{}".format(backend_id),
+        )
+
+    for issue in (signals or {}).get("issues", []):
+        key = issue["key"]
+        if key in desired:
+            continue
+        labels = (
+            LABEL_MANAGED,
+            LABEL_EXTRACTED,
+            LABEL_PREFIX_BACKEND + compact_label_part(issue["backend_id"]),
+            LABEL_PREFIX_CATEGORY + compact_label_part(issue["category"]),
+        )
+        desired[key] = DesiredIssue(
+            key=key,
+            title="[Support Signals][{}] {} ({})".format(
+                issue["backend"], issue["feature"], issue["kind"]
+            ),
+            body=extracted_issue_body(issue, signals_by_row),
+            labels=labels,
+            parent_key="parent:{}".format(issue["backend_id"]),
         )
 
     return desired
@@ -468,6 +584,7 @@ def desired_label_catalog(
         LABEL_MANAGED: ("5319e7", "Managed from support/generated/support-matrix.json"),
         LABEL_PARENT: ("0e8a16", "Parent issue for support matrix backlog"),
         LABEL_BACKLOG: ("fbca04", "Support matrix backlog sub-issue"),
+        LABEL_EXTRACTED: ("fef2c0", "Generated support extraction issue"),
     }
     for issue in desired.values():
         for label in issue.labels:
@@ -488,8 +605,8 @@ def closed_body(issue: dict[str, Any], key: str) -> str:
     return "\n\n".join(
         [
             marker_for(key),
-            "# Completed Support Matrix Row",
-            "This managed issue was closed because the corresponding support-matrix backlog row is no longer present.",
+            "# Completed Managed Support Issue",
+            "This managed issue was closed because the corresponding support matrix or generated support-signal row is no longer present.",
             "Previous title: `{}`".format(issue.get("title", "")),
         ]
     )
@@ -525,8 +642,10 @@ def sync_issues(
         print("Dry run: would manage {} desired issues".format(len(desired)))
         parent_count = sum(1 for key in desired if key.startswith("parent:"))
         child_count = sum(1 for key in desired if key.startswith("backlog:"))
+        extracted_count = sum(1 for key in desired if key.startswith("extracted:"))
         print("Parents: {}".format(parent_count))
         print("Backlog sub-issues: {}".format(child_count))
+        print("Extracted signal sub-issues: {}".format(extracted_count))
         return summary
 
     for label, (color, description) in desired_label_catalog(desired).items():
@@ -586,7 +705,7 @@ def sync_issues(
     for key, issue in existing_by_key.items():
         if key in desired:
             continue
-        if not (key.startswith("backlog:") or key.startswith("parent:")):
+        if not key.startswith(("backlog:", "parent:", "extracted:")):
             continue
         if issue.get("state") == "closed":
             summary["unchanged"] += 1
@@ -605,6 +724,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_MATRIX_PATH,
         help="Path to generated support-matrix JSON",
+    )
+    parser.add_argument(
+        "--signals",
+        type=Path,
+        default=DEFAULT_SIGNALS_PATH,
+        help="Optional generated support-signals JSON path",
     )
     parser.add_argument(
         "--repo",
@@ -631,7 +756,10 @@ def main(argv: list[str] | None = None) -> int:
     if not matrix_path.is_absolute():
         matrix_path = ROOT / matrix_path
     matrix = load_matrix(matrix_path)
-    desired = build_desired_issues(matrix)
+    signals_path = args.signals
+    if signals_path is not None and not signals_path.is_absolute():
+        signals_path = ROOT / signals_path
+    desired = build_desired_issues(matrix, load_signals(signals_path))
 
     token = os.environ.get(args.token_env) or os.environ.get("GH_TOKEN")
     if args.dry_run:
