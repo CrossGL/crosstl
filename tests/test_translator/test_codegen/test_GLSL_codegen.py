@@ -5211,6 +5211,89 @@ def test_glsl_mesh_layout_counts_accept_positive_integer_constants_and_aliases()
     assert "SetMeshOutputsEXT(MAX_VERTEX_COUNT, MAX_PRIMITIVE_COUNT);" in mesh_code
 
 
+def test_glsl_mesh_layout_accepts_equivalent_aliases():
+    shader = """
+    shader MeshLayoutEquivalentAliases {
+        mesh {
+            void main()
+                @outputtopology(triangle)
+                @triangles
+                @max_vertices(3)
+                @maxvertexcount(3)
+                @max_primitives(1)
+                @maxprimitivecount(1)
+                @numthreads(1, 1, 1)
+            {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    mesh_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+    assert "layout(triangles, max_vertices = 3, max_primitives = 1) out;" in mesh_code
+    assert "SetMeshOutputsEXT(3, 1);" in mesh_code
+
+
+@pytest.mark.parametrize(
+    ("attribute_lines", "message"),
+    [
+        (
+            "@outputtopology(line)\n                @triangles",
+            "Conflicting GLSL mesh output topology layout outputtopology line "
+            "with triangles",
+        ),
+        (
+            "@max_vertices(3)\n                @maxvertexcount(4)",
+            "Conflicting GLSL mesh max_vertices layout max_vertices 3 "
+            "with maxvertexcount 4",
+        ),
+        (
+            "@max_primitives(1)\n                @maxprimitivecount(2)",
+            "Conflicting GLSL mesh max_primitives layout max_primitives 1 "
+            "with maxprimitivecount 2",
+        ),
+    ],
+)
+def test_glsl_mesh_layout_rejects_conflicting_aliases(attribute_lines, message):
+    fallback_topology = (
+        ""
+        if "@outputtopology" in attribute_lines
+        or any(
+            f"@{name}" in attribute_lines for name in ("points", "lines", "triangles")
+        )
+        else "@outputtopology(triangle)"
+    )
+    fallback_max_vertices = (
+        ""
+        if "@max_vertices" in attribute_lines or "@maxvertexcount" in attribute_lines
+        else "@max_vertices(3)"
+    )
+    fallback_max_primitives = (
+        ""
+        if "@max_primitives" in attribute_lines
+        or "@maxprimitivecount" in attribute_lines
+        else "@max_primitives(1)"
+    )
+    shader = f"""
+    shader BadMeshLayoutAliases {{
+        mesh {{
+            void main()
+                {fallback_topology}
+                {fallback_max_vertices}
+                {fallback_max_primitives}
+                {attribute_lines}
+                @numthreads(1, 1, 1)
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 @pytest.mark.parametrize(
     ("attribute_line", "message"),
     [
@@ -7230,6 +7313,52 @@ def test_compute_stage_uses_function_execution_config_attribute(attribute):
     )
     assert f"@{attribute}" not in compute_code
     assert "void main() @" not in compute_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "body", "message"),
+    [
+        (
+            "compute",
+            "void main() @numthreads(8, 1, 1) @workgroup_size(4, 1, 1) { }",
+            r"Conflicting numthreads metadata on compute stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+        (
+            "task",
+            "void main() @numthreads(8, 1, 1) @workgroup_size(4, 1, 1) { }",
+            r"Conflicting numthreads metadata on task stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+        (
+            "mesh",
+            """
+            void main()
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+                @numthreads(8, 1, 1)
+                @workgroup_size(4, 1, 1)
+            { }
+            """,
+            r"Conflicting numthreads metadata on mesh stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+    ],
+)
+def test_threadgroup_stages_reject_conflicting_execution_config_metadata(
+    stage, body, message
+):
+    shader = f"""
+    shader BadThreadgroupMetadata {{
+        {stage} {{
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), stage)
 
 
 def test_while_switch_and_void_return_emit_c_style_syntax():

@@ -3152,6 +3152,7 @@ class SlangCodeGen:
                 node, shader_type, effective_param_list
             )
             self.validate_slang_ray_query_calls(node, shader_type, effective_param_list)
+            self.validate_slang_mesh_intrinsic_calls(node, shader_type)
             self.validate_slang_mesh_payload_parameter(
                 shader_type, effective_param_list
             )
@@ -6033,20 +6034,67 @@ class SlangCodeGen:
                 node.operation, rejection_reason
             )
 
-    def validate_slang_mesh_op_stage(self, operation):
-        if not self.current_shader_type:
+    def validate_slang_mesh_op_stage_for_shader(self, operation, shader_type):
+        if not shader_type:
             return
 
-        shader_stage = self.slang_shader_stage_name(self.current_shader_type)
+        shader_stage = self.slang_shader_stage_name(shader_type)
         if operation == "SetMeshOutputCounts" and shader_stage != "mesh":
             raise ValueError(
-                f"Slang {self.current_shader_type} stage cannot call "
+                f"Slang {shader_type} stage cannot call "
                 "SetMeshOutputCounts; SetMeshOutputCounts is only valid in mesh stages"
             )
         if operation == "DispatchMesh" and shader_stage != "amplification":
             raise ValueError(
-                f"Slang {self.current_shader_type} stage cannot call DispatchMesh; "
+                f"Slang {shader_type} stage cannot call DispatchMesh; "
                 "DispatchMesh is only valid in amplification/task/object stages"
+            )
+
+    def validate_slang_mesh_op_stage(self, operation):
+        self.validate_slang_mesh_op_stage_for_shader(
+            operation, self.current_shader_type
+        )
+
+    def slang_mesh_intrinsic_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, MeshOpNode):
+                calls.append(
+                    (
+                        getattr(node, "operation", None),
+                        getattr(node, "arguments", []),
+                    )
+                )
+                continue
+            call_name = self.slang_function_call_name(node)
+            if call_name in self.SLANG_MESH_INTRINSIC_ARITIES:
+                calls.append(
+                    (call_name, getattr(node, "arguments", getattr(node, "args", [])))
+                )
+        return calls
+
+    def validate_slang_mesh_intrinsic_calls(
+        self, func, shader_type, visited_helpers=None
+    ):
+        if visited_helpers is None:
+            visited_helpers = set()
+
+        for operation, args in self.slang_mesh_intrinsic_calls(func):
+            if operation in self.SLANG_MESH_INTRINSIC_ARITIES:
+                expected_arities = self.SLANG_MESH_INTRINSIC_ARITIES[operation]
+                if len(args) not in expected_arities:
+                    continue
+                self.validate_slang_mesh_op_stage_for_shader(operation, shader_type)
+
+        for helper_call in self.slang_user_function_call_nodes(func):
+            helper_name = self.slang_function_call_name(helper_call)
+            if helper_name in visited_helpers:
+                continue
+            helper_func = self.user_functions_by_name.get(helper_name)
+            if helper_func is None or helper_func is func:
+                continue
+            self.validate_slang_mesh_intrinsic_calls(
+                helper_func, shader_type, visited_helpers | {helper_name}
             )
 
     def validate_slang_dispatch_mesh_payload_argument(self, node):

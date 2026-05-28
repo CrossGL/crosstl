@@ -3034,31 +3034,23 @@ class GLSLCodeGen:
             func, stage_layout_qualifiers
         )
 
-        max_vertices = self.glsl_stage_positive_int_layout_argument(
-            "mesh", func, "max_vertices", stage_layout_qualifiers, "out"
+        max_vertices = self.glsl_stage_consistent_positive_int_layout_argument(
+            "mesh",
+            func,
+            ("max_vertices", "maxvertexcount"),
+            stage_layout_qualifiers,
+            "out",
+            layout_name="max_vertices",
         )
-        if max_vertices is None:
-            max_vertices = self.glsl_stage_positive_int_layout_argument(
-                "mesh",
-                func,
-                "maxvertexcount",
-                stage_layout_qualifiers,
-                "out",
-                layout_name="max_vertices",
-            )
 
-        max_primitives = self.glsl_stage_positive_int_layout_argument(
-            "mesh", func, "max_primitives", stage_layout_qualifiers, "out"
+        max_primitives = self.glsl_stage_consistent_positive_int_layout_argument(
+            "mesh",
+            func,
+            ("max_primitives", "maxprimitivecount"),
+            stage_layout_qualifiers,
+            "out",
+            layout_name="max_primitives",
         )
-        if max_primitives is None:
-            max_primitives = self.glsl_stage_positive_int_layout_argument(
-                "mesh",
-                func,
-                "maxprimitivecount",
-                stage_layout_qualifiers,
-                "out",
-                layout_name="max_primitives",
-            )
 
         layout_parts = []
         if output_primitive:
@@ -3073,16 +3065,16 @@ class GLSLCodeGen:
         return f"layout({', '.join(layout_parts)}) out;\n"
 
     def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
-        output_primitive = self.glsl_stage_bare_attribute(
-            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        return self.glsl_stage_consistent_layout_value(
+            "mesh",
+            "output topology",
+            func,
+            explicit_attribute_name="outputtopology",
+            bare_names={"points", "lines", "triangles"},
+            value_mapper=self.glsl_mesh_output_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="out",
         )
-        if output_primitive is None:
-            output_primitive = self.glsl_single_stage_attribute_argument(
-                func, "outputtopology", stage_layout_qualifiers, "out"
-            )
-        if output_primitive is None:
-            return None
-        return self.glsl_mesh_output_topology(output_primitive)
 
     def glsl_stage_bare_attribute(
         self, func, names, stage_layout_qualifiers=None, direction=None
@@ -3158,6 +3150,60 @@ class GLSLCodeGen:
                     f"{first_source} with {source}"
                 )
         return first_mapped
+
+    def glsl_stage_consistent_positive_int_layout_argument(
+        self,
+        stage_name,
+        func,
+        attribute_names,
+        stage_layout_qualifiers=None,
+        direction=None,
+        layout_name=None,
+    ):
+        layout_name = layout_name or attribute_names[0]
+        choices = []
+        for attribute_name in attribute_names:
+            arguments = self.glsl_stage_attribute_arguments(
+                func, attribute_name, stage_layout_qualifiers, direction
+            )
+            if not arguments:
+                continue
+            if len(arguments) != 1:
+                raise ValueError(
+                    f"GLSL stage attribute {attribute_name} requires exactly one argument"
+                )
+
+            argument = arguments[0]
+            literal = self.literal_int_value(argument, self.literal_int_constants)
+            source = self.glsl_attribute_argument_source(argument)
+            if (
+                not isinstance(literal, int)
+                or isinstance(literal, bool)
+                or literal <= 0
+            ):
+                raise ValueError(
+                    f"GLSL {stage_name} {layout_name} layout requires a positive "
+                    f"integer constant, got {source}"
+                )
+            choices.append(
+                (
+                    f"{attribute_name} {source}",
+                    literal,
+                    self.generate_expression(argument),
+                )
+            )
+
+        if not choices:
+            return None
+
+        first_source, first_literal, first_expression = choices[0]
+        for source, literal, _expression in choices[1:]:
+            if literal != first_literal:
+                raise ValueError(
+                    f"Conflicting GLSL {stage_name} {layout_name} layout "
+                    f"{first_source} with {source}"
+                )
+        return first_expression
 
     def glsl_stage_control_attributes(
         self, func, stage_layout_qualifiers=None, direction=None

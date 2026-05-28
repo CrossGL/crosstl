@@ -66,6 +66,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.variable_types = {}
         self.image_resource_accesses = {}
         self.struct_member_types = {}
+        self.struct_member_image_accesses = {}
         self.function_return_types = {}
         self.helper_functions = {}
         self.query_resource_names = set()
@@ -101,6 +102,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.variable_types = {}
         self.image_resource_accesses = {}
         self.struct_member_types = {}
+        self.struct_member_image_accesses = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
         self.resource_query_info_required = False
@@ -336,6 +338,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         members = getattr(node, "members", [])
         member_types = {}
+        member_image_accesses = {}
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -345,9 +348,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 member_type = "float"
 
             member_types[member.name] = member_type
+            member_access = self.explicit_resource_access(member)
+            if member_access is not None and self.is_storage_image_type(member_type):
+                member_image_accesses[member.name] = member_access
             self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_image_accesses[node.name] = member_image_accesses
         self.indent_level -= 1
         self.emit("};")
 
@@ -378,11 +385,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if not var_type and initial_value is not None:
             inferred_type = self.expression_result_type(initial_value)
-            self.register_variable_type(node.name, inferred_type or "auto")
+            self.register_variable_type(
+                node.name,
+                inferred_type or "auto",
+                source_node=initial_value,
+            )
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
-            self.register_variable_type(node.name, var_type, node)
+            self.register_variable_type(node.name, var_type, node, initial_value)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -3066,6 +3077,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def is_storage_image_type(self, type_name):
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
         base_type = self.resource_base_type(type_name)
         if not isinstance(base_type, str):
             return False
@@ -3086,7 +3099,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for shape in image_shapes
         )
 
-    def register_variable_type(self, name, type_name, node=None):
+    def register_variable_type(self, name, type_name, node=None, source_node=None):
         if not name or type_name is None:
             return
         if not isinstance(type_name, str):
@@ -3097,6 +3110,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return
 
         access = self.explicit_resource_access(node)
+        if access is None and source_node is not None:
+            access = self.image_resource_access(source_node)
         if access is None:
             self.image_resource_accesses.pop(name, None)
         else:
@@ -3119,6 +3134,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if name is None:
             return None
         return self.variable_types.get(name)
+
+    def resource_expression_type(self, node):
+        type_name = self.get_expression_type(node)
+        if type_name is None:
+            type_name = self.expression_result_type(node)
+        if type_name is not None and not isinstance(type_name, str):
+            return self.convert_type_node_to_string(type_name)
+        return type_name
 
     def map_vector_arithmetic_type(self, type_name):
         return self.convert_crossgl_type_to_cuda(type_name)
@@ -3340,6 +3363,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
 
     def image_resource_access(self, image_arg):
+        if isinstance(image_arg, ArrayAccessNode):
+            array_node = getattr(
+                image_arg, "array", getattr(image_arg, "array_expr", None)
+            )
+            return self.image_resource_access(array_node)
+
+        if isinstance(image_arg, MemberAccessNode):
+            object_node = getattr(
+                image_arg,
+                "object_expr",
+                getattr(image_arg, "object", None),
+            )
+            object_type = self.type_name_string(
+                self.expression_result_type(object_node)
+            )
+            member = getattr(image_arg, "member", None)
+            access = self.struct_member_image_accesses.get(object_type, {}).get(member)
+            if access is not None:
+                return access
+
         image_name = self.get_expression_name(image_arg)
         if not image_name:
             return None
@@ -3563,7 +3606,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             image_type = None
             if raw_args:
                 image_type = self.resource_base_type(
-                    self.get_expression_type(raw_args[0])
+                    self.resource_expression_type(raw_args[0])
                 )
                 access_diagnostic = self.image_atomic_access_diagnostic(
                     func_name, image_type, raw_args[0]
@@ -3775,7 +3818,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
 
         if func_name == "imageLoad" and len(args) >= 2:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            image_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
             if image_type is None:
                 return None
             if self.is_multisample_resource_type(image_type):
@@ -3827,7 +3872,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return f"surf2Dread<{value_type}>({image_name}, {x}, {y})"
 
         if func_name == "imageStore" and len(args) >= 3:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            image_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
             if image_type is None:
                 return None
             if self.is_multisample_resource_type(image_type):

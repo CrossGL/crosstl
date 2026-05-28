@@ -3719,6 +3719,89 @@ def test_mesh_intrinsics_reject_invalid_slang_stages(stage_source, message):
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_task_stage_helper_can_dispatch_mesh():
+    code = """
+    shader SlangTaskHelperDispatchMesh {
+        task {
+            void launchMesh() {
+                DispatchMesh(1, 1, 1);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                launchMesh();
+            }
+        }
+
+        mesh {
+            void main(
+                @vertices out vec4 verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void launchMesh()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "launchMesh();" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                void launchMesh() {
+                    DispatchMesh(1, 1, 1);
+                }
+
+                void main() {
+                    launchMesh();
+                }
+            }
+            """,
+            "compute stage cannot call DispatchMesh",
+        ),
+        (
+            """
+            mesh {
+                void launchMesh() {
+                    DispatchMesh(1, 1, 1);
+                }
+
+                void main(
+                    @vertices out vec4 verts[3],
+                    @indices out uvec3 tris[1]
+                ) @outputtopology(triangle) {
+                    SetMeshOutputCounts(3, 1);
+                    launchMesh();
+                    verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+            """,
+            "mesh stage cannot call DispatchMesh",
+        ),
+    ],
+)
+def test_mesh_intrinsics_reject_invalid_helper_stage_contexts(stage_source, message):
+    code = f"""
+    shader InvalidSlangHelperDispatchMeshStage {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_stage_numthreads_attribute_overrides_default_numthreads():
     code = """
     shader StageNumthreads {
