@@ -74,6 +74,10 @@ jobs:
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
           --signals support/generated/support-signals.json
+          --throttle-seconds 2
+          --max-retries 6
+          --retry-base-seconds 60
+          --retry-max-seconds 600
           --dry-run
 
       - name: Sync GitHub issues
@@ -84,3 +88,7 @@ jobs:
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
           --signals support/generated/support-signals.json
+          --throttle-seconds 2
+          --max-retries 6
+          --retry-base-seconds 60
+          --retry-max-seconds 600

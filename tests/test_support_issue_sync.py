@@ -1,4 +1,5 @@
 import importlib.util
+import io
 from pathlib import Path
 import sys
 
@@ -349,3 +350,82 @@ def test_dry_run_does_not_touch_client():
     }
     assert client.created == []
     assert client.labels == []
+
+
+def test_github_client_retries_secondary_rate_limit(monkeypatch):
+    module = load_sync_module()
+    attempts = {"count": 0}
+    sleeps = []
+
+    class FakeResponse:
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(_req, timeout):
+        assert timeout == 30
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise module.error.HTTPError(
+                url="https://api.example.test",
+                code=403,
+                msg="Forbidden",
+                hdrs={},
+                fp=io.BytesIO(b'{"message":"secondary rate limit"}'),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr(module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    client = module.GitHubClient(
+        "owner/repo",
+        "token",
+        api_url="https://api.example.test",
+        max_retries=1,
+        retry_base_seconds=0.5,
+    )
+
+    data, _headers = client.request("POST", "/repos/owner/repo/issues", {"title": "x"})
+
+    assert data == {"ok": True}
+    assert attempts["count"] == 2
+    assert sleeps == [0.5]
+
+
+def test_github_client_uses_retry_after_header_for_retry_delay():
+    module = load_sync_module()
+    client = module.GitHubClient("owner/repo", "token", retry_base_seconds=30.0)
+
+    assert client.retry_delay_seconds({"retry-after": "7"}, attempt=3) == 7.0
+
+
+def test_parse_args_exposes_rate_limit_controls():
+    module = load_sync_module()
+
+    args = module.parse_args(
+        [
+            "--repo",
+            "owner/repo",
+            "--max-retries",
+            "6",
+            "--retry-base-seconds",
+            "60",
+            "--retry-max-seconds",
+            "600",
+            "--throttle-seconds",
+            "2",
+        ]
+    )
+
+    assert args.max_retries == 6
+    assert args.retry_base_seconds == 60
+    assert args.retry_max_seconds == 600
+    assert args.throttle_seconds == 2

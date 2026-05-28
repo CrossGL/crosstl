@@ -54,12 +54,20 @@ BACKLOG_STATUSES = {
 class GitHubApiError(RuntimeError):
     """Raised when GitHub returns an unexpected API error."""
 
-    def __init__(self, method: str, path: str, status: int, body: str):
+    def __init__(
+        self,
+        method: str,
+        path: str,
+        status: int,
+        body: str,
+        headers: dict[str, str] | None = None,
+    ):
         super().__init__("{} {} failed with {}: {}".format(method, path, status, body))
         self.method = method
         self.path = path
         self.status = status
         self.body = body
+        self.headers = headers or {}
 
 
 @dataclass(frozen=True)
@@ -402,12 +410,23 @@ def build_desired_issues(
 
 
 class GitHubClient:
-    def __init__(self, repo: str, token: str, api_url: str = "https://api.github.com"):
+    def __init__(
+        self,
+        repo: str,
+        token: str,
+        api_url: str = "https://api.github.com",
+        max_retries: int = 4,
+        retry_base_seconds: float = 30.0,
+        retry_max_seconds: float = 300.0,
+    ):
         if "/" not in repo:
             raise ValueError("Repository must be in OWNER/REPO form")
         self.repo = repo
         self.api_url = api_url.rstrip("/")
         self.token = token
+        self.max_retries = max(0, max_retries)
+        self.retry_base_seconds = max(0.0, retry_base_seconds)
+        self.retry_max_seconds = max(self.retry_base_seconds, retry_max_seconds)
 
     def request(
         self,
@@ -416,6 +435,43 @@ class GitHubClient:
         payload: dict[str, Any] | None = None,
         query: dict[str, Any] | None = None,
     ) -> tuple[Any, dict[str, str]]:
+        for attempt in range(self.max_retries + 1):
+            req = self.build_request(method, path, payload, query)
+            try:
+                with request.urlopen(req, timeout=30) as response:
+                    text = response.read().decode("utf-8")
+                    data = json.loads(text) if text else None
+                    return data, {
+                        key.lower(): value for key, value in response.headers.items()
+                    }
+            except error.HTTPError as exc:
+                error_body = exc.read().decode("utf-8", errors="replace")
+                headers = {key.lower(): value for key, value in exc.headers.items()}
+                if attempt < self.max_retries and self.should_retry_http_error(
+                    exc.code, error_body
+                ):
+                    delay = self.retry_delay_seconds(headers, attempt)
+                    print(
+                        "GitHub API {} {} returned {}; retrying in {:.1f}s".format(
+                            method, path, exc.code, delay
+                        ),
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise GitHubApiError(
+                    method, path, exc.code, error_body, headers
+                ) from exc
+
+        raise RuntimeError("unreachable GitHub request retry state")
+
+    def build_request(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None,
+        query: dict[str, Any] | None,
+    ) -> request.Request:
         url = self.api_url + path
         if query:
             url += "?" + parse.urlencode(query, doseq=True)
@@ -428,17 +484,31 @@ class GitHubClient:
         req.add_header("X-GitHub-Api-Version", API_VERSION)
         if body is not None:
             req.add_header("Content-Type", "application/json")
+        return req
 
-        try:
-            with request.urlopen(req, timeout=30) as response:
-                text = response.read().decode("utf-8")
-                data = json.loads(text) if text else None
-                return data, {
-                    key.lower(): value for key, value in response.headers.items()
-                }
-        except error.HTTPError as exc:
-            error_body = exc.read().decode("utf-8", errors="replace")
-            raise GitHubApiError(method, path, exc.code, error_body) from exc
+    def should_retry_http_error(self, status: int, body: str) -> bool:
+        if status in {429, 500, 502, 503, 504}:
+            return True
+        return status == 403 and "secondary rate limit" in body.lower()
+
+    def retry_delay_seconds(self, headers: dict[str, str], attempt: int) -> float:
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(0.0, float(retry_after))
+            except ValueError:
+                pass
+
+        if headers.get("x-ratelimit-remaining") == "0":
+            reset_at = headers.get("x-ratelimit-reset")
+            if reset_at:
+                try:
+                    return max(0.0, float(reset_at) - time.time() + 5.0)
+                except ValueError:
+                    pass
+
+        delay = self.retry_base_seconds * (2**attempt)
+        return min(self.retry_max_seconds, delay)
 
     def paginate(
         self, path: str, query: dict[str, Any] | None = None
@@ -747,6 +817,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-sub-issues", action="store_true")
     parser.add_argument("--throttle-seconds", type=float, default=0.2)
+    parser.add_argument("--max-retries", type=int, default=4)
+    parser.add_argument("--retry-base-seconds", type=float, default=30.0)
+    parser.add_argument("--retry-max-seconds", type=float, default=300.0)
     return parser.parse_args(argv)
 
 
@@ -771,7 +844,14 @@ def main(argv: list[str] | None = None) -> int:
         print("{} or GH_TOKEN is required".format(args.token_env), file=sys.stderr)
         return 2
 
-    client = GitHubClient(args.repo, token, api_url=args.api_url)
+    client = GitHubClient(
+        args.repo,
+        token,
+        api_url=args.api_url,
+        max_retries=args.max_retries,
+        retry_base_seconds=args.retry_base_seconds,
+        retry_max_seconds=args.retry_max_seconds,
+    )
     summary = sync_issues(
         client,
         desired,
