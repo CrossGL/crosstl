@@ -2715,14 +2715,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.cuda_shadow_scalar_diagnostic_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_shadow_resource_type(resource_type):
                 return "float"
 
         if func_name in self.cuda_sampled_diagnostic_float4_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if resource_type is None:
                 return None
@@ -2732,7 +2732,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.cuda_image_atomic_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             return self.cuda_image_atomic_result_type(resource_type)
 
@@ -3143,6 +3143,111 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.convert_type_node_to_string(type_name)
         return type_name
 
+    def resource_query_metadata_unavailable_call(
+        self, func_name, resource_type, fallback
+    ):
+        resource_type = resource_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} metadata unavailable on {resource_type} */ {fallback}"
+        )
+
+    def unsupported_dimension_metadata_query_call(self, func_name, resource_type):
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+        return_type = self.query_return_type(spec["dimensions"])
+        fallback = self.query_constructor(
+            return_type,
+            ["0"] * len(spec["dimensions"]),
+        )
+        return self.resource_query_metadata_unavailable_call(
+            func_name, resource_type, fallback
+        )
+
+    def unsupported_scalar_metadata_query_call(self, func_name, resource_type):
+        return self.resource_query_metadata_unavailable_call(
+            func_name, resource_type, "0"
+        )
+
+    def generate_dimension_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_dimension_metadata_query_call(
+                func_name, resource_type
+            )
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        if spec["mip"]:
+            self.ensure_query_prefix_helper()
+        self.require_helper_function(
+            helper_name, self.build_dimension_query_helper(helper_name, spec)
+        )
+
+        if spec["mip"]:
+            lod = args[1] if len(args) > 1 else "0"
+            return f"{helper_name}({metadata_expr}, {lod})"
+        return f"{helper_name}({metadata_expr})"
+
+    def generate_sample_count_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None or not spec["samples"]:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_scalar_metadata_query_call(func_name, resource_type)
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        self.require_helper_function(
+            helper_name, self.build_sample_count_query_helper(helper_name)
+        )
+        return f"{helper_name}({metadata_expr})"
+
+    def generate_texture_query_levels(self, raw_args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        if not self.is_sampled_resource_type(resource_type):
+            return None
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_scalar_metadata_query_call(
+                "textureQueryLevels", resource_type
+            )
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_textureQueryLevels_{resource_type}"
+        self.require_helper_function(
+            helper_name, self.build_texture_query_levels_helper(helper_name, spec)
+        )
+        return f"{helper_name}({metadata_expr})"
+
     def map_vector_arithmetic_type(self, type_name):
         return self.convert_crossgl_type_to_cuda(type_name)
 
@@ -3478,7 +3583,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return sample_count_query
             if raw_args:
                 resource_type = self.resource_base_type(
-                    self.get_expression_type(raw_args[0])
+                    self.resource_expression_type(raw_args[0])
                 )
                 if resource_type is not None:
                     return self.unsupported_scalar_resource_query_call(
@@ -3491,7 +3596,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "textureQueryLod" and len(args) >= 2:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 return self.unsupported_resource_query_call(
@@ -3523,7 +3628,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and len(args) >= 2
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_shadow_resource_type(texture_type):
                 return self.unsupported_shadow_resource_call(
@@ -3545,7 +3650,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and len(args) >= 2
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 return self.unsupported_sampled_resource_call(
@@ -3569,7 +3674,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and raw_args
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 if self.is_shadow_resource_type(texture_type):
@@ -3625,7 +3730,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
@@ -3761,7 +3866,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "texelFetch" and len(args) >= 3:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
@@ -3926,7 +4031,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def generate_texture_gather_call(self, raw_args, args):
-        texture_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        texture_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
         if texture_type != "sampler2D":
             return None
 

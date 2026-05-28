@@ -11334,24 +11334,55 @@ class GLSLCodeGen:
                 return int(raw_value[len(prefix) :])
         return None
 
-    def explicit_resource_binding_index(self, node):
+    def explicit_resource_binding_choices(self, node):
+        choices = []
         if not hasattr(node, "attributes"):
-            return None
+            return choices
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
             arguments = getattr(attr, "arguments", []) or []
             if not attr_name or not arguments:
                 continue
             attr_name = str(attr_name).lower()
+            source = self.attribute_value_to_string(arguments[0])
             if attr_name in {"binding", "buffer", "sampler", "texture"}:
                 binding = self.binding_index_value(arguments[0])
             elif attr_name == "register":
                 binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
             else:
-                binding = None
+                continue
             if binding is not None:
-                return binding
-        return None
+                choices.append((attr_name, source, binding))
+        return choices
+
+    def explicit_resource_binding_choice_description(self, attr_name, source, binding):
+        if attr_name == "binding":
+            source = source if source is not None else binding
+            return f"binding {source}"
+        source = source if source is not None else binding
+        return f"{attr_name} {source} binding {binding}"
+
+    def explicit_resource_binding_index(self, node):
+        choices = self.explicit_resource_binding_choices(node)
+        if not choices:
+            return None
+
+        first_name, first_source, first_binding = choices[0]
+        first_description = self.explicit_resource_binding_choice_description(
+            first_name, first_source, first_binding
+        )
+        node_name = self.resource_node_name(node, "<unnamed>")
+        for attr_name, source, binding in choices[1:]:
+            if binding != first_binding:
+                current_description = self.explicit_resource_binding_choice_description(
+                    attr_name, source, binding
+                )
+                raise ValueError(
+                    "Conflicting OpenGL resource binding metadata for "
+                    f"'{node_name}': {first_description} differs from "
+                    f"{current_description}"
+                )
+        return first_binding
 
     def semantic_from_node(self, node):
         semantic = getattr(node, "semantic", None)

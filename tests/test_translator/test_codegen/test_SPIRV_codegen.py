@@ -4051,7 +4051,7 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpCompositeExtract %\d+ %\d+ 2\b", spv_code)
         assert "WARNING" not in spv_code
 
-    def test_compute_synchronization_builtins_emit_spirv_barriers(self):
+    def test_compute_synchronization_builtins_emit_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {
             compute {
@@ -4097,8 +4097,9 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers(self):
+    def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {
             compute {
@@ -4173,6 +4174,7 @@ class TestVulkanSPIRVCodeGen:
         assert "OpControlBarrier" not in spv_code
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_user_defined_synchronization_names_are_not_lowered(self):
         source_code = """

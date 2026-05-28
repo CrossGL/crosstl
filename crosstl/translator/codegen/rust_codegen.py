@@ -1999,9 +1999,21 @@ class RustCodeGen:
         inferred_constraints = self.combined_function_generic_constraints(func)
         self.current_function_generic_constraints = inferred_constraints
 
+        if hasattr(func, "return_type"):
+            return_type = self.convert_type_node_to_string(func.return_type)
+        else:
+            return_type = "void"
+        self.current_return_type = return_type
+
+        param_types = [self.function_parameter_type(p) for p in param_list]
+        reference_lifetime = self.function_reference_return_lifetime(
+            func,
+            return_type,
+            param_types,
+        )
+
         params = []
-        for p in param_list:
-            param_type = self.function_parameter_type(p)
+        for p, param_type in zip(param_list, param_types):
             self.register_variable_type(p.name, param_type, scope="local")
             param_name = p.name
             if param_name in self.current_mutated_names or (
@@ -2012,16 +2024,11 @@ class RustCodeGen:
             ):
                 param_name = f"mut {param_name}"
             params.append(
-                f"{param_name}: {self.map_function_parameter_type(param_type)}"
+                f"{param_name}: "
+                f"{self.map_function_parameter_type_with_lifetime(param_type, reference_lifetime)}"
             )
 
         params_str = ", ".join(params) if params else ""
-
-        if hasattr(func, "return_type"):
-            return_type = self.convert_type_node_to_string(func.return_type)
-        else:
-            return_type = "void"
-        self.current_return_type = return_type
 
         if shader_type == "vertex":
             code += f"#[vertex_shader]\n"
@@ -2030,14 +2037,15 @@ class RustCodeGen:
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
 
-        generic_params = self.format_generic_params(
+        generic_params = self.format_function_generic_params(
             func,
             extra_constraints=inferred_constraints,
+            lifetime=reference_lifetime,
         )
         emitted_name = function_name or func.name
         code += (
             f"pub fn {emitted_name}{generic_params}({params_str}) "
-            f"-> {self.map_type(return_type)} {{\n"
+            f"-> {self.map_type_with_lifetime(return_type, reference_lifetime)} {{\n"
         )
 
         body = getattr(func, "body", [])
@@ -2056,6 +2064,45 @@ class RustCodeGen:
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
         return code
+
+    def function_reference_return_lifetime(self, func, return_type, param_types):
+        if self.reference_type_parts_for_type(return_type) is None:
+            return None
+
+        reference_param_count = sum(
+            1
+            for param_type in param_types
+            if self.reference_type_parts_for_type(param_type) is not None
+        )
+        if reference_param_count <= 1:
+            return None
+
+        generic_names = set(self.generic_param_names(func))
+        for lifetime in ("'a", "'b", "'cgl_ref"):
+            if lifetime not in generic_names:
+                return lifetime
+        return "'cgl_ref"
+
+    def format_function_generic_params(
+        self,
+        node,
+        extra_constraints=None,
+        lifetime=None,
+    ):
+        generic_params = self.format_generic_params(
+            node,
+            extra_constraints=extra_constraints,
+        )
+        if lifetime is None:
+            return generic_params
+        if not generic_params:
+            return f"<{lifetime}>"
+        return f"<{lifetime}, {generic_params[1:-1]}>"
+
+    def map_function_parameter_type_with_lifetime(self, param_type, lifetime):
+        if lifetime is not None and self.reference_type_parts_for_type(param_type):
+            return self.map_type_with_lifetime(param_type, lifetime)
+        return self.map_function_parameter_type(param_type)
 
     def combined_function_generic_constraints(self, func):
         """Return explicit and inferred generic constraints for one function."""
@@ -2144,13 +2191,9 @@ class RustCodeGen:
                 declared_type = self.get_variable_type(current)
                 reference_parts = self.reference_type_parts_for_type(declared_type)
                 if reference_parts is not None and reference_parts[0]:
-                    source_reference = self.reference_type_parts_for_type(
-                        self.expression_result_type(initial_value)
+                    names.update(
+                        self.mutable_reference_borrow_root_names(initial_value)
                     )
-                    if source_reference is None:
-                        root_name = self.assignment_target_root_name(initial_value)
-                        if root_name:
-                            names.add(root_name)
                 collect(initial_value)
                 return
 
@@ -2281,6 +2324,37 @@ class RustCodeGen:
         if isinstance(target, ArrayAccessNode):
             return self.assignment_target_root_name(target.array_expr)
         return None
+
+    def mutable_reference_borrow_root_names(self, expr):
+        """Return owned roots that must be mutable for an `&mut` borrow."""
+        if expr is None:
+            return set()
+
+        source_reference = self.reference_type_parts_for_type(
+            self.expression_result_type(expr)
+        )
+        if source_reference is not None:
+            return set()
+
+        if isinstance(expr, TernaryOpNode):
+            return self.mutable_reference_borrow_root_names(
+                expr.true_expr
+            ) | self.mutable_reference_borrow_root_names(expr.false_expr)
+
+        if isinstance(expr, BlockNode):
+            explicit_tail = getattr(expr, "expression", None)
+            if explicit_tail is not None:
+                return self.mutable_reference_borrow_root_names(explicit_tail)
+            statements = self.statement_list(expr)
+            if not statements:
+                return set()
+            tail_expression = self.block_tail_expression(statements[-1])
+            if tail_expression is not None:
+                return self.mutable_reference_borrow_root_names(tail_expression)
+            return set()
+
+        root_name = self.assignment_target_root_name(expr)
+        return {root_name} if root_name else set()
 
     def generate_borrow_operand_expression(self, expr):
         """Render a borrow operand without value-context clones."""
@@ -3881,6 +3955,12 @@ class RustCodeGen:
 
     def generate_expression_with_type(self, expr, target_type, static_context=False):
         if self.reference_type_parts_for_type(target_type) is not None:
+            if isinstance(expr, TernaryOpNode):
+                return self.generate_ternary_expression(expr, target_type)
+            if isinstance(expr, MatchNode):
+                return self.generate_match_expression(expr, target_type=target_type)
+            if isinstance(expr, BlockNode):
+                return self.generate_block_expression(expr, target_type=target_type)
             generated = self.generate_borrow_operand_expression(expr)
             return self.normalize_reference_typed_expression(
                 expr,
@@ -8615,6 +8695,22 @@ class RustCodeGen:
             return generic_type
 
         return vtype_str
+
+    def map_type_with_lifetime(self, vtype, lifetime):
+        if lifetime is None:
+            return self.map_type(vtype)
+
+        vtype_str = self.type_name_string(vtype)
+        reference_parts = self.reference_type_parts(vtype_str)
+        if reference_parts is None:
+            return self.map_type(vtype)
+
+        is_mutable, referenced_type = reference_parts
+        mutability = "mut " if is_mutable else ""
+        return (
+            f"&{lifetime} {mutability}"
+            f"{self.map_reference_pointee_type(referenced_type)}"
+        )
 
     def reference_type_parts(self, type_name):
         type_name = str(type_name).strip()

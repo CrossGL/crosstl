@@ -5798,6 +5798,11 @@ class SlangCodeGen:
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            synchronization_call = self.generate_slang_synchronization_call(
+                callee, node.args
+            )
+            if synchronization_call is not None:
+                return synchronization_call
             if callee not in self.user_function_names:
                 resource_call = self.generate_resource_call(callee, node.args)
                 if resource_call is not None:
@@ -5870,6 +5875,33 @@ class SlangCodeGen:
             return node
         else:
             return str(node)
+
+    def generate_slang_synchronization_call(self, callee, args):
+        if not isinstance(callee, str) or callee in self.user_function_names:
+            return None
+
+        intrinsic = self.slang_synchronization_intrinsic_name(callee)
+        if intrinsic is None:
+            return None
+        if args:
+            raise ValueError(
+                f"Slang synchronization builtin '{callee}' requires 0 "
+                f"argument(s), got {len(args)}"
+            )
+        return f"{intrinsic}()"
+
+    def slang_synchronization_intrinsic_name(self, callee):
+        return {
+            "barrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "groupMemoryBarrier": "GroupMemoryBarrier",
+            "memoryBarrierShared": "GroupMemoryBarrier",
+            "memoryBarrierBuffer": "DeviceMemoryBarrier",
+            "deviceMemoryBarrier": "DeviceMemoryBarrier",
+            "memoryBarrierImage": "DeviceMemoryBarrier",
+            "memoryBarrier": "AllMemoryBarrier",
+            "allMemoryBarrier": "AllMemoryBarrier",
+        }.get(callee)
 
     def generate_slang_ray_tracing_op_expression(self, node):
         args = [self.generate_expression(arg) for arg in node.arguments]

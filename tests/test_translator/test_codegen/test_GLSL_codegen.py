@@ -992,6 +992,124 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
 
 
+def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
+    code = """
+    shader EquivalentResourceBindings {
+        cbuffer Constants @binding(4) @register(b4) {
+            vec4 tint;
+        };
+
+        RWStructuredBuffer<int> values @binding(3) @register(u3);
+        sampler2D tex @binding(1) @texture(1) @register(t1);
+        image2D img @binding(2) @register(u2);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                int value = buffer_load(values, 0);
+                return texture(tex, uv) + imageLoad(img, ivec2(0, 0)) +
+                    tint + vec4(float(value));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(std140, binding = 4) uniform Constants" in generated_code
+    assert "layout(std430, binding = 3) buffer valuesBuffer" in generated_code
+    assert "layout(binding = 1) uniform sampler2D tex;" in generated_code
+    assert "layout(rgba32f, binding = 2) uniform image2D img;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader ConflictingTextureBindings {
+                sampler2D tex @binding(1) @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'tex': "
+            "binding 1 differs from register t2 binding 2",
+        ),
+        (
+            """
+            shader ConflictingImageBindings {
+                image2D img @binding(2) @register(u3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'img': "
+            "binding 2 differs from register u3 binding 3",
+        ),
+        (
+            """
+            shader ConflictingStructuredBufferBindings {
+                RWStructuredBuffer<int> values @binding(3) @register(u4);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'values': "
+            "binding 3 differs from register u4 binding 4",
+        ),
+        (
+            """
+            shader ConflictingCBufferBindings {
+                cbuffer Constants @binding(4) @register(b5) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'Constants': "
+            "binding 4 differs from register b5 binding 5",
+        ),
+        (
+            """
+            shader ConflictingStageResourceBindings {
+                fragment {
+                    vec4 main(sampler2D tex @binding(1) @register(t2))
+                        @gl_FragColor
+                    {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'tex': "
+            "binding 1 differs from register t2 binding 2",
+        ),
+    ],
+)
+def test_glsl_resource_binding_aliases_reject_conflicting_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_glsl_stage_local_resources_emit_global_layout_bindings():
     code = """
     shader StageLocalResourcesGLSL {

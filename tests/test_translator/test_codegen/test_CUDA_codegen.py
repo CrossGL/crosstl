@@ -5983,6 +5983,78 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
+        self,
+    ):
+        """Test CUDA handles sampled/image resource calls through struct members."""
+        source_code = """
+        struct TextureBundle {
+            sampler2d tex;
+            sampler2dms msTex;
+            sampler2d textures[2];
+            image2D images[2];
+        };
+
+        shader ResourceMembers {
+            void sampleBundle(
+                TextureBundle bundle,
+                vec2 uv,
+                ivec2 pixel,
+                int slot
+            ) {
+                vec4 sampled = texture(bundle.tex, uv);
+                vec4 sampledLod = textureLod(bundle.tex, uv, 1.0);
+                vec4 sampledElement = texture(bundle.textures[slot], uv);
+                vec4 msSample = texture(bundle.msTex, uv);
+                ivec2 dims = textureSize(bundle.tex, 0);
+                int samples = textureSamples(bundle.msTex);
+                int levels = textureQueryLevels(bundle.tex);
+                ivec2 imageDims = imageSize(bundle.images[slot]);
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "float4 sampled = tex2D(bundle.tex, uv.x, uv.y);" in cuda_code
+        assert "float4 sampledLod = tex2DLod(bundle.tex, uv.x, uv.y, 1.0);" in cuda_code
+        assert (
+            "float4 sampledElement = tex2D(bundle.textures[slot], uv.x, uv.y);"
+            in cuda_code
+        )
+        assert (
+            "float4 msSample = /* unsupported CUDA multisample resource call: "
+            "texture on sampler2DMS */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "int2 dims = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int samples = /* unsupported CUDA resource query: "
+            "textureSamples metadata unavailable on sampler2DMS */ 0;" in cuda_code
+        )
+        assert (
+            "int levels = /* unsupported CUDA resource query: "
+            "textureQueryLevels metadata unavailable on sampler2D */ 0;" in cuda_code
+        )
+        assert (
+            "int2 imageDims = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert "texture(" not in cuda_code
+        assert "textureLod(" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics(self):
         """Test CUDA texture sampling rejects known invalid coordinate ranks."""
         source_code = """

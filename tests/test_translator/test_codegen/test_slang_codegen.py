@@ -2442,6 +2442,108 @@ def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
 
 
+def test_synchronization_intrinsics_lower_to_slang_barriers():
+    code = """
+    shader SlangSynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                workgroupBarrier();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                deviceMemoryBarrier();
+                memoryBarrierImage();
+                memoryBarrier();
+                allMemoryBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert generated_code.count("GroupMemoryBarrier();") == 2
+    assert generated_code.count("DeviceMemoryBarrier();") == 3
+    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert "barrier();" not in generated_code
+    assert "workgroupBarrier();" not in generated_code
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+    assert "memoryBarrier();" not in generated_code
+    assert "allMemoryBarrier();" not in generated_code
+
+
+def test_user_defined_synchronization_names_are_not_lowered_to_slang_barriers():
+    code = """
+    shader UserDefinedSlangSynchronization {
+        compute {
+            void barrier() {
+                return;
+            }
+
+            void memoryBarrier() {
+                return;
+            }
+
+            void main() {
+                barrier();
+                memoryBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void barrier()" in generated_code
+    assert "void memoryBarrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "GroupMemoryBarrier" not in generated_code
+    assert "DeviceMemoryBarrier" not in generated_code
+    assert "AllMemoryBarrier" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "builtin_name",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "deviceMemoryBarrier",
+        "memoryBarrierImage",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_synchronization_intrinsics_reject_arguments(builtin_name):
+    code = f"""
+    shader InvalidSlangSynchronization {{
+        compute {{
+            void main() {{
+                {builtin_name}(1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Slang synchronization builtin '{builtin_name}' requires "
+            r"0 argument\(s\), got 1"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_threadgroup_memory_qualifiers_emit_slang_groupshared():
     code = """
     shader SharedMemoryQualifiers {

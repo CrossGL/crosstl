@@ -3828,6 +3828,194 @@ def test_reference_locals_and_returns_borrow_without_clones_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_reference_branches_and_mutable_places_borrow_without_clones_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def payload_member():
+        return MemberAccessNode(IdentifierNode("wrapper"), "payload")
+
+    def payload_slot():
+        return ArrayAccessNode(
+            MemberAccessNode(IdentifierNode("wrapper"), "values"),
+            IdentifierNode("index"),
+        )
+
+    ast = ShaderNode(
+        "RustReferenceBranchSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            StructNode(
+                "Wrapper",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("values", ArrayType(payload_type, size=2)),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "choose_ref",
+                ReferenceType(payload_type),
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", ReferenceType(payload_type)),
+                    ParameterNode("right", ReferenceType(payload_type)),
+                ],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "branch_local_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type),
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "branch_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(7, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "borrow_mut_places",
+                int_type,
+                [
+                    ParameterNode("wrapper", wrapper_type),
+                    ParameterNode("index", int_type),
+                ],
+                [
+                    VariableNode(
+                        "member",
+                        ReferenceType(payload_type, is_mutable=True),
+                        payload_member(),
+                    ),
+                    VariableNode(
+                        "slot",
+                        ReferenceType(payload_type, is_mutable=True),
+                        payload_slot(),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("member")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("member")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("slot")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("slot")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            count_of(IdentifierNode("member")),
+                            "+",
+                            count_of(IdentifierNode("slot")),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn choose_ref<'a>(flag: bool, left: &'a Payload, right: &'a Payload) "
+        "-> &'a Payload"
+    ) in generated_code
+    assert "return (if flag { left } else { right });" in generated_code
+    assert "pub fn branch_local_ref(flag: bool, left: Payload, right: Payload)" in (
+        generated_code
+    )
+    assert "let selected: &Payload = (if flag { &left } else { &right });" in (
+        generated_code
+    )
+    assert (
+        "pub fn branch_local_mut_ref(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if flag { &mut left } else { &mut right });"
+    ) in generated_code
+    assert "pub fn borrow_mut_places(mut wrapper: Wrapper, index: i32)" in (
+        generated_code
+    )
+    assert "let mut member: &mut Payload = &mut wrapper.payload;" in generated_code
+    assert (
+        "let mut slot: &mut Payload = &mut wrapper.values[index as usize];"
+        in generated_code
+    )
+    assert "&(if flag" not in generated_code
+    assert "&mut (if flag" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 
