@@ -3877,7 +3877,7 @@ class MojoCodeGen:
                 expr, target_type, target_context or "match expression"
             )
         elif isinstance(expr, ConstructorNode):
-            return self.generate_constructor_node(expr)
+            return self.generate_constructor_node(expr, target_type, target_context)
         elif isinstance(expr, CastNode):
             return self.generate_cast_node(expr)
         elif isinstance(expr, SwizzleNode):
@@ -4120,28 +4120,38 @@ class MojoCodeGen:
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
 
-    def generate_constructor_node(self, expr):
+    def generate_constructor_node(self, expr, target_type=None, target_context=None):
         type_name = self.convert_type_node_to_string(expr.constructor_type)
         mapped_type = self.map_type(type_name)
-        self.validate_constructor_resource_size_target_shapes(
-            expr, type_name, f"constructor {type_name}"
-        )
-        field_items = list(self.struct_types.get(type_name, {}).items())
+        target_name = self.type_name(target_type)
+        struct_type = target_name if target_name in self.struct_types else type_name
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        base_context = target_context or f"constructor {type_name}"
         positional_args = []
         for index, argument in enumerate(expr.arguments):
-            field_type = field_items[index][1] if index < len(field_items) else None
+            field_type = None
+            if index < len(field_items):
+                field_name, field_type = field_items[index]
+                field_context = f"{base_context} field {struct_type}.{field_name}"
+            else:
+                field_context = f"{base_context} field {index + 1}"
+            self.validate_expression_target_shape(argument, field_type, field_context)
             positional_args.append(
-                self.generate_expression(
-                    argument,
-                    field_type,
-                    f"constructor {type_name} field {index + 1}",
-                )
+                self.generate_expression(argument, field_type, field_context)
             )
-        named_args = [
-            f"{name}="
-            f"{self.generate_expression(value, self.struct_types.get(type_name, {}).get(name), f'constructor {type_name} field {name}')}"
-            for name, value in expr.named_arguments.items()
-        ]
+        named_args = []
+        for name, value in expr.named_arguments.items():
+            field_type = fields.get(name)
+            field_context = (
+                f"{base_context} field {struct_type}.{name}"
+                if field_type is not None
+                else f"{base_context} field {name}"
+            )
+            self.validate_expression_target_shape(value, field_type, field_context)
+            named_args.append(
+                f"{name}={self.generate_expression(value, field_type, field_context)}"
+            )
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
 
     def generate_struct_function_constructor_call(self, expr, type_name, context):

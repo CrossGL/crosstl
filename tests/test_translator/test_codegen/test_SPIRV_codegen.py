@@ -2061,6 +2061,45 @@ class TestVulkanSPIRVCodeGen:
         assert " Refract " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_unknown_std450_fallback_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader UnknownStd450Builtins {
+            compute {
+                void main() {
+                    float scalar = notAStd450Function(vec2(1.0, 2.0));
+                    vec2 vector = missingVecCall(vec2(3.0, 4.0));
+                    int whole = missingIntegerCall(1);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'notAStd450Function'; using default value"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'missingVecCall'; using default value"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'missingIntegerCall'; using default value"
+        ) in spv_code
+        assert " NotAStd450Function " not in spv_code
+        assert " MissingVecCall " not in spv_code
+        assert " MissingIntegerCall " not in spv_code
+        assert not re.search(
+            r"OpExtInst .* (NotAStd450Function|MissingVecCall|MissingIntegerCall)\b",
+            spv_code,
+        )
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_malformed_min_max_clamp_mix_builtins_emit_diagnostics(self, tmp_path):
         source_code = """
         shader MalformedGenericBuiltins {
@@ -2632,6 +2671,22 @@ class TestVulkanSPIRVCodeGen:
             )
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_generic_std450_lowering_registers_result_value_type(self):
+        generator = VulkanSPIRVCodeGen()
+        float_type = generator.register_primitive_type("float")
+        vec2_type = generator.register_vector_type(float_type, 2)
+        zero = generator.register_constant(0.0, float_type)
+        vector = generator.composite_construct(vec2_type, [zero, zero])
+
+        result = generator.call_builtin_function("sin", [vector])
+
+        assert result is not None
+        assert generator.value_types[result.id] == vec2_type
+        assert re.search(
+            rf"%{result.id} = OpExtInst %{vec2_type.id} %\d+ Sin %{vector.id}",
+            "\n".join(generator.code_lines),
+        )
 
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):
         source_code = """

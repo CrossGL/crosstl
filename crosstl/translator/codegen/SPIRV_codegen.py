@@ -6839,6 +6839,15 @@ class VulkanSPIRVCodeGen:
                 "reflect": "Reflect",
                 "refract": "Refract",
             }
+            if function_name not in glsl_std450_map:
+                self.emit(
+                    f"; WARNING: SPIR-V backend cannot lower unknown function "
+                    f"'{function_name}'; using default value"
+                )
+                return self.default_value_for_type(
+                    self.unknown_function_fallback_type(args)
+                )
+
             unary_std450_functions = {
                 "sin",
                 "cos",
@@ -6952,32 +6961,10 @@ class VulkanSPIRVCodeGen:
                     vector_type = self.register_vector_type(component_type, 3)
                     result_type = vector_type.type
 
-            id_value = self.get_id()
-            arg_list = " ".join([f"%{arg.id}" for arg in args])
-
-            glsl_function = glsl_std450_map.get(
-                function_name, function_name[0].upper() + function_name[1:]
+            result_type_id = self.ensure_registered_type(result_type)
+            return self.emit_glsl_std450_instruction(
+                glsl_std450_map[function_name], result_type_id, args
             )
-
-            # Find the result type ID
-            result_type_id = None
-            for id_obj in (
-                [self.primitive_types.get(result_type.base_type)]
-                + list(self.vector_types.values())
-                + list(self.matrix_types.values())
-            ):
-                if id_obj and id_obj.type.base_type == result_type.base_type:
-                    result_type_id = id_obj.id
-                    break
-
-            if result_type_id is None:
-                result_type_id = float_type.id
-
-            self.emit(
-                f"%{id_value} = OpExtInst %{result_type_id} %{self.glsl_std450_id} {glsl_function} {arg_list}"
-            )
-
-            return SpirvId(id_value, result_type)
 
     def dot_result_type(self, args: List[SpirvId]) -> SpirvId:
         for arg in args:
@@ -7055,6 +7042,17 @@ class VulkanSPIRVCodeGen:
             )
 
         return None
+
+    def unknown_function_fallback_type(self, args: List[SpirvId]) -> SpirvId:
+        if not args:
+            return self.register_primitive_type("float")
+
+        component_type = self.scalar_or_vector_component_type(args[0].type)
+        primitive_type = self.normalize_primitive_name(component_type)
+        if primitive_type in {"float", "double", "int", "uint", "bool"}:
+            return self.register_primitive_type(primitive_type)
+
+        return self.register_primitive_type("float")
 
     def is_float32_unary_std450_function(self, function_name: str) -> bool:
         return function_name in {
