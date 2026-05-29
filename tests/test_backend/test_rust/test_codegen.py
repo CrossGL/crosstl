@@ -6319,6 +6319,46 @@ def test_typed_noncapturing_closures_emit_helpers():
         pytest.fail(f"Typed noncapturing closure helper conversion failed: {e}")
 
 
+def test_typed_inline_closure_resource_parameters_convert_helpers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type Values = RwBuffer<i32>;
+
+    fn closure_resource_parameters(
+        tex: ColorTexture,
+        values: Values,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let apply_sample = |resource: ColorTexture| -> Vec4<f32> {
+            resource.sample_sampler(sampler_state, uv)
+        };
+        let apply_load = |buffer: Values| -> i32 {
+            buffer.buffer_load(index)
+        };
+        let base = apply_sample(tex);
+        let value = apply_load(values);
+        return base + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "let apply_sample = lambda(ColorTexture resource, "
+        "{ return texture(resource, sampler_state, uv); });"
+    ) in result
+    assert (
+        "let apply_load = lambda(Values buffer, "
+        "{ return buffer_load(buffer, index); });"
+    ) in result
+    assert "let base = apply_sample(tex);" in result
+    assert "let value = apply_load(values);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
 def test_typed_pattern_closures_emit_helpers():
     code = """
     struct Point {

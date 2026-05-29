@@ -6791,6 +6791,90 @@ class TestHipCodeGen:
         assert "var manualFunctionAttribute: i32 = (/* HIP device query:" not in result
         assert "var manualArrayFlags: u32 = (/* HIP device query:" not in result
 
+    def test_hip_function_attribute_member_reads_emit_metadata_expressions(self):
+        """Test hipFuncAttributes member reads lower to explicit metadata."""
+        code = """
+        void host(hipFunction_t function, int* out) {
+            hipFuncAttributes attrs;
+            hipFuncAttributes statusAttrs;
+            hipFuncGetAttributes(&attrs, function);
+            out[0] = attrs.maxThreadsPerBlock;
+            out[1] = attrs.sharedSizeBytes;
+            int regs = attrs.numRegs;
+            out[2] = attrs.binaryVersion;
+            out[3] = attrs.cacheModeCA;
+            out[4] = attrs.constSizeBytes;
+            out[5] = attrs.maxDynamicSharedSizeBytes;
+            out[6] = attrs.preferredShmemCarveout;
+            out[7] = attrs.ptxVersion;
+            attrs.maxThreadsPerBlock = 128;
+            int manualMax = attrs.maxThreadsPerBlock;
+            hipError_t err = hipFuncGetAttributes(&statusAttrs, function);
+            out[8] = statusAttrs.localSizeBytes;
+            statusAttrs.sharedSizeBytes++;
+            int manualShared = statusAttrs.sharedSizeBytes;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP function get attributes: output: attrs, function: function"
+            in result
+        )
+        assert (
+            "out[0] = (/* HIP device query: "
+            "function.attributes.maxThreadsPerBlock(function) */ 0);"
+        ) in result
+        assert (
+            "out[1] = (/* HIP device query: "
+            "function.attributes.sharedSizeBytes(function) */ 0);"
+        ) in result
+        assert (
+            "var regs: i32 = (/* HIP device query: "
+            "function.attributes.numRegs(function) */ 0);"
+        ) in result
+        for index, member in [
+            (2, "binaryVersion"),
+            (3, "cacheModeCA"),
+            (4, "constSizeBytes"),
+            (5, "maxDynamicSharedSizeBytes"),
+            (6, "preferredShmemCarveout"),
+            (7, "ptxVersion"),
+        ]:
+            assert (
+                f"out[{index}] = (/* HIP device query: "
+                f"function.attributes.{member}(function) */ 0);"
+            ) in result
+        assert "attrs.maxThreadsPerBlock = 128;" in result
+        assert "var manualMax: i32 = attrs.maxThreadsPerBlock;" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "out[8] = (/* HIP device query: "
+            "function.attributes.localSizeBytes(function) */ 0);"
+        ) in result
+        assert "(statusAttrs.sharedSizeBytes++);" in result
+        assert "var manualShared: i32 = statusAttrs.sharedSizeBytes;" in result
+        assert "out[0] = attrs.maxThreadsPerBlock;" not in result
+        assert "out[1] = attrs.sharedSizeBytes;" not in result
+        assert "var regs: i32 = attrs.numRegs;" not in result
+        for index, member in [
+            (2, "binaryVersion"),
+            (3, "cacheModeCA"),
+            (4, "constSizeBytes"),
+            (5, "maxDynamicSharedSizeBytes"),
+            (6, "preferredShmemCarveout"),
+            (7, "ptxVersion"),
+        ]:
+            assert f"out[{index}] = attrs.{member};" not in result
+        assert "out[8] = statusAttrs.localSizeBytes;" not in result
+        assert "var manualMax: i32 = (/* HIP device query:" not in result
+        assert "var manualShared: i32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

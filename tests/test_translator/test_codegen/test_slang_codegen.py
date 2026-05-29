@@ -8915,6 +8915,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 ivec3 badPixel = ivec3(2, 3, 4);
                 float floatFetchLod = 1.0;
                 bool boolSampleIndex = true;
+                bool boolLod = true;
                 vec2 badLod = vec2(0.0, 1.0);
                 ivec2 badSampleIndex = ivec2(0, 1);
                 vec4 missingTexture = texture();
@@ -8946,6 +8947,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec4 badBiasRank = texture(colorMap, uv, badUv);
                 vec4 badLodCoordRank = textureLod(colorMap, badUv, 1.0);
                 vec4 badLodRank = textureLod(colorMap, uv, badLod);
+                vec4 boolLodType = textureLod(colorMap, uv, boolLod);
                 vec4 badGradCoordRank = textureGrad(colorMap, scalarCoord, ddx, ddy);
                 vec4 badGradRank = textureGrad(colorMap, uv, badUv, ddy);
                 vec4 intGradType = textureGrad(colorMap, uv, intDdx, ddy);
@@ -9057,6 +9059,11 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "textureLod requires a scalar lod argument */ float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolLodType = /* unsupported Slang sampled texture: "
+        "textureLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badGradCoordRank = /* unsupported Slang sampled texture: "
         "textureGrad requires a 2-component coordinate for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -9124,7 +9131,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texelFetch fetch index argument must be scalar int or uint, got bool */ "
         "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 31
+    assert generated_code.count("unsupported Slang sampled texture") == 32
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -9332,6 +9339,7 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 ivec3 badOffset = ivec3(1, 0, 0);
                 vec2 floatOffset = vec2(1.0, 0.0);
                 bvec2 boolOffset = bvec2(true, false);
+                bool boolLod = true;
                 vec4 missingOffset = textureOffset(colorMap, uv);
                 vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
                 vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
@@ -9347,8 +9355,14 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 multisampleOffset = textureOffset(msTex, uv, offset);
                 vec4 badCoordRank = textureOffset(colorMap, scalarCoord, offset);
                 vec4 badOffsetRank = textureLodOffset(colorMap, uv, 1.0, badOffset);
-                vec4 floatOffsetType = textureOffset(colorMap, uv, floatOffset);
                 vec4 boolLodOffsetType = textureLodOffset(
+                    colorMap,
+                    uv,
+                    boolLod,
+                    offset
+                );
+                vec4 floatOffsetType = textureOffset(colorMap, uv, floatOffset);
+                vec4 boolOffsetType = textureLodOffset(
                     colorMap,
                     uv,
                     1.0,
@@ -9422,12 +9436,17 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolLodOffsetType = /* unsupported Slang texture offset: "
+        "textureLodOffset lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 floatOffsetType = /* unsupported Slang texture offset: "
         "textureOffset offset must be scalar or vector int, got float2 */ "
         "float4(0.0);" in generated_code
     )
     assert (
-        "float4 boolLodOffsetType = /* unsupported Slang texture offset: "
+        "float4 boolOffsetType = /* unsupported Slang texture offset: "
         "textureLodOffset offset must be scalar or vector int, got bool2 */ "
         "float4(0.0);" in generated_code
     )
@@ -9580,12 +9599,15 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                 ivec3 badOffset = ivec3(1, 0, 0);
                 vec2 floatOffset = vec2(1.0, 0.0);
                 bvec2 boolOffset = bvec2(true, false);
+                bool boolLod = true;
+                vec2 badLod = vec2(0.0, 1.0);
                 vec4 badCoord = textureProj(colorMap, uv);
                 vec4 samplerProjected = textureProj(querySampler, uvq);
                 vec4 imageProjected = textureProj(colorImage, uvq);
                 vec4 shadowProjected = textureProj(shadowMap, uvq);
                 vec4 multisampleProjected = textureProj(msTex, uvq);
                 vec4 missingLod = textureProjLod(colorMap, uvq);
+                vec4 boolProjectedLod = textureProjLod(colorMap, uvq, boolLod);
                 vec4 missingGrad = textureProjGrad(colorMap, uvq, ddx);
                 vec4 missingOffset = textureProjGradOffset(
                     colorMap,
@@ -9604,6 +9626,12 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                     uvq,
                     1.0,
                     boolOffset
+                );
+                vec4 vectorProjectedLodOffset = textureProjLodOffset(
+                    colorMap,
+                    uvq,
+                    badLod,
+                    offset
                 );
                 vec4 badProjectedGrad = textureProjGrad(
                     colorMap,
@@ -9650,6 +9678,11 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolProjectedLod = /* unsupported Slang projected texture: "
+        "textureProjLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 missingGrad = /* unsupported Slang projected texture: "
         "textureProjGrad requires gradient x and gradient y arguments */ "
         "float4(0.0);" in generated_code
@@ -9673,6 +9706,11 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 boolProjectedLodOffset = /* unsupported Slang projected texture: "
         "textureProjLodOffset offset must be scalar or vector int, got bool2 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 vectorProjectedLodOffset = /* unsupported Slang projected texture: "
+        "textureProjLodOffset requires a scalar lod argument */ float4(0.0);"
+        in generated_code
     )
     assert (
         "float4 badProjectedGrad = /* unsupported Slang projected texture: "

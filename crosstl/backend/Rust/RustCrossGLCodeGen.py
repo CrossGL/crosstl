@@ -7850,15 +7850,23 @@ class RustToCrossGLConverter:
             self.prepare_closure_parameter(param) for param in closure.params
         ]
         params = ", ".join(info["declarator"] for info in parameter_infos)
-        body = self.generate_closure_body(
-            closure.body,
-            [
-                (info["subject"], info["pattern"])
-                for info in parameter_infos
-                if info["pattern"] is not None
-            ],
-            closure.return_type,
-        )
+        param_types = [
+            (info["subject"], param.param_type)
+            for info, param in zip(parameter_infos, closure.params)
+        ]
+        self.push_value_type_scope(param_types)
+        try:
+            body = self.generate_closure_body(
+                closure.body,
+                [
+                    (info["subject"], info["pattern"])
+                    for info in parameter_infos
+                    if info["pattern"] is not None
+                ],
+                closure.return_type,
+            )
+        finally:
+            self.pop_value_type_scope()
         if not params:
             return f"lambda({body})"
         return f"lambda({params}, {body})"

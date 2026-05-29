@@ -8201,9 +8201,7 @@ class SlangCodeGen:
                 return f"{texture_name}.Sample({coord})"
 
             if func_name == "textureLod" and extra_args:
-                lod_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                    extra_args[0], "lod argument"
-                )
+                lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
                 if lod_reason:
                     return self.unsupported_sampled_texture_call(func_name, lod_reason)
                 lod = self.generate_expression(extra_args[0])
@@ -8554,6 +8552,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_offset_call(
                     func_name, "requires lod and offset arguments"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_offset_call(func_name, lod_reason)
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[1]
             )
@@ -8648,6 +8649,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires one lod argument"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_projected_call(func_name, lod_reason)
             lod = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleLevel({projected_coord}, {lod})"
 
@@ -8656,6 +8660,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires lod and offset arguments"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_projected_call(func_name, lod_reason)
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[1]
             )
@@ -9173,6 +9180,13 @@ class SlangCodeGen:
         if actual_rank is None or actual_rank == 1:
             return None
         return f"requires {self.texture_rank_phrase(1, role)}"
+
+    def scalar_texture_lod_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "lod argument"
+        ) or self.scalar_numeric_texture_argument_unsupported_reason(
+            node, "lod argument"
+        )
 
     def scalar_integer_texture_argument_unsupported_reason(self, node, role):
         type_name = self.type_name_string(self.expression_result_type(node))
