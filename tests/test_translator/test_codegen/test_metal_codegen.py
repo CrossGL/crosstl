@@ -6840,6 +6840,10 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
             uint meshlet;
         };
 
+        struct PayloadBlock {
+            MeshPayload active;
+        };
+
         MeshPayload makePayload() {
             MeshPayload payload;
             payload.meshlet = 1u;
@@ -6847,13 +6851,20 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
         }
 
         task {
-            void main() @numthreads(1, 1, 1) {
+            void main(
+                device MeshPayload* devicePayloads @buffer(0),
+                constant MeshPayload* constantPayloads @buffer(1),
+                device PayloadBlock* deviceBlocks @buffer(2)
+            ) @numthreads(1, 1, 1) {
                 MeshPayload threadPayload;
                 groupshared MeshPayload payloads[2];
                 payloads[0].meshlet = 2u;
                 threadgroup MeshPayload* alias = &payloads[0];
                 DispatchMesh(1, 1, 1, makePayload());
                 DispatchMesh(1, 1, 1, threadPayload);
+                DispatchMesh(1, 1, 1, devicePayloads[0]);
+                DispatchMesh(1, 1, 1, constantPayloads[0]);
+                DispatchMesh(1, 1, 1, deviceBlocks[0].active);
                 DispatchMesh(1, 1, 1, alias);
                 DispatchMesh(1, 1, 1, payloads);
                 DispatchMesh(1, 1, 1, alias[0]);
@@ -6876,6 +6887,9 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in generated
+    assert "device MeshPayload* devicePayloads [[buffer(0)]]" in generated
+    assert "constant MeshPayload* constantPayloads [[buffer(1)]]" in generated
+    assert "device PayloadBlock* deviceBlocks [[buffer(2)]]" in generated
     assert (
         "/* unsupported Metal mesh payload dispatch: payload argument must be a "
         "threadgroup lvalue */"
@@ -6884,6 +6898,21 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
         "/* unsupported Metal mesh payload dispatch: payload argument "
         "'threadPayload' uses thread address space; DispatchMesh payload requires "
         "a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'devicePayloads[0]' uses device address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'constantPayloads[0]' uses constant address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'deviceBlocks[0].active' uses device address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
     ) in generated
     assert (
         "/* unsupported Metal mesh payload dispatch: payload argument 'alias' "
@@ -6897,11 +6926,14 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
     ) in generated
     assert "_crossglMeshPayload = makePayload();" not in generated
     assert "_crossglMeshPayload = threadPayload;" not in generated
+    assert "_crossglMeshPayload = devicePayloads[0];" not in generated
+    assert "_crossglMeshPayload = constantPayloads[0];" not in generated
+    assert "_crossglMeshPayload = deviceBlocks[0].active;" not in generated
     assert "_crossglMeshPayload = alias;" not in generated
     assert "_crossglMeshPayload = payloads;" not in generated
     assert "_crossglMeshPayload = alias[0];" in generated
     assert "_crossglMeshPayload = payloads[0];" in generated
-    assert generated.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 6
+    assert generated.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 9
     assert "DispatchMesh(" not in generated
 
 

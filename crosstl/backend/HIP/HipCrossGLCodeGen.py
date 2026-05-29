@@ -2356,6 +2356,7 @@ class HipToCrossGLConverter:
         elif name == "hipTexRefGetAddress":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     "// HIP texture reference get address: "
                     f"output: {output}, texture: {args[1]}"
@@ -2411,6 +2412,18 @@ class HipToCrossGLConverter:
                         output_name,
                         f"textureReference.{query_name}({args[1]})",
                     )
+                elif output_name is not None and name == "hipTexRefGetBorderColor":
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            f"[{index}]": (
+                                f"textureReference.borderColor[{index}]({args[1]})"
+                            )
+                            for index in range(4)
+                        },
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP texture reference get {labels[name]}: "
                     f"output: {output}, texture: {args[1]}"
@@ -4927,12 +4940,15 @@ class HipToCrossGLConverter:
                 return root
             if isinstance(current, ArrayAccessNode):
                 root = collect(current.array)
-                if root is None or not path:
+                if root is None:
                     return None
                 index = self.format_member_query_index(current.index)
                 if index is None:
                     return None
-                path[-1] = f"{path[-1]}[{index}]"
+                if path:
+                    path[-1] = f"{path[-1]}[{index}]"
+                else:
+                    path.append(f"[{index}]")
                 return root
             return None
 

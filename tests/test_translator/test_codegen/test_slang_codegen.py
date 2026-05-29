@@ -13567,6 +13567,12 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int extraTextureSamples = textureSamples(msTex, 0);
                 int extraImageSamples = imageSamples(msImage, 0);
                 int extraLevels = textureQueryLevels(colorMap, 0);
+                float levelsFloatTarget = textureQueryLevels(colorMap);
+                ivec2 levelsVectorTarget = textureQueryLevels(colorMap);
+                float textureSamplesFloatTarget = textureSamples(msTex);
+                ivec2 textureSamplesVectorTarget = textureSamples(msTex);
+                float imageSamplesFloatTarget = imageSamples(msImage);
+                ivec2 imageSamplesVectorTarget = imageSamples(msImage);
                 ivec3 scalarTextureTarget = textureSize(line, 0);
                 int vectorTextureTarget = textureSize(colorMap, 0);
                 ivec2 scalarImageTarget = imageSize(values);
@@ -13720,6 +13726,33 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
     )
     assert (
+        "float levelsFloatTarget = /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int2 levelsVectorTarget = /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "float textureSamplesFloatTarget = /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 textureSamplesVectorTarget = /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "float imageSamplesFloatTarget = /* unsupported Slang resource query: "
+        "imageSamples returns int but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 imageSamplesVectorTarget = /* unsupported Slang resource query: "
+        "imageSamples returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
         "int3 scalarTextureTarget = /* unsupported Slang resource query: "
         "textureSize returns int but target expects int3 */ int3(0);" in generated_code
     )
@@ -13796,7 +13829,7 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0))));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 49
+    assert generated_code.count("unsupported Slang resource query") == 55
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code

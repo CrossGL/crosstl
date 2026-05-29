@@ -9163,6 +9163,82 @@ class TestHipCodeGen:
         )
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
 
+    def test_hip_texture_reference_pointer_outputs_and_border_color_metadata(self):
+        """Test raw texture-reference outputs clear stale metadata."""
+        code = """
+        void queryTextureReferencePointerOutputs(
+            textureReference* texRef,
+            float* borderColor,
+            size_t* sizes,
+            void** ptrs,
+            hipArray_t* arrays,
+            hipMipmappedArray_t* mipmaps,
+            float* floats
+        ) {
+            size_t alignment = 0;
+            hipDeviceptr_t address;
+            hipArray_t array;
+            hipMipmappedArray_t mipmap;
+            int index = 1;
+            hipGetTextureAlignmentOffset(&alignment, texRef);
+            hipTexRefGetAddress(&alignment, texRef);
+            sizes[0] = alignment;
+            hipGetTextureAlignmentOffset(&alignment, texRef);
+            sizes[1] = alignment;
+            hipTexRefGetAddress(&address, texRef);
+            ptrs[0] = address;
+            hipTexRefGetArray(&array, texRef);
+            arrays[0] = array;
+            hipTexRefGetMipMappedArray(&mipmap, texRef);
+            mipmaps[0] = mipmap;
+            hipTexRefGetBorderColor(borderColor, texRef);
+            floats[0] = borderColor[0];
+            floats[1] = borderColor[3];
+            floats[2] = borderColor[index];
+            borderColor[0] = 1.0f;
+            floats[3] = borderColor[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP texture reference get address: output: alignment, texture: texRef"
+            in result
+        )
+        assert "sizes[0] = alignment;" in result
+        assert (
+            "sizes[0] = "
+            "(/* HIP device query: textureReference.alignmentOffset(texRef) */ 0);"
+            not in result
+        )
+        assert (
+            "sizes[1] = "
+            "(/* HIP device query: textureReference.alignmentOffset(texRef) */ 0);"
+            in result
+        )
+        assert "ptrs[0] = address;" in result
+        assert "arrays[0] = array;" in result
+        assert "mipmaps[0] = mipmap;" in result
+        assert (
+            "floats[0] = (/* HIP device query: "
+            "textureReference.borderColor[0](texRef) */ 0);"
+        ) in result
+        assert (
+            "floats[1] = (/* HIP device query: "
+            "textureReference.borderColor[3](texRef) */ 0);"
+        ) in result
+        assert "floats[2] = borderColor[index];" in result
+        assert "borderColor[0] = 1.0f;" in result
+        assert "floats[3] = borderColor[0];" in result
+        assert "textureReference.address(texRef)" not in result
+        assert "textureReference.array(texRef)" not in result
+        assert "textureReference.mipmappedArray(texRef)" not in result
+
     def test_hip_runtime_callback_activity_expression_conversion(self):
         """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """

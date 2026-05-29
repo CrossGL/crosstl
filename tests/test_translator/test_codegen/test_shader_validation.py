@@ -3514,6 +3514,10 @@ shader MetalMeshPayloadInvalidSourceValidation {
         uint meshlet;
     };
 
+    struct PayloadBlock {
+        MeshPayload active;
+    };
+
     MeshPayload makePayload() {
         MeshPayload payload;
         payload.meshlet = 1u;
@@ -3521,13 +3525,20 @@ shader MetalMeshPayloadInvalidSourceValidation {
     }
 
     task {
-        void main() @numthreads(1, 1, 1) {
+        void main(
+            device MeshPayload* devicePayloads @buffer(0),
+            constant MeshPayload* constantPayloads @buffer(1),
+            device PayloadBlock* deviceBlocks @buffer(2)
+        ) @numthreads(1, 1, 1) {
             MeshPayload threadPayload;
             groupshared MeshPayload payloads[2];
             payloads[0].meshlet = 2u;
             threadgroup MeshPayload* alias = &payloads[0];
             DispatchMesh(1, 1, 1, makePayload());
             DispatchMesh(1, 1, 1, threadPayload);
+            DispatchMesh(1, 1, 1, devicePayloads[0]);
+            DispatchMesh(1, 1, 1, constantPayloads[0]);
+            DispatchMesh(1, 1, 1, deviceBlocks[0].active);
             DispatchMesh(1, 1, 1, alias);
             DispatchMesh(1, 1, 1, payloads);
             DispatchMesh(1, 1, 1, alias[0]);
@@ -7037,13 +7048,19 @@ def test_generated_metal_mesh_payload_invalid_sources_compile_with_metal3(tmp_pa
     source.write_text(code, encoding="utf-8")
 
     assert "unsupported Metal mesh payload dispatch" in code
+    assert "device MeshPayload* devicePayloads [[buffer(0)]]" in code
+    assert "constant MeshPayload* constantPayloads [[buffer(1)]]" in code
+    assert "device PayloadBlock* deviceBlocks [[buffer(2)]]" in code
     assert "_crossglMeshPayload = makePayload();" not in code
     assert "_crossglMeshPayload = threadPayload;" not in code
+    assert "_crossglMeshPayload = devicePayloads[0];" not in code
+    assert "_crossglMeshPayload = constantPayloads[0];" not in code
+    assert "_crossglMeshPayload = deviceBlocks[0].active;" not in code
     assert "_crossglMeshPayload = alias;" not in code
     assert "_crossglMeshPayload = payloads;" not in code
     assert "_crossglMeshPayload = alias[0];" in code
     assert "_crossglMeshPayload = payloads[0];" in code
-    assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 6
+    assert code.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 9
 
     run_validator(
         [

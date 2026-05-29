@@ -6272,9 +6272,12 @@ class MetalCodeGen:
             return None
 
         source_address_space = address_space or "unknown"
+        display_name = (
+            self.assignment_target_access_display_name(payload_expr) or payload_name
+        )
         return (
             "/* unsupported Metal mesh payload dispatch: payload argument "
-            f"'{payload_name}' uses {source_address_space} address space; "
+            f"'{display_name}' uses {source_address_space} address space; "
             "DispatchMesh payload requires a threadgroup lvalue */"
         )
 
@@ -6741,7 +6744,16 @@ class MetalCodeGen:
             return ""
         if semantic:
             return self.map_semantic(semantic)
-        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
+        if shader_type in {
+            "vertex",
+            "fragment",
+            "compute",
+            "ray_generation",
+            "object",
+            "task",
+            "amplification",
+            "mesh",
+        }:
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr
@@ -7669,6 +7681,49 @@ class MetalCodeGen:
             return f"{object_name}.{member_name}" if object_name else member_name
         if isinstance(target, PointerAccessNode):
             object_name = self.assignment_target_display_name(
+                getattr(target, "pointer_expr", None)
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}->{member_name}" if object_name else member_name
+        return self.expression_name(target)
+
+    def assignment_target_access_display_name(self, target):
+        if isinstance(target, UnaryOpNode):
+            operand_name = self.assignment_target_access_display_name(
+                getattr(target, "operand", None)
+            )
+            if getattr(target, "operator", None) == "&":
+                return operand_name
+            if getattr(target, "operator", None) == "*":
+                return f"*{operand_name}" if operand_name else None
+        if isinstance(target, BinaryOpNode) and getattr(target, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.assignment_target_access_display_name(
+                getattr(target, "left", None)
+            ) or self.assignment_target_access_display_name(
+                getattr(target, "right", None)
+            )
+        if isinstance(target, ArrayAccessNode):
+            object_name = self.assignment_target_access_display_name(
+                getattr(target, "array", getattr(target, "array_expr", None))
+            )
+            index_expr = getattr(target, "index", getattr(target, "index_expr", None))
+            index_name = (
+                self.safe_expression_to_string(index_expr)
+                if index_expr is not None
+                else ""
+            )
+            return f"{object_name}[{index_name}]" if object_name else None
+        if isinstance(target, MemberAccessNode):
+            object_name = self.assignment_target_access_display_name(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}.{member_name}" if object_name else member_name
+        if isinstance(target, PointerAccessNode):
+            object_name = self.assignment_target_access_display_name(
                 getattr(target, "pointer_expr", None)
             )
             member_name = str(getattr(target, "member", ""))

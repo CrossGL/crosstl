@@ -8413,6 +8413,16 @@ class SlangCodeGen:
                 func_name, self.sample_count_query_requirement(func_name)
             )
 
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "int"
+        )
+        if expected_reason:
+            return self.unsupported_resource_query_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
+
         resource_name = self.generate_expression(args[0])
         resource_slang_type = self.resource_query_slang_type(args[0], resource_type)
         base_helper_name = self.resource_query_helper_name(
@@ -9396,6 +9406,16 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(
                 "textureQueryLevels",
                 "requires a mipmapped sampled texture resource",
+            )
+
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            "textureQueryLevels", "int"
+        )
+        if expected_reason:
+            return self.unsupported_resource_query_call(
+                "textureQueryLevels",
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
             )
 
         resource_name = self.generate_expression(args[0])
