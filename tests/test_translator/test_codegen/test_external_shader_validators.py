@@ -368,6 +368,9 @@ shader GLSLStorageImageAccessValidator {
 
 GLSL_BUFFER_BLOCK_ACCESS_COMPUTE_SHADER = """
 shader GLSLBufferBlockAccessValidator {
+    struct Counter {
+        uint value;
+    };
     struct ReadonlyData {
         uint value;
     };
@@ -376,6 +379,9 @@ shader GLSLBufferBlockAccessValidator {
     };
     struct ReadwriteData {
         uint value;
+        Counter nested;
+        Counter items[2];
+        uint values[4];
     };
 
     ReadonlyData readonlyData @glsl_buffer_block(std430) @readonly;
@@ -387,7 +393,11 @@ shader GLSLBufferBlockAccessValidator {
             uint value = readonlyData.value;
             writeonlyData.value = value;
             uint oldValue = atomicAdd(readwriteData.value, 1u);
+            uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);
+            uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);
+            uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);
             readwriteData.value += oldValue;
+            readwriteData.values[1] = arrayOld;
         }
     }
 }
@@ -2432,7 +2442,11 @@ def test_generated_glsl_buffer_block_access_qualifiers_validate_with_glslangvali
     assert "uint value = readonlyData.value;" in code
     assert "writeonlyData.value = value;" in code
     assert "uint oldValue = atomicAdd(readwriteData.value, 1u);" in code
+    assert "uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);" in code
+    assert "uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);" in code
+    assert "uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);" in code
     assert "readwriteData.value += oldValue;" in code
+    assert "readwriteData.values[1] = arrayOld;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

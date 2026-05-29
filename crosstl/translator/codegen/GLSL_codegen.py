@@ -738,6 +738,8 @@ class GLSLCodeGen:
         self.current_image_access_parameters = {}
         self.structured_buffer_variable_accesses = {}
         self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_names = set()
+        self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = {}
         self.function_parameter_names = {}
@@ -1440,6 +1442,8 @@ class GLSLCodeGen:
         self.current_image_access_parameters = {}
         self.structured_buffer_variable_accesses = {}
         self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_names = set()
+        self.glsl_buffer_block_variable_types = {}
         self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
@@ -1841,7 +1845,7 @@ class GLSLCodeGen:
                 var_name = f"var{index}"
 
             if self.is_glsl_buffer_block_variable(node, vtype):
-                self.record_glsl_buffer_block_access_metadata(var_name, node)
+                self.record_glsl_buffer_block_variable(var_name, node, vtype)
                 if self.is_shader_record_buffer_block(node):
                     if self.explicit_resource_binding_index(node) is not None:
                         raise ValueError(
@@ -6010,7 +6014,10 @@ class GLSLCodeGen:
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            name = getattr(expr, "name", None)
+            return self.local_variable_types.get(
+                name
+            ) or self.glsl_buffer_block_variable_types.get(name)
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -6137,7 +6144,10 @@ class GLSLCodeGen:
             if literal_type:
                 return literal_type
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            name = getattr(expr, "name", None)
+            return self.local_variable_types.get(
+                name
+            ) or self.glsl_buffer_block_variable_types.get(name)
         return None
 
     def validate_dispatch_mesh_count_argument(self, arg, index):
@@ -7888,9 +7898,14 @@ class GLSLCodeGen:
             return None
         return choices[0][1]
 
-    def record_glsl_buffer_block_access_metadata(self, name, node):
+    def record_glsl_buffer_block_variable(self, name, node, vtype=None):
         if not name:
             return
+        block_type = str(
+            self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
+        )
+        self.glsl_buffer_block_variable_names.add(name)
+        self.glsl_buffer_block_variable_types[name] = block_type
         access = self.glsl_buffer_block_access_metadata(node)
         if access is None or access == "read_write":
             return
@@ -7907,8 +7922,25 @@ class GLSLCodeGen:
             )
         return self.expression_name(expr)
 
+    def is_glsl_buffer_block_member_expression(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            return True
+        if isinstance(expr, ArrayAccessNode) or (
+            hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__)
+        ):
+            return self.is_glsl_buffer_block_member_expression(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        return False
+
+    def is_glsl_buffer_block_member_reference(self, expr):
+        if not self.is_glsl_buffer_block_member_expression(expr):
+            return False
+        base_name = self.glsl_buffer_block_member_base_name(expr)
+        return bool(base_name and base_name in self.glsl_buffer_block_variable_names)
+
     def glsl_buffer_block_member_access(self, expr):
-        if not isinstance(expr, MemberAccessNode):
+        if not self.is_glsl_buffer_block_member_expression(expr):
             return None
         base_name = self.glsl_buffer_block_member_base_name(expr)
         if not base_name:
@@ -7936,7 +7968,21 @@ class GLSLCodeGen:
     def validate_glsl_buffer_block_atomic_call(self, func_name, args):
         if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
             return
-        self.validate_glsl_buffer_block_member_access(args[0], "read_write")
+        target = args[0]
+        self.validate_glsl_buffer_block_member_access(target, "read_write")
+        if not self.is_glsl_buffer_block_member_reference(target):
+            return
+        target_type = self.expression_result_type(target)
+        if target_type is None:
+            return
+        mapped_type = self.map_type(target_type)
+        if mapped_type not in {"int", "uint"}:
+            target_name = expression_debug_name(target)
+            raise ValueError(
+                f"OpenGL buffer block atomic '{func_name}' requires a scalar "
+                f"int or uint buffer block member for {target_name}: got "
+                f"{mapped_type}"
+            )
 
     def generate_glsl_buffer_block_mutation_target(self, expr):
         self.glsl_buffer_block_read_validation_suppression += 1

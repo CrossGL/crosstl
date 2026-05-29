@@ -600,9 +600,120 @@ def test_glsl_buffer_block_access_allows_compatible_operations():
             """,
             "requires read-write buffer block access.*got writeonly",
         ),
+        (
+            """
+            shader BufferBlockAtomicReadonlyArrayElement {
+                struct Data {
+                    uint values[4];
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.values[0], 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
     ],
 )
 def test_glsl_buffer_block_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_buffer_block_nested_and_array_atomically_mutable_members():
+    shader = """
+    shader BufferBlockNestedAtomicMembers {
+        struct Counter {
+            uint value;
+        };
+        struct Data {
+            Counter nested;
+            Counter items[2];
+            uint values[4];
+        };
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint nestedOld = atomicAdd(data.nested.value, 1u);
+                uint itemOld = atomicAdd(data.items[1].value, nestedOld);
+                uint arrayOld = atomicAdd(data.values[0], itemOld);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Counter nested;" in generated
+    assert "Counter items[2];" in generated
+    assert "uint values[4];" in generated
+    assert "uint nestedOld = atomicAdd(data.nested.value, 1u);" in generated
+    assert "uint itemOld = atomicAdd(data.items[1].value, nestedOld);" in generated
+    assert "uint arrayOld = atomicAdd(data.values[0], itemOld);" in generated
+
+
+@pytest.mark.parametrize(
+    ("member_declarations", "target", "value", "match"),
+    [
+        (
+            "float value;",
+            "data.value",
+            "1.0",
+            r"requires a scalar int or uint buffer block member.*got float",
+        ),
+        (
+            "uvec2 value;",
+            "data.value",
+            "1u",
+            r"requires a scalar int or uint buffer block member.*got uvec2",
+        ),
+        (
+            "mat2 value;",
+            "data.value",
+            "1.0",
+            r"requires a scalar int or uint buffer block member.*got mat2",
+        ),
+        (
+            "Counter nested;",
+            "data.nested",
+            "1u",
+            r"requires a scalar int or uint buffer block member.*got Counter",
+        ),
+    ],
+)
+def test_glsl_buffer_block_atomics_reject_non_scalar_integer_members(
+    member_declarations,
+    target,
+    value,
+    match,
+):
+    shader = f"""
+    shader BufferBlockInvalidAtomicMember {{
+        struct Counter {{
+            uint value;
+        }};
+        struct Data {{
+            {member_declarations}
+        }};
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {{
+            void main() {{
+                atomicAdd({target}, {value});
+            }}
+        }}
+    }}
+    """
     ast = crosstl.translator.parse(shader)
 
     with pytest.raises(ValueError, match=match):

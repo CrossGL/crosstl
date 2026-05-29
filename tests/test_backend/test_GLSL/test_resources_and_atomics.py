@@ -2894,7 +2894,15 @@ def test_codegen_mixed_ssbo_helper_readonly_array_write_stays_diagnostic():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL buffer block member access for "
+            r"helperReadonlyBlocks\[1\]\.values\[i\] requires write-capable "
+            "buffer block access: got readonly"
+        ),
+    ):
+        GLSLCodeGen().generate(shader_ast)
 
     assert "ByteAddressBuffer helperReadonlyBlocks[2] : register(t81);" in hlsl
     assert "RWByteAddressBuffer helperReadonlyBlocks" not in hlsl
@@ -2905,9 +2913,6 @@ def test_codegen_mixed_ssbo_helper_readonly_array_write_stays_diagnostic():
     assert "array<device uchar*, 2> helperReadonlyBlocks" not in metal
     assert "readonly device buffer cannot be written" in metal
     assert "reinterpret_cast<device float*>" not in metal
-
-    assert "layout(std430, binding = 81) readonly buffer HelperReadonlyBlock" in glsl
-    assert "helperReadonlyBlocks[1].values[i] = 1.0;" in glsl
 
 
 def test_codegen_mixed_ssbo_helper_matrix_array_store_uses_indexed_receiver():
@@ -3031,7 +3036,15 @@ def test_codegen_mixed_ssbo_helper_readonly_matrix_array_write_stays_diagnostic(
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL buffer block member access for "
+            r"helperReadMatrixBlocks\[1\]\.transforms\[i\] requires "
+            "write-capable buffer block access: got readonly"
+        ),
+    ):
+        GLSLCodeGen().generate(shader_ast)
 
     assert "ByteAddressBuffer helperReadMatrixBlocks[2] : register(t84);" in hlsl
     assert "RWByteAddressBuffer helperReadMatrixBlocks" not in hlsl
@@ -3044,9 +3057,6 @@ def test_codegen_mixed_ssbo_helper_readonly_matrix_array_write_stays_diagnostic(
     assert "array<device uchar*, 2> helperReadMatrixBlocks" not in metal
     assert "readonly device buffer cannot be written" in metal
     assert "reinterpret_cast<device float*>" not in metal
-
-    assert "layout(std430, binding = 84) readonly buffer HelperReadMatrixBlock" in glsl
-    assert "helperReadMatrixBlocks[1].transforms[i] = value;" in glsl
 
 
 def test_codegen_mixed_ssbo_helper_matrix_array_unsupported_compound_is_diagnostic():
@@ -17450,6 +17460,46 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
     )
     assert "atomic_fetch_" not in metal
     assert "__crossgl_buffer_atomic" not in metal
+
+
+@pytest.mark.parametrize(
+    ("block_name", "member_type", "result_type", "value", "expected_type"),
+    [
+        ("FloatAtomicBlock", "float", "float", "1.0", "float"),
+        ("VectorAtomicBlock", "uvec2", "uint", "1u", "uvec2"),
+        ("MatrixAtomicBlock", "mat2", "float", "1.0", "mat2"),
+    ],
+)
+def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
+    block_name,
+    member_type,
+    result_type,
+    value,
+    expected_type,
+):
+    code = f"""
+    #version 450 core
+    layout(std430, binding = 22) buffer {block_name} {{
+        {member_type} value;
+    }} block;
+
+    void main() {{
+        {result_type} oldValue = atomicAdd(block.value, {value});
+    }}
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
+            f"uint buffer block member for block.value: got {expected_type}"
+        ),
+    ):
+        GLSLCodeGen().generate(shader_ast)
 
 
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():

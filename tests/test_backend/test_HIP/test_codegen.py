@@ -8684,6 +8684,80 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
+        """Test module global size outputs replace stale symbol-size metadata."""
+        code = """
+        void queryModuleGlobals(
+            hipModule_t module,
+            const void* symbol,
+            size_t* sizes,
+            void** ptrs,
+            textureReference** refs
+        ) {
+            hipDeviceptr_t globalPtr;
+            size_t globalBytes = 0;
+            textureReference* moduleRef;
+            textureReference* symbolRef;
+            hipGetSymbolSize(&globalBytes, symbol);
+            hipModuleGetGlobal(&globalPtr, &globalBytes, module, "device_symbol");
+            ptrs[0] = globalPtr;
+            sizes[0] = globalBytes;
+            hipModuleGetGlobal(&globalPtr, &globalBytes, module, "other_symbol");
+            sizes[1] = globalBytes;
+            hipError_t err =
+                hipModuleGetGlobal(
+                    &globalPtr,
+                    &globalBytes,
+                    module,
+                    "status_symbol"
+                );
+            sizes[2] = globalBytes;
+            hipModuleGetTexRef(&moduleRef, module, "tex");
+            refs[0] = moduleRef;
+            hipGetTextureReference(&symbolRef, symbol);
+            refs[1] = symbolRef;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP module get global: pointer output: globalPtr, "
+            'size output: globalBytes, module: module, name: "device_symbol"'
+        ) in result
+        assert "ptrs[0] = globalPtr;" in result
+        assert (
+            "sizes[0] = (/* HIP device query: "
+            'module.global.size(module, "device_symbol") */ 0);'
+        ) in result
+        assert (
+            "sizes[1] = (/* HIP device query: "
+            'module.global.size(module, "other_symbol") */ 0);'
+        ) in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "sizes[2] = (/* HIP device query: "
+            'module.global.size(module, "status_symbol") */ 0);'
+        ) in result
+        assert (
+            "// HIP module get texture reference: output: moduleRef, "
+            'module: module, name: "tex"'
+        ) in result
+        assert "refs[0] = moduleRef;" in result
+        assert (
+            "// HIP get texture reference: output: symbolRef, symbol: symbol" in result
+        )
+        assert "refs[1] = symbolRef;" in result
+        assert (
+            "sizes[0] = (/* HIP device query: symbol.size(symbol) */ 0);" not in result
+        )
+        assert "textureReference.moduleRef" not in result
+        assert "textureReference.symbolRef" not in result
+
     def test_hip_texture_reference_expression_contexts_emit_status(self):
         """Test deprecated texture-reference helpers in expressions stay explicit."""
         code = """

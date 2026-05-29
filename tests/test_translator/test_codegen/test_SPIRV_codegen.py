@@ -8533,6 +8533,102 @@ class TestVulkanSPIRVCodeGen:
         assert "StructuredBuffer" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_byte_address_buffers_emit_scalar_load_store_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressBuffers {
+            ByteAddressBuffer rawData @set(1) @binding(3);
+            RWByteAddressBuffer outData @binding(4);
+
+            compute {
+                void main() {
+                    uint a = rawData.Load(0u);
+                    uint b = rawData.Load(4u);
+                    outData.Store(8u, a + b);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawDataBuffer")
+        out_block = spirv_named_id(spv_code, "outDataBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawData", storage_class="Uniform")
+        out_var = spirv_named_variable(spv_code, "outData", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {out_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {raw_block} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {out_block} 0 Offset 0" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 4", spv_code)
+        assert f"OpDecorate {raw_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {raw_var} Binding 3" in spv_code
+        assert f"OpDecorate {out_var} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {out_var} Binding 4" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(out_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(rf"OpLoad {re.escape(uint_type.group(1))} %\d+", spv_code)
+        assert "OpUDiv" in spv_code
+        assert "OpStore" in spv_code
+        assert "ByteAddressBuffer" not in spv_code
+        assert "RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressBuffers {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uint missingOffset = rawData.Load();
+                    uint floatOffset = rawData.Load(0.5);
+                    outData.Store(4u);
+                    outData.Store(8u, missingOffset, floatOffset);
+                    rawData.Store(12u, missingOffset);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: ByteAddressBuffer.Load requires a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires byte offset and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store accepts only byte offset and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffers_reject_duplicate_spirv_bindings(self):
         source_code = """
         shader StorageBuffers {

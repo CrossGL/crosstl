@@ -8088,6 +8088,15 @@ class VulkanSPIRVCodeGen:
 
     def structured_buffer_type_info(self, type_str: str):
         type_str = re.sub(r"\s+", "", str(type_str))
+        if type_str in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            return {
+                "kind": "structured_buffer",
+                "buffer_kind": type_str,
+                "element_type_name": "uint",
+                "readonly": type_str == "ByteAddressBuffer",
+                "byte_address": True,
+            }
+
         match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
         if not match:
             return None
@@ -11846,6 +11855,93 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
+    def byte_address_buffer_element_index(self, offset_expr) -> Optional[SpirvId]:
+        byte_offset = self.process_expression(offset_expr)
+        if byte_offset is None:
+            self.emit("; WARNING: ByteAddressBuffer byte offset could not be evaluated")
+            return None
+
+        offset_type_name = self.normalize_primitive_name(byte_offset.type.base_type)
+        if offset_type_name not in {"int", "uint"}:
+            self.emit("; WARNING: ByteAddressBuffer byte offset must be an integer")
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        byte_offset = self.convert_value_to_type(byte_offset, uint_type)
+        element_size = self.register_constant(4, uint_type)
+        return self.binary_operation("/", uint_type, byte_offset, element_size)
+
+    def process_byte_address_buffer_method_call(
+        self, expr: FunctionCallNode
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee_expr, MemberAccessNode):
+            return False, None
+
+        method_name = getattr(callee_expr, "member", None)
+        if method_name not in {"Load", "Store"}:
+            return False, None
+
+        buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
+        if buffer_pointer is None:
+            return False, None
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None or not metadata.get("byte_address"):
+            return False, None
+
+        args = list(getattr(expr, "args", []) or [])
+        uint_type = self.register_primitive_type("uint")
+        if method_name == "Load":
+            if len(args) < 1:
+                self.emit("; WARNING: ByteAddressBuffer.Load requires a byte offset")
+                return True, self.default_value_for_type(uint_type)
+            if len(args) > 1:
+                self.emit(
+                    "; WARNING: ByteAddressBuffer.Load accepts only a byte offset"
+                )
+                return True, self.default_value_for_type(uint_type)
+
+            element_index = self.byte_address_buffer_element_index(args[0])
+            if element_index is None:
+                return True, self.default_value_for_type(uint_type)
+            return True, self.call_resource_function(
+                "buffer_load", [buffer_pointer, element_index]
+            )
+
+        if len(args) < 2:
+            self.emit(
+                "; WARNING: RWByteAddressBuffer.Store requires byte offset and value "
+                "operands"
+            )
+            return True, None
+        if len(args) > 2:
+            self.emit(
+                "; WARNING: RWByteAddressBuffer.Store accepts only byte offset and "
+                "value operands"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit("; WARNING: RWByteAddressBuffer.Store requires a writable buffer")
+            return True, None
+
+        element_index = self.byte_address_buffer_element_index(args[0])
+        if element_index is None:
+            return True, None
+
+        value = self.process_expression(args[1])
+        if value is None:
+            self.emit(
+                "; WARNING: RWByteAddressBuffer.Store value could not be evaluated"
+            )
+            return True, None
+
+        value = self.convert_value_to_type(value, uint_type)
+        self.call_resource_function(
+            "buffer_store", [buffer_pointer, element_index, value]
+        )
+        return True, None
+
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
             name = expr.name
@@ -13799,6 +13895,12 @@ class VulkanSPIRVCodeGen:
             ray_query_call = self.ray_query_call_from_function_call(expr)
             if ray_query_call is not None:
                 return self.process_ray_query_operation(ray_query_call)
+
+            handled_byte_address_call, byte_address_result = (
+                self.process_byte_address_buffer_method_call(expr)
+            )
+            if handled_byte_address_call:
+                return byte_address_result
 
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None

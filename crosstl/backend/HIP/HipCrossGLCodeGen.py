@@ -2289,6 +2289,15 @@ class HipToCrossGLConverter:
             if len(args) >= 4:
                 pointer_output = self.format_runtime_pointer_target(node.args[0])
                 size_output = self.format_runtime_pointer_target(node.args[1])
+                size_output_name = self.get_runtime_pointer_target_name(node.args[1])
+                self.clear_lvalue_metadata_source(node.args[0])
+                if size_output_name is not None:
+                    self.register_device_query_source(
+                        size_output_name,
+                        f"module.global.size({args[2]}, {args[3]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[1])
                 return [
                     f"// HIP module get global: pointer output: {pointer_output}, "
                     f"size output: {size_output}, module: {args[2]}, name: {args[3]}"
@@ -2296,6 +2305,7 @@ class HipToCrossGLConverter:
         elif name == "hipModuleGetTexRef":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP module get texture reference: output: {output}, "
                     f"module: {args[1]}, name: {args[2]}"
@@ -2333,6 +2343,7 @@ class HipToCrossGLConverter:
         elif name == "hipGetTextureReference":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP get texture reference: output: {output}, "
                     f"symbol: {args[1]}"
