@@ -769,6 +769,34 @@ def test_parse_ray_shader_record_layout_roundtrips_without_binding():
     assert "traceRayEXT(" in glsl
 
 
+def test_parse_conflicting_ssbo_memory_layout_rejects_regeneration():
+    code = """
+    #version 450 core
+
+    layout(std430, std140, binding = 2) buffer DataBlock {
+        int value;
+    } dataBlock;
+
+    void main() {
+        int value = dataBlock.value;
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+
+    assert (
+        "DataBlock dataBlock @glsl_buffer_block(std430, std140) @binding(2);" in crossgl
+    )
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting OpenGL buffer block memory layout metadata for "
+            "'dataBlock': std430 differs from std140"
+        ),
+    ):
+        GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
+
+
 def test_parse_ray_shader_record_layout_rejects_binding():
     code = """
     #version 460 core

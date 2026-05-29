@@ -476,6 +476,13 @@ class GLSLCodeGen:
         "xfb_offset",
         "xfb_stride",
     )
+    GLSL_BUFFER_BLOCK_MEMORY_LAYOUT_NAMES = {
+        "packed",
+        "scalar",
+        "shared",
+        "std140",
+        "std430",
+    }
     GLSL_BLEND_SUPPORT_LAYOUT_NAMES = {
         "blend_support_multiply",
         "blend_support_screen",
@@ -1511,6 +1518,9 @@ class GLSLCodeGen:
             + collect_stage_local_structs(ast, target_stage),
             "struct",
         )
+        self.structs_by_name = {
+            node.name: node for node in structs if isinstance(node, StructNode)
+        }
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
         )
@@ -1684,9 +1694,6 @@ class GLSLCodeGen:
                 global_vars + stage_local_interface_vars
             )
         )
-        self.structs_by_name = {
-            node.name: node for node in structs if isinstance(node, StructNode)
-        }
         self.glsl_interface_block_structs_by_name = {
             node.name: node
             for node in structs
@@ -10959,8 +10966,35 @@ class GLSLCodeGen:
             ]
             layout_parts = [part for part in layout_parts if part]
             if layout_parts:
+                self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
                 return ", ".join(layout_parts)
         return "std430"
+
+    def validate_glsl_buffer_block_layout_parts(self, node, layout_parts):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        seen = {}
+        memory_layouts = []
+        for layout_part in layout_parts:
+            normalized = self.normalized_glsl_buffer_block_layout_part(layout_part)
+            if normalized in seen:
+                raise ValueError(
+                    "Duplicate OpenGL buffer block layout metadata for "
+                    f"'{node_name}': {layout_part}"
+                )
+            seen[normalized] = layout_part
+            if normalized in self.GLSL_BUFFER_BLOCK_MEMORY_LAYOUT_NAMES:
+                memory_layouts.append(layout_part)
+
+        if len(memory_layouts) > 1:
+            first_layout = memory_layouts[0]
+            conflicting_layout = memory_layouts[1]
+            raise ValueError(
+                "Conflicting OpenGL buffer block memory layout metadata for "
+                f"'{node_name}': {first_layout} differs from {conflicting_layout}"
+            )
+
+    def normalized_glsl_buffer_block_layout_part(self, layout_part):
+        return str(layout_part).strip().lower().replace("_", "")
 
     def is_shader_record_buffer_block(self, node):
         layout_parts = {

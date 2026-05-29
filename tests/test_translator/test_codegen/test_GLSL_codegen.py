@@ -494,6 +494,74 @@ def test_glsl_buffer_block_access_allows_compatible_operations():
     [
         (
             """
+            shader ConflictingGlobalBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                Data data[2] @glsl_buffer_block(std430, std140);
+
+                compute {
+                    void main() {
+                        int value = data[0].value;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL buffer block memory layout metadata for "
+            "'data': std430 differs from std140",
+        ),
+        (
+            """
+            shader DuplicateBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                Data data @glsl_buffer_block(std430, std430);
+
+                compute {
+                    void main() {
+                        int value = data.value;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL buffer block layout metadata for 'data': std430",
+        ),
+        (
+            """
+            shader ConflictingStageLocalBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                compute {
+                    Data localData @glsl_buffer_block(std140, scalar);
+
+                    void main() {
+                        int value = localData.value;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL buffer block memory layout metadata for "
+            "'localData': std140 differs from scalar",
+        ),
+    ],
+)
+def test_glsl_buffer_block_layout_metadata_rejects_duplicates_and_conflicts(
+    shader, match
+):
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
             shader BufferBlockReadFromWriteonly {
                 struct Data {
                     uint value;
@@ -1774,13 +1842,18 @@ def test_glsl_resource_binding_operands_reject_non_integer_metadata(code, messag
 def test_glsl_stage_local_resources_emit_global_layout_bindings():
     code = """
     shader StageLocalResourcesGLSL {
+        struct LocalData {
+            int value;
+        };
+
         fragment {
             uniform sampler2D localTex @binding(2);
             uniform image2D localImage @binding(5);
+            LocalData localData @glsl_buffer_block(std430) @binding(8);
 
             vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
                 vec4 stored = imageLoad(localImage, ivec2(0, 0));
-                return texture(localTex, uv) + stored;
+                return texture(localTex, uv) + stored + vec4(float(localData.value));
             }
         }
     }
@@ -1792,7 +1865,9 @@ def test_glsl_stage_local_resources_emit_global_layout_bindings():
 
     assert "layout(binding = 2) uniform sampler2D localTex;" in generated_code
     assert "layout(rgba32f, binding = 5) uniform image2D localImage;" in generated_code
+    assert "layout(std430, binding = 8) buffer LocalData" in generated_code
     assert "texture(localTex, uv)" in generated_code
+    assert "float(localData.value)" in generated_code
 
 
 def test_glsl_stage_resource_parameters_emit_global_layout_bindings():

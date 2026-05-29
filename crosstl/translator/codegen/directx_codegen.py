@@ -5719,6 +5719,20 @@ class HLSLCodeGen:
             normalized = normalized[len("hlsl_") :]
         return normalized == "wavesize"
 
+    def hlsl_wave_size_lane_value(self, argument, label):
+        lane_count = self.hlsl_int_literal_value(argument)
+        if lane_count is None:
+            raise ValueError(
+                f"DirectX WaveSize attribute {label} requires an immediate "
+                "integer argument"
+            )
+        if lane_count not in self.HLSL_WAVE_SIZE_LANE_COUNTS:
+            raise ValueError(
+                f"DirectX WaveSize attribute {label} lane count must be one of "
+                "4, 8, 16, 32, 64, or 128"
+            )
+        return lane_count
+
     def generate_hlsl_waveops_include_helper_lanes_attribute(self, func, shader_type):
         found = False
         for attr in getattr(func, "attributes", []) or []:
@@ -5743,27 +5757,37 @@ class HLSLCodeGen:
 
     def generate_hlsl_wave_size_attribute(self, func, shader_type):
         found = False
-        lane_count = None
+        wave_size_values = None
         for attr in getattr(func, "attributes", []) or []:
             if not self.hlsl_wave_size_attribute(attr):
                 continue
             found = True
             arguments = getattr(attr, "arguments", []) or []
-            if len(arguments) != 1:
+            if len(arguments) not in {1, 2, 3}:
                 raise ValueError(
-                    "DirectX WaveSize attribute requires exactly 1 argument"
+                    "DirectX WaveSize attribute requires 1, 2, or 3 arguments"
                 )
 
-            lane_count = self.hlsl_int_literal_value(arguments[0])
-            if lane_count is None:
+            labels = (
+                ("lane count",)
+                if len(arguments) == 1
+                else ("minimum", "maximum", "preferred")
+            )
+            wave_size_values = [
+                self.hlsl_wave_size_lane_value(argument, labels[index])
+                for index, argument in enumerate(arguments)
+            ]
+            if len(wave_size_values) >= 2 and wave_size_values[0] > wave_size_values[1]:
                 raise ValueError(
-                    "DirectX WaveSize attribute requires an immediate integer "
-                    "argument"
+                    "DirectX WaveSize attribute minimum lane count must be "
+                    "less than or equal to maximum lane count"
                 )
-            if lane_count not in self.HLSL_WAVE_SIZE_LANE_COUNTS:
+            if len(wave_size_values) == 3 and not (
+                wave_size_values[0] <= wave_size_values[2] <= wave_size_values[1]
+            ):
                 raise ValueError(
-                    "DirectX WaveSize attribute lane count must be one of "
-                    "4, 8, 16, 32, 64, or 128"
+                    "DirectX WaveSize attribute preferred lane count must be "
+                    "between minimum and maximum lane counts"
                 )
 
         if not found:
@@ -5773,7 +5797,8 @@ class HLSLCodeGen:
                 "DirectX WaveSize attribute is only valid on compute shader "
                 "entry points"
             )
-        return f"[WaveSize({lane_count})]\n"
+        arguments_text = ", ".join(str(value) for value in wave_size_values)
+        return f"[WaveSize({arguments_text})]\n"
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
         value = self.hlsl_stage_attribute_argument(func, expected_name)

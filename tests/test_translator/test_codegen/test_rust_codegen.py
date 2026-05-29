@@ -17140,7 +17140,7 @@ def test_increment_and_decrement_emit_rust_assignment_updates():
     assert "++j" not in generated_code
 
 
-def test_increment_and_decrement_initializers_preserve_rust_value_order():
+def test_increment_and_decrement_initializers_preserve_rust_value_order(tmp_path):
     code = """
     shader main {
         compute {
@@ -17173,6 +17173,7 @@ def test_increment_and_decrement_initializers_preserve_rust_value_order():
     assert "let post: i32 = i += 1;" not in generated_code
     assert "let pre_dec: i32 = i -= 1;" not in generated_code
     assert "let post_dec: i32 = i -= 1;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body(tmp_path):
