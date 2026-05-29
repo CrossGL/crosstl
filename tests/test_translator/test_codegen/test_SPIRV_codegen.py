@@ -4861,6 +4861,32 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpSetMeshOutputsEXT" not in spv_code
 
+    def test_mesh_stage_set_mesh_output_counts_rejects_non_scalar_counts(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshSPIRVBadCounts {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(uvec2(1u, 2u), true);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts count operands must be "
+            "scalar integer values"
+        ) in spv_code
+        assert "OpSetMeshOutputsEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mesh_stage_set_vertex_and_primitive_emit_output_stores(self, tmp_path):
         source_code = """
         shader MeshOutputSPIRV {
@@ -6519,6 +6545,28 @@ class TestVulkanSPIRVCodeGen:
             "WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments" in spv_code
         )
         assert "OpEmitMeshTasksEXT" not in spv_code
+
+    def test_task_stage_dispatch_mesh_rejects_non_scalar_group_counts(self, tmp_path):
+        source_code = """
+        shader TaskSPIRVBadCounts {
+            task {
+                void main() {
+                    DispatchMesh(uvec2(1u, 2u), true, 1u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh group-count operands must be "
+            "scalar integer values"
+        ) in spv_code
+        assert "OpEmitMeshTasksEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
         bool_type = PrimitiveType("bool")

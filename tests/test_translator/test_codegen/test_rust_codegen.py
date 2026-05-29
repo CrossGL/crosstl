@@ -16617,6 +16617,76 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
+    code = """
+    shader ResourceBundleProbe {
+        struct ResourceBundle {
+            sampler2D texture;
+            sampler samplerState;
+            image2D colorImage;
+            RWStructuredBuffer<int> values;
+            float weights[];
+        };
+
+        fragment {
+            vec4 main(ResourceBundle bundle, ResourceBundle bundles[2], ivec2 pixel, vec2 uv, uint index) @ gl_FragColor {
+                let selected = bundles[index];
+                let aliasTexture = selected.texture;
+                let sampled = texture(aliasTexture, selected.samplerState, uv);
+                let direct = texture(bundle.texture, bundle.samplerState, uv);
+                let color = imageLoad(bundle.colorImage, pixel);
+                imageStore(selected.colorImage, pixel, color);
+                let value = buffer_load(bundle.values, index);
+                buffer_store(selected.values, index, value);
+                return sampled + direct + color + vec4(selected.weights[0] + float(value), 0.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "#[derive(Debug, Clone, Default)]\npub struct ResourceBundle" in (
+        generated_code
+    )
+    assert "#[derive(Debug, Clone, Copy, Default)]\npub struct ResourceBundle" not in (
+        generated_code
+    )
+    assert "pub texture: Texture2D<f32>," in generated_code
+    assert "pub samplerState: Sampler," in generated_code
+    assert "pub colorImage: Image2D<Vec4<f32>>," in generated_code
+    assert "pub values: RWStructuredBuffer<i32>," in generated_code
+    assert "pub weights: Vec<f32>," in generated_code
+    assert (
+        "pub fn main(bundle: ResourceBundle, bundles: [ResourceBundle; 2], "
+        "pixel: Vec2<i32>, uv: Vec2<f32>, index: u32) -> Vec4<f32>"
+    ) in generated_code
+    assert (
+        "let selected: ResourceBundle = bundles[index as usize].clone();"
+        in generated_code
+    )
+    assert "let aliasTexture: Texture2D<f32> = selected.texture;" in generated_code
+    assert (
+        "let sampled: Vec4<f32> = "
+        "sample_sampler(aliasTexture, selected.samplerState, uv);"
+    ) in generated_code
+    assert (
+        "let direct: Vec4<f32> = "
+        "sample_sampler(bundle.texture, bundle.samplerState, uv);"
+    ) in generated_code
+    assert (
+        "let color: Vec4<f32> = image_load(bundle.colorImage, pixel);" in generated_code
+    )
+    assert "image_store(selected.colorImage, pixel, color);" in generated_code
+    assert "let value: i32 = buffer_load(bundle.values, index);" in generated_code
+    assert "buffer_store(selected.values, index, value);" in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "texture(aliasTexture" not in generated_code
+    assert "texture(bundle.texture" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_path):
     code = """
     shader ResourceHelperProbe {

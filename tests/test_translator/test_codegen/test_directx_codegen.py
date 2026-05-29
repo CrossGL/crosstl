@@ -2291,6 +2291,18 @@ def test_directx_buffer_store_helpers_reject_readonly_resources(
             "DirectX buffer helper 'buffer_consume' requires "
             "ConsumeStructuredBuffer, got AppendStructuredBuffer<uint>",
         ),
+        (
+            "StructuredBuffer<uint> values @register(t1);",
+            "uint value = buffer_increment_counter(values);",
+            "DirectX buffer helper 'buffer_increment_counter' requires "
+            "RWStructuredBuffer, got StructuredBuffer<uint>",
+        ),
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "uint value = buffer_decrement_counter(values);",
+            "DirectX buffer helper 'buffer_decrement_counter' requires "
+            "RWStructuredBuffer, got AppendStructuredBuffer<uint>",
+        ),
     ],
 )
 def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, match):
@@ -2333,6 +2345,18 @@ def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, 
             "ConsumeStructuredBuffer<uint> values @register(u2);",
             "uint value = buffer_consume(values, 1u);",
             "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 2",
+        ),
+        (
+            "RWStructuredBuffer<uint> values @register(u3);",
+            "uint value = buffer_increment_counter();",
+            "DirectX buffer helper 'buffer_increment_counter' requires "
+            "1 argument(s), got 0",
+        ),
+        (
+            "RWStructuredBuffer<uint> values @register(u3);",
+            "uint value = buffer_decrement_counter(values, 1u);",
+            "DirectX buffer helper 'buffer_decrement_counter' requires "
+            "1 argument(s), got 2",
         ),
     ],
 )
@@ -2781,6 +2805,34 @@ def test_structured_buffer_append_consume_lower_to_native_methods():
     assert "int consumed = consumeValues.Consume();" in generated
     assert "buffer_append" not in generated
     assert "buffer_consume" not in generated
+
+
+def test_rwstructured_buffer_counter_helpers_lower_to_native_methods():
+    code = """
+    shader StructuredBufferCounterHelpersHLSL {
+        RWStructuredBuffer<uint> counters @ binding(3);
+        RWStructuredBuffer<uint> counterArrays[2] @ binding(4);
+
+        compute {
+            void main(uint which) {
+                uint nextIndex = buffer_increment_counter(counters);
+                uint oldIndex = buffer_decrement_counter(counterArrays[which]);
+                buffer_store(counterArrays[which], nextIndex, oldIndex);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "RWStructuredBuffer<uint> counters : register(u3);" in generated
+    assert "RWStructuredBuffer<uint> counterArrays[2] : register(u4);" in generated
+    assert "uint nextIndex = counters.IncrementCounter();" in generated
+    assert "uint oldIndex = counterArrays[which].DecrementCounter();" in generated
+    assert "counterArrays[which].Store(nextIndex, oldIndex);" in generated
+    assert "buffer_increment_counter" not in generated
+    assert "buffer_decrement_counter" not in generated
 
 
 def test_structured_buffer_append_accepts_matching_vector_element_shape():

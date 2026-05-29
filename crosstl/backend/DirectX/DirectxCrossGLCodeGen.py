@@ -220,6 +220,8 @@ class HLSLToCrossGLConverter:
             "Store4": "buffer_store4",
             "Append": "buffer_append",
             "Consume": "buffer_consume",
+            "IncrementCounter": "buffer_increment_counter",
+            "DecrementCounter": "buffer_decrement_counter",
             "GetDimensions": "buffer_dimensions",
         }
         self.semantic_map = {
@@ -812,6 +814,8 @@ class HLSLToCrossGLConverter:
                         "Store": "store",
                         "Append": "append",
                         "Consume": "consume",
+                        "IncrementCounter": "increment_counter",
+                        "DecrementCounter": "decrement_counter",
                         "Load": "load",
                         "GetDimensions": "dimensions",
                     }.get(member)

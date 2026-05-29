@@ -2677,6 +2677,43 @@ def test_codegen_append_consume_multidimensional_buffer_arrays_roundtrip():
     assert "buffer_consume(" not in hlsl
 
 
+def test_codegen_rwstructured_buffer_counter_methods_roundtrip():
+    code = textwrap.dedent("""
+        RWStructuredBuffer<uint> counters[2] : register(u0, space7);
+
+        uint main(uint queueIndex : TEXCOORD0) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(queueIndex);
+            uint nextIndex = counters[slot].IncrementCounter();
+            uint oldIndex = counters[slot].DecrementCounter();
+            counters[slot][nextIndex] = oldIndex;
+            return nextIndex + oldIndex;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space7)" in crossgl
+    assert "RWStructuredBuffer<uint> counters[2];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "uint nextIndex = buffer_increment_counter(counters[slot]);" in crossgl
+    assert "uint oldIndex = buffer_decrement_counter(counters[slot]);" in crossgl
+    assert "counters[slot][nextIndex] = oldIndex;" in crossgl
+    assert ".IncrementCounter(" not in crossgl
+    assert ".DecrementCounter(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "RWStructuredBuffer<uint> counters[2] : register(u0, space7);" in hlsl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "uint nextIndex = counters[slot].IncrementCounter();" in hlsl
+    assert "uint oldIndex = counters[slot].DecrementCounter();" in hlsl
+    assert "counters[slot][nextIndex] = oldIndex;" in hlsl
+    assert "float nextIndex" not in hlsl
+    assert "float oldIndex" not in hlsl
+    assert "buffer_increment_counter(" not in hlsl
+    assert "buffer_decrement_counter(" not in hlsl
+
+
 def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
     code = textwrap.dedent("""
         Texture2D<float> shadowMap : register(t0);

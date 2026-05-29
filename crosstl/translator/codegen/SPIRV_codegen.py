@@ -4535,6 +4535,10 @@ class VulkanSPIRVCodeGen:
                 "; WARNING: SPIR-V mesh SetMeshOutputCounts requires count operands"
             )
             return self.register_constant(0, uint_type)
+        if not self.validate_mesh_count_operands(
+            "SetMeshOutputCounts", [vertex_count, primitive_count]
+        ):
+            return self.register_constant(0, uint_type)
 
         vertex_count = self.convert_value_to_type(vertex_count, uint_type)
         primitive_count = self.convert_value_to_type(primitive_count, uint_type)
@@ -4557,6 +4561,21 @@ class VulkanSPIRVCodeGen:
             )
 
         return self.register_constant(0, uint_type)
+
+    def validate_mesh_count_operands(
+        self, operation: str, operands: List[SpirvId], count_label: str = "count"
+    ) -> bool:
+        """Require SPIR-V mesh/task count operands to be scalar integer values."""
+        if all(
+            self.integer_value_component_count(operand) == 1 for operand in operands
+        ):
+            return True
+
+        self.emit(
+            f"; WARNING: SPIR-V mesh {operation} {count_label} operands must be "
+            "scalar integer values"
+        )
+        return False
 
     def process_mesh_output_function_call(
         self, function_name: str, args: List
@@ -5698,6 +5717,10 @@ class VulkanSPIRVCodeGen:
                 self.emit(
                     "; WARNING: SPIR-V mesh DispatchMesh requires group-count operands"
                 )
+                return self.register_constant(0, uint_type)
+            if not self.validate_mesh_count_operands(
+                "DispatchMesh", [group_count], "group-count"
+            ):
                 return self.register_constant(0, uint_type)
             group_counts.append(self.convert_value_to_type(group_count, uint_type))
 

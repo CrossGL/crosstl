@@ -2739,6 +2739,11 @@ class HLSLCodeGen:
                 return self.hlsl_typed_buffer_element_type(
                     resource_type, {"ConsumeStructuredBuffer"}
                 )
+            if func_name in {
+                "buffer_increment_counter",
+                "buffer_decrement_counter",
+            }:
+                return "uint"
             if is_image_atomic_operation(func_name) and args:
                 return self.image_atomic_result_type(func_name, args[0])
             if func_name == "imageLoad" and args:
@@ -3851,6 +3856,8 @@ class HLSLCodeGen:
         helper_arg_counts = {
             "buffer_append": 2,
             "buffer_consume": 1,
+            "buffer_increment_counter": 1,
+            "buffer_decrement_counter": 1,
         }
         expected_args = helper_arg_counts.get(func_name)
         if expected_args is not None and len(args) != expected_args:
@@ -3970,6 +3977,14 @@ class HLSLCodeGen:
             )
         if func_name == "buffer_consume":
             self.validate_hlsl_buffer_consume_result_shape(resource_type)
+        if (
+            func_name in {"buffer_increment_counter", "buffer_decrement_counter"}
+            and resource_name != "RWStructuredBuffer"
+        ):
+            raise ValueError(
+                f"DirectX buffer helper '{func_name}' requires "
+                f"RWStructuredBuffer, got {resource_type}"
+            )
 
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
@@ -4012,6 +4027,12 @@ class HLSLCodeGen:
         if func_name == "buffer_consume" and args:
             buffer = self.generate_expression(args[0])
             return f"{buffer}.Consume()"
+        if func_name == "buffer_increment_counter" and args:
+            buffer = self.generate_expression(args[0])
+            return f"{buffer}.IncrementCounter()"
+        if func_name == "buffer_decrement_counter" and args:
+            buffer = self.generate_expression(args[0])
+            return f"{buffer}.DecrementCounter()"
         if func_name == "buffer_dimensions" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])

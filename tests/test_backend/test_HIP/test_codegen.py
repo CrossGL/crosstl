@@ -6428,6 +6428,233 @@ class TestHipCodeGen:
         assert "var manualBlockSize: i32 = (/* HIP device query:" not in result
         assert "var manualActiveBlocks: i32 = (/* HIP device query:" not in result
 
+    def test_hip_memory_event_output_reads_emit_metadata_expressions(self):
+        """Test HIP memory and event outputs lower to explicit metadata."""
+        code = """
+        void host(
+            hipEvent_t start,
+            hipEvent_t stop,
+            void* devicePtr,
+            hipMemPool_t pool,
+            float* times,
+            size_t* sizes,
+            int* attrs,
+            unsigned long long* flags
+        ) {
+            float elapsedMs = 0.0f;
+            float statusElapsedMs = 0.0f;
+            size_t freeMem = 0;
+            size_t totalMem = 0;
+            void* basePtr;
+            size_t rangeSize = 0;
+            int pointerAttrValue = 0;
+            int statusPointerAttrValue = 0;
+            size_t pointerSize = 0;
+            size_t statusPointerSize = 0;
+            unsigned long long accessFlags = 0;
+            unsigned long long poolAccessFlags = 0;
+            unsigned int hostFlags = 0;
+            size_t poolAttrValue = 0;
+            size_t allocationGranularity = 0;
+            hipMemLocation location;
+            hipMemAllocationProp prop;
+            hipEventElapsedTime(&elapsedMs, start, stop);
+            times[0] = elapsedMs;
+            elapsedMs = 1.0f;
+            float manualElapsedMs = elapsedMs;
+            hipMemGetInfo(&freeMem, &totalMem);
+            sizes[0] = freeMem;
+            sizes[1] = totalMem;
+            hipMemGetAddressRange(&basePtr, &rangeSize, devicePtr);
+            void* rangeBase = basePtr;
+            sizes[2] = rangeSize;
+            basePtr = devicePtr;
+            rangeSize = 3;
+            void* manualBase = basePtr;
+            size_t manualRangeSize = rangeSize;
+            hipPointerGetAttribute(
+                &pointerAttrValue,
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            attrs[0] = pointerAttrValue;
+            hipMemPtrGetInfo(devicePtr, &pointerSize);
+            sizes[3] = pointerSize;
+            hipMemGetAccess(&accessFlags, &location, devicePtr);
+            flags[0] = accessFlags;
+            hipMemPoolGetAttribute(pool, hipMemPoolAttrReleaseThreshold, &poolAttrValue);
+            sizes[4] = poolAttrValue;
+            hipMemPoolGetAccess(&poolAccessFlags, pool, &location);
+            flags[1] = poolAccessFlags;
+            hipHostGetFlags(&hostFlags, devicePtr);
+            flags[2] = hostFlags;
+            hipMemGetAllocationGranularity(
+                &allocationGranularity,
+                &prop,
+                hipMemAllocationGranularityMinimum
+            );
+            sizes[5] = allocationGranularity;
+            freeMem = 4;
+            totalMem = 5;
+            pointerAttrValue = 6;
+            pointerSize = 7;
+            accessFlags = 8;
+            poolAttrValue = 9;
+            poolAccessFlags = 10;
+            hostFlags = 11;
+            allocationGranularity = 12;
+            size_t manualFreeMem = freeMem;
+            size_t manualTotalMem = totalMem;
+            int manualPointerAttrValue = pointerAttrValue;
+            size_t manualPointerSize = pointerSize;
+            unsigned long long manualAccessFlags = accessFlags;
+            size_t manualPoolAttrValue = poolAttrValue;
+            unsigned long long manualPoolAccessFlags = poolAccessFlags;
+            unsigned int manualHostFlags = hostFlags;
+            size_t manualAllocationGranularity = allocationGranularity;
+            hipError_t errElapsed =
+                hipEventElapsedTime(&statusElapsedMs, start, stop);
+            times[1] = statusElapsedMs;
+            hipError_t errPointerSize =
+                hipMemPtrGetInfo(devicePtr, &statusPointerSize);
+            sizes[6] = statusPointerSize;
+            hipError_t errPointerAttr =
+                hipPointerGetAttribute(
+                    &statusPointerAttrValue,
+                    hipPointerAttributeDevicePointer,
+                    devicePtr
+                );
+            attrs[1] = statusPointerAttrValue;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP event elapsed time: start -> stop, output: elapsedMs" in result
+        assert (
+            "times[0] = (/* HIP device query: " "event.elapsedTime(start, stop) */ 0);"
+        ) in result
+        assert "elapsedMs = 1.0f;" in result
+        assert "var manualElapsedMs: f32 = elapsedMs;" in result
+        assert (
+            "// HIP memory info: free output: freeMem, total output: totalMem" in result
+        )
+        assert "sizes[0] = (/* HIP device query: memory.info.free */ 0);" in result
+        assert "sizes[1] = (/* HIP device query: memory.info.total */ 0);" in result
+        assert (
+            "// HIP driver memory address range: base output: basePtr, "
+            "size output: rangeSize, pointer: devicePtr"
+        ) in result
+        assert (
+            "var rangeBase: ptr<void> = (/* HIP device query: "
+            "memory.addressRange.base(devicePtr) */ 0);"
+        ) in result
+        assert (
+            "sizes[2] = (/* HIP device query: "
+            "memory.addressRange.size(devicePtr) */ 0);"
+        ) in result
+        assert "basePtr = devicePtr;" in result
+        assert "rangeSize = 3;" in result
+        assert "var manualBase: ptr<void> = basePtr;" in result
+        assert "var manualRangeSize: u32 = rangeSize;" in result
+        assert (
+            "// HIP pointer attribute: output: pointerAttrValue, "
+            "attribute: hipPointerAttributeMemoryType, pointer: devicePtr"
+        ) in result
+        assert (
+            "attrs[0] = (/* HIP device query: "
+            "pointer.attribute(hipPointerAttributeMemoryType, devicePtr) */ 0);"
+        ) in result
+        assert (
+            "// HIP memory pointer info: pointer: devicePtr, "
+            "size output: pointerSize"
+        ) in result
+        assert (
+            "sizes[3] = (/* HIP device query: " "memoryPointer.size(devicePtr) */ 0);"
+        ) in result
+        assert (
+            "// HIP virtual memory get access: output: accessFlags, "
+            "location: (&location), pointer: devicePtr"
+        ) in result
+        assert (
+            "flags[0] = (/* HIP device query: "
+            "virtualMemory.accessFlags(location, devicePtr) */ 0);"
+        ) in result
+        assert (
+            "// HIP memory pool get attribute: pool: pool, "
+            "attribute: hipMemPoolAttrReleaseThreshold, output: poolAttrValue"
+        ) in result
+        assert (
+            "sizes[4] = (/* HIP device query: "
+            "memoryPool.attribute(pool, hipMemPoolAttrReleaseThreshold) */ 0);"
+        ) in result
+        assert (
+            "// HIP memory pool get access: output: poolAccessFlags, "
+            "pool: pool, location: (&location)"
+        ) in result
+        assert (
+            "flags[1] = (/* HIP device query: "
+            "memoryPool.accessFlags(pool, location) */ 0);"
+        ) in result
+        assert "// HIP host memory flags: output: hostFlags, host: devicePtr" in result
+        assert (
+            "flags[2] = (/* HIP device query: " "hostMemory.flags(devicePtr) */ 0);"
+        ) in result
+        assert (
+            "// HIP virtual memory allocation granularity: "
+            "output: allocationGranularity, properties: (&prop), "
+            "option: hipMemAllocationGranularityMinimum"
+        ) in result
+        assert (
+            "sizes[5] = (/* HIP device query: "
+            "virtualMemory.allocationGranularity("
+            "prop, hipMemAllocationGranularityMinimum) */ 0);"
+        ) in result
+        assert "var manualFreeMem: u32 = freeMem;" in result
+        assert "var manualTotalMem: u32 = totalMem;" in result
+        assert "var manualPointerAttrValue: i32 = pointerAttrValue;" in result
+        assert "var manualPointerSize: u32 = pointerSize;" in result
+        assert "var manualAccessFlags: u64 = accessFlags;" in result
+        assert "var manualPoolAttrValue: u32 = poolAttrValue;" in result
+        assert "var manualPoolAccessFlags: u64 = poolAccessFlags;" in result
+        assert "var manualHostFlags: u32 = hostFlags;" in result
+        assert "var manualAllocationGranularity: u32 = allocationGranularity;" in result
+        assert "var errElapsed: hipError_t = hipSuccess;" in result
+        assert (
+            "times[1] = (/* HIP device query: " "event.elapsedTime(start, stop) */ 0);"
+        ) in result
+        assert "var errPointerSize: hipError_t = hipSuccess;" in result
+        assert (
+            "sizes[6] = (/* HIP device query: " "memoryPointer.size(devicePtr) */ 0);"
+        ) in result
+        assert "var errPointerAttr: hipError_t = hipSuccess;" in result
+        assert (
+            "attrs[1] = (/* HIP device query: "
+            "pointer.attribute(hipPointerAttributeDevicePointer, devicePtr) */ 0);"
+        ) in result
+        assert "times[0] = elapsedMs;" not in result
+        assert "sizes[0] = freeMem;" not in result
+        assert "sizes[1] = totalMem;" not in result
+        assert "sizes[2] = rangeSize;" not in result
+        assert "attrs[0] = pointerAttrValue;" not in result
+        assert "sizes[3] = pointerSize;" not in result
+        assert "flags[0] = accessFlags;" not in result
+        assert "sizes[4] = poolAttrValue;" not in result
+        assert "flags[1] = poolAccessFlags;" not in result
+        assert "flags[2] = hostFlags;" not in result
+        assert "sizes[5] = allocationGranularity;" not in result
+        assert "times[1] = statusElapsedMs;" not in result
+        assert "sizes[6] = statusPointerSize;" not in result
+        assert "attrs[1] = statusPointerAttrValue;" not in result
+        assert "var manualElapsedMs: f32 = (/* HIP device query:" not in result
+        assert "var manualFreeMem: u32 = (/* HIP device query:" not in result
+        assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
+        assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
