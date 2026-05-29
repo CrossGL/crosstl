@@ -182,6 +182,29 @@ class HipToCrossGLConverter:
         "Width",
     }
     HIP_EXTENT_MEMBERS = {"depth", "height", "width"}
+    HIP_RESOURCE_DESCRIPTOR_MEMBERS = {"resType"}
+    HIP_TEXTURE_DESCRIPTOR_MEMBERS = {
+        "disableTrilinearOptimization",
+        "filterMode",
+        "maxAnisotropy",
+        "maxMipmapLevelClamp",
+        "minMipmapLevelClamp",
+        "mipmapFilterMode",
+        "mipmapLevelBias",
+        "normalizedCoords",
+        "readMode",
+        "sRGB",
+    }
+    HIP_RESOURCE_VIEW_DESCRIPTOR_MEMBERS = {
+        "depth",
+        "firstLayer",
+        "firstMipmapLevel",
+        "format",
+        "height",
+        "lastLayer",
+        "lastMipmapLevel",
+        "width",
+    }
 
     def __init__(self):
         """Initialize HIP-to-CrossGL visitor state."""
@@ -2693,6 +2716,15 @@ class HipToCrossGLConverter:
         }:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            member: f"textureObject.resourceDesc.{member}({args[1]})"
+                            for member in self.HIP_RESOURCE_DESCRIPTOR_MEMBERS
+                        },
+                    )
                 return [
                     f"// HIP texture object get resource desc: output: {output}, "
                     f"texture: {args[1]}"
@@ -2700,6 +2732,15 @@ class HipToCrossGLConverter:
         elif name in {"hipGetTextureObjectTextureDesc", "hipTexObjectGetTextureDesc"}:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            member: f"textureObject.textureDesc.{member}({args[1]})"
+                            for member in self.HIP_TEXTURE_DESCRIPTOR_MEMBERS
+                        },
+                    )
                 return [
                     f"// HIP texture object get texture desc: output: {output}, "
                     f"texture: {args[1]}"
@@ -2710,6 +2751,17 @@ class HipToCrossGLConverter:
         }:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            member: (
+                                f"textureObject.resourceViewDesc.{member}({args[1]})"
+                            )
+                            for member in self.HIP_RESOURCE_VIEW_DESCRIPTOR_MEMBERS
+                        },
+                    )
                 return [
                     f"// HIP texture object get resource view desc: output: {output}, "
                     f"texture: {args[1]}"

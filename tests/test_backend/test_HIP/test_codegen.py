@@ -3867,6 +3867,139 @@ class TestHipCodeGen:
         assert "hipGetTextureObjectTextureDesc(" not in result
         assert "hipGetSurfaceObjectResourceDesc(" not in result
 
+    def test_hip_texture_object_descriptor_member_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test texture object descriptor output members lower to metadata."""
+        code = """
+        void host(
+            hipTextureObject_t texObj,
+            int* ints,
+            size_t* dims,
+            float* floats
+        ) {
+            hipResourceDesc resourceDesc;
+            hipResourceDesc aliasResourceDesc;
+            hipTextureDesc textureDesc;
+            hipTextureDesc aliasTextureDesc;
+            hipResourceViewDesc viewDesc;
+            hipResourceViewDesc aliasViewDesc;
+            hipGetTextureObjectResourceDesc(&resourceDesc, texObj);
+            ints[0] = resourceDesc.resType;
+            hipGetTextureObjectTextureDesc(&textureDesc, texObj);
+            ints[1] = textureDesc.filterMode;
+            ints[2] = textureDesc.readMode;
+            ints[3] = textureDesc.normalizedCoords;
+            floats[0] = textureDesc.mipmapLevelBias;
+            hipGetTextureObjectResourceViewDesc(&viewDesc, texObj);
+            ints[4] = viewDesc.format;
+            dims[0] = viewDesc.width;
+            dims[1] = viewDesc.height;
+            dims[2] = viewDesc.depth;
+            dims[3] = viewDesc.firstMipmapLevel;
+            dims[4] = viewDesc.lastMipmapLevel;
+            dims[5] = viewDesc.firstLayer;
+            dims[6] = viewDesc.lastLayer;
+            textureDesc.filterMode = hipFilterModePoint;
+            int manualFilter = textureDesc.filterMode;
+            viewDesc.width = 64;
+            size_t manualWidth = viewDesc.width;
+            hipError_t resErr = hipTexObjectGetResourceDesc(&aliasResourceDesc, texObj);
+            ints[5] = aliasResourceDesc.resType;
+            hipError_t texErr = hipTexObjectGetTextureDesc(&aliasTextureDesc, texObj);
+            ints[6] = aliasTextureDesc.maxAnisotropy;
+            hipError_t viewErr = hipTexObjectGetResourceViewDesc(&aliasViewDesc, texObj);
+            dims[7] = aliasViewDesc.lastLayer;
+            aliasViewDesc.firstLayer++;
+            size_t manualLayer = aliasViewDesc.firstLayer;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP texture object get resource desc: output: resourceDesc, "
+            "texture: texObj"
+        ) in result
+        assert (
+            "// HIP texture object get texture desc: output: textureDesc, "
+            "texture: texObj"
+        ) in result
+        assert (
+            "// HIP texture object get resource view desc: output: viewDesc, "
+            "texture: texObj"
+        ) in result
+        assert (
+            "ints[0] = (/* HIP device query: "
+            "textureObject.resourceDesc.resType(texObj) */ 0);"
+        ) in result
+        for index, member in [
+            (1, "filterMode"),
+            (2, "readMode"),
+            (3, "normalizedCoords"),
+        ]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"textureObject.textureDesc.{member}(texObj) */ 0);"
+            ) in result
+        assert (
+            "floats[0] = (/* HIP device query: "
+            "textureObject.textureDesc.mipmapLevelBias(texObj) */ 0);"
+        ) in result
+        assert (
+            "ints[4] = (/* HIP device query: "
+            "textureObject.resourceViewDesc.format(texObj) */ 0);"
+        ) in result
+        for index, member in enumerate(
+            [
+                "width",
+                "height",
+                "depth",
+                "firstMipmapLevel",
+                "lastMipmapLevel",
+                "firstLayer",
+                "lastLayer",
+            ]
+        ):
+            assert (
+                f"dims[{index}] = (/* HIP device query: "
+                f"textureObject.resourceViewDesc.{member}(texObj) */ 0);"
+            ) in result
+        assert "textureDesc.filterMode = hipFilterModePoint;" in result
+        assert "var manualFilter: i32 = textureDesc.filterMode;" in result
+        assert "viewDesc.width = 64;" in result
+        assert "var manualWidth: u32 = viewDesc.width;" in result
+        assert "var resErr: hipError_t = hipSuccess;" in result
+        assert (
+            "ints[5] = (/* HIP device query: "
+            "textureObject.resourceDesc.resType(texObj) */ 0);"
+        ) in result
+        assert "var texErr: hipError_t = hipSuccess;" in result
+        assert (
+            "ints[6] = (/* HIP device query: "
+            "textureObject.textureDesc.maxAnisotropy(texObj) */ 0);"
+        ) in result
+        assert "var viewErr: hipError_t = hipSuccess;" in result
+        assert (
+            "dims[7] = (/* HIP device query: "
+            "textureObject.resourceViewDesc.lastLayer(texObj) */ 0);"
+        ) in result
+        assert "(aliasViewDesc.firstLayer++);" in result
+        assert "var manualLayer: u32 = aliasViewDesc.firstLayer;" in result
+        assert "ints[0] = resourceDesc.resType;" not in result
+        assert "ints[1] = textureDesc.filterMode;" not in result
+        assert "dims[0] = viewDesc.width;" not in result
+        assert "ints[5] = aliasResourceDesc.resType;" not in result
+        assert "ints[6] = aliasTextureDesc.maxAnisotropy;" not in result
+        assert "dims[7] = aliasViewDesc.lastLayer;" not in result
+        assert "var manualFilter: i32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualLayer: u32 = (/* HIP device query:" not in result
+
     def test_hip_channel_descriptor_expression_contexts_emit_status(self):
         """Test channel and array descriptor queries in expressions stay explicit."""
         code = """
