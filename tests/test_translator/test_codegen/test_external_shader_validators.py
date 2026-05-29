@@ -368,11 +368,37 @@ shader GLSLDynamicImageArrayHelperValidator {
         return queryElement(images[layer]);
     }
 
+    int queryViaInitializer(image2D images[] @r32ui, int layer) {
+        int count = queryElement(images[layer]);
+        return count;
+    }
+
+    int queryViaAssignment(image2D images[] @r32ui, int layer) {
+        int count = 0;
+        count = queryElement(images[layer]);
+        return count;
+    }
+
+    void storeElement(image2D image @r32ui, ivec2 pixel, uint value) {
+        imageStore(image, pixel, value);
+    }
+
+    void storeViaExpression(image2D images[] @r32ui, int layer) {
+        storeElement(images[layer], ivec2(0, 0), uint(layer));
+    }
+
     compute {
         void main() {
             int directCount = queryElement(counters[0]);
             int nestedCount = queryViaDynamic(counters, 1);
-            imageStore(counters[1], ivec2(0, 0), uint(directCount + nestedCount));
+            int initializedCount = queryViaInitializer(counters, 0);
+            int assignedCount = queryViaAssignment(counters, 1);
+            storeViaExpression(counters, 1);
+            imageStore(
+                counters[1],
+                ivec2(0, 0),
+                uint(directCount + nestedCount + initializedCount + assignedCount)
+            );
         }
     }
 }
@@ -2580,6 +2606,12 @@ def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidat
     assert "return imageSize(counters[layer]).x;" in code
     assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
     assert "return queryElement__glsl_image_counters_layer(layer);" in code
+    assert "int queryViaInitializer__glsl_images_counters(int layer)" in code
+    assert "int count = queryElement__glsl_image_counters_layer(layer);" in code
+    assert "int queryViaAssignment__glsl_images_counters(int layer)" in code
+    assert "count = queryElement__glsl_image_counters_layer(layer);" in code
+    assert "void storeViaExpression__glsl_images_counters(int layer)" in code
+    assert "storeElement__glsl_image_counters_layer(" in code
     assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
 
