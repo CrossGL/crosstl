@@ -5599,6 +5599,190 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_struct_array_branch_value_operations_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        sampler2D textures[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    vec4 sampleTernaryDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        vec2 uv
+    ) {
+        return texture(
+            (useLeft ? left : right).textures[slot],
+            (useLeft ? left : right).state,
+            uv
+        );
+    }
+
+    vec4 readTernaryArrayDirect(
+        bool useLeft,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel
+    ) {
+        return imageLoad((useLeft ? left : right)[0].inputs[slot], pixel);
+    }
+
+    void writeTernaryArrayDirect(
+        bool useLeft,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel,
+        vec4 value
+    ) {
+        imageStore((useLeft ? left : right)[0].outputs[slot], pixel, value);
+    }
+
+    int loadTernaryBufferDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index
+    ) {
+        return (useLeft ? left : right).values[slot].Load(index);
+    }
+
+    void storeTernaryBufferDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index,
+        int value
+    ) {
+        (useLeft ? left : right).values[slot].Store(index, value);
+    }
+
+    uint loadTernaryRawDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint offset
+    ) {
+        return (useLeft ? left : right).rawBuffers[slot].Load(offset);
+    }
+
+    void storeTernaryRawDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint offset,
+        uint4 data
+    ) {
+        (useLeft ? left : right).rawBuffers[slot].Store4(offset, data);
+    }
+
+    vec4 readMatchArrayDirect(
+        int mode,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel
+    ) {
+        return imageLoad(
+            (match mode { 0 => left, _ => right })[0].inputs[slot],
+            pixel
+        );
+    }
+
+    int loadMatchBufferDirect(
+        int mode,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index
+    ) {
+        return (match mode { 0 => left, _ => right }).values[slot].Load(index);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return sample((left if useLeft else right).textures[int(slot)], uv)" in (
+        generated_code
+    )
+    assert (
+        "return image_load((left if useLeft else right)[0].inputs[int(slot)], pixel)"
+        in generated_code
+    )
+    assert (
+        "image_store((left if useLeft else right)[0].outputs[int(slot)], pixel, value)"
+        in generated_code
+    )
+    assert (
+        "return buffer_load((left if useLeft else right).values[int(slot)], index)"
+        in generated_code
+    )
+    assert (
+        "buffer_store((left if useLeft else right).values[int(slot)], index, value)"
+        in generated_code
+    )
+    assert (
+        "return buffer_load((left if useLeft else right).rawBuffers[int(slot)], offset)"
+        in generated_code
+    )
+    assert (
+        "buffer_store4((left if useLeft else right).rawBuffers[int(slot)], "
+        "offset, data)" in generated_code
+    )
+    assert "return image_load(__cgl_match_value_0[0].inputs[int(slot)], pixel)" in (
+        generated_code
+    )
+    assert "return buffer_load(__cgl_match_value_1.values[int(slot)], index)" in (
+        generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "unsafe_uninitialized=True" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_struct_array_branch_values.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholders():
     code = """
     struct SampleSet {

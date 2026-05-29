@@ -2463,6 +2463,48 @@ def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
     assert "float nonUniformTile" not in hlsl
 
 
+def test_codegen_feedback_texture_arrays_preserve_feedback_kind_and_uav_registers():
+    code = textwrap.dedent("""
+        Texture2D<float4> pairedTextures[2] : register(t0, space9);
+        SamplerState linearSampler : register(s0, space9);
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : register(u0, space9);
+        FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : register(u2, space9);
+
+        void main(float2 uv : TEXCOORD0, uint materialIndex : TEXCOORD1) {
+            uint slot = NonUniformResourceIndex(materialIndex);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(t0, space9)" in crossgl
+    assert "sampler2D pairedTextures[2];" in crossgl
+    assert "@ register(u0, space9)" in crossgl
+    assert "feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2];" in crossgl
+    assert "@ register(u2, space9)" in crossgl
+    assert (
+        "feedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[];"
+        in crossgl
+    )
+    assert "uint slot = NonUniformResourceIndex(materialIndex);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D pairedTextures[2] : register(t0, space9);" in hlsl
+    assert "SamplerState linearSampler : register(s0, space9);" in hlsl
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : "
+        "register(u0, space9);" in hlsl
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : "
+        "register(u2, space9);" in hlsl
+    )
+    assert "uint slot = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "feedbackTexture2D" not in hlsl
+    assert "feedbackTexture2DArray" not in hlsl
+
+
 def test_codegen_nonuniform_resource_index_typed_and_raw_buffer_arrays_roundtrip():
     code = textwrap.dedent("""
         StructuredBuffer<float4> positions[4] : register(t0, space3);

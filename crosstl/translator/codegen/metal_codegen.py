@@ -4722,6 +4722,7 @@ class MetalCodeGen:
             )
             if readonly_mesh_payload_call is not None:
                 return readonly_mesh_payload_call
+            self.validate_function_resource_argument_types(func_name, expr.args)
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -11832,6 +11833,124 @@ class MetalCodeGen:
                 f"Metal function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got access::{actual_access}"
+            )
+
+    def split_metal_array_resource_type(self, type_name):
+        type_name = str(type_name or "").strip()
+        if not type_name.startswith("array<") or not type_name.endswith(">"):
+            return None
+
+        body = type_name[len("array<") : -1]
+        depth = 0
+        for index, char in enumerate(body):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return body[:index].strip(), body[index + 1 :].strip()
+        return None
+
+    def metal_array_resource_type(self, element_type, array_size):
+        return f"array<{element_type}, {array_size or '1'}>"
+
+    def function_parameter_resource_type(self, func_name, parameter):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        param_name = getattr(parameter, "name", None)
+        function_hints = self.function_resource_array_size_hints.get(func_name, {})
+
+        if self.is_array_type_node(raw_type):
+            base_type = self.type_name_string(raw_type.element_type)
+            if not self.is_resource_parameter_type(base_type):
+                return None
+            array_size = (
+                self.safe_expression_to_string(raw_type.size)
+                if raw_type.size is not None
+                else function_hints.get(param_name, "")
+            )
+            return self.metal_array_resource_type(
+                self.map_resource_type_with_format(base_type, parameter),
+                array_size,
+            )
+
+        type_string = self.type_name_string(raw_type)
+        if "[" in type_string and "]" in type_string:
+            base_type, array_size = parse_array_type(type_string)
+            if not self.is_resource_parameter_type(base_type):
+                return None
+            return self.metal_array_resource_type(
+                self.map_resource_type_with_format(base_type, parameter),
+                (
+                    function_hints.get(param_name, "")
+                    if array_size is None
+                    else array_size
+                ),
+            )
+
+        if not self.is_resource_parameter_type(type_string):
+            return None
+        return self.map_resource_type_with_format(type_string, parameter)
+
+    def function_argument_resource_type(self, arg):
+        resource_type = self.texture_argument_resource_type(arg)
+        if resource_type is None:
+            return None
+        array_size = self.texture_argument_resource_array_size(arg)
+        if array_size is not None:
+            return self.metal_array_resource_type(resource_type, array_size)
+        return resource_type
+
+    def normalize_function_resource_compatibility_type(self, resource_type):
+        array_resource = self.split_metal_array_resource_type(resource_type)
+        if array_resource is not None:
+            element_type, array_size = array_resource
+            return self.metal_array_resource_type(
+                self.normalize_function_resource_compatibility_type(element_type),
+                array_size,
+            )
+        if self.is_storage_image_resource(resource_type):
+            return self.storage_image_access_agnostic_type(resource_type)
+        return self.resource_base_type(resource_type)
+
+    def resource_type_mentions_multisample_storage_image(self, resource_type):
+        array_resource = self.split_metal_array_resource_type(resource_type)
+        if array_resource is not None:
+            element_type, _ = array_resource
+            return self.resource_type_mentions_multisample_storage_image(element_type)
+        return self.is_multisample_storage_image_resource(resource_type)
+
+    def validate_function_resource_argument_types(self, func_name, args):
+        parameter_nodes = self.function_parameter_nodes.get(func_name)
+        if not parameter_nodes:
+            return
+
+        for index, parameter in enumerate(parameter_nodes):
+            if index >= len(args):
+                return
+            expected_type = self.function_parameter_resource_type(func_name, parameter)
+            if expected_type is None:
+                continue
+
+            actual_type = self.function_argument_resource_type(args[index])
+            if not (
+                self.resource_type_mentions_multisample_storage_image(expected_type)
+                or self.resource_type_mentions_multisample_storage_image(actual_type)
+            ):
+                continue
+
+            if self.normalize_function_resource_compatibility_type(
+                expected_type
+            ) == self.normalize_function_resource_compatibility_type(actual_type):
+                continue
+
+            actual_name = expression_debug_name(args[index])
+            actual_type_label = actual_type or self.type_name_string(
+                self.expression_result_type(args[index])
+            )
+            raise ValueError(
+                f"Metal function call '{func_name}' requires resource parameter "
+                f"{getattr(parameter, 'name', None)} of type {expected_type}: "
+                f"argument {actual_name} has {actual_type_label or 'non-resource'}"
             )
 
     def validate_integer_coordinate_argument(self, func_name, args):

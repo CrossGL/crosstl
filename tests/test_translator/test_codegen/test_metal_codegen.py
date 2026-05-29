@@ -24586,6 +24586,100 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
     assert "atomic_fetch_add" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("resources", "helper", "call", "match"),
+    [
+        (
+            "image2D regular @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(regular, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument regular has texture2d<float, access::read_write>",
+        ),
+        (
+            "image2DMS ms @rgba16f;",
+            """
+            vec4 readRegular(image2D image @rgba16f, ivec2 pixel) {
+                return imageLoad(image, pixel);
+            }
+            """,
+            "vec4 value = readRegular(ms, ivec2(0));",
+            "resource parameter image of type texture2d<float, access::read_write>: "
+            "argument ms has texture2d_ms<float, access::read>",
+        ),
+        (
+            "image2DMSArray msArray @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(msArray, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument msArray has texture2d_ms_array<float, access::read>",
+        ),
+        (
+            "uimage2DMS counter @r32ui;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(counter, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument counter has texture2d_ms<uint, access::read>",
+        ),
+        (
+            "image2DMS ms @rgba16f;",
+            """
+            vec4 readMsArray(image2DMS images[2] @rgba16f, int index, ivec2 pixel, int sampleIndex) {
+                return imageLoad(images[index], pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMsArray(ms, 0, ivec2(0), 1);",
+            "resource parameter images of type array<texture2d_ms<float, access::read>, 2>: "
+            "argument ms has texture2d_ms<float, access::read>",
+        ),
+        (
+            "image2DMS images[2] @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(images, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument images has array<texture2d_ms<float, access::read>, 2>",
+        ),
+    ],
+)
+def test_metal_multisample_storage_image_helper_calls_reject_incompatible_resources(
+    resources, helper, call, match
+):
+    shader = f"""
+    shader MetalMultisampleStorageImageHelperCompatibility {{
+        {resources}
+
+        {helper}
+
+        compute {{
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
+
+
 def test_metal_storage_image_access_attributes_select_texture_access():
     shader = """
     shader StorageImageAccess {

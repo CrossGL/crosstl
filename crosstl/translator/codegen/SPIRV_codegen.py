@@ -4691,14 +4691,53 @@ class VulkanSPIRVCodeGen:
             max_primitives = max(observed_primitives, max_primitives or 0)
         return max(1, max_vertices or 1), max(1, max_primitives or 1)
 
+    def mesh_output_literal_index_limit(
+        self, role: str, info: Optional[dict] = None
+    ) -> Optional[int]:
+        if info is not None and info.get("count") is not None:
+            return int(info["count"])
+
+        max_vertices, max_primitives = self.mesh_stage_current_output_limits()
+        if role == "vertices":
+            return max_vertices
+        if role in {"indices", "primitives"}:
+            return max_primitives
+        return None
+
+    def validate_mesh_output_literal_index(
+        self,
+        role: str,
+        literal_index: Optional[int],
+        diagnostic_name: str,
+        info: Optional[dict] = None,
+    ) -> bool:
+        if literal_index is None:
+            return True
+        if literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {diagnostic_name} literal index "
+                "must be non-negative"
+            )
+            return False
+
+        limit = self.mesh_output_literal_index_limit(role, info)
+        if limit is None or literal_index < limit:
+            return True
+
+        limit_label = "vertex" if role == "vertices" else "primitive"
+        self.emit(
+            f"; WARNING: SPIR-V mesh {diagnostic_name} literal index exceeds "
+            f"the declared mesh {limit_label} output limit"
+        )
+        return False
+
     def ensure_mesh_vertex_position_output(
         self, literal_index: Optional[int] = None
     ) -> Optional[SpirvId]:
         """Create the mesh Position output array used by SetVertex."""
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetVertex literal index must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            "vertices", literal_index, "SetVertex"
+        ):
             return None
 
         minimum_size = (literal_index + 1) if literal_index is not None else 1
@@ -4742,11 +4781,9 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         """Create a mesh output array for a signature member assignment."""
         role = info["role"]
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            role, literal_index, f"{info['name']} output", info
+        ):
             return None
 
         if role == "vertices":
@@ -4865,11 +4902,9 @@ class VulkanSPIRVCodeGen:
         self, literal_index: Optional[int] = None
     ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
         """Create the topology-specific primitive-index output array."""
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetPrimitive literal index must be "
-                "non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            "indices", literal_index, "SetPrimitive"
+        ):
             return None, None
 
         info = self.mesh_primitive_index_builtin_info()
@@ -4991,11 +5026,9 @@ class VulkanSPIRVCodeGen:
             return True
 
         literal_index = self.literal_int_argument(index_expr)
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return True
 
         role = info["role"]
@@ -5120,11 +5153,9 @@ class VulkanSPIRVCodeGen:
             return True
 
         literal_index = self.literal_int_argument(index_expr)
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return True
 
         if info["role"] == "indices":
@@ -5378,11 +5409,9 @@ class VulkanSPIRVCodeGen:
         semantic = member_info.get("semantic")
         member_type = member_info["type"]
 
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return None, None
 
         if info["role"] == "vertices":

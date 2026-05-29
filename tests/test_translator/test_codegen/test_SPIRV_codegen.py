@@ -6381,6 +6381,96 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mesh_output_helpers_reject_literal_indices_above_declared_limits(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputHighIndexSPIRV {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(1, 1);
+                    SetVertex(1, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(1, uvec3(0u, 0u, 0u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "mesh primitive output limit"
+        ) in spv_code
+        assert "OpSetMeshOutputsEXT" in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_output_parameter_assignments_reject_indices_above_limits(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputParameterHighIndexSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[1],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(1)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(1, 1);
+                    verts[1].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[1] = uvec3(0u, 0u, 0u);
+                    prims[1].normal = vec3(0.0, 1.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh verts output literal index exceeds the "
+            "declared mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh tris output literal index exceeds the "
+            "declared mesh primitive output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh prims output literal index exceeds the "
+            "declared mesh primitive output limit"
+        ) in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_task_stage_dispatch_mesh_emits_ext_terminator(self, tmp_path):
         source_code = """
         shader TaskSPIRV {

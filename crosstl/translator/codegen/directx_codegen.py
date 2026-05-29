@@ -637,6 +637,10 @@ class HLSLCodeGen:
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
             "samplerCubeArrayShadow": "TextureCubeArray",
+            "feedbackTexture2D": "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>",
+            "feedbackTexture2DArray": (
+                "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>"
+            ),
             "iimage1D": "RWTexture1D<int>",
             "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",
@@ -1254,6 +1258,7 @@ class HLSLCodeGen:
                 mapped_type = "SamplerComparisonState"
             is_hlsl_resource_global = (
                 mapped_type.startswith("Texture")
+                or self.is_hlsl_feedback_texture_type(mapped_type)
                 or self.is_hlsl_rw_texture_type(mapped_type)
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
@@ -1306,6 +1311,32 @@ class HLSLCodeGen:
                 register = self.resource_register_suffix("t", binding, node)
                 self.advance_resource_register(
                     texture_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_feedback_texture_type(mapped_type):
+                self.texture_variable_types[var_name] = mapped_type
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture", "uav"}, ("u",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "u",
+                        uav_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "u",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("u", binding, node)
+                self.advance_resource_register(
+                    uav_registers, space, binding, resource_count
                 )
             elif self.is_hlsl_rw_texture_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
@@ -9218,7 +9249,9 @@ class HLSLCodeGen:
         return mapped_type in {"SamplerState", "SamplerComparisonState"}
 
     def is_texture_type(self, vtype):
-        return self.map_type(self.resource_base_type(vtype)).startswith("Texture")
+        return self.map_type(self.resource_base_type(vtype)).startswith(
+            ("Texture", "FeedbackTexture")
+        )
 
     def is_image_type(self, vtype):
         return self.map_type(self.resource_base_type(vtype)).startswith(
@@ -9435,11 +9468,16 @@ class HLSLCodeGen:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if (
                 mapped_type.startswith("Texture")
+                or self.is_hlsl_feedback_texture_type(mapped_type)
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
             ):
-                prefix = "t"
-                attribute_names = {"binding", "texture"}
+                if self.is_hlsl_feedback_texture_type(mapped_type):
+                    prefix = "u"
+                    attribute_names = {"binding", "texture", "uav"}
+                else:
+                    prefix = "t"
+                    attribute_names = {"binding", "texture"}
             elif self.is_hlsl_rw_texture_type(mapped_type):
                 prefix = "u"
                 attribute_names = {"binding", "texture", "uav"}
@@ -14311,6 +14349,9 @@ class HLSLCodeGen:
             ("RWTexture", "RasterizerOrderedTexture")
         )
 
+    def is_hlsl_feedback_texture_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype).startswith("FeedbackTexture")
+
     def is_hlsl_readonly_buffer_type(self, vtype):
         return self.hlsl_resource_type_name(vtype) in {
             "Buffer",
@@ -14653,6 +14694,13 @@ class HLSLCodeGen:
         if "<" in vtype_str and vtype_str.endswith(">"):
             base_type, generic_args = vtype_str.split("<", 1)
             generic_args = generic_args[:-1].strip()
+            feedback_texture_types = {
+                "feedbackTexture2D": "FeedbackTexture2D",
+                "feedbackTexture2DArray": "FeedbackTexture2DArray",
+            }
+            feedback_texture_type = feedback_texture_types.get(base_type)
+            if feedback_texture_type and generic_args:
+                return f"{feedback_texture_type}<{generic_args}>"
             if "," not in generic_args:
                 return f"{base_type}<{self.map_type(generic_args)}>"
 

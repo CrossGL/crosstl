@@ -2347,6 +2347,9 @@ class HLSLToCrossGLConverter:
             )
             if rasterizer_buffer_type:
                 return rasterizer_buffer_type
+            feedback_texture_type = self.map_feedback_texture_type(base, generic_type)
+            if feedback_texture_type:
+                return feedback_texture_type
             if base in self.structured_buffer_types:
                 return type_name
             storage_image_type = self.map_rw_texture_type(base, generic_type)
@@ -2363,6 +2366,15 @@ class HLSLToCrossGLConverter:
         if buffer_type is None:
             return None
         return f"{buffer_type}<{element_type}>"
+
+    def map_feedback_texture_type(self, base_type, feedback_type):
+        texture_type = {
+            "FeedbackTexture2D": "feedbackTexture2D",
+            "FeedbackTexture2DArray": "feedbackTexture2DArray",
+        }.get(base_type)
+        if texture_type is None:
+            return None
+        return f"{texture_type}<{feedback_type}>"
 
     def map_rw_texture_type(self, base_type, element_type):
         image_type = {
