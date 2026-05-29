@@ -63,16 +63,42 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $ProgressPreference = "SilentlyContinue"
+          $vulkanSdkVersion = "1.4.341.1"
           $maxAttempts = 3
+          $chocoInstalled = $false
           for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
             choco install vulkan-sdk --version=1.4.341 -y --no-progress
             if ($LASTEXITCODE -eq 0) {
+              $chocoInstalled = $true
               break
             }
             if ($attempt -eq $maxAttempts) {
-              exit $LASTEXITCODE
+              break
             }
+            Write-Warning "Chocolatey Vulkan SDK install failed on attempt $attempt; retrying."
             Start-Sleep -Seconds (20 * $attempt)
+          }
+          if (-not $chocoInstalled) {
+            $installer = Join-Path $env:RUNNER_TEMP "vulkansdk-windows-X64-$vulkanSdkVersion.exe"
+            $installRoot = "C:\VulkanSDK\$vulkanSdkVersion"
+            $sdkUri = "https://sdk.lunarg.com/sdk/download/$vulkanSdkVersion/windows/vulkansdk-windows-X64-$vulkanSdkVersion.exe"
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $sdkUri -OutFile $installer
+                & $installer --root $installRoot --accept-licenses --default-answer --confirm-command install copy_only=1
+                if ($LASTEXITCODE -ne 0) {
+                  throw "Vulkan SDK installer exited with code $LASTEXITCODE"
+                }
+                break
+              } catch {
+                if ($attempt -eq $maxAttempts) {
+                  throw
+                }
+                Write-Warning "Direct Vulkan SDK install failed on attempt $attempt; retrying."
+                Start-Sleep -Seconds (20 * $attempt)
+              }
+            }
           }
           $sdkRoot = Get-ChildItem "C:\VulkanSDK" -Directory |
             Sort-Object Name -Descending |
