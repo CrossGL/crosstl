@@ -5715,6 +5715,114 @@ class TestHipCodeGen:
             not in result
         )
 
+    def test_hip_context_scalar_output_reads_emit_metadata_expressions(self):
+        """Test HIP context scalar outputs lower to explicit metadata."""
+        code = """
+        void host(hipCtx_t ctx, int* out) {
+            hipDevice_t device;
+            unsigned int apiVersion = 0;
+            unsigned int flags = 0;
+            unsigned int statusFlags = 0;
+            int active = 0;
+            int statusActive = 0;
+            hipCtxGetDevice(&device);
+            out[0] = device;
+            device = 2;
+            hipDevice_t manualDevice = device;
+            hipError_t errApi = hipCtxGetApiVersion(ctx, &apiVersion);
+            out[1] = apiVersion;
+            apiVersion = 13;
+            unsigned int manualApiVersion = apiVersion;
+            hipCtxGetFlags(&flags);
+            out[2] = flags;
+            hipDevicePrimaryCtxSetFlags(device, flags);
+            flags = 7;
+            unsigned int manualContextFlags = flags;
+            hipDevicePrimaryCtxGetState(device, &flags, &active);
+            out[3] = flags;
+            out[4] = active;
+            hipDevicePrimaryCtxSetFlags(device, flags);
+            flags = 9;
+            active = 1;
+            unsigned int manualPrimaryFlags = flags;
+            int manualPrimaryActive = active;
+            hipError_t errState =
+                hipDevicePrimaryCtxGetState(
+                    device + 1,
+                    &statusFlags,
+                    &statusActive
+                );
+            out[5] = statusFlags;
+            out[6] = statusActive;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP context get device: output: device" in result
+        assert "out[0] = (/* HIP device query: context.device */ 0);" in result
+        assert "device = 2;" in result
+        assert "var manualDevice: hipDevice_t = device;" in result
+        assert (
+            "// HIP context get API version: context: ctx, output: apiVersion" in result
+        )
+        assert "var errApi: hipError_t = hipSuccess;" in result
+        assert "out[1] = (/* HIP device query: context.apiVersion(ctx) */ 0);" in result
+        assert "apiVersion = 13;" in result
+        assert "var manualApiVersion: u32 = apiVersion;" in result
+        assert "// HIP context get flags: output: flags" in result
+        assert "out[2] = (/* HIP device query: context.flags */ 0);" in result
+        assert (
+            "// HIP primary context set flags: device: device, flags: flags" in result
+        )
+        assert "flags = 7;" in result
+        assert "var manualContextFlags: u32 = flags;" in result
+        assert (
+            "// HIP primary context get state: device: device, "
+            "flags output: flags, active output: active"
+        ) in result
+        assert (
+            "out[3] = (/* HIP device query: primaryContext.flags, "
+            "device: device */ 0);"
+        ) in result
+        assert (
+            "out[4] = (/* HIP device query: primaryContext.active, "
+            "device: device */ 0);"
+        ) in result
+        assert "flags = 9;" in result
+        assert "active = 1;" in result
+        assert "var manualPrimaryFlags: u32 = flags;" in result
+        assert "var manualPrimaryActive: i32 = active;" in result
+        assert (
+            "// HIP primary context get state: device: (device + 1), "
+            "flags output: statusFlags, active output: statusActive"
+        ) in result
+        assert "var errState: hipError_t = hipSuccess;" in result
+        assert (
+            "out[5] = (/* HIP device query: primaryContext.flags, "
+            "device: (device + 1) */ 0);"
+        ) in result
+        assert (
+            "out[6] = (/* HIP device query: primaryContext.active, "
+            "device: (device + 1) */ 0);"
+        ) in result
+        assert "out[0] = device;" not in result
+        assert "out[1] = apiVersion;" not in result
+        assert "out[2] = flags;" not in result
+        assert "out[3] = flags;" not in result
+        assert "out[4] = active;" not in result
+        assert "out[5] = statusFlags;" not in result
+        assert "out[6] = statusActive;" not in result
+        assert "var manualDevice: hipDevice_t = (/* HIP device query:" not in result
+        assert "var manualApiVersion: u32 = (/* HIP device query:" not in result
+        assert "var manualContextFlags: u32 = (/* HIP device query:" not in result
+        assert "var manualPrimaryFlags: u32 = (/* HIP device query:" not in result
+        assert "var manualPrimaryActive: i32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

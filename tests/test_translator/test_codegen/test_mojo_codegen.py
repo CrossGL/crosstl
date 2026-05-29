@@ -284,6 +284,46 @@ def test_braced_struct_constructors_zero_fill_missing_fields():
     assert "Pair(y=2.0)" not in generated_code
 
 
+def test_braced_struct_constructors_zero_fill_nested_struct_and_array_fields():
+    code = """
+    struct Inner {
+        float value;
+        float2 offset;
+    };
+
+    struct Outer {
+        Inner inner;
+        float weights[2];
+        float scalar;
+    };
+
+    Outer makePartialOuter() {
+        return Outer { scalar: 5.0 };
+    }
+
+    Outer makePartialInner() {
+        return Outer { inner: Inner { value: 1.0 } };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "return Outer(inner=Inner(0.0, SIMD[DType.float32, 2](0.0, 0.0)), "
+        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=5.0)" in generated_code
+    )
+    assert (
+        "return Outer(inner=Inner(value=1.0, "
+        "offset=SIMD[DType.float32, 2](0.0, 0.0)), "
+        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=0.0)" in generated_code
+    )
+    assert "Outer(scalar=5.0)" not in generated_code
+    assert (
+        "return Outer(inner=Inner(value=1.0, "
+        "offset=SIMD[DType.float32, 2](0.0, 0.0)))" not in generated_code
+    )
+
+
 def test_braced_struct_positional_missing_fields_zero_fill_direct_ast():
     codegen = MojoCodeGen()
     codegen.struct_types["Pair"] = {"x": "float", "y": "float"}
@@ -325,6 +365,25 @@ def test_braced_struct_constructors_compile_with_mojo(tmp_path):
         Pair named = Pair { y: 9.0 };
         return positional.x + positional.y + named.x + named.y;
     }
+
+    struct Inner {
+        float value;
+        float2 offset;
+    };
+
+    struct Outer {
+        Inner inner;
+        float weights[2];
+        float scalar;
+    };
+
+    Outer makePartialOuter() {
+        return Outer { scalar: 5.0 };
+    }
+
+    Outer makePartialInner() {
+        return Outer { inner: Inner { value: 1.0 } };
+    }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
@@ -333,6 +392,8 @@ fn main():
     print(makePositionalPair(6.0, 7.0).x)
     print(sumPair())
     print(sumPartialPairs())
+    print(makePartialOuter().inner.value + makePartialOuter().weights[0] + makePartialOuter().scalar)
+    print(makePartialInner().inner.value + makePartialInner().inner.offset[0] + makePartialInner().weights[1] + makePartialInner().scalar)
 """
 
     source_path = tmp_path / "braced_struct_constructors.mojo"
@@ -349,6 +410,8 @@ fn main():
     assert "6.0" in result.stdout
     assert "3.0" in result.stdout
     assert "17.0" in result.stdout
+    assert "5.0" in result.stdout
+    assert "1.0" in result.stdout
 
 
 def test_unit_enums_lower_to_mojo_aliases():

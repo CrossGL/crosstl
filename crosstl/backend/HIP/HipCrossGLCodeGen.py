@@ -2640,10 +2640,18 @@ class HipToCrossGLConverter:
         if name == "hipCtxGetDevice":
             if args:
                 output = self.format_runtime_pointer_target(raw_args[0])
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "context.device")
                 return [f"// HIP context get device: output: {output}"]
         if name == "hipCtxGetApiVersion":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(raw_args[1])
+                output_name = self.get_runtime_pointer_target_name(raw_args[1])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"context.apiVersion({args[0]})"
+                    )
                 return [
                     f"// HIP context get API version: context: {args[0]}, "
                     f"output: {output}"
@@ -2668,6 +2676,9 @@ class HipToCrossGLConverter:
         if name == "hipCtxGetFlags":
             if args:
                 output = self.format_runtime_pointer_target(raw_args[0])
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "context.flags")
                 return [f"// HIP context get flags: output: {output}"]
         if name == "hipCtxSynchronize":
             return ["// HIP context synchronize"]
@@ -2692,6 +2703,16 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 flags_output = self.format_runtime_pointer_target(raw_args[1])
                 active_output = self.format_runtime_pointer_target(raw_args[2])
+                flags_output_name = self.get_runtime_pointer_target_name(raw_args[1])
+                active_output_name = self.get_runtime_pointer_target_name(raw_args[2])
+                if flags_output_name is not None:
+                    self.register_device_query_source(
+                        flags_output_name, "primaryContext.flags", args[0]
+                    )
+                if active_output_name is not None:
+                    self.register_device_query_source(
+                        active_output_name, "primaryContext.active", args[0]
+                    )
                 return [
                     f"// HIP primary context get state: device: {args[0]}, "
                     f"flags output: {flags_output}, active output: {active_output}"
