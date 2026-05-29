@@ -4737,6 +4737,140 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     assert "accelerationStructureEXT" not in generated_code
 
 
+def test_slang_ray_tracing_intrinsics_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayIntrinsicTargets {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        bool acceptBool(bool value) {
+            return value;
+        }
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        float reportAsFloat(HitAttributes attributes) {
+            return ReportHit(6.0, 5, attributes);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData callableData;
+                float traced = TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                float callableValue = CallShader(1, callableData);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool take = true;
+                bool validReport = ReportHit(1.0, 0, attributes);
+                acceptBool(ReportHit(2.0, 1, attributes));
+                float reportScalar = ReportHit(3.0, 2, attributes);
+                bvec2 reportVector = ReportHit(4.0, 3, attributes);
+                acceptFloat(ReportHit(5.0, 4, attributes));
+                float reportReturn = reportAsFloat(attributes);
+                float reportTernary = take ? ReportHit(7.0, 6, attributes) : 1.0;
+                float reportArray[2] = {ReportHit(8.0, 7, attributes), 1.0};
+            }
+        }
+
+        ray_any_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) {
+                bool ignoredValue = IgnoreHit();
+                vec2 acceptedVector = AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) { }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool validReport = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "acceptBool(ReportHit(2.0, 1, attributes));" in generated_code
+    assert (
+        "float traced = /* unsupported Slang ray tracing intrinsic: TraceRay "
+        "returns void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float callableValue = /* unsupported Slang ray tracing intrinsic: "
+        "CallShader returns void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float reportScalar = /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "bool2 reportVector = /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects bool2 */ bool2(false);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang ray tracing intrinsic: ReportHit "
+        "returns bool but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang ray tracing intrinsic: ReportHit returns bool "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert "float reportReturn = reportAsFloat(attributes);" in generated_code
+    assert (
+        "float reportTernary = (take ? /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0 : 1.0);" in generated_code
+    )
+    assert (
+        "float reportArray[2] = {/* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0, 1.0};" in generated_code
+    )
+    assert (
+        "bool ignoredValue = /* unsupported Slang ray tracing intrinsic: "
+        "IgnoreHit returns void but target expects bool */ false;" in generated_code
+    )
+    assert (
+        "float2 acceptedVector = /* unsupported Slang ray tracing intrinsic: "
+        "AcceptHitAndEndSearch returns void but target expects float2 */ "
+        "float2(0.0);" in generated_code
+    )
+    assert "float traced = TraceRay(" not in generated_code
+    assert "float callableValue = CallShader(" not in generated_code
+    assert "float reportScalar = ReportHit(" not in generated_code
+    assert "bool2 reportVector = ReportHit(" not in generated_code
+    assert "bool ignoredValue = IgnoreHit();" not in generated_code
+    assert "float2 acceptedVector = AcceptHitAndEndSearch();" not in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_report_hit_helper_return_attributes_emit_native_calls():
     code = """
     shader SlangReportHitHelperReturnAttributes {

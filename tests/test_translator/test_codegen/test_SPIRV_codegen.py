@@ -10933,6 +10933,179 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_unsized_storage_buffer_array_parameters_inline_with_descriptor_indexing(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UnsizedStorageBufferArrayParameters {
+            RWStructuredBuffer<float> values[] @set(9) @binding(0);
+            StructuredBuffer<float> weights[] @set(9) @binding(1);
+            ByteAddressBuffer rawInputs[] @set(9) @binding(2);
+            RWByteAddressBuffer rawOutputs[] @set(9) @binding(3);
+
+            float readValue(StructuredBuffer<float> data[], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            void writeValue(
+                RWStructuredBuffer<float> data[],
+                uint slot,
+                uint index,
+                float value
+            ) {
+                data[slot].Store(index, value);
+            }
+
+            uint readRaw(ByteAddressBuffer data[], uint slot, uint offset) {
+                return data[slot].Load(offset);
+            }
+
+            void writeRaw(
+                RWByteAddressBuffer data[],
+                uint slot,
+                uint offset,
+                uint value
+            ) {
+                data[slot].Store(offset, value);
+            }
+
+            compute {
+                void main() {
+                    uint slot = 1u;
+                    float w = readValue(weights, slot, 0u);
+                    writeValue(values, slot, 1u, w);
+                    uint raw = readRaw(rawInputs, slot, 4u);
+                    writeRaw(rawOutputs, slot, 8u, raw);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        raw_inputs_var = spirv_named_variable(
+            spv_code, "rawInputs", storage_class="Uniform"
+        )
+        raw_outputs_var = spirv_named_variable(
+            spv_code, "rawOutputs", storage_class="Uniform"
+        )
+
+        for variable in (values_var, weights_var, raw_inputs_var, raw_outputs_var):
+            descriptor_accesses = re.findall(
+                rf"OpAccessChain %\d+ {re.escape(variable)} ([^\n]+)",
+                spv_code,
+            )
+            assert any(len(access.split()) == 1 for access in descriptor_accesses)
+
+        assert "OpCapability RuntimeDescriptorArray" in spv_code
+        assert 'OpExtension "SPV_EXT_descriptor_indexing"' in spv_code
+        assert spv_code.count("OpTypeRuntimeArray") >= 6
+        assert f"OpDecorate {values_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {values_var} Binding 0" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {weights_var} Binding 1" in spv_code
+        assert f"OpDecorate {raw_inputs_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {raw_inputs_var} Binding 2" in spv_code
+        assert f"OpDecorate {raw_outputs_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {raw_outputs_var} Binding 3" in spv_code
+        assert "OpUDiv" in spv_code
+        assert spv_code.count("OpLoad") >= 4
+        assert spv_code.count("OpStore") >= 4
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "readRaw" not in spv_code
+        assert "writeRaw" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unsized_storage_buffer_array_parameter_type_contracts_emit_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UnsizedStorageBufferArrayParameterDiagnostics {
+            ByteAddressBuffer rawInputs[] @set(1) @binding(0);
+            StructuredBuffer<float> weights[] @set(1) @binding(1);
+            StructuredBuffer<uint> counters[] @set(1) @binding(2);
+            RWStructuredBuffer<float> writeOnlyValues[] @writeonly @set(1) @binding(3);
+            StructuredBuffer<float> scalarWeights @set(1) @binding(4);
+
+            float readValue(StructuredBuffer<float> data[], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            uint readRaw(ByteAddressBuffer data[], uint slot, uint offset) {
+                return data[slot].Load(offset);
+            }
+
+            float readScalar(StructuredBuffer<float> data, uint index) {
+                return data.Load(index);
+            }
+
+            compute {
+                void main() {
+                    float wrongByteArray = readValue(rawInputs, 0u, 0u);
+                    float wrongElementArray = readValue(counters, 0u, 0u);
+                    uint wrongRawArray = readRaw(weights, 0u, 0u);
+                    float wrongArrayToScalar = readScalar(weights, 0u);
+                    float wrongScalarToArray = readValue(scalarWeights, 0u, 0u);
+                    float rejectedRead = readValue(writeOnlyValues, 0u, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument rawInputs "
+            "passed to parameter data: got ByteAddressBuffer[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument counters "
+            "passed to parameter data: got StructuredBuffer<uint>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readRaw' requires ByteAddressBuffer[] "
+            "storage buffer type for argument weights passed to parameter data: "
+            "got StructuredBuffer<float>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readScalar' requires StructuredBuffer<float> "
+            "storage buffer type for argument weights passed to parameter data: "
+            "got StructuredBuffer<float>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument scalarWeights "
+            "passed to parameter data: got StructuredBuffer<float>"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires read-capable "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics(self):
         source_code = """
         shader StorageBuffers {

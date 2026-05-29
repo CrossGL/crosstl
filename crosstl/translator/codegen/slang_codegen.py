@@ -3888,29 +3888,35 @@ class SlangCodeGen:
 
     def slang_ray_tracing_calls(self, func):
         calls = []
-        ray_intrinsics = {
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call = self.slang_ray_tracing_call_parts(node, include_user_functions=True)
+            if call is not None:
+                calls.append(call)
+        return calls
+
+    def slang_ray_tracing_intrinsic_names(self):
+        return {
             "TraceRay",
             "CallShader",
             "ReportHit",
             "AcceptHitAndEndSearch",
             "IgnoreHit",
         }
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, RayTracingOpNode):
-                calls.append(
-                    (getattr(node, "operation", None), getattr(node, "arguments", []))
-                )
-                continue
 
-            if not isinstance(node, FunctionCallNode):
-                continue
-            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
-            func_name = getattr(func_expr, "name", func_expr)
-            if func_name in ray_intrinsics:
-                calls.append(
-                    (func_name, getattr(node, "arguments", getattr(node, "args", [])))
-                )
-        return calls
+    def slang_ray_tracing_call_parts(self, node, include_user_functions=False):
+        if isinstance(node, RayTracingOpNode):
+            return getattr(node, "operation", None), getattr(node, "arguments", [])
+
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        func_name = getattr(func_expr, "name", func_expr)
+        if func_name not in self.slang_ray_tracing_intrinsic_names():
+            return None
+        if not include_user_functions and func_name in self.user_function_names:
+            return None
+        return func_name, getattr(node, "arguments", getattr(node, "args", []))
 
     def slang_function_call_name(self, node):
         if not isinstance(node, FunctionCallNode):
@@ -4457,6 +4463,45 @@ class SlangCodeGen:
             self.variable_types = saved_variable_types
             self.buffer_resource_types = saved_buffer_resource_types
             self.buffer_resource_accesses = saved_buffer_resource_accesses
+
+    def slang_ray_tracing_result_type(self, operation):
+        return {
+            "TraceRay": "void",
+            "CallShader": "void",
+            "ReportHit": "bool",
+            "AcceptHitAndEndSearch": "void",
+            "IgnoreHit": "void",
+        }.get(operation)
+
+    def slang_ray_tracing_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        return expected_type
+
+    def slang_ray_tracing_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_ray_tracing_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if result_type == "void":
+            return f"returns void but target expects {expected_type}"
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_ray_tracing_diagnostic_expression(self, operation, reason):
+        expected_type = self.slang_ray_tracing_expected_target_type()
+        fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
+        return (
+            f"/* unsupported Slang ray tracing intrinsic: {operation} {reason} */ "
+            f"{fallback}"
+        )
 
     def slang_ray_query_method_return_type(self, operation):
         return {
@@ -5618,11 +5663,17 @@ class SlangCodeGen:
                 return None
             image_type = self.resource_base_type(self.image_resource_type(expr.target))
             return self.image_atomic_return_type(image_type)
+        if isinstance(expr, RayTracingOpNode):
+            return self.slang_ray_tracing_result_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.slang_ray_query_call_parts(expr)
             if ray_query_call is not None:
                 operation, _query_expr, _args = ray_query_call
                 return self.slang_ray_query_method_return_type(operation)
+            ray_tracing_call = self.slang_ray_tracing_call_parts(expr)
+            if ray_tracing_call is not None:
+                operation, _args = ray_tracing_call
+                return self.slang_ray_tracing_result_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             if (
@@ -5875,6 +5926,10 @@ class SlangCodeGen:
                 return self.generate_slang_ray_query_expression(
                     operation, query_expr, args
                 )
+            ray_tracing_call = self.slang_ray_tracing_call_parts(node)
+            if ray_tracing_call is not None:
+                operation, args = ray_tracing_call
+                return self.generate_slang_ray_tracing_call_expression(operation, args)
             if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):
@@ -6016,11 +6071,23 @@ class SlangCodeGen:
         }.get(callee)
 
     def generate_slang_ray_tracing_op_expression(self, node):
-        args = [self.generate_expression(arg) for arg in node.arguments]
-        if node.operation == "TraceRay" and len(args) == 11:
+        return self.generate_slang_ray_tracing_call_expression(
+            node.operation, node.arguments
+        )
+
+    def generate_slang_ray_tracing_call_expression(self, operation, arguments):
+        result_type = self.slang_ray_tracing_result_type(operation)
+        target_reason = self.slang_ray_tracing_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.slang_ray_tracing_diagnostic_expression(
+                operation, target_reason
+            )
+
+        args = [self.generate_expression(arg) for arg in arguments]
+        if operation == "TraceRay" and len(args) == 11:
             ray_desc = f"RayDesc({args[6]}, {args[7]}, {args[8]}, {args[9]})"
             args = args[:6] + [ray_desc, args[10]]
-        return f"{node.operation}({', '.join(args)})"
+        return f"{operation}({', '.join(args)})"
 
     def generate_slang_wave_op_expression(self, node):
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)

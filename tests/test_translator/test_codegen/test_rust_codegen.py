@@ -18788,7 +18788,7 @@ def test_bitwise_or_operator():
         pytest.fail("Bitwise OR codegen not implemented")
 
 
-def test_ternary_operator():
+def test_ternary_operator(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -18821,6 +18821,7 @@ def test_ternary_operator():
         assert (
             "if" in generated_code and "else" in generated_code
         )  # Rust converts ternary to if-else
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Ternary operator codegen not implemented")

@@ -8578,6 +8578,66 @@ class VulkanSPIRVCodeGen:
             return type_name
         return None
 
+    def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
+        if isinstance(expr, ArrayAccessNode):
+            base_type = self.storage_buffer_expression_type_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+            if base_type is not None:
+                array_type = self.split_outer_array_type(base_type)
+                if array_type is not None:
+                    return array_type[0]
+
+        pointer = self.variable_pointer_from_expression(expr)
+        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if metadata is None:
+            return None
+        return metadata.get("declared_type_name")
+
+    def storage_buffer_parameter_type_is_compatible(
+        self, declared_type: str, actual_type: str
+    ) -> bool:
+        declared_type = re.sub(r"\s+", "", str(declared_type))
+        actual_type = re.sub(r"\s+", "", str(actual_type))
+        declared_info = self.structured_buffer_type_info(
+            self.array_base_type_name(declared_type)
+        )
+        actual_info = self.structured_buffer_type_info(
+            self.array_base_type_name(actual_type)
+        )
+        if declared_info is None or actual_info is None:
+            return True
+
+        declared_dimensions = self.array_dimensions(declared_type) or []
+        actual_dimensions = self.array_dimensions(actual_type) or []
+        if len(declared_dimensions) != len(actual_dimensions):
+            return False
+        for declared_dimension, actual_dimension in zip(
+            declared_dimensions, actual_dimensions
+        ):
+            if declared_dimension and declared_dimension != actual_dimension:
+                return False
+
+        if bool(declared_info.get("byte_address")) != bool(
+            actual_info.get("byte_address")
+        ):
+            return False
+        if declared_info.get("byte_address"):
+            return True
+
+        if declared_info.get("element_type_name") != actual_info.get(
+            "element_type_name"
+        ):
+            return False
+
+        declared_kind = declared_info.get("buffer_kind")
+        actual_kind = actual_info.get("buffer_kind")
+        if declared_kind == "StructuredBuffer":
+            return actual_kind in {"StructuredBuffer", "RWStructuredBuffer"}
+        if declared_kind == "RWStructuredBuffer":
+            return actual_kind in {"StructuredBuffer", "RWStructuredBuffer"}
+        return declared_kind == actual_kind
+
     def function_storage_buffer_parameters(self, function_node) -> set:
         return {
             getattr(param, "name", None)
@@ -11736,7 +11796,10 @@ class VulkanSPIRVCodeGen:
         try:
             for index, param in enumerate(parameters):
                 param_name = getattr(param, "name", f"param{index}")
-                if self.storage_buffer_parameter_type_name(param) is not None:
+                storage_buffer_type_name = self.storage_buffer_parameter_type_name(
+                    param
+                )
+                if storage_buffer_type_name is not None:
                     pointer_arg = self.variable_pointer_from_expression(
                         call_args[index]
                     )
@@ -11744,6 +11807,22 @@ class VulkanSPIRVCodeGen:
                         self.emit(
                             f"; WARNING: function call '{func_name}' requires a "
                             f"storage buffer argument for parameter {param_name}"
+                        )
+                        return self.default_value_for_function(function_node)
+                    actual_type_name = self.storage_buffer_expression_type_name(
+                        call_args[index]
+                    )
+                    if (
+                        actual_type_name is not None
+                        and not self.storage_buffer_parameter_type_is_compatible(
+                            storage_buffer_type_name, actual_type_name
+                        )
+                    ):
+                        self.emit(
+                            f"; WARNING: function call '{func_name}' requires "
+                            f"{storage_buffer_type_name} storage buffer type for "
+                            f"argument {self.expression_debug_name(call_args[index])} "
+                            f"passed to parameter {param_name}: got {actual_type_name}"
                         )
                         return self.default_value_for_function(function_node)
                     self.local_variables[param_name] = pointer_arg

@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 520
+        "test_count": 522
       },
       "translator_codegen": {
         "exists": true,
@@ -921,7 +921,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 271,
+        "unsupported_marker_count": 272,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -934,6 +934,10 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "if node.name not in unsupported_tess_factor_builtins:"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"/* unsupported Slang ray tracing intrinsic: {operation} {reason} */ \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -998,10 +1002,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "+ f\"{temp_name} = /* unsupported Slang match expression: {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_image_access_call(self, operation, reason, result_type=None):"
           }
         ]
       },
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 382
+        "test_count": 383
       },
       "translator_codegen": {
         "exists": true,
