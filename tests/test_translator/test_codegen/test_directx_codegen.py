@@ -3172,6 +3172,79 @@ def test_hlsl_implicit_sampler_inherits_global_texture_register_space():
     assert "defaultTex.Sample(defaultTexSampler, uv)" in generated_code
 
 
+def test_hlsl_nonuniform_resource_index_infers_integer_descriptor_indices():
+    code = """
+    shader NonUniformDescriptorArrayIndex {
+        Texture2D<float4> textures[4] @register(t0);
+        SamplerState samplers[4] @register(s0);
+
+        fragment {
+            vec4 main(
+                uint materialIndex @ TEXCOORD0,
+                uint samplerIndex @ TEXCOORD1,
+                vec2 uv @ TEXCOORD2
+            ) @ SV_Target {
+                let textureIndex = NonUniformResourceIndex(materialIndex);
+                let samplerSlot = NonUniformResourceIndex(samplerIndex);
+                return textures[textureIndex].Sample(samplers[samplerSlot], uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D<float4> textures[4] : register(t0);" in generated_code
+    assert "SamplerState samplers[4] : register(s0);" in generated_code
+    assert (
+        "uint textureIndex = NonUniformResourceIndex(materialIndex);" in generated_code
+    )
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in generated_code
+    assert "textures[textureIndex].Sample(samplers[samplerSlot], uv)" in generated_code
+    assert "float textureIndex" not in generated_code
+    assert "float samplerSlot" not in generated_code
+
+
+def test_hlsl_nonuniform_resource_index_validates_arity_and_scalar_index_type():
+    missing_argument_code = """
+    shader MissingNonUniformResourceIndexArgument {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                uint index = NonUniformResourceIndex();
+                return vec4(float(index));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="NonUniformResourceIndex requires exactly 1 argument, got 0",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_argument_code), "fragment"
+        )
+
+    vector_index_code = """
+    shader VectorNonUniformResourceIndexArgument {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                uint index = NonUniformResourceIndex(uv);
+                return vec4(float(index));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="NonUniformResourceIndex index argument.*scalar int or uint.*float2",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_index_code), "fragment"
+        )
+
+
 def test_hlsl_implicit_shadow_sampler_split_inherits_global_texture_register_space():
     code = """
     shader ImplicitShadowSamplerSpaces {

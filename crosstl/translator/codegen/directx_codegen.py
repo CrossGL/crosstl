@@ -2054,6 +2054,7 @@ class HLSLCodeGen:
             return_type = "void"
         self.current_function_return_type = raw_return_type
         self.validate_hlsl_local_groupshared_declarations(func)
+        self.validate_hlsl_nonuniform_resource_index_calls(func)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
             "HLSL", param_list, indent
         )
@@ -2709,6 +2710,8 @@ class HLSLCodeGen:
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 return self.hlsl_wave_intrinsic_return_type(func_name, args)
+            if func_name == "NonUniformResourceIndex":
+                return self.hlsl_nonuniform_resource_index_return_type(args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -6842,6 +6845,62 @@ class HLSLCodeGen:
                 self.validate_hlsl_ray_query_call_arguments(
                     operation, query_expr, args, shader_type
                 )
+        finally:
+            self.local_variable_types = previous_local_variable_types
+
+    def hlsl_nonuniform_resource_index_return_type(self, args):
+        if len(args) != 1:
+            return "uint"
+
+        argument_type = self.expression_result_type(args[0])
+        if argument_type is None:
+            return "uint"
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if not array_suffix and base_type in {"int", "uint"}:
+            return base_type
+        return "uint"
+
+    def validate_hlsl_nonuniform_resource_index_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            if self.function_call_name(node) != "NonUniformResourceIndex":
+                continue
+            calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+
+        if not calls:
+            return
+
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {
+            **previous_local_variable_types,
+            **self.function_scope_variable_types(func),
+        }
+        try:
+            for args in calls:
+                if len(args) != 1:
+                    raise ValueError(
+                        "DirectX NonUniformResourceIndex requires exactly "
+                        f"1 argument, got {len(args)}"
+                    )
+
+                argument_type = self.expression_result_type(args[0])
+                if argument_type is None:
+                    continue
+                argument_type_name = self.type_name_string(argument_type)
+                if argument_type_name in {"let", "auto"}:
+                    continue
+
+                mapped_type = self.map_type(argument_type_name)
+                base_type, array_suffix = split_array_type_suffix(mapped_type)
+                if array_suffix or base_type not in {"int", "uint"}:
+                    raise ValueError(
+                        "DirectX NonUniformResourceIndex index argument must be "
+                        f"scalar int or uint, got {mapped_type}"
+                    )
         finally:
             self.local_variable_types = previous_local_variable_types
 
