@@ -2278,9 +2278,7 @@ class RustCodeGen:
                     reference_parts = self.reference_type_parts_for_type(param_type)
                     if reference_parts is None or not reference_parts[0]:
                         continue
-                    root_name = self.assignment_target_root_name(argument)
-                    if root_name:
-                        names.add(root_name)
+                    names.update(self.mutable_reference_borrow_root_names(argument))
                 collect(current.function)
                 collect(args)
                 return

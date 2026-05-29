@@ -726,12 +726,15 @@ class GLSLCodeGen:
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
         self.current_image_access_parameters = {}
+        self.structured_buffer_variable_accesses = {}
+        self.current_structured_buffer_access_parameters = {}
         self.function_sampler_parameter_indices = {}
         self.function_parameter_names = {}
         self.function_parameter_types = {}
         self.function_parameter_infos = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.function_structured_buffer_access_requirements = {}
         self.function_definitions = {}
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
@@ -1423,6 +1426,8 @@ class GLSLCodeGen:
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
         self.current_image_access_parameters = {}
+        self.structured_buffer_variable_accesses = {}
+        self.current_structured_buffer_access_parameters = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -1451,6 +1456,9 @@ class GLSLCodeGen:
                 self.expression_name,
             )
         )
+        self.function_structured_buffer_access_requirements = (
+            self.collect_function_structured_buffer_access_requirements(functions)
+        )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1476,6 +1484,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_structured_buffer_access_parameters = {}
         self.structured_buffer_instance_members = {}
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
@@ -1870,6 +1879,7 @@ class GLSLCodeGen:
                 self.sampler_variables.add(var_name)
                 continue
             if self.is_structured_buffer_type(vtype):
+                self.record_structured_buffer_access_metadata(var_name, vtype, node)
                 binding_namespace = "buffer binding"
                 explicit_binding = self.explicit_resource_binding_index(node)
                 resource_binding = (
@@ -1891,7 +1901,7 @@ class GLSLCodeGen:
                     var_name,
                 )
                 code += self.structured_buffer_block_declaration(
-                    vtype, var_name, resource_binding, array_size
+                    vtype, var_name, resource_binding, array_size, node
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -3808,6 +3818,99 @@ class GLSLCodeGen:
             f"GLSL tessellation outputtopology cannot be lowered: {topology}"
         )
 
+    def structured_buffer_operation_access_requirement(self, func_name):
+        if func_name == "buffer_load":
+            return "read"
+        if func_name in {"buffer_store", "buffer_append"}:
+            return "write"
+        if func_name == "buffer_consume":
+            return "read_write"
+        return None
+
+    def merge_access_requirement(self, current, incoming):
+        if incoming is None:
+            return current
+        if current is None or current == incoming:
+            return incoming
+        return "read_write"
+
+    def collect_function_structured_buffer_access_requirements(self, functions):
+        functions = list(functions)
+        requirements = {
+            getattr(func, "name", None): {}
+            for func in functions
+            if getattr(func, "name", None)
+        }
+        parameter_names = {
+            func_name: list(names)
+            for func_name, names in self.function_parameter_names.items()
+        }
+        parameter_sets = {
+            func_name: set(names) for func_name, names in parameter_names.items()
+        }
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            parameter_set = parameter_sets.get(func_name, set())
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                operation = self.function_call_name(node)
+                required_access = self.structured_buffer_operation_access_requirement(
+                    operation
+                )
+                if required_access is None:
+                    continue
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                if not args:
+                    continue
+                target_name = self.expression_name(args[0])
+                if target_name not in parameter_set:
+                    continue
+                current = requirements[func_name].get(target_name)
+                requirements[func_name][target_name] = self.merge_access_requirement(
+                    current, required_access
+                )
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                parameter_set = parameter_sets.get(func_name, set())
+                if not parameter_set:
+                    continue
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(node)
+                    callee_requirements = requirements.get(callee_name)
+                    if not callee_requirements:
+                        continue
+                    callee_parameters = parameter_names.get(callee_name, [])
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    for callee_param, required_access in callee_requirements.items():
+                        try:
+                            index = callee_parameters.index(callee_param)
+                        except ValueError:
+                            continue
+                        if index >= len(args):
+                            continue
+                        target_name = self.expression_name(args[index])
+                        if target_name not in parameter_set:
+                            continue
+                        current = requirements[func_name].get(target_name)
+                        merged = self.merge_access_requirement(current, required_access)
+                        if merged != current:
+                            requirements[func_name][target_name] = merged
+                            changed = True
+
+        return {name: reqs for name, reqs in requirements.items() if reqs}
+
     def generate_function(
         self,
         func,
@@ -3846,12 +3949,16 @@ class GLSLCodeGen:
         previous_structured_buffer_counter_parameters = (
             self.current_structured_buffer_counter_parameters
         )
+        previous_structured_buffer_access_parameters = (
+            self.current_structured_buffer_access_parameters
+        )
         self.local_variable_types = {}
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_structured_buffer_access_parameters = {}
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -3866,6 +3973,9 @@ class GLSLCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            self.record_structured_buffer_access_metadata(
+                p.name, raw_param_type, p, parameter=True
+            )
 
             if index in unsupported_buffer_array_indices:
                 continue
@@ -4105,6 +4215,9 @@ class GLSLCodeGen:
         )
         self.current_structured_buffer_counter_parameters = (
             previous_structured_buffer_counter_parameters
+        )
+        self.current_structured_buffer_access_parameters = (
+            previous_structured_buffer_access_parameters
         )
 
         code += "}\n\n"
@@ -6986,6 +7099,9 @@ class GLSLCodeGen:
                 )
                 return f"{constructor}({args})"
 
+            self.validate_function_structured_buffer_access_arguments(
+                func_name, expr.args
+            )
             self.validate_function_image_access_arguments(func_name, expr.args)
             resource_specialization = self.glsl_resource_function_call_specialization(
                 func_name,
@@ -7294,9 +7410,11 @@ class GLSLCodeGen:
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
+            self.validate_structured_buffer_access_argument(func_name, args)
             index = self.generate_expression(args[1])
             return f"{self.structured_buffer_access_expression(args[0], index)}"
         if func_name == "buffer_store" and len(args) >= 3:
+            self.validate_structured_buffer_access_argument(func_name, args)
             index = self.generate_expression(args[1])
             value = self.generate_expression(args[2])
             array_access = self.structured_buffer_array_parameter_access(args[0])
@@ -7311,6 +7429,7 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_append" and len(args) >= 2:
+            self.validate_structured_buffer_access_argument(func_name, args)
             value = self.generate_expression(args[1])
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
@@ -7323,6 +7442,7 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_consume" and args:
+            self.validate_structured_buffer_access_argument(func_name, args)
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
                 return (
@@ -7715,6 +7835,21 @@ class GLSLCodeGen:
                 f"storage image access for {texture_name}: got {access_name}"
             )
 
+    def validate_structured_buffer_access_argument(self, func_name, args):
+        required_access = self.structured_buffer_operation_access_requirement(func_name)
+        if required_access is None or not args:
+            return
+        access = self.structured_buffer_resource_access(args[0])
+        if image_access_satisfies_requirement(required_access, access):
+            return
+        buffer_name = expression_debug_name(args[0])
+        required_label = image_access_requirement_label(required_access)
+        actual_label = image_access_diagnostic_name(access)
+        raise ValueError(
+            f"OpenGL buffer operation '{func_name}' requires {required_label} "
+            f"SSBO access for {buffer_name}: got {actual_label}"
+        )
+
     def image_atomic_value_arguments(self, func_name, args):
         image_type = self.texture_argument_resource_type(args[0])
         has_sample = self.is_multisample_storage_image_type(image_type)
@@ -7815,6 +7950,29 @@ class GLSLCodeGen:
                 f"OpenGL function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got {actual_label}"
+            )
+
+    def validate_function_structured_buffer_access_arguments(self, func_name, args):
+        callee_requirements = self.function_structured_buffer_access_requirements.get(
+            func_name
+        )
+        if not callee_requirements:
+            return
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+            actual_access = self.structured_buffer_resource_access(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+            actual_name = expression_debug_name(args[index])
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires {required_label} "
+                f"SSBO access for argument {actual_name} passed to parameter "
+                f"{param_name}: got {actual_label}"
             )
 
     def is_integer_coordinate_type(self, vtype):
@@ -9426,6 +9584,15 @@ class GLSLCodeGen:
             and texture_name not in self.texture_variable_types
         )
 
+    def structured_buffer_resource_access(self, buffer_arg):
+        buffer_name = self.expression_name(buffer_arg)
+        if not buffer_name:
+            return None
+        return self.current_structured_buffer_access_parameters.get(
+            buffer_name,
+            self.structured_buffer_variable_accesses.get(buffer_name),
+        )
+
     def image_atomic_zero_value(self, texture_type, image_format):
         component_kind = image_format_component_kind(image_format)
         if component_kind is None:
@@ -10492,26 +10659,79 @@ class GLSLCodeGen:
             literal = int(value)
         return literal if literal is not None and literal > 0 else None
 
+    def structured_buffer_access_metadata(self, node):
+        choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, choices)
+        if not choices:
+            return None
+        return choices[0][1]
+
+    def structured_buffer_effective_access(self, vtype, node=None):
+        type_name = self.structured_buffer_type_name(vtype)
+        explicit_access = self.structured_buffer_access_metadata(node)
+
+        if type_name == "StructuredBuffer":
+            if explicit_access in {"write", "read_write"}:
+                access_name = image_access_diagnostic_name(explicit_access)
+                node_name = self.resource_node_name(node, "<unnamed>")
+                raise ValueError(
+                    "OpenGL StructuredBuffer resource "
+                    f"'{node_name}' cannot use {access_name} access metadata"
+                )
+            return "read"
+
+        return explicit_access
+
+    def structured_buffer_memory_qualifiers(self, vtype, node=None):
+        effective_access = self.structured_buffer_effective_access(vtype, node)
+        qualifiers = set()
+        for qualifier in self.resource_memory_qualifiers(node).split():
+            qualifiers.add(qualifier)
+        if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
+            qualifiers.add("readonly")
+        elif effective_access == "read":
+            qualifiers.add("readonly")
+        elif effective_access == "write":
+            qualifiers.add("writeonly")
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
+
+        order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
+        return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+
+    def record_structured_buffer_access_metadata(
+        self, name, vtype, node=None, parameter=False
+    ):
+        if not name or not self.is_structured_buffer_type(vtype):
+            return
+        access = self.structured_buffer_effective_access(vtype, node)
+        if access is None or access == "read_write":
+            return
+        target = (
+            self.current_structured_buffer_access_parameters
+            if parameter
+            else self.structured_buffer_variable_accesses
+        )
+        target[name] = access
+
     def structured_buffer_block_declaration(
-        self, vtype, name, binding, array_size=None
+        self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
-        readonly = (
-            "readonly "
-            if self.structured_buffer_type_name(vtype) == "StructuredBuffer"
-            else ""
-        )
+        memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
+        qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         if array_size is not None:
             instance_member = "data"
             self.structured_buffer_instance_members[name] = instance_member
             array_suffix = f"[{array_size}]" if array_size else "[]"
             return (
-                f"layout(std430, binding = {binding}) {readonly}buffer "
+                f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
                 f"{name}Buffer {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
         return (
-            f"layout(std430, binding = {binding}) {readonly}buffer "
+            f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
             f"{name}Buffer {{ {element_type} {name}[]; }};\n"
         )
 

@@ -6236,6 +6236,198 @@ class TestHipCodeGen:
         assert "var manualPriority: i32 = (/* HIP device query:" not in result
         assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
 
+    def test_hip_occupancy_output_reads_emit_metadata_expressions(self):
+        """Test HIP occupancy scalar outputs lower to explicit metadata."""
+        code = """
+        void host(void* kernel, void* dynamicSmem, int* out) {
+            int gridSize = 0;
+            int blockSize = 0;
+            int variableGridSize = 0;
+            int variableBlockSize = 0;
+            int flaggedGridSize = 0;
+            int flaggedBlockSize = 0;
+            int activeBlocks = 0;
+            int flaggedActiveBlocks = 0;
+            int statusGridSize = 0;
+            int statusBlockSize = 0;
+            int statusActiveBlocks = 0;
+            hipOccupancyMaxPotentialBlockSize(
+                &gridSize,
+                &blockSize,
+                kernel,
+                0,
+                0
+            );
+            out[0] = gridSize;
+            out[1] = blockSize;
+            hipOccupancyMaxActiveBlocksPerMultiprocessor(
+                &activeBlocks,
+                kernel,
+                blockSize,
+                0
+            );
+            out[2] = activeBlocks;
+            gridSize = 1;
+            blockSize = 2;
+            activeBlocks = 3;
+            int manualGridSize = gridSize;
+            int manualBlockSize = blockSize;
+            int manualActiveBlocks = activeBlocks;
+            hipOccupancyMaxPotentialBlockSizeVariableSMem(
+                &variableGridSize,
+                &variableBlockSize,
+                kernel,
+                dynamicSmem,
+                128
+            );
+            out[3] = variableGridSize;
+            out[4] = variableBlockSize;
+            hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags(
+                &flaggedGridSize,
+                &flaggedBlockSize,
+                kernel,
+                dynamicSmem,
+                256,
+                1
+            );
+            out[5] = flaggedGridSize;
+            out[6] = flaggedBlockSize;
+            hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                &flaggedActiveBlocks,
+                kernel,
+                flaggedBlockSize,
+                0,
+                1
+            );
+            out[7] = flaggedActiveBlocks;
+            hipError_t errPotential =
+                hipOccupancyMaxPotentialBlockSize(
+                    &statusGridSize,
+                    &statusBlockSize,
+                    kernel,
+                    0,
+                    0
+                );
+            out[8] = statusGridSize;
+            out[9] = statusBlockSize;
+            hipError_t errActive =
+                hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                    &statusActiveBlocks,
+                    kernel,
+                    statusBlockSize,
+                    0,
+                    1
+                );
+            out[10] = statusActiveBlocks;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP occupancy max potential block size: grid output: gridSize, "
+            "block output: blockSize, kernel: kernel, dynamic shared memory: 0, "
+            "block size limit: 0"
+        ) in result
+        assert (
+            "out[0] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSize.grid(kernel, 0, 0) */ 0);"
+        ) in result
+        assert (
+            "out[1] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSize.block(kernel, 0, 0) */ 0);"
+        ) in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: "
+            "output: activeBlocks, kernel: kernel, block size: blockSize, "
+            "dynamic shared memory: 0"
+        ) in result
+        assert (
+            "out[2] = (/* HIP device query: "
+            "occupancy.maxActiveBlocksPerMultiprocessor(kernel, blockSize, 0) */ 0);"
+        ) in result
+        assert "gridSize = 1;" in result
+        assert "blockSize = 2;" in result
+        assert "activeBlocks = 3;" in result
+        assert "var manualGridSize: i32 = gridSize;" in result
+        assert "var manualBlockSize: i32 = blockSize;" in result
+        assert "var manualActiveBlocks: i32 = activeBlocks;" in result
+        assert (
+            "// HIP occupancy max potential block size: "
+            "grid output: variableGridSize, block output: variableBlockSize, "
+            "kernel: kernel, dynamic shared memory: dynamicSmem, "
+            "block size limit: 128"
+        ) in result
+        assert (
+            "out[3] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSizeVariableSMem.grid("
+            "kernel, dynamicSmem, 128) */ 0);"
+        ) in result
+        assert (
+            "out[4] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSizeVariableSMem.block("
+            "kernel, dynamicSmem, 128) */ 0);"
+        ) in result
+        assert (
+            "// HIP occupancy max potential block size: "
+            "grid output: flaggedGridSize, block output: flaggedBlockSize, "
+            "kernel: kernel, dynamic shared memory: dynamicSmem, "
+            "block size limit: 256, flags: 1"
+        ) in result
+        assert (
+            "out[5] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSizeVariableSMemWithFlags.grid("
+            "kernel, dynamicSmem, 256, 1) */ 0);"
+        ) in result
+        assert (
+            "out[6] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSizeVariableSMemWithFlags.block("
+            "kernel, dynamicSmem, 256, 1) */ 0);"
+        ) in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: "
+            "output: flaggedActiveBlocks, kernel: kernel, "
+            "block size: flaggedBlockSize, dynamic shared memory: 0, flags: 1"
+        ) in result
+        assert (
+            "out[7] = (/* HIP device query: "
+            "occupancy.maxActiveBlocksPerMultiprocessorWithFlags("
+            "kernel, flaggedBlockSize, 0, 1) */ 0);"
+        ) in result
+        assert "var errPotential: hipError_t = hipSuccess;" in result
+        assert (
+            "out[8] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSize.grid(kernel, 0, 0) */ 0);"
+        ) in result
+        assert (
+            "out[9] = (/* HIP device query: "
+            "occupancy.maxPotentialBlockSize.block(kernel, 0, 0) */ 0);"
+        ) in result
+        assert "var errActive: hipError_t = hipSuccess;" in result
+        assert (
+            "out[10] = (/* HIP device query: "
+            "occupancy.maxActiveBlocksPerMultiprocessorWithFlags("
+            "kernel, statusBlockSize, 0, 1) */ 0);"
+        ) in result
+        assert "out[0] = gridSize;" not in result
+        assert "out[1] = blockSize;" not in result
+        assert "out[2] = activeBlocks;" not in result
+        assert "out[3] = variableGridSize;" not in result
+        assert "out[4] = variableBlockSize;" not in result
+        assert "out[5] = flaggedGridSize;" not in result
+        assert "out[6] = flaggedBlockSize;" not in result
+        assert "out[7] = flaggedActiveBlocks;" not in result
+        assert "out[8] = statusGridSize;" not in result
+        assert "out[9] = statusBlockSize;" not in result
+        assert "out[10] = statusActiveBlocks;" not in result
+        assert "var manualGridSize: i32 = (/* HIP device query:" not in result
+        assert "var manualBlockSize: i32 = (/* HIP device query:" not in result
+        assert "var manualActiveBlocks: i32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

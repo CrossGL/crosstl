@@ -225,6 +225,138 @@ def test_readonly_structured_buffer_uses_readonly_ssbo():
     assert "int v = values[gl_GlobalInvocationID.x];" in generated
 
 
+def test_glsl_structured_buffer_access_metadata_emits_ssbo_qualifiers():
+    code = """
+    shader StructuredBufferAccessMetadataGLSL {
+        RWStructuredBuffer<int> source @binding(1) @readonly;
+        RWStructuredBuffer<int> target @binding(2) @access(writeonly);
+        RWStructuredBuffer<int> scratch @binding(3) @access(readwrite);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int value = buffer_load(source, tid.x);
+                buffer_store(target, tid.x, value);
+                int oldValue = buffer_load(scratch, tid.x);
+                buffer_store(scratch, tid.x, oldValue + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer sourceBuffer "
+        "{ int source[]; };" in generated
+    )
+    assert (
+        "layout(std430, binding = 2) writeonly buffer targetBuffer "
+        "{ int target[]; };" in generated
+    )
+    assert (
+        "layout(std430, binding = 3) buffer scratchBuffer { int scratch[]; };"
+        in generated
+    )
+    assert "readwrite buffer" not in generated
+    assert "int value = source[gl_GlobalInvocationID.x];" in generated
+    assert "target[gl_GlobalInvocationID.x] = value;" in generated
+    assert "int oldValue = scratch[gl_GlobalInvocationID.x];" in generated
+    assert "scratch[gl_GlobalInvocationID.x] = (oldValue + 1);" in generated
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StructuredBufferAccessInvalidWriteonlyLoad {
+                RWStructuredBuffer<int> values @writeonly;
+
+                compute {
+                    void main() {
+                        int value = buffer_load(values, 0);
+                    }
+                }
+            }
+            """,
+            "requires read-capable SSBO access.*got writeonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidReadonlyStore {
+                RWStructuredBuffer<int> values @readonly;
+
+                compute {
+                    void main() {
+                        buffer_store(values, 0, 1);
+                    }
+                }
+            }
+            """,
+            "requires write-capable SSBO access.*got readonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidTypedStore {
+                StructuredBuffer<int> values;
+
+                compute {
+                    void main() {
+                        buffer_store(values, 0, 1);
+                    }
+                }
+            }
+            """,
+            "requires write-capable SSBO access.*got readonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidTypedMetadata {
+                StructuredBuffer<int> values @writeonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "StructuredBuffer resource 'values' cannot use writeonly",
+        ),
+    ],
+)
+def test_glsl_structured_buffer_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_structured_buffer_access_rejects_incompatible_helper_calls():
+    shader = """
+    shader StructuredBufferAccessInvalidHelper {
+        RWStructuredBuffer<int> target @writeonly;
+
+        int readValue(RWStructuredBuffer<int> values, uint index) {
+            return buffer_load(values, index);
+        }
+
+        compute {
+            void main() {
+                int value = readValue(target, 0u);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match="function call 'readValue' requires read-capable SSBO access",
+    ):
+        GLSLCodeGen().generate(ast)
+
+
 def test_append_consume_structured_buffers_use_sidecar_counters():
     code = """
     shader StructuredBufferAppendConsumeGLSL {
@@ -2336,6 +2468,146 @@ def test_glsl_geometry_layout_rejects_invalid_count_constants(attribute_line, me
 
     with pytest.raises(ValueError, match=message):
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@triangles(1)\n                @outputtopology(line)\n                @maxvertexcount(2)",
+            "GLSL stage attribute triangles does not accept arguments",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n                @line_strip(1)\n                @maxvertexcount(2)",
+            "GLSL stage attribute line_strip does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @partitioning(equal)\n                @cw(1)",
+            "GLSL stage attribute cw does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @equal_spacing(1)",
+            "GLSL stage attribute equal_spacing does not accept arguments",
+        ),
+    ],
+)
+def test_glsl_stage_bare_layout_attributes_reject_arguments(stage, metadata, message):
+    code = f"""
+    shader BadBareStageLayoutOperand {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @triangles\n"
+            "                @outputtopology(line)\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry input topology layout "
+            "inputtopology line with triangles",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @outputtopology(line)\n"
+            "                @triangle_strip\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry output topology layout "
+            "outputtopology line with triangle_strip",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @quads\n"
+            "                @partitioning(equal)",
+            "Conflicting GLSL tessellation domain layout domain triangle with quads",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @partitioning(equal)\n"
+            "                @fractional_even_spacing",
+            "Conflicting GLSL tessellation partitioning layout "
+            "partitioning equal with fractional_even_spacing",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n" "                @cw\n" "                @ccw",
+            "Conflicting GLSL tessellation winding layout cw with ccw",
+        ),
+    ],
+)
+def test_glsl_stage_layout_attributes_reject_conflicting_aliases(
+    stage, metadata, message
+):
+    code = f"""
+    shader ConflictingStageLayoutAliases {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_stage_layout_attributes_accept_equivalent_aliases():
+    geometry_code = """
+    shader EquivalentGeometryStageLayoutAliases {
+        geometry {
+            void main()
+                @inputtopology(line)
+                @lines
+                @outputtopology(line)
+                @line_strip
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+    tessellation_code = """
+    shader EquivalentTessellationStageLayoutAliases {
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @triangles
+                @partitioning(equal)
+                @equal_spacing
+                @outputtopology(triangle_cw)
+            { }
+        }
+    }
+    """
+
+    geometry = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(geometry_code), "geometry"
+    )
+    tessellation = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(tessellation_code), "tessellation_evaluation"
+    )
+
+    assert "layout(lines) in;" in geometry
+    assert "layout(line_strip, max_vertices = 2) out;" in geometry
+    assert "layout(triangles, equal_spacing, cw) in;" in tessellation
 
 
 @pytest.mark.parametrize(

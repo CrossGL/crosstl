@@ -3722,6 +3722,168 @@ def test_reference_parameter_calls_auto_borrow_and_mark_mut_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_mutable_reference_call_branch_arguments_mark_all_roots_mut_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def branch_match():
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            IdentifierNode("left"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            IdentifierNode("right"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "RustMutableReferenceCallBranchArgs",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        count_of(IdentifierNode("value")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("value")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("value"))),
+                ],
+            ),
+            FunctionNode(
+                "call_mut_branch_args",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "ternaryScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [
+                                TernaryOpNode(
+                                    IdentifierNode("flag"),
+                                    IdentifierNode("left"),
+                                    IdentifierNode("right"),
+                                )
+                            ],
+                        ),
+                    ),
+                    VariableNode(
+                        "matchScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [branch_match()],
+                        ),
+                    ),
+                    VariableNode(
+                        "blockScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [
+                                BlockNode(
+                                    [
+                                        VariableNode(
+                                            "marker",
+                                            int_type,
+                                            LiteralNode(1, int_type),
+                                        ),
+                                        ExpressionStatementNode(
+                                            branch_match(),
+                                            is_tail_expression=True,
+                                        ),
+                                    ]
+                                )
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            BinaryOpNode(
+                                IdentifierNode("ternaryScore"),
+                                "+",
+                                IdentifierNode("matchScore"),
+                            ),
+                            "+",
+                            IdentifierNode("blockScore"),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn call_mut_branch_args(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "let ternaryScore: i32 = bump_payload((if flag { &mut left } else { &mut right }));"
+        in generated_code
+    )
+    assert "let matchScore: i32 = bump_payload(match flag {" in generated_code
+    assert "true => {" in generated_code
+    assert "false => {" in generated_code
+    assert generated_code.count("&mut left") == 3
+    assert generated_code.count("&mut right") == 3
+    assert "let blockScore: i32 = bump_payload({" in generated_code
+    assert "let marker: i32 = 1;" in generated_code
+    assert "&mut (if flag" not in generated_code
+    assert "&mut match flag" not in generated_code
+    assert "&mut {" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_reference_locals_and_returns_borrow_without_clones_compile(tmp_path):
     payload_type = NamedType("Payload")
     int_type = PrimitiveType("int")

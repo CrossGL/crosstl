@@ -1877,6 +1877,31 @@ class HipToCrossGLConverter:
             if len(args) >= 5:
                 grid_output = self.format_runtime_pointer_target(node.args[0])
                 block_output = self.format_runtime_pointer_target(node.args[1])
+                grid_output_name = self.get_runtime_pointer_target_name(node.args[0])
+                block_output_name = self.get_runtime_pointer_target_name(node.args[1])
+                query_kind = {
+                    "hipOccupancyMaxPotentialBlockSize": "maxPotentialBlockSize",
+                    "hipOccupancyMaxPotentialBlockSizeVariableSMem": (
+                        "maxPotentialBlockSizeVariableSMem"
+                    ),
+                    "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags": (
+                        "maxPotentialBlockSizeVariableSMemWithFlags"
+                    ),
+                }[name]
+                query_operands = [args[2], args[3], args[4]]
+                if len(args) >= 6:
+                    query_operands.append(args[5])
+                query_operands_text = ", ".join(query_operands)
+                if grid_output_name is not None:
+                    self.register_device_query_source(
+                        grid_output_name,
+                        f"occupancy.{query_kind}.grid({query_operands_text})",
+                    )
+                if block_output_name is not None:
+                    self.register_device_query_source(
+                        block_output_name,
+                        f"occupancy.{query_kind}.block({query_operands_text})",
+                    )
                 comment = (
                     f"// HIP occupancy max potential block size: "
                     f"grid output: {grid_output}, block output: {block_output}, "
@@ -1892,6 +1917,20 @@ class HipToCrossGLConverter:
         }:
             if len(args) >= 4:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                query_kind = (
+                    "maxActiveBlocksPerMultiprocessorWithFlags"
+                    if name.endswith("WithFlags")
+                    else "maxActiveBlocksPerMultiprocessor"
+                )
+                query_operands = [args[1], args[2], args[3]]
+                if len(args) >= 5:
+                    query_operands.append(args[4])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"occupancy.{query_kind}({', '.join(query_operands)})",
+                    )
                 comment = (
                     f"// HIP occupancy active blocks per multiprocessor: "
                     f"output: {output}, kernel: {args[1]}, "
