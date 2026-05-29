@@ -3022,6 +3022,80 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
         generate_code(parse_code(tokenize_code(code)))
 
 
+@pytest.mark.parametrize(
+    ("source", "alias_name"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            RWTexture2DMS<float4> msImage;
+            Result<RWTexture2DMS<float4>, int> wrapMS() {
+                return Result::Ok(msImage);
+            }
+            """,
+            "RWTexture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            Result<RasterizerOrderedTexture2DMS<float4>, int> wrapMS(
+                RasterizerOrderedTexture2DMS<float4> image
+            ) {
+                return Result::Ok(image);
+            }
+            """,
+            "RasterizerOrderedTexture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            RWTexture2DMSArray<uint> msImages[2];
+            Result<RWTexture2DMSArray<uint>[2], int> wrapMSArray() {
+                return Result::Ok(msImages);
+            }
+            """,
+            "RWTexture2DMSArray",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSBox {
+                RWTexture2DMS<float4> image;
+                int tag;
+            };
+            Result<MSBox, int> wrapBox(MSBox payload) {
+                return Result::Ok(payload);
+            }
+            """,
+            "RWTexture2DMS",
+        ),
+    ],
+)
+def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_diagnostic(
+    source, alias_name
+):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unsupported writable texture resource for Mojo codegen; "
+            rf"multisample writable texture alias is not supported: {alias_name}"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 

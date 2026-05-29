@@ -8472,7 +8472,7 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name = self.type_name_from_value(param_type)
-        if self.is_structured_buffer_type_name(type_name):
+        if self.is_structured_buffer_declared_type_name(type_name):
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):
             return type_name
@@ -10873,6 +10873,17 @@ class VulkanSPIRVCodeGen:
             return "read_write"
         return None
 
+    def storage_buffer_member_method_access_requirement(self, method_name):
+        if method_name in {"Load"} or self.byte_address_method_load_width(method_name):
+            return "read"
+        if method_name in {"Store"} or self.byte_address_method_store_width(
+            method_name
+        ):
+            return "write"
+        if self.byte_address_method_interlocked_info(method_name) is not None:
+            return "read_write"
+        return None
+
     def storage_buffer_parameter_root_name(self, expr, storage_buffer_parameters):
         if isinstance(expr, str):
             return expr if expr in storage_buffer_parameters else None
@@ -10961,6 +10972,39 @@ class VulkanSPIRVCodeGen:
             return
 
         if isinstance(expr, FunctionCallNode):
+            callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+            if isinstance(callee_expr, MemberAccessNode):
+                args = getattr(expr, "arguments", getattr(expr, "args", []))
+                required_access = self.storage_buffer_member_method_access_requirement(
+                    getattr(callee_expr, "member", None)
+                )
+                target_name = self.storage_buffer_parameter_root_name(
+                    getattr(callee_expr, "object", None),
+                    storage_buffer_parameters,
+                )
+                if required_access is not None and target_name is not None:
+                    self.merge_storage_buffer_access_requirement_for_parameter(
+                        requirements, func_name, target_name, required_access
+                    )
+                    self.scan_storage_buffer_access_path_indices(
+                        getattr(callee_expr, "object", None),
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                    for arg in args:
+                        self.scan_storage_buffer_requirement_node(
+                            arg,
+                            func_name,
+                            storage_buffer_parameters,
+                            callee_storage_buffer_parameter_indices,
+                            requirements,
+                            visited,
+                        )
+                    return
+
             callee_name = self.function_call_name(expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             required_access = self.buffer_operation_access_requirement(callee_name)
