@@ -22567,6 +22567,43 @@ def test_glsl_storage_image_access_function_attributes_emit_qualifiers():
     )
 
 
+def test_glsl_storage_image_access_readwrite_operations_stay_qualifier_free():
+    shader = """
+    shader StorageImageReadwriteOperations {
+        uimage2D counters @r32ui @access(readwrite);
+
+        uint bump(uimage2D image @r32ui @access(readwrite), ivec2 pixel, uint value) {
+            uint oldValue = imageAtomicAdd(image, pixel, value);
+            imageStore(image, pixel, oldValue + 1u);
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint directValue = imageLoad(counters, pixel);
+                imageStore(counters, pixel, directValue + 1u);
+                uint oldValue = bump(counters, pixel, 2u);
+                imageStore(counters, ivec2(1, 0), oldValue + 3u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters;" in generated_code
+    assert "readwrite uniform uimage2D" not in generated_code
+    assert "uint bump(uimage2D image, ivec2 pixel, uint value)" in generated_code
+    assert "readwrite uimage2D image" not in generated_code
+    assert "uint directValue = imageLoad(counters, pixel).x;" in generated_code
+    assert "imageStore(counters, pixel, uvec4((directValue + 1u)));" in generated_code
+    assert "uint oldValue = imageAtomicAdd(counters, pixel, value);" in generated_code
+    assert "imageStore(counters, pixel, uvec4((oldValue + 1u)));" in generated_code
+    assert "return imageLoad(counters, pixel).x;" in generated_code
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [

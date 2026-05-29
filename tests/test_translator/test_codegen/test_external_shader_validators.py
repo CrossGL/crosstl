@@ -333,6 +333,39 @@ shader GLSLParameterImageAtomicValidator {
 """
 
 
+GLSL_STORAGE_IMAGE_ACCESS_COMPUTE_SHADER = """
+shader GLSLStorageImageAccessValidator {
+    image2D source @access(readonly);
+    image2D target @access(writeonly);
+    uimage2D counters @r32ui @access(readwrite);
+
+    float readPixel(image2D image @access(readonly), ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    void writePixel(image2D image @access(writeonly), ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    uint bump(uimage2D image @r32ui @access(readwrite), ivec2 pixel, uint value) {
+        uint oldValue = imageAtomicAdd(image, pixel, value);
+        imageStore(image, pixel, oldValue + 1u);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float value = readPixel(source, pixel);
+            writePixel(target, pixel, vec4(value));
+            uint oldValue = bump(counters, pixel, 1u);
+            imageStore(counters, pixel, oldValue + 2u);
+        }
+    }
+}
+"""
+
+
 GLSL_GEOMETRY_TESSELLATION_LAYOUT_SHADER = """
 shader GLSLGeometryTessellationLayoutValidator {
     geometry {
@@ -2326,6 +2359,29 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     assert "imageAtomicAdd(image, pixel, value)" not in code
     assert "imageAtomicAdd(counters, pixel, value)" in code
     assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_storage_image_access_qualifiers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "storage_image_access.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_STORAGE_IMAGE_ACCESS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "layout(rgba32f, binding = 0) readonly uniform image2D source;" in code
+    assert "layout(rgba32f, binding = 1) writeonly uniform image2D target;" in code
+    assert "layout(r32ui, binding = 2) uniform uimage2D counters;" in code
+    assert "layout(r32ui, binding = 2) readwrite uniform uimage2D" not in code
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in code
+    assert "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)" in code
+    assert "uint bump(uimage2D image, ivec2 pixel, uint value)" in code
+    assert "uint oldValue = imageAtomicAdd(counters, pixel, value);" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

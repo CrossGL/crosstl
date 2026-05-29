@@ -2381,6 +2381,88 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "atomicAdd(counters" not in hlsl
 
 
+def test_codegen_nonuniform_resource_index_descriptor_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Texture2D<float4> textures[4] : register(t0, space1);
+        SamplerState samplers[4] : register(s0, space1);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            uint materialIndex : TEXCOORD1,
+            uint samplerIndex : TEXCOORD2
+        ) : SV_Target0 {
+            uint textureIndex = NonUniformResourceIndex(materialIndex);
+            uint samplerSlot = NonUniformResourceIndex(samplerIndex);
+            return textures[textureIndex].Sample(samplers[samplerSlot], uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2D textures[4];" in crossgl
+    assert "sampler samplers[4];" in crossgl
+    assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in crossgl
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in crossgl
+    assert "texture(textures[textureIndex], samplers[samplerSlot], uv)" in crossgl
+    assert ".Sample(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D textures[4] : register(t0, space1);" in hlsl
+    assert "SamplerState samplers[4] : register(s0, space1);" in hlsl
+    assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in hlsl
+    assert "textures[textureIndex].Sample(samplers[samplerSlot], uv)" in hlsl
+    assert "float textureIndex" not in hlsl
+    assert "float samplerSlot" not in hlsl
+
+
+def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Texture2D<float4> textures[][4] : register(t0, space2);
+        SamplerState samplers[] : register(s0, space2);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            uint materialIndex : TEXCOORD1,
+            uint tileIndex : TEXCOORD2
+        ) : SV_Target0 {
+            uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);
+            uint nonUniformTile = NonUniformResourceIndex(tileIndex);
+            return textures[nonUniformMaterial][nonUniformTile].Sample(
+                samplers[nonUniformMaterial],
+                uv
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2D textures[][4];" in crossgl
+    assert "sampler samplers[];" in crossgl
+    assert (
+        "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
+    )
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
+    assert (
+        "texture(textures[nonUniformMaterial][nonUniformTile], "
+        "samplers[nonUniformMaterial], uv)" in crossgl
+    )
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D textures[][4] : register(t0, space2);" in hlsl
+    assert "SamplerState samplers[] : register(s0, space2);" in hlsl
+    assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
+    assert (
+        "textures[nonUniformMaterial][nonUniformTile].Sample("
+        "samplers[nonUniformMaterial], uv)" in hlsl
+    )
+    assert "float nonUniformMaterial" not in hlsl
+    assert "float nonUniformTile" not in hlsl
+
+
 def test_codegen_append_consume_structured_buffers_roundtrip():
     code = textwrap.dedent("""
         AppendStructuredBuffer<int> appendValues : register(u1);
