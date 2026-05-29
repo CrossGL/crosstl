@@ -1052,6 +1052,55 @@ shader ResourceImageArrayLocalAliasValidation {
 """
 
 
+SAMPLER_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
+shader SamplerArrayLocalAliasValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+
+    struct TexturePack {
+        sampler2D textures[4];
+        sampler samplers[4];
+    };
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        int layer @ TEXCOORD1;
+    };
+
+    vec4 sampleParam(
+        sampler2D paramTextures[4],
+        sampler paramSamplers[4],
+        int layer,
+        vec2 uv
+    ) {
+        let paramSamplerAlias = paramSamplers;
+        let chainedSamplerAlias = paramSamplerAlias;
+        return texture(paramTextures[layer], chainedSamplerAlias[layer], uv);
+    }
+
+    vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+        let packSamplerAlias = pack.samplers;
+        let chainedPackSamplerAlias = packSamplerAlias;
+        return texture(pack.textures[layer], chainedPackSamplerAlias[layer], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            TexturePack pack;
+            let samplerAlias = samplers;
+            let chainedAlias = samplerAlias;
+            return texture(
+                textures[input.layer],
+                chainedAlias[input.layer],
+                input.uv
+            ) + sampleParam(textures, samplers, input.layer, input.uv)
+                + samplePack(pack, input.layer, input.uv);
+        }
+    }
+}
+"""
+
+
 STRUCT_MEMBER_TEXTURE_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
 shader StructMemberTextureArrayLocalAliasValidation {
     struct TexturePack {
@@ -5694,6 +5743,33 @@ def test_generated_metal_resource_array_local_aliases_compile_with_metal(tmp_pat
             "-o",
             str(compute_output),
         ]
+    )
+
+
+def test_generated_metal_sampler_array_local_aliases_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_sampler_array_local_alias.metal"
+    output = tmp_path / "fragment_sampler_array_local_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(SAMPLER_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER),
+        "fragment",
+    )
+    assert "array<sampler, 4> samplerAlias = samplers;" in code
+    assert "array<sampler, 4> chainedAlias = samplerAlias;" in code
+    assert "array<sampler, 4> paramSamplerAlias = paramSamplers;" in code
+    assert "array<sampler, 4> chainedSamplerAlias = paramSamplerAlias;" in code
+    assert "array<sampler, 4> packSamplerAlias = pack.samplers;" in code
+    assert "array<sampler, 4> chainedPackSamplerAlias = packSamplerAlias;" in code
+    assert "textures[input.layer].sample(chainedAlias[input.layer], input.uv)" in code
+    assert "paramTextures[layer].sample(chainedSamplerAlias[layer], uv)" in code
+    assert "pack.textures[layer].sample(chainedPackSamplerAlias[layer], uv)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
     )
 
 

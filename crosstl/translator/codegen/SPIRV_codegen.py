@@ -136,6 +136,7 @@ class VulkanSPIRVCodeGen:
         self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
         self.current_return_type = None
@@ -5985,6 +5986,37 @@ class VulkanSPIRVCodeGen:
             value |= semantic_values[semantic]
         return self.register_constant(value, self.register_primitive_type("uint"))
 
+    def current_synchronization_execution_models(self) -> set:
+        if self.current_stage is None and self.current_function_name is not None:
+            execution_models = self.function_execution_models.get(
+                self.current_function_name, ()
+            )
+            if execution_models:
+                return set(execution_models)
+        if self.current_execution_model is not None:
+            return {self.current_execution_model}
+        if self.current_function_name is None:
+            return set()
+        return set(self.function_execution_models.get(self.current_function_name, ()))
+
+    def current_execution_model_label(self) -> str:
+        execution_models = self.current_synchronization_execution_models()
+        if execution_models:
+            return ", ".join(sorted(execution_models))
+        return "unknown"
+
+    def can_emit_workgroup_synchronization(self) -> bool:
+        execution_models = self.current_synchronization_execution_models()
+        workgroup_execution_models = {
+            "GLCompute",
+            "MeshEXT",
+            "TaskEXT",
+            "TessellationControl",
+        }
+        return bool(execution_models) and execution_models.issubset(
+            workgroup_execution_models
+        )
+
     def call_synchronization_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -6005,6 +6037,23 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 f"; WARNING: synchronization builtin '{function_name}' "
                 "requires 0 operands"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        workgroup_synchronization_functions = {
+            "barrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+            "workgroupBarrier",
+        }
+        if (
+            function_name in workgroup_synchronization_functions
+            and not self.can_emit_workgroup_synchronization()
+        ):
+            self.emit(
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model; current execution model: "
+                f"{self.current_execution_model_label()}"
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -9250,7 +9299,9 @@ class VulkanSPIRVCodeGen:
         return_type = self.map_crossgl_type(function_node.return_type)
         previous_return_type = self.current_return_type
         previous_stage = self.current_stage
+        previous_function_name = self.current_function_name
         self.current_return_type = return_type
+        self.current_function_name = function_node.name
         if stage is not None:
             self.current_stage = stage
 
@@ -9364,6 +9415,7 @@ class VulkanSPIRVCodeGen:
         self.current_execution_model = previous_execution_model
         self.current_function_id = previous_function_id
         self.current_mesh_output_parameters = previous_mesh_output_parameters
+        self.current_function_name = previous_function_name
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.local_variables.clear()

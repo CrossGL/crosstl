@@ -2981,6 +2981,13 @@ class MetalCodeGen:
             if sampler_alias_type is not None:
                 var_type = sampler_alias_type
                 self.current_sampler_parameters.add(stmt.name)
+                _sampler_type, sampler_array_size = self.metal_array_type_parts(
+                    sampler_alias_type
+                )
+                if sampler_array_size is not None:
+                    self.current_sampler_parameter_array_sizes[stmt.name] = (
+                        sampler_array_size
+                    )
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3285,17 +3292,50 @@ class MetalCodeGen:
 
         initial_name = self.expression_name(initial_value)
         initial_type = self.expression_result_type(initial_value)
+        initial_array_element_type = self.metal_array_element_type(initial_type)
         if not (
             self.is_sampler_type(initial_type)
+            or self.is_sampler_type(initial_array_element_type)
             or initial_name in self.sampler_variable_names()
+            or self.struct_member_is_sampler_resource(
+                self.struct_resource_member_node(initial_value)
+            )
         ):
             return None
 
         declared_type_name = self.type_name_string(declared_type)
         if self.local_variable_type_node(node) is None:
+            array_size = self.sampler_argument_resource_array_size(initial_value)
+            if array_size is not None:
+                return self.format_resource_array_type("sampler", array_size)
             return "sampler"
         if self.is_sampler_type(declared_type_name):
             return "sampler"
+        return None
+
+    def sampler_argument_resource_array_size(self, sampler_arg):
+        if isinstance(sampler_arg, ArrayAccessNode):
+            return None
+
+        member_array_size = self.struct_member_resource_array_size(sampler_arg)
+        if member_array_size is not None:
+            return member_array_size
+
+        sampler_name = self.expression_name(sampler_arg)
+        if not sampler_name:
+            return None
+
+        local_type = self.local_variable_types.get(sampler_name)
+        _element_type, array_size = self.metal_array_type_parts(local_type)
+        if array_size is not None:
+            return array_size
+
+        if sampler_name in self.current_sampler_parameter_array_sizes:
+            return self.current_sampler_parameter_array_sizes[sampler_name]
+
+        for sampler_variable, _, array_size in self.sampler_variables:
+            if getattr(sampler_variable, "name", None) == sampler_name:
+                return array_size
         return None
 
     def record_local_texture_alias_sampler_source(self, node):

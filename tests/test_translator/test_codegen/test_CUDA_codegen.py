@@ -10154,6 +10154,132 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_returned_resource_array_elements_forward_cuda_metadata(
+        self,
+    ):
+        """Test CUDA query sidecars follow returned resource-array elements."""
+        source_code = """
+        shader ReturnedResourceArrayQueries {
+            sampler2d textures[3];
+            image2D images[3];
+            sampler2d textureGrid[2][3];
+            image2D imageGrid[2][3];
+
+            sampler2d chooseGlobalTex(int slot) {
+                return textures[slot];
+            }
+
+            image2D chooseGlobalImage(int slot) {
+                return images[slot];
+            }
+
+            sampler2d chooseGlobalLiteralTex() {
+                return textures[1];
+            }
+
+            sampler2d chooseParamTex(sampler2d texs[3], int slot) {
+                return texs[slot];
+            }
+
+            image2D chooseParamImage(image2D imgs[3], int slot) {
+                return imgs[slot];
+            }
+
+            sampler2d chooseNestedTex(sampler2d texs[][3], int layer, int slot) {
+                return texs[layer][slot];
+            }
+
+            image2D chooseNestedImage(image2D imgs[][3], int layer, int slot) {
+                return imgs[layer][slot];
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(int layer, int slot) {
+                    sampler2d aliasTex = chooseParamTex(textures, slot);
+                    image2D aliasImage = chooseParamImage(images, slot);
+                    ivec2 globalTexSize = textureSize(chooseGlobalTex(slot), 0);
+                    int globalLevels = textureQueryLevels(chooseGlobalLiteralTex());
+                    ivec2 globalImageSize = imageSize(chooseGlobalImage(slot));
+                    ivec2 aliasTexSize = textureSize(aliasTex, 0);
+                    ivec2 aliasImageSize = imageSize(aliasImage);
+                    ivec2 nestedTexSize =
+                        textureSize(chooseNestedTex(textureGrid, layer, slot), 0);
+                    ivec2 nestedImageSize =
+                        imageSize(chooseNestedImage(imageGrid, layer, slot));
+                    consume(
+                        chooseParamTex(textureGrid[layer], slot),
+                        chooseParamImage(imageGrid[layer], slot)
+                    );
+                    consume(
+                        chooseNestedTex(textureGrid, layer, slot),
+                        chooseNestedImage(imageGrid, layer, slot)
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo textures_metadata[3] = {};" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[3] = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[2][3] = {};" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[2][3] = {};" in cuda_code
+        assert (
+            "int2 globalTexSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int globalLevels = cgl_textureQueryLevels_sampler2D"
+            "(textures_metadata[1]);" in cuda_code
+        )
+        assert (
+            "int2 globalImageSize = cgl_imageSize_image2D"
+            "(images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 aliasTexSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int2 aliasImageSize = cgl_imageSize_image2D"
+            "(images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 nestedTexSize = cgl_textureSize_sampler2D"
+            "(textureGrid_metadata[layer][slot], 0);" in cuda_code
+        )
+        assert (
+            "int2 nestedImageSize = cgl_imageSize_image2D"
+            "(imageGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "consume(chooseParamTex(textureGrid[layer], slot), "
+            "textureGrid_metadata[layer][slot], "
+            "chooseParamImage(imageGrid[layer], slot), "
+            "imageGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert (
+            "consume(chooseNestedTex(textureGrid, layer, slot), "
+            "textureGrid_metadata[layer][slot], "
+            "chooseNestedImage(imageGrid, layer, slot), "
+            "imageGrid_metadata[layer][slot]);" in cuda_code
+        )
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "metadata unavailable for image2D argument img" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

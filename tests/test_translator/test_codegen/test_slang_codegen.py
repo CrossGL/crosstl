@@ -10050,6 +10050,10 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 vec2 badDepth = vec2(0.5, 0.25);
+                int intDepth = 1;
+                bool boolDepth = true;
+                ivec2 intDepthPair = ivec2(1, 2);
+                ivec2 offset = ivec2(1, 0);
                 ivec3 badOffset = ivec3(1, 0, 0);
                 float badResource = textureCompare(colorMap, uv, 0.5);
                 float samplerCompare = textureCompare(querySampler, uv, 0.5);
@@ -10066,6 +10070,13 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 );
                 float badCoordRank = textureCompare(shadowMap, scalarCoord, 0.5);
                 float badCompareRank = textureCompare(shadowMap, uv, badDepth);
+                float intCompare = textureCompare(shadowMap, uv, intDepth);
+                float boolOffsetCompare = textureCompareOffset(
+                    shadowMap,
+                    uv,
+                    boolDepth,
+                    offset
+                );
                 float badOffsetRank = textureCompareOffset(
                     shadowMap,
                     uv,
@@ -10088,6 +10099,22 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                     shadowMap,
                     uv,
                     badDepth
+                );
+                vec4 intGatherCompare = textureGatherCompare(
+                    shadowMap,
+                    uv,
+                    intDepth
+                );
+                vec4 boolGatherOffsetCompare = textureGatherCompareOffset(
+                    shadowMap,
+                    uv,
+                    boolDepth,
+                    offset
+                );
+                vec4 intVectorGatherCompare = textureGatherCompare(
+                    shadowMap,
+                    uv,
+                    intDepthPair
                 );
             }
         }
@@ -10145,7 +10172,18 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     )
     assert (
         "float badCompareRank = /* unsupported Slang shadow compare: "
-        "textureCompare requires a scalar compare reference */ 0.0;" in generated_code
+        "textureCompare compare reference must be scalar float or double, got float2 */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float intCompare = /* unsupported Slang shadow compare: "
+        "textureCompare compare reference must be scalar float or double, got int */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float boolOffsetCompare = /* unsupported Slang shadow compare: "
+        "textureCompareOffset compare reference must be scalar float or double, "
+        "got bool */ 0.0;" in generated_code
     )
     assert (
         "float badOffsetRank = /* unsupported Slang shadow compare: "
@@ -10164,8 +10202,23 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     )
     assert (
         "float4 badGatherCompareRank = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare requires a scalar compare reference */ float4(0.0);"
-        in generated_code
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got float2 */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 intGatherCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got int */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolGatherOffsetCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset compare reference must be scalar float or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 intVectorGatherCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got int2 */ float4(0.0);" in generated_code
     )
     assert "textureCompare(" not in generated_code
     assert "textureCompareOffset(" not in generated_code

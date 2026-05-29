@@ -22931,6 +22931,88 @@ def test_metal_resource_array_local_aliases_preserve_element_metadata():
     )
 
 
+def test_metal_sampler_array_local_aliases_preserve_element_metadata():
+    shader = """
+    shader SamplerArrayLocalAliases {
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        struct TexturePack {
+            sampler2D textures[4];
+            sampler samplers[4];
+        };
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        vec4 sampleParam(
+            sampler2D paramTextures[4],
+            sampler paramSamplers[4],
+            int layer,
+            vec2 uv
+        ) {
+            let paramSamplerAlias = paramSamplers;
+            let chainedSamplerAlias = paramSamplerAlias;
+            return texture(paramTextures[layer], chainedSamplerAlias[layer], uv);
+        }
+
+        vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+            let packSamplerAlias = pack.samplers;
+            let chainedPackSamplerAlias = packSamplerAlias;
+            return texture(pack.textures[layer], chainedPackSamplerAlias[layer], uv);
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                TexturePack pack;
+                let samplerAlias = samplers;
+                let chainedAlias = samplerAlias;
+                return texture(
+                    textures[input.layer],
+                    chainedAlias[input.layer],
+                    input.uv
+                ) + sampleParam(textures, samplers, input.layer, input.uv)
+                    + samplePack(pack, input.layer, input.uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in generated_code
+    assert "array<sampler, 4> samplers;" in generated_code
+    assert "array<sampler, 4> samplerAlias = samplers;" in generated_code
+    assert "array<sampler, 4> chainedAlias = samplerAlias;" in generated_code
+    assert (
+        "textures[input.layer].sample(chainedAlias[input.layer], input.uv)"
+        in generated_code
+    )
+    assert "array<sampler, 4> paramSamplerAlias = paramSamplers;" in generated_code
+    assert (
+        "array<sampler, 4> chainedSamplerAlias = paramSamplerAlias;" in generated_code
+    )
+    assert (
+        "paramTextures[layer].sample(chainedSamplerAlias[layer], uv)" in generated_code
+    )
+    assert "array<sampler, 4> packSamplerAlias = pack.samplers;" in generated_code
+    assert (
+        "array<sampler, 4> chainedPackSamplerAlias = packSamplerAlias;"
+        in generated_code
+    )
+    assert (
+        "pack.textures[layer].sample(chainedPackSamplerAlias[layer], uv)"
+        in generated_code
+    )
+    assert "sampler samplerAlias = samplers;" not in generated_code
+    assert "sampler paramSamplerAlias = paramSamplers;" not in generated_code
+    assert "sampler packSamplerAlias = pack.samplers;" not in generated_code
+
+
 def test_metal_struct_member_resource_array_local_aliases_preserve_sampler_metadata():
     shader = """
     shader StructMemberTextureArrayLocalAliases {

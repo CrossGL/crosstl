@@ -2981,33 +2981,87 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 continue
 
             return_expr = getattr(statements[0], "value", None)
-            if not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
+            return_base_expr = return_expr
+            return_indices = []
+            if isinstance(return_expr, ArrayAccessNode):
+                return_base_expr, return_indices = self.query_array_access_parts(
+                    return_expr
+                )
+            elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
                 continue
-            return_name = self.get_expression_name(return_expr)
+            return_name = self.get_expression_name(return_base_expr)
             if not return_name:
                 continue
 
             params = getattr(func, "parameters", getattr(func, "params", []))
-            param_indices = {
+            resource_param_indices = {
                 getattr(param, "name", None): index
                 for index, param in enumerate(params)
                 if self.is_queryable_resource_type(self.get_parameter_type(param))
             }
-            param_indices = {
-                name: index for name, index in param_indices.items() if name
+            resource_param_indices = {
+                name: index for name, index in resource_param_indices.items() if name
             }
-            if return_name in param_indices:
+            all_param_indices = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(params)
+            }
+            all_param_indices = {
+                name: index for name, index in all_param_indices.items() if name
+            }
+            if any(
+                not self.is_safe_query_return_index(index, all_param_indices)
+                for index in return_indices
+            ):
+                continue
+            if return_name in resource_param_indices:
                 return_sources[func_name] = {
                     "kind": "parameter",
-                    "index": param_indices[return_name],
+                    "index": resource_param_indices[return_name],
+                    "indices": return_indices,
+                    "param_indices": all_param_indices,
                 }
             elif return_name in global_resource_names:
                 return_sources[func_name] = {
                     "kind": "global",
                     "name": return_name,
+                    "indices": return_indices,
+                    "param_indices": all_param_indices,
                 }
 
         return return_sources
+
+    def query_array_access_parts(self, expr):
+        """Return the base expression and ordered indices for nested array access."""
+        indices = []
+        current = expr
+        while isinstance(current, ArrayAccessNode):
+            index_node = getattr(
+                current,
+                "index_expr",
+                getattr(current, "index", None),
+            )
+            array_node = getattr(
+                current,
+                "array_expr",
+                getattr(current, "array", None),
+            )
+            if index_node is None or array_node is None:
+                return None, []
+            indices.insert(0, index_node)
+            current = array_node
+        return current, indices
+
+    def is_safe_query_return_index(self, index_expr, param_indices):
+        """Return whether a returned-array index can be rendered in the caller."""
+        if isinstance(index_expr, LiteralNode) or isinstance(index_expr, int):
+            return True
+        index_name = self.get_expression_name(index_expr)
+        if index_name:
+            return index_name in param_indices
+        if isinstance(index_expr, str):
+            return index_expr.lstrip("-").isdigit()
+        return False
 
     def collect_resource_query_requirements(self, node):
         """Collect query metadata needs, resolving local CUDA resource aliases."""
@@ -3169,17 +3223,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return_source = self.query_return_sources.get(callee_name)
             if return_source is None:
                 return None
-            if return_source["kind"] == "global":
-                return self.query_metadata_name(return_source["name"])
             raw_args = getattr(
                 resource_expr,
                 "arguments",
                 getattr(resource_expr, "args", []),
             )
-            index = return_source["index"]
-            if index >= len(raw_args):
-                return None
-            return self.query_metadata_expression(raw_args[index])
+            return self.query_return_source_metadata_expression(
+                return_source,
+                raw_args,
+            )
 
         if isinstance(resource_expr, ArrayAccessNode):
             array_node = getattr(
@@ -3223,6 +3275,46 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if resource_name in self.query_resource_names:
             return self.query_metadata_name(resource_name)
+        return None
+
+    def query_return_source_metadata_expression(self, return_source, raw_args):
+        """Render query metadata for a resource returned by a user function."""
+        if return_source["kind"] == "global":
+            metadata_expr = self.query_metadata_name(return_source["name"])
+        else:
+            index = return_source["index"]
+            if index >= len(raw_args):
+                return None
+            metadata_expr = self.query_metadata_expression(raw_args[index])
+        if metadata_expr is None:
+            return None
+
+        param_indices = return_source.get("param_indices", {})
+        for index_expr in return_source.get("indices", []):
+            rendered_index = self.format_query_return_index(
+                index_expr,
+                param_indices,
+                raw_args,
+            )
+            if rendered_index is None:
+                return None
+            metadata_expr = f"{metadata_expr}[{rendered_index}]"
+        return metadata_expr
+
+    def format_query_return_index(self, index_expr, param_indices, raw_args):
+        """Render a returned-array index in the caller's argument context."""
+        index_name = self.get_expression_name(index_expr)
+        if index_name in param_indices:
+            param_index = param_indices[index_name]
+            if param_index >= len(raw_args):
+                return None
+            return self.visit(raw_args[param_index])
+        if isinstance(index_expr, LiteralNode):
+            return self.visit(index_expr)
+        if isinstance(index_expr, int):
+            return str(index_expr)
+        if isinstance(index_expr, str) and index_expr.lstrip("-").isdigit():
+            return index_expr
         return None
 
     def convert_builtin_function(self, func_name):

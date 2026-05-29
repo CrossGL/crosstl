@@ -8898,7 +8898,7 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_compare_call(func_name, coord_reason)
-        compare_reason = self.compare_reference_rank_unsupported_reason(
+        compare_reason = self.compare_reference_unsupported_reason(
             args[coord_index + 1]
         )
         if compare_reason:
@@ -8965,7 +8965,7 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_gather_compare_call(func_name, coord_reason)
-        compare_reason = self.compare_reference_rank_unsupported_reason(
+        compare_reason = self.compare_reference_unsupported_reason(
             args[coord_index + 1]
         )
         if compare_reason:
@@ -9097,11 +9097,16 @@ class SlangCodeGen:
             gradient, expected_rank, resource_type, "gradient"
         )
 
-    def compare_reference_rank_unsupported_reason(self, compare):
-        compare_rank = self.expression_value_rank(compare)
-        if compare_rank is None or compare_rank == 1:
+    def compare_reference_unsupported_reason(self, compare):
+        type_name = self.type_name_string(self.expression_result_type(compare))
+        if type_name is None:
             return None
-        return "requires a scalar compare reference"
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"float", "double"}:
+            return None
+
+        return f"compare reference must be scalar float or double, got {mapped_type}"
 
     def scalar_texture_argument_rank_unsupported_reason(self, node, role):
         actual_rank = self.expression_value_rank(node)
