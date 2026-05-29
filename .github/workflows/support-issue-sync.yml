@@ -11,15 +11,44 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/backend-tests.yml"
+      - ".github/workflows/docs.yml"
+      - ".github/workflows/examples-test.yml"
+      - ".github/workflows/full-tests.yml"
+      - ".github/workflows/support-matrix.yml"
       - ".github/workflows/support-issue-sync.yml"
+      - ".github/workflows/translator-tests.yml"
       - ".github/workflows/pr-issue-links.yml"
+      - "crosstl/backend/**"
+      - "crosstl/translator/ast.py"
+      - "crosstl/translator/codegen/**"
+      - "crosstl/translator/lexer.py"
+      - "crosstl/translator/parser.py"
+      - "crosstl/translator/validation.py"
+      - "docs/source/support-matrix.rst"
+      - "examples/test.py"
       - "support/**"
+      - "tools/ci_coverage.py"
       - "tools/support_matrix.py"
       - "tools/support_signals.py"
       - "tools/sync_support_issues.py"
       - "tools/sync_pr_issue_links.py"
+      - "tests/test_backend/**"
+      - "tests/test_examples_test_script.py"
+      - "tests/test_translator/test_ast_ir_contracts.py"
+      - "tests/test_translator/test_backend_contract.py"
+      - "tests/test_translator/test_codegen/**"
+      - "tests/test_translator/test_frontend_*.py"
+      - "tests/test_translator/test_ir_legacy_alias_contracts.py"
+      - "tests/test_translator/test_lexer.py"
+      - "tests/test_translator/test_parser.py"
+      - "tests/test_translator/test_shader_validation.py"
+      - "tests/test_translator/test_translation_pipeline.py"
+      - "tests/test_ci_workflows.py"
+      - "tests/test_support_matrix.py"
       - "tests/test_support_signals.py"
       - "tests/test_support_issue_sync.py"
+      - "tests/test_tool_cli.py"
       - "tests/test_pr_issue_links.py"
 
 permissions:
@@ -50,6 +79,45 @@ jobs:
       - name: Validate support matrix artifacts
         run: python tools/support_matrix.py check
 
+      - name: Write CI coverage report
+        run: |
+          python tools/ci_coverage.py report --output support/generated/ci-coverage-report.json
+          python tools/ci_coverage.py summary --output support/generated/ci-coverage-report.md
+          cat support/generated/ci-coverage-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write base CI coverage report
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${GITHUB_BASE_REF}"
+          rm -rf "$RUNNER_TEMP/ci-coverage-base"
+          git worktree add --detach "$RUNNER_TEMP/ci-coverage-base" FETCH_HEAD
+          python tools/ci_coverage.py --root "$RUNNER_TEMP/ci-coverage-base" report \
+            --output "$GITHUB_WORKSPACE/support/generated/ci-coverage-base-report.json"
+
+      - name: Compare CI coverage with base
+        if: github.event_name == 'pull_request'
+        run: >
+          python tools/ci_coverage.py compare
+          --baseline support/generated/ci-coverage-base-report.json
+          --current support/generated/ci-coverage-report.json
+          --output support/generated/ci-coverage-comparison.json
+          --fail-on-shrink
+
+      - name: Upload CI coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-coverage-report
+          path: |
+            support/generated/ci-coverage-report.json
+            support/generated/ci-coverage-report.md
+            support/generated/ci-coverage-base-report.json
+            support/generated/ci-coverage-comparison.json
+
+      - name: Validate CI coverage policy
+        run: python tools/ci_coverage.py check
+
       - name: Probe backend documentation signals
         if: github.event_name != 'pull_request'
         run: python tools/support_signals.py docs --output support/generated/backend-docs-report.json
@@ -66,7 +134,15 @@ jobs:
           fi
 
       - name: Test support automation planners
-        run: python -m pytest -q tests/test_support_signals.py tests/test_support_issue_sync.py tests/test_pr_issue_links.py
+        run: >
+          python -m pytest -q
+          tests/test_support_matrix.py
+          tests/test_support_signals.py
+          tests/test_support_issue_sync.py
+          tests/test_pr_issue_links.py
+          tests/test_ci_workflows.py
+          tests/test_tool_cli.py
+          tests/test_examples_test_script.py
 
       - name: Dry-run issue sync
         if: github.event_name == 'pull_request'
@@ -78,6 +154,7 @@ jobs:
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
+          --min-desired-issues 10
           --dry-run
 
       - name: Sync GitHub issues
@@ -92,3 +169,4 @@ jobs:
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
+          --min-desired-issues 10

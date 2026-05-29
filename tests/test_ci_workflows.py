@@ -1,8 +1,31 @@
 from pathlib import Path
+import copy
+import importlib.util
+import json
 import re
+import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
+CI_COVERAGE_SCRIPT = ROOT / "tools" / "ci_coverage.py"
+PYTHON_VERSIONS = {"3.8", "3.9", "3.10", "3.11", "3.12", "3.13"}
+RUNNER_OSES = {"ubuntu-latest", "windows-latest", "macOS-latest"}
+BACKEND_TEST_MATRIX_NAMES = {
+    "cuda": "CUDA",
+    "directx": "directx",
+    "hip": "HIP",
+    "metal": "metal",
+    "mojo": "mojo",
+    "opengl": "GLSL",
+    "rust": "rust",
+    "slang": "slang",
+    "vulkan": "SPIRV",
+}
+TRANSLATOR_TEST_MATRIX_NAMES = {
+    **BACKEND_TEST_MATRIX_NAMES,
+    "hip": "hip",
+}
 
 
 def _workflow_texts():
@@ -10,6 +33,48 @@ def _workflow_texts():
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(WORKFLOW_DIR.glob("*.yml"))
     }
+
+
+def _load_ci_coverage_module():
+    spec = importlib.util.spec_from_file_location("ci_coverage", CI_COVERAGE_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _catalog_backend_ids():
+    catalog = json.loads((ROOT / "support" / "backends.json").read_text())
+    return {backend["id"] for backend in catalog["backends"]}
+
+
+def _parse_matrix_values(raw):
+    raw = raw.strip().strip("[]")
+    return {
+        item.strip().strip("\"'")
+        for item in raw.split(",")
+        if item.strip().strip("\"'")
+    }
+
+
+def _matrix_values(workflow_text, key):
+    inline = re.search(
+        r"^\s*{}:\s*(\[[^\n]+\])\s*$".format(re.escape(key)),
+        workflow_text,
+        flags=re.MULTILINE,
+    )
+    if inline:
+        return _parse_matrix_values(inline.group(1))
+
+    block = re.search(
+        r"^\s*{}:\s*\n\s*\[\s*(.*?)\s*\]".format(re.escape(key)),
+        workflow_text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if block:
+        return _parse_matrix_values(block.group(1))
+    raise AssertionError("matrix key not found: {}".format(key))
 
 
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
@@ -22,6 +87,11 @@ def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
     assert "glslang-tools" in full_suite
     assert "brew install glslang" in full_suite
     assert "choco install vulkan-sdk --version=1.4.341" in full_suite
+    assert "sdk.lunarg.com/sdk/download/$vulkanSdkVersion/windows" in full_suite
+    assert (
+        "--accept-licenses --default-answer --confirm-command install copy_only=1"
+        in full_suite
+    )
     assert "DirectXShaderCompiler/releases/download/v1.9.2602" in full_suite
     assert "linux_dxc_2026_02_20.x86_64.tar.gz" in full_suite
     assert "dxc_2026_02_20.zip" in full_suite
@@ -30,6 +100,395 @@ def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():
     assert "windows-latest" in full_suite
     assert re.search(r"python\s+-m\s+pytest\s+tests\b", full_suite)
     assert "test_external_shader_validators.py" in full_suite
+
+
+def test_full_suite_keeps_required_compiler_smoke_coverage():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+
+    assert "compiler-smoke-linux:" in full_suite
+    assert "Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)" in full_suite
+    assert "runs-on: ubuntu-24.04" in full_suite
+    for tool in ("glslangValidator", "spirv-as", "spirv-val", "dxc", "slangc", "nvcc"):
+        assert tool in full_suite
+    assert "Jimver/cuda-toolkit@v0.2.35" in full_suite
+    assert 'CUDA_VERSION: "13.2.0"' in full_suite
+    assert "SLANG_VERSION: v2026.9.1" in full_suite
+    assert "test_external_shader_validators.py" in full_suite
+
+    assert "compiler-smoke-macos:" in full_suite
+    assert "Compiler Smoke (macOS Metal)" in full_suite
+    assert "runs-on: macOS-latest" in full_suite
+    assert "xcrun -sdk macosx -f metal" in full_suite
+    assert "test_shader_validation.py" in full_suite
+    assert "test_metal_codegen.py" in full_suite
+
+
+def test_ci_coverage_report_summarizes_required_workflow_dimensions():
+    module = _load_ci_coverage_module()
+
+    report = module.build_report()
+
+    assert report["summary"] == {"ok": True, "errors": 0}
+    assert report["catalog"]["backend_count"] == len(_catalog_backend_ids())
+    assert module.validation_errors(report) == []
+    assert report["workflows"]["backend_tests"]["components"]["missing"] == []
+    assert report["workflows"]["translator_tests"]["components"]["missing"] == []
+    assert report["workflows"]["translator_tests"]["general_frontend_suite"] is True
+    assert all(report["workflows"]["docs"]["required_policies"].values())
+    assert report["workflows"]["examples"]["python_versions"]["missing"] == []
+    assert report["workflows"]["examples"]["oses"]["missing"] == []
+    assert report["workflows"]["examples"]["backend_coverage"]["missing"] == []
+    assert all(report["workflows"]["examples"]["required_policies"].values())
+    assert report["workflows"]["examples"]["backend_specific_strict"] is True
+    assert report["workflows"]["examples"]["stability_fails_on_regression"] is True
+    assert all(report["workflows"]["full_tests"]["required_tools"].values())
+    assert all(report["workflows"]["support_matrix"]["required_policies"].values())
+    assert report["workflows"]["support_matrix"]["uploads_docs_probe_artifact"] is True
+    assert all(report["workflows"]["support_issue_sync"]["required_tests"].values())
+    assert all(
+        report["workflows"]["support_issue_sync"]["required_path_filters"].values()
+    )
+
+
+def test_ci_coverage_check_command_passes():
+    result = subprocess.run(
+        [sys.executable, "tools/ci_coverage.py", "check"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "CI coverage check passed." in result.stdout
+
+
+def test_ci_coverage_check_command_accepts_explicit_root():
+    result = subprocess.run(
+        [sys.executable, "tools/ci_coverage.py", "--root", str(ROOT), "check"],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "CI coverage check passed." in result.stdout
+
+
+def test_ci_coverage_summary_command_writes_markdown(tmp_path):
+    output = tmp_path / "ci-coverage-report.md"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/ci_coverage.py",
+            "summary",
+            "--output",
+            str(output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    text = output.read_text(encoding="utf-8")
+    assert "Wrote" in result.stdout
+    assert "# CI Coverage Report" in text
+    assert "Status: **pass**" in text
+    assert (
+        "| Workflow | Components | Python | OS | Fail-fast disabled | Frontend suite |"
+        in text
+    )
+    assert "backend-tests.yml" in text
+    assert "translator-tests.yml" in text
+    assert "## Documentation" in text
+    assert "## Examples" in text
+    assert "Backend-specific failures are fatal" in text
+    assert "## Support Matrix" in text
+    assert "Documentation probe artifact" in text
+    assert "PR path filters" in text
+
+
+def test_ci_coverage_reports_missing_matrix_entries():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["backend_tests"]["components"]["actual"].remove("metal")
+    report["workflows"]["backend_tests"]["components"]["missing"] = ["metal"]
+
+    errors = module.validation_errors(report)
+
+    assert any("backend-tests.yml components mismatch" in error for error in errors)
+
+
+def test_ci_coverage_reports_missing_python_versions_and_oses():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["translator_tests"]["python_versions"]["actual"].remove("3.13")
+    report["workflows"]["translator_tests"]["python_versions"]["missing"] = ["3.13"]
+    report["workflows"]["translator_tests"]["oses"]["actual"].remove("windows-latest")
+    report["workflows"]["translator_tests"]["oses"]["missing"] = ["windows-latest"]
+
+    errors = module.validation_errors(report)
+
+    assert any(
+        "translator-tests.yml python_versions mismatch" in error for error in errors
+    )
+    assert any("translator-tests.yml oses mismatch" in error for error in errors)
+
+
+def test_ci_coverage_reports_missing_translator_frontend_suite():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["translator_tests"]["general_frontend_suite"] = False
+
+    errors = module.validation_errors(report)
+
+    assert "translator-tests.yml must run the frontend general suite" in errors
+
+
+def test_ci_coverage_reports_missing_docs_policy():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["docs"]["required_policies"]["build_sphinx_html"] = False
+
+    errors = module.validation_errors(report)
+
+    assert "docs.yml missing policy: build_sphinx_html" in errors
+
+
+def test_ci_coverage_reports_missing_examples_coverage_and_strictness():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["examples"]["python_versions"]["actual"].remove("3.13")
+    report["workflows"]["examples"]["python_versions"]["missing"] = ["3.13"]
+    report["workflows"]["examples"]["backend_coverage"]["actual"].remove("metal")
+    report["workflows"]["examples"]["backend_coverage"]["missing"] = ["metal"]
+    report["workflows"]["examples"]["required_policies"][
+        "comprehensive_test_script"
+    ] = False
+    report["workflows"]["examples"]["backend_specific_strict"] = False
+    report["workflows"]["examples"]["stability_fails_on_regression"] = False
+    report["workflows"]["examples"]["diagnostic_continue_on_error_count"] = 2
+
+    errors = module.validation_errors(report)
+
+    assert any(
+        "examples-test.yml python_versions mismatch" in error for error in errors
+    )
+    assert any(
+        "examples-test.yml backend_coverage mismatch" in error for error in errors
+    )
+    assert "examples-test.yml missing policy: comprehensive_test_script" in errors
+    assert "examples-test.yml backend-specific job must fail on errors" in errors
+    assert "examples-test.yml stability job must fail on regression" in errors
+    assert "examples-test.yml has too many continue-on-error steps: 2" in errors
+
+
+def test_ci_coverage_reports_missing_compiler_smoke_tooling():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["full_tests"]["required_tools"]["slangc"] = False
+    report["workflows"]["full_tests"]["required_markers"][
+        "Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)"
+    ] = False
+
+    errors = module.validation_errors(report)
+
+    assert "full-tests.yml missing compiler tool coverage: slangc" in errors
+    assert (
+        "full-tests.yml missing marker: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)"
+        in errors
+    )
+
+
+def test_ci_coverage_reports_missing_support_planner_tests():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["support_issue_sync"]["required_tests"][
+        "tests/test_support_matrix.py"
+    ] = False
+    report["workflows"]["support_issue_sync"]["min_desired_issues"] = False
+    report["workflows"]["support_issue_sync"]["required_path_filters"][
+        "crosstl/backend/**"
+    ] = False
+
+    errors = module.validation_errors(report)
+
+    assert (
+        "support-issue-sync.yml missing planner test: tests/test_support_matrix.py"
+        in errors
+    )
+    assert "support-issue-sync.yml missing min_desired_issues" in errors
+    assert "support-issue-sync.yml missing path filter: crosstl/backend/**" in errors
+
+
+def test_ci_coverage_reports_missing_support_matrix_policy():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["support_matrix"]["required_policies"][
+        "docs_probe_command"
+    ] = False
+    report["workflows"]["support_matrix"]["uploads_docs_probe_artifact"] = False
+
+    errors = module.validation_errors(report)
+
+    assert "support-matrix.yml missing policy: docs_probe_command" in errors
+    assert "support-matrix.yml missing docs probe artifact upload" in errors
+
+
+def test_ci_coverage_reads_support_path_filters_only_from_pull_request_paths():
+    module = _load_ci_coverage_module()
+    workflow = (WORKFLOW_DIR / "support-issue-sync.yml").read_text(encoding="utf-8")
+    workflow = workflow.replace('      - "crosstl/backend/**"\n', "")
+    workflow += "\n# crosstl/backend/**\n"
+
+    report = module.support_issue_sync_report(workflow)
+
+    assert report["required_path_filters"]["crosstl/backend/**"] is False
+
+
+def test_ci_coverage_report_summary_reflects_validation_failures():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    broken = copy.deepcopy(report)
+    broken["workflows"]["backend_tests"]["components"]["actual"].remove("metal")
+    broken["workflows"]["backend_tests"]["components"]["missing"] = ["metal"]
+    errors = module.validation_errors(broken)
+
+    broken["summary"] = {
+        "ok": not errors,
+        "errors": len(errors),
+    }
+
+    assert broken["summary"] == {"ok": False, "errors": 1}
+
+
+def test_ci_coverage_comparison_reports_removed_coverage():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["backend_tests"]["components"]["actual"].remove("metal")
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": False,
+        "shrink_count": 1,
+        "growth_count": 0,
+    }
+    assert comparison["shrinks"] == [
+        {
+            "scope": "backend-tests.yml",
+            "dimension": "components",
+            "removed": ["metal"],
+            "added": [],
+        }
+    ]
+
+
+def test_ci_coverage_comparison_reports_added_coverage_without_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["backend_tests"]["components"]["actual"].append("new-backend")
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": True,
+        "shrink_count": 0,
+        "growth_count": 1,
+    }
+    assert comparison["growth"][0]["added"] == ["new-backend"]
+
+
+def test_ci_coverage_comparison_reports_support_matrix_policy_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["support_matrix"]["required_policies"][
+        "daily_schedule"
+    ] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"]["ok"] is False
+    assert comparison["shrinks"] == [
+        {
+            "scope": "support-matrix.yml",
+            "dimension": "required_policies",
+            "removed": ["daily_schedule"],
+            "added": [],
+        }
+    ]
+
+
+def test_ci_coverage_comparison_reports_translator_frontend_suite_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["translator_tests"]["general_frontend_suite"] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"]["ok"] is False
+    assert {
+        "scope": "translator-tests.yml",
+        "dimension": "general_frontend_suite",
+        "removed": ["general_frontend_suite"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
+def test_ci_coverage_comparison_reports_examples_backend_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["examples"]["backend_coverage"]["actual"].remove("metal")
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert {
+        "scope": "examples-test.yml",
+        "dimension": "backend_coverage",
+        "removed": ["metal"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
+def test_ci_coverage_compare_command_fails_on_shrink(tmp_path):
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["full_tests"]["required_tools"]["dxc"] = False
+    baseline_path = tmp_path / "baseline.json"
+    current_path = tmp_path / "current.json"
+    baseline_path.write_text(module.stable_json(baseline), encoding="utf-8")
+    current_path.write_text(module.stable_json(current), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/ci_coverage.py",
+            "compare",
+            "--baseline",
+            str(baseline_path),
+            "--current",
+            str(current_path),
+            "--fail-on-shrink",
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    comparison = json.loads(result.stdout)
+    assert result.returncode == 1
+    assert comparison["summary"]["shrink_count"] == 1
+    assert comparison["shrinks"][0]["removed"] == ["dxc"]
+    assert "removed coverage" in result.stderr
 
 
 def test_backend_and_translator_compatibility_matrices_remain_enabled():
@@ -45,6 +504,44 @@ def test_backend_and_translator_compatibility_matrices_remain_enabled():
     assert "python-version" in translator_tests
     assert "OS:" in translator_tests
     assert "pytest tests/test_translator" in translator_tests
+
+
+def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
+    workflows = _workflow_texts()
+    backend_tests = workflows.get("backend-tests.yml", "")
+    assert backend_tests, "backend-tests.yml must exist"
+
+    assert set(BACKEND_TEST_MATRIX_NAMES) == _catalog_backend_ids()
+    assert _matrix_values(backend_tests, "backend") == set(
+        BACKEND_TEST_MATRIX_NAMES.values()
+    )
+    assert _matrix_values(backend_tests, "python-version") == PYTHON_VERSIONS
+    assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
+    assert "fail-fast: false" in backend_tests
+    assert "pytest tests/test_backend/test_${{ matrix.backend }}" in backend_tests
+
+
+def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
+    workflows = _workflow_texts()
+    translator_tests = workflows.get("translator-tests.yml", "")
+    assert translator_tests, "translator-tests.yml must exist"
+
+    expected_components = set(TRANSLATOR_TEST_MATRIX_NAMES.values()) | {"general"}
+    assert set(TRANSLATOR_TEST_MATRIX_NAMES) == _catalog_backend_ids()
+    assert _matrix_values(translator_tests, "component") == expected_components
+    assert _matrix_values(translator_tests, "python-version") == PYTHON_VERSIONS
+    assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
+    assert "fail-fast: false" in translator_tests
+    assert 'if [ "${{ matrix.component }}" == "general" ]; then' in translator_tests
+    assert (
+        "pytest tests/test_translator --ignore=tests/test_translator/test_codegen"
+        in translator_tests
+    )
+    assert "pytest tests/test_translator/test_lexer.py" not in translator_tests
+    assert (
+        "pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py"
+        in translator_tests
+    )
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
@@ -66,3 +563,182 @@ def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
         "support/generated/backend-docs-report.json"
     ) in support_matrix
     assert "actions/upload-artifact@v4" in support_matrix
+
+
+def test_docs_workflow_builds_doxygen_and_sphinx():
+    workflows = _workflow_texts()
+    docs = workflows.get("docs.yml", "")
+
+    assert docs, "docs.yml must exist"
+    assert re.search(r"\bpush\s*:", docs)
+    assert re.search(r"\bpull_request\s*:", docs)
+    assert "workflow_dispatch:" in docs
+    assert 'python-version: "3.12"' in docs
+    assert "sudo apt-get update && sudo apt-get install -y doxygen" in docs
+    assert "pip install -r docs/requirements.txt" in docs
+    assert "make -C docs doxygen" in docs
+    assert "make -C docs html" in docs
+
+
+def test_examples_workflow_enforces_backend_outputs_and_platform_matrix():
+    workflows = _workflow_texts()
+    examples = workflows.get("examples-test.yml", "")
+
+    assert examples, "examples-test.yml must exist"
+    assert re.search(r"\bpush\s*:", examples)
+    assert re.search(r"\bpull_request\s*:", examples)
+    assert "workflow_dispatch:" in examples
+    assert _matrix_values(examples, "python-version") == PYTHON_VERSIONS
+    assert _matrix_values(examples, "os") == RUNNER_OSES
+    for backend in BACKEND_TEST_MATRIX_NAMES:
+        assert f'backend: "{backend}"' in examples
+    assert "python test.py" in examples
+    assert "backend-specific:" in examples
+    assert "stability-test:" in examples
+    assert 'echo "[ERROR] Output file not created: $OUTPUT_FILE"' in examples
+    assert 'echo "[ERROR] Output file is too small ($FILE_SIZE bytes)"' in examples
+    assert examples.count("continue-on-error: true") == 1
+    assert examples.count("raise SystemExit(1)") >= 2
+    assert "--summary-json" in examples
+    assert 'summary["within_regression_budget"]' in examples
+    assert "Example regression detected" in examples
+    assert re.search(
+        r"- name: Create output directory\n"
+        r"\s+run:\s+\|\n"
+        r"\s+mkdir -p output/\$\{\{ matrix\.combination\.category \}\}\n"
+        r"\s+shell: bash\n"
+        r"\s+working-directory: examples",
+        examples,
+    )
+
+
+def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
+    workflows = _workflow_texts()
+    issue_sync = workflows.get("support-issue-sync.yml", "")
+
+    assert issue_sync, "support-issue-sync.yml must exist"
+    assert re.search(r"\bschedule\s*:", issue_sync)
+    assert 'cron: "17 * * * *"' in issue_sync
+    assert "workflow_dispatch:" in issue_sync
+    assert re.search(r"\bpull_request\s*:", issue_sync)
+    assert "issues: write" in issue_sync
+    assert '".github/workflows/backend-tests.yml"' in issue_sync
+    assert '".github/workflows/docs.yml"' in issue_sync
+    assert '".github/workflows/examples-test.yml"' in issue_sync
+    assert '".github/workflows/full-tests.yml"' in issue_sync
+    assert '".github/workflows/support-matrix.yml"' in issue_sync
+    assert '".github/workflows/translator-tests.yml"' in issue_sync
+    required_path_filters = [
+        '"crosstl/backend/**"',
+        '"crosstl/translator/ast.py"',
+        '"crosstl/translator/codegen/**"',
+        '"crosstl/translator/lexer.py"',
+        '"crosstl/translator/parser.py"',
+        '"crosstl/translator/validation.py"',
+        '"docs/source/support-matrix.rst"',
+        '"examples/test.py"',
+        '"tests/test_backend/**"',
+        '"tests/test_examples_test_script.py"',
+        '"tests/test_translator/test_ast_ir_contracts.py"',
+        '"tests/test_translator/test_backend_contract.py"',
+        '"tests/test_translator/test_codegen/**"',
+        '"tests/test_translator/test_frontend_*.py"',
+        '"tests/test_translator/test_ir_legacy_alias_contracts.py"',
+        '"tests/test_translator/test_lexer.py"',
+        '"tests/test_translator/test_parser.py"',
+        '"tests/test_translator/test_shader_validation.py"',
+        '"tests/test_translator/test_translation_pipeline.py"',
+    ]
+    for path_filter in required_path_filters:
+        assert path_filter in issue_sync
+    assert "python tools/support_matrix.py check" in issue_sync
+    assert (
+        "python tools/ci_coverage.py report --output "
+        "support/generated/ci-coverage-report.json"
+    ) in issue_sync
+    assert (
+        "python tools/ci_coverage.py summary --output "
+        "support/generated/ci-coverage-report.md"
+    ) in issue_sync
+    assert (
+        'cat support/generated/ci-coverage-report.md >> "$GITHUB_STEP_SUMMARY"'
+        in issue_sync
+    )
+    assert "name: Write base CI coverage report" in issue_sync
+    assert "git fetch --no-tags --depth=1 origin" in issue_sync
+    assert 'git worktree add --detach "$RUNNER_TEMP/ci-coverage-base" FETCH_HEAD' in (
+        issue_sync
+    )
+    assert (
+        'python tools/ci_coverage.py --root "$RUNNER_TEMP/ci-coverage-base" report'
+        in issue_sync
+    )
+    assert "support/generated/ci-coverage-base-report.json" in issue_sync
+    assert "name: Compare CI coverage with base" in issue_sync
+    assert "python tools/ci_coverage.py compare" in issue_sync
+    assert "--baseline support/generated/ci-coverage-base-report.json" in issue_sync
+    assert "--current support/generated/ci-coverage-report.json" in issue_sync
+    assert "--output support/generated/ci-coverage-comparison.json" in issue_sync
+    assert "--fail-on-shrink" in issue_sync
+    assert "actions/upload-artifact@v4" in issue_sync
+    assert "if: always()" in issue_sync
+    assert "name: ci-coverage-report" in issue_sync
+    assert "path: |" in issue_sync
+    assert "support/generated/ci-coverage-report.json" in issue_sync
+    assert "support/generated/ci-coverage-report.md" in issue_sync
+    assert "support/generated/ci-coverage-comparison.json" in issue_sync
+    assert "python tools/ci_coverage.py check" in issue_sync
+    assert '"tools/ci_coverage.py"' in issue_sync
+    assert "python tools/support_signals.py docs" in issue_sync
+    assert "python tools/support_signals.py extract" in issue_sync
+    assert '"tests/test_ci_workflows.py"' in issue_sync
+    assert '"tests/test_examples_test_script.py"' in issue_sync
+    assert '"tests/test_support_matrix.py"' in issue_sync
+    assert '"tests/test_tool_cli.py"' in issue_sync
+    assert "python -m pytest -q" in issue_sync
+    assert "tests/test_support_matrix.py" in issue_sync
+    assert "tests/test_support_signals.py" in issue_sync
+    assert "tests/test_support_issue_sync.py" in issue_sync
+    assert "tests/test_pr_issue_links.py" in issue_sync
+    assert "tests/test_ci_workflows.py" in issue_sync
+    assert "tests/test_examples_test_script.py" in issue_sync
+    assert "tests/test_tool_cli.py" in issue_sync
+    assert "github.event_name == 'pull_request'" in issue_sync
+    assert "--dry-run" in issue_sync
+    assert "github.event_name != 'pull_request'" in issue_sync
+    assert "python tools/sync_support_issues.py" in issue_sync
+    assert "--signals support/generated/support-signals.json" in issue_sync
+    assert "--max-retries 6" in issue_sync
+    assert "--min-desired-issues 10" in issue_sync
+
+
+def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
+    workflows = _workflow_texts()
+    pr_issue_links = workflows.get("pr-issue-links.yml", "")
+
+    assert pr_issue_links, "pr-issue-links.yml must exist"
+    assert "pull_request_target:" in pr_issue_links
+    assert "issues: write" in pr_issue_links
+    assert "pull-requests: write" in pr_issue_links
+    assert "python tools/sync_pr_issue_links.py" in pr_issue_links
+    assert "--check-support-traceability" in pr_issue_links
+    assert "--enforce-support-traceability" not in pr_issue_links
+
+
+def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
+    workflows = _workflow_texts()
+    full_suite = workflows.get("full-tests.yml", "")
+
+    assert '$vulkanSdkVersion = "1.4.341.1"' in full_suite
+    assert "$maxAttempts = 3" in full_suite
+    assert "for ($attempt = 1; $attempt -le $maxAttempts; $attempt++)" in full_suite
+    assert "choco install vulkan-sdk --version=1.4.341" in full_suite
+    assert "Chocolatey Vulkan SDK install failed" in full_suite
+    assert "sdk.lunarg.com/sdk/download/$vulkanSdkVersion/windows" in full_suite
+    assert (
+        "--accept-licenses --default-answer --confirm-command install copy_only=1"
+        in full_suite
+    )
+    assert "Direct Vulkan SDK install failed" in full_suite
+    assert 'throw "Vulkan SDK install directory was not found"' in full_suite
+    assert "$global:LASTEXITCODE = 0" not in full_suite

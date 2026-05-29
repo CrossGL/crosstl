@@ -302,6 +302,58 @@ class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
+    HLSL_FEEDBACK_WRITE_HELPERS = {
+        "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
+        "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
+        "write_sampler_feedback_grad": ("WriteSamplerFeedbackGrad", {6, 7}),
+        "write_sampler_feedback_level": ("WriteSamplerFeedbackLevel", {5}),
+    }
+    HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS = {
+        "write_sampler_feedback": "WriteSamplerFeedback",
+        "write_sampler_feedback_bias": "WriteSamplerFeedbackBias",
+    }
+    HLSL_SYNCHRONIZATION_INTRINSICS = {
+        "barrier": "GroupMemoryBarrierWithGroupSync",
+        "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+        "groupMemoryBarrier": "GroupMemoryBarrier",
+        "memoryBarrierShared": "GroupMemoryBarrier",
+        "deviceMemoryBarrier": "DeviceMemoryBarrier",
+        "memoryBarrierBuffer": "DeviceMemoryBarrier",
+        "memoryBarrierImage": "DeviceMemoryBarrier",
+        "memoryBarrier": "AllMemoryBarrier",
+        "allMemoryBarrier": "AllMemoryBarrier",
+    }
+    HLSL_RAY_FLAG_VALUES = {
+        "RAY_FLAG_NONE": 0x00,
+        "RAY_FLAG_FORCE_OPAQUE": 0x01,
+        "RAY_FLAG_FORCE_NON_OPAQUE": 0x02,
+        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH": 0x04,
+        "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER": 0x08,
+        "RAY_FLAG_CULL_BACK_FACING_TRIANGLES": 0x10,
+        "RAY_FLAG_CULL_FRONT_FACING_TRIANGLES": 0x20,
+        "RAY_FLAG_CULL_OPAQUE": 0x40,
+        "RAY_FLAG_CULL_NON_OPAQUE": 0x80,
+        "RAY_FLAG_SKIP_TRIANGLES": 0x100,
+        "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES": 0x200,
+    }
+    HLSL_RAY_FLAG_KNOWN_MASK = 0x3FF
+    HLSL_RAY_FLAG_MUTUALLY_EXCLUSIVE_GROUPS = (
+        (
+            "RAY_FLAG_FORCE_OPAQUE",
+            "RAY_FLAG_FORCE_NON_OPAQUE",
+            "RAY_FLAG_CULL_OPAQUE",
+            "RAY_FLAG_CULL_NON_OPAQUE",
+        ),
+        (
+            "RAY_FLAG_CULL_BACK_FACING_TRIANGLES",
+            "RAY_FLAG_CULL_FRONT_FACING_TRIANGLES",
+            "RAY_FLAG_SKIP_TRIANGLES",
+        ),
+        (
+            "RAY_FLAG_SKIP_TRIANGLES",
+            "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES",
+        ),
+    )
     HLSL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -325,6 +377,7 @@ class HLSLCodeGen:
         "WavePrefixCountBits": 1,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
         "WaveMultiPrefixProduct": 2,
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
@@ -333,7 +386,94 @@ class HLSLCodeGen:
         "QuadReadAcrossY": 1,
         "QuadReadAcrossDiagonal": 1,
         "QuadReadLaneAt": 2,
+        "QuadAny": 1,
+        "QuadAll": 1,
     }
+    HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
+        "QuadAny",
+        "QuadAll",
+    }
+    HLSL_WAVE_NUMERIC_VALUE_INTRINSICS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    HLSL_WAVE_INTEGER_VALUE_INTRINSICS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    HLSL_WAVE_UINT_RESULT_INTRINSICS = {
+        "WaveGetLaneCount",
+        "WaveGetLaneIndex",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
+    }
+    HLSL_WAVE_BOOL_RESULT_INTRINSICS = {
+        "WaveIsFirstLane",
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveAllEqual",
+        "QuadAny",
+        "QuadAll",
+    }
+    HLSL_WAVE_UINT4_RESULT_INTRINSICS = {
+        "WaveActiveBallot",
+        "WaveMatch",
+    }
+    HLSL_WAVE_LANE_READ_VALUE_INTRINSICS = {
+        "WaveReadLaneAt",
+        "WaveReadLaneFirst",
+        "QuadReadAcrossX",
+        "QuadReadAcrossY",
+        "QuadReadAcrossDiagonal",
+        "QuadReadLaneAt",
+    }
+    HLSL_WAVE_VALUE_RESULT_INTRINSICS = (
+        HLSL_WAVE_NUMERIC_VALUE_INTRINSICS
+        | HLSL_WAVE_INTEGER_VALUE_INTRINSICS
+        | HLSL_WAVE_LANE_READ_VALUE_INTRINSICS
+    )
+    HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
+        "float",
+        "half",
+        "min16float",
+        "min10float",
+        "double",
+        "int",
+        "min16int",
+        "min12int",
+        "int64_t",
+        "uint",
+        "min16uint",
+        "uint64_t",
+    }
+    HLSL_WAVE_INTEGER_COMPONENT_TYPES = {
+        "int",
+        "min16int",
+        "min12int",
+        "int64_t",
+        "uint",
+        "min16uint",
+        "uint64_t",
+    }
+    HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
+    HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
 
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -362,6 +502,8 @@ class HLSLCodeGen:
         self.function_parameter_types = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_synchronization_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.resource_array_size_hints = {}
@@ -388,6 +530,7 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
@@ -550,6 +693,10 @@ class HLSLCodeGen:
             "sampler2DArrayShadow": "Texture2DArray",
             "samplerCubeShadow": "TextureCube",
             "samplerCubeArrayShadow": "TextureCubeArray",
+            "feedbackTexture2D": "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP>",
+            "feedbackTexture2DArray": (
+                "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIN_MIP>"
+            ),
             "iimage1D": "RWTexture1D<int>",
             "iimage1DArray": "RWTexture1DArray<int>",
             "iimage2D": "RWTexture2D<int>",
@@ -645,6 +792,8 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
         self.function_image_access_requirements = {}
+        self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_synchronization_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_function_return_type = None
@@ -660,6 +809,7 @@ class HLSLCodeGen:
         self.current_hlsl_mesh_payload_types = set()
         self.current_hlsl_dispatch_mesh_payload_types = set()
         self.current_hlsl_has_amplification_stage = False
+        self.fragment_entry_input_struct_names = set()
         self.hlsl_temp_variable_index = 0
         self.current_glsl_buffer_block_parameters = {}
         self.unsupported_glsl_buffer_block_variables = set()
@@ -728,6 +878,9 @@ class HLSLCodeGen:
         self.current_global_resource_declaration_nodes = global_vars
         self.global_variable_types = self.collect_global_variable_types(global_vars)
         functions = self.collect_functions(ast)
+        self.fragment_entry_input_struct_names = (
+            self.collect_hlsl_fragment_entry_input_struct_names(ast, target_stage)
+        )
         self.function_return_types = {
             func.name: self.type_name_string(getattr(func, "return_type", "void"))
             for func in functions
@@ -825,6 +978,12 @@ class HLSLCodeGen:
                 self.expression_name,
             )
         )
+        self.hlsl_pixel_only_feedback_function_names = (
+            self.collect_hlsl_pixel_only_feedback_function_names(functions)
+        )
+        self.hlsl_synchronization_function_names = (
+            self.collect_hlsl_synchronization_function_names(functions)
+        )
         (
             self.resource_array_size_hints,
             self.function_resource_array_size_hints,
@@ -884,6 +1043,9 @@ class HLSLCodeGen:
                     continue
                 code += f"struct {node.name} {{\n"
                 members = getattr(node, "members", [])
+                default_member_semantics = (
+                    self.hlsl_default_fragment_input_member_semantics(node)
+                )
                 for member in members:
                     if isinstance(member, ArrayNode):
                         element_type = getattr(
@@ -897,7 +1059,9 @@ class HLSLCodeGen:
                         else:
                             # Dynamic arrays in HLSL
                             declaration_type = f"{member_type}[]"
-                        semantic = self.semantic_from_array_node(member)
+                        semantic = self.hlsl_struct_member_declared_semantic(member)
+                        if semantic is None:
+                            semantic = default_member_semantics.get(member.name)
                         self.validate_hlsl_struct_member_semantic_type(
                             node.name, member.name, declaration_type, semantic
                         )
@@ -942,19 +1106,9 @@ class HLSLCodeGen:
                             member_type = "float"
                             array_syntax = ""
 
-                        semantic = self.semantic_from_node(member)
-                        if semantic is None and getattr(member, "name", "") in [
-                            "view",
-                            "layer",
-                            "viewport",
-                        ]:
-                            # Fallback to name-based mapping for common multiview outputs
-                            name_semantics = {
-                                "view": "gl_ViewID",
-                                "layer": "gl_Layer",
-                                "viewport": "gl_ViewportIndex",
-                            }
-                            semantic = name_semantics.get(member.name)
+                        semantic = self.hlsl_struct_member_declared_semantic(member)
+                        if semantic is None:
+                            semantic = default_member_semantics.get(member.name)
 
                         self.validate_hlsl_struct_member_semantic_type(
                             node.name, member.name, member_type, semantic
@@ -1168,6 +1322,7 @@ class HLSLCodeGen:
                 mapped_type = "SamplerComparisonState"
             is_hlsl_resource_global = (
                 mapped_type.startswith("Texture")
+                or self.is_hlsl_feedback_texture_type(mapped_type)
                 or self.is_hlsl_rw_texture_type(mapped_type)
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
@@ -1220,6 +1375,32 @@ class HLSLCodeGen:
                 register = self.resource_register_suffix("t", binding, node)
                 self.advance_resource_register(
                     texture_registers, space, binding, resource_count
+                )
+            elif self.is_hlsl_feedback_texture_type(mapped_type):
+                self.texture_variable_types[var_name] = mapped_type
+                space = self.explicit_resource_register_space(node)
+                binding = self.explicit_resource_binding_index(
+                    node, {"binding", "texture", "uav"}, ("u",)
+                )
+                if binding is None:
+                    binding = self.next_available_resource_register(
+                        used_resource_registers,
+                        "u",
+                        uav_registers,
+                        space,
+                        resource_count,
+                    )
+                self.reserve_resource_register_range(
+                    used_resource_registers,
+                    "u",
+                    binding,
+                    resource_count,
+                    var_name,
+                    space,
+                )
+                register = self.resource_register_suffix("u", binding, node)
+                self.advance_resource_register(
+                    uav_registers, space, binding, resource_count
                 )
             elif self.is_hlsl_rw_texture_type(mapped_type):
                 self.texture_variable_types[var_name] = mapped_type
@@ -1968,6 +2149,7 @@ class HLSLCodeGen:
             return_type = "void"
         self.current_function_return_type = raw_return_type
         self.validate_hlsl_local_groupshared_declarations(func)
+        self.validate_hlsl_nonuniform_resource_index_calls(func)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
             "HLSL", param_list, indent
         )
@@ -2012,6 +2194,16 @@ class HLSLCodeGen:
             self.validate_hlsl_stage_return_semantics(
                 func, effective_shader_type, return_semantic
             )
+            self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
+            self.validate_hlsl_synchronization_stage_calls(func, effective_shader_type)
+        waveops_helper_lanes_attribute = (
+            self.generate_hlsl_waveops_include_helper_lanes_attribute(
+                func, effective_shader_type
+            )
+        )
+        wave_size_attribute = self.generate_hlsl_wave_size_attribute(
+            func, effective_shader_type
+        )
 
         if effective_shader_type in shader_map:
             return_semantic_attr = self.map_semantic(return_semantic)
@@ -2021,6 +2213,8 @@ class HLSLCodeGen:
                     func, effective_shader_type
                 )
                 code += self.generate_compute_numthreads(execution_config)
+            code += wave_size_attribute
+            code += waveops_helper_lanes_attribute
             function_name = entry_name or shader_map[effective_shader_type]
             code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
         else:
@@ -2030,6 +2224,8 @@ class HLSLCodeGen:
                 func, effective_shader_type, execution_config
             )
             code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
+            code += wave_size_attribute
+            code += waveops_helper_lanes_attribute
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
             function_name = entry_name or func.name
@@ -2508,11 +2704,42 @@ class HLSLCodeGen:
             return "bool"
         return None
 
+    def hlsl_matrix_shape(self, vtype):
+        mapped_type = self.map_type(vtype)
+        for component_type in (
+            "min16float",
+            "min10float",
+            "min16uint",
+            "min16int",
+            "min12int",
+            "uint64_t",
+            "int64_t",
+            "double",
+            "float",
+            "half",
+            "uint",
+            "int",
+            "bool",
+        ):
+            if not mapped_type.startswith(component_type):
+                continue
+            suffix = mapped_type[len(component_type) :]
+            if (
+                len(suffix) == 3
+                and suffix[0] in {"2", "3", "4"}
+                and suffix[1] == "x"
+                and suffix[2] in {"2", "3", "4"}
+            ):
+                return component_type, suffix[0], suffix[2]
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
             return self.variable_type_by_name(getattr(expr, "name", None))
+        if isinstance(expr, bool):
+            return "bool"
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
@@ -2596,6 +2823,8 @@ class HLSLCodeGen:
             return infer_match_expression_result_type(self, expr)
         if isinstance(expr, RayQueryOpNode):
             return self.hlsl_ray_query_method_return_type(expr.operation)
+        if isinstance(expr, WaveOpNode):
+            return self.hlsl_wave_intrinsic_return_type(expr.operation, expr.arguments)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.hlsl_ray_query_call_parts(expr)
             if ray_query_call is not None:
@@ -2605,6 +2834,10 @@ class HLSLCodeGen:
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                return self.hlsl_wave_intrinsic_return_type(func_name, args)
+            if func_name == "NonUniformResourceIndex":
+                return self.hlsl_nonuniform_resource_index_return_type(args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -2632,6 +2865,11 @@ class HLSLCodeGen:
                 return self.hlsl_typed_buffer_element_type(
                     resource_type, {"ConsumeStructuredBuffer"}
                 )
+            if func_name in {
+                "buffer_increment_counter",
+                "buffer_decrement_counter",
+            }:
+                return "uint"
             if is_image_atomic_operation(func_name) and args:
                 return self.image_atomic_result_type(func_name, args[0])
             if func_name == "imageLoad" and args:
@@ -3248,6 +3486,9 @@ class HLSLCodeGen:
             if interpolation_call is not None:
                 return interpolation_call
 
+            if func_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_hlsl_wave_intrinsic_call(func_name, args)
+
             texture_call = self.generate_texture_call(func_name, args)
             if texture_call is not None:
                 return texture_call
@@ -3451,9 +3692,16 @@ class HLSLCodeGen:
             obj = self.generate_expression_with_expected(obj_expr, None)
             return f"{obj}.{member}"
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
-            condition = self.generate_expression(getattr(expr, "condition", ""))
-            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
-            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
+            expected_type = self.current_expression_expected_type
+            condition = self.generate_expression_with_expected(
+                getattr(expr, "condition", ""), "bool"
+            )
+            true_expr = self.generate_expression_with_expected(
+                getattr(expr, "true_expr", ""), expected_type
+            )
+            false_expr = self.generate_expression_with_expected(
+                getattr(expr, "false_expr", ""), expected_type
+            )
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
@@ -3473,17 +3721,7 @@ class HLSLCodeGen:
         return f"{intrinsic}()"
 
     def synchronization_intrinsic_name(self, func_name):
-        return {
-            "barrier": "GroupMemoryBarrierWithGroupSync",
-            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
-            "groupMemoryBarrier": "GroupMemoryBarrier",
-            "memoryBarrierShared": "GroupMemoryBarrier",
-            "deviceMemoryBarrier": "DeviceMemoryBarrier",
-            "memoryBarrierBuffer": "DeviceMemoryBarrier",
-            "memoryBarrierImage": "DeviceMemoryBarrier",
-            "memoryBarrier": "AllMemoryBarrier",
-            "allMemoryBarrier": "AllMemoryBarrier",
-        }.get(func_name)
+        return self.HLSL_SYNCHRONIZATION_INTRINSICS.get(func_name)
 
     def interpolation_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
@@ -3512,19 +3750,261 @@ class HLSLCodeGen:
 
     def generate_wave_op_expression(self, expr):
         operation = getattr(expr, "operation", "")
+        return self.generate_hlsl_wave_intrinsic_call(operation, expr.arguments)
+
+    def generate_hlsl_wave_intrinsic_call(self, operation, args):
         expected_args = self.HLSL_WAVE_INTRINSIC_ARITIES.get(operation)
         if expected_args is None:
             raise ValueError(f"DirectX wave intrinsic '{operation}' is not recognized")
 
-        actual_args = len(getattr(expr, "arguments", []))
+        actual_args = len(args)
         if actual_args != expected_args:
             raise ValueError(
                 f"DirectX wave intrinsic '{operation}' requires "
                 f"{expected_args} argument(s), got {actual_args}"
             )
 
-        args_str = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
+        self.validate_hlsl_wave_intrinsic_arguments(operation, args)
+        self.validate_hlsl_wave_intrinsic_result_context(operation, args)
+        args_str = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{operation}({args_str})"
+
+    def hlsl_wave_intrinsic_return_type(self, operation, args):
+        if operation in self.HLSL_WAVE_UINT_RESULT_INTRINSICS:
+            return "uint"
+        if operation == "WaveActiveAllEqual" and args:
+            return self.hlsl_wave_all_equal_return_type(args[0])
+        if operation in self.HLSL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "bool"
+        if operation in self.HLSL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4"
+        if operation in self.HLSL_WAVE_VALUE_RESULT_INTRINSICS and args:
+            return self.expression_result_type(args[0])
+        return None
+
+    def hlsl_wave_argument_base_type(self, argument):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return None, "", None
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        return base_type, array_suffix, mapped_type
+
+    def hlsl_wave_value_component_type(self, argument):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return None, None
+        if array_suffix:
+            return None, mapped_type
+        if base_type in self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES or base_type == "bool":
+            return base_type, mapped_type
+        if self.is_vector_value_type(base_type):
+            return self.vector_component_type(base_type), mapped_type
+        return None, mapped_type
+
+    def hlsl_wave_basic_value_component_type(self, argument):
+        component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
+        if component_type is not None or mapped_type is None:
+            return component_type, mapped_type
+
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if array_suffix:
+            return None, mapped_type
+        matrix_shape = self.hlsl_matrix_shape(base_type)
+        if matrix_shape:
+            return matrix_shape[0], mapped_type
+        return None, mapped_type
+
+    def hlsl_wave_all_equal_return_type(self, argument):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None or array_suffix:
+            return "bool"
+        if self.is_scalar_value_type(base_type):
+            return "bool"
+        if self.is_vector_value_type(base_type):
+            size = self.map_type(base_type)[-1:]
+            if size in {"2", "3", "4"}:
+                return f"bool{size}"
+        matrix_shape = self.hlsl_matrix_shape(base_type)
+        if matrix_shape:
+            _, rows, columns = matrix_shape
+            return f"bool{rows}x{columns}"
+        return "bool"
+
+    def hlsl_result_component_type(self, vtype):
+        mapped_type = self.map_type(vtype)
+        if self.is_scalar_value_type(mapped_type):
+            return mapped_type
+        if self.is_vector_value_type(mapped_type):
+            return self.vector_component_type(mapped_type)
+        matrix_shape = self.hlsl_matrix_shape(mapped_type)
+        if matrix_shape:
+            return matrix_shape[0]
+        return None
+
+    def hlsl_wave_result_context_matches(self, actual_type, expected_type):
+        if not self.hlsl_value_shape_matches(actual_type, expected_type):
+            return False
+
+        actual_component = self.hlsl_result_component_type(actual_type)
+        expected_component = self.hlsl_result_component_type(expected_type)
+        if actual_component == "bool" or expected_component == "bool":
+            return actual_component == expected_component
+        return True
+
+    def validate_hlsl_wave_intrinsic_result_context(self, operation, args):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type or expected_type == "void":
+            return
+
+        actual_type = self.hlsl_wave_intrinsic_return_type(operation, args)
+        if not actual_type:
+            return
+        if self.hlsl_wave_result_context_matches(actual_type, expected_type):
+            return
+
+        raise ValueError(
+            f"DirectX wave intrinsic '{operation}' requires "
+            f"{self.hlsl_value_type_display(actual_type)} result context, got "
+            f"{self.hlsl_value_type_display(expected_type)}"
+        )
+
+    def validate_hlsl_wave_scalar_bool_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type != "bool":
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"scalar bool, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_scalar_int_uint_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type not in {"int", "uint"}:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"scalar int or uint, got {mapped_type}"
+            )
+
+    def validate_hlsl_quad_lane_index_range(self, operation, argument):
+        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        if lane_index is None:
+            return
+        if not 0 <= lane_index <= 3:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' quad lane index must be "
+                f"in the range 0 to 3, got {lane_index}"
+            )
+
+    def validate_hlsl_wave_uint4_argument(self, operation, argument, role):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None:
+            return
+        if array_suffix or base_type != "uint4":
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"uint4, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_value_argument(
+        self,
+        operation,
+        argument,
+        role,
+        allowed_components,
+        description,
+        include_matrices=False,
+    ):
+        if include_matrices:
+            component_type, mapped_type = self.hlsl_wave_basic_value_component_type(
+                argument
+            )
+        else:
+            component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
+        if mapped_type is None:
+            return
+        if component_type not in allowed_components:
+            raise ValueError(
+                f"DirectX wave intrinsic '{operation}' {role} argument must be "
+                f"{description}, got {mapped_type}"
+            )
+
+    def validate_hlsl_wave_intrinsic_arguments(self, operation, args):
+        if operation in self.HLSL_WAVE_BOOL_ARGUMENT_INTRINSICS:
+            self.validate_hlsl_wave_scalar_bool_argument(
+                operation, args[0], "predicate"
+            )
+        elif operation in self.HLSL_WAVE_NUMERIC_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+        elif operation in self.HLSL_WAVE_INTEGER_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar or vector",
+            )
+        elif operation == "WaveActiveAllEqual":
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_BASIC_COMPONENT_TYPES,
+                "basic scalar, vector, or matrix",
+                include_matrices=True,
+            )
+        elif operation == "WaveMatch":
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_BASIC_COMPONENT_TYPES,
+                "primitive scalar, vector, or matrix",
+                include_matrices=True,
+            )
+        elif operation in self.HLSL_WAVE_LANE_READ_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+
+        if operation == "WaveReadLaneAt":
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[1], "lane index"
+            )
+        elif operation == "QuadReadLaneAt":
+            self.validate_hlsl_wave_scalar_int_uint_argument(
+                operation, args[1], "quad lane index"
+            )
+            self.validate_hlsl_quad_lane_index_range(operation, args[1])
+
+        if operation.startswith("WaveMultiPrefix"):
+            self.validate_hlsl_wave_uint4_argument(operation, args[1], "partition mask")
 
     def hlsl_buffer_helper_resource_type(self, expr):
         vtype = self.type_name_string(self.expression_result_type(expr))
@@ -3570,6 +4050,10 @@ class HLSLCodeGen:
             "4",
         }:
             return f"vector{mapped_type[-1]}"
+        matrix_shape = self.hlsl_matrix_shape(mapped_type)
+        if matrix_shape:
+            _, rows, columns = matrix_shape
+            return f"matrix{rows}x{columns}"
         return mapped_type
 
     def hlsl_value_shape_matches(self, expected_type, actual_type):
@@ -3610,6 +4094,8 @@ class HLSLCodeGen:
         helper_arg_counts = {
             "buffer_append": 2,
             "buffer_consume": 1,
+            "buffer_increment_counter": 1,
+            "buffer_decrement_counter": 1,
         }
         expected_args = helper_arg_counts.get(func_name)
         if expected_args is not None and len(args) != expected_args:
@@ -3729,6 +4215,14 @@ class HLSLCodeGen:
             )
         if func_name == "buffer_consume":
             self.validate_hlsl_buffer_consume_result_shape(resource_type)
+        if (
+            func_name in {"buffer_increment_counter", "buffer_decrement_counter"}
+            and resource_name != "RWStructuredBuffer"
+        ):
+            raise ValueError(
+                f"DirectX buffer helper '{func_name}' requires "
+                f"RWStructuredBuffer, got {resource_type}"
+            )
 
     def generate_buffer_call(self, func_name, args):
         """Render canonical CrossGL buffer operations as HLSL resource methods."""
@@ -3771,6 +4265,12 @@ class HLSLCodeGen:
         if func_name == "buffer_consume" and args:
             buffer = self.generate_expression(args[0])
             return f"{buffer}.Consume()"
+        if func_name == "buffer_increment_counter" and args:
+            buffer = self.generate_expression(args[0])
+            return f"{buffer}.IncrementCounter()"
+        if func_name == "buffer_decrement_counter" and args:
+            buffer = self.generate_expression(args[0])
+            return f"{buffer}.DecrementCounter()"
         if func_name == "buffer_dimensions" and len(args) >= 2:
             buffer = self.generate_expression(args[0])
             dimensions = ", ".join(self.generate_expression(arg) for arg in args[1:])
@@ -4452,6 +4952,18 @@ class HLSLCodeGen:
         )
         return not self.texture_gather_compare_offset_supported(texture_type)
 
+    def texture_gather_compare_call_is_diagnostic_only(self, func_name, texture_type):
+        if not is_texture_gather_compare_operation(func_name) or texture_type is None:
+            return False
+        if self.texture_gather_compare_offset_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_gather_supported(texture_type)
+
     def texture_gather_call_is_diagnostic_only(self, func_name, texture_type):
         if func_name != "textureGather" or texture_type is None:
             return False
@@ -4541,9 +5053,7 @@ class HLSLCodeGen:
             func_name, texture_type
         ):
             return True
-        if self.texture_gather_compare_offset_call_is_diagnostic_only(
-            func_name, texture_type
-        ):
+        if self.texture_gather_compare_call_is_diagnostic_only(func_name, texture_type):
             return True
         if self.texture_gather_call_is_diagnostic_only(func_name, texture_type):
             return True
@@ -4599,7 +5109,7 @@ class HLSLCodeGen:
                     func_name, global_texture_types.get(texture_name)
                 ):
                     continue
-                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                if self.texture_gather_compare_call_is_diagnostic_only(
                     func_name, global_texture_types.get(texture_name)
                 ):
                     continue
@@ -5069,7 +5579,7 @@ class HLSLCodeGen:
                     texture_func, texture_param_types[texture_name]
                 ):
                     continue
-                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                if self.texture_gather_compare_call_is_diagnostic_only(
                     texture_func, texture_param_types[texture_name]
                 ):
                     continue
@@ -5348,6 +5858,101 @@ class HLSLCodeGen:
             return getattr(attr, "arguments", []) or []
         return []
 
+    def hlsl_waveops_include_helper_lanes_attribute(self, attr):
+        attr_name = str(getattr(attr, "name", ""))
+        normalized = attr_name.lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized == "waveopsincludehelperlanes"
+
+    def hlsl_wave_size_attribute(self, attr):
+        attr_name = str(getattr(attr, "name", ""))
+        normalized = attr_name.lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized == "wavesize"
+
+    def hlsl_wave_size_lane_value(self, argument, label):
+        lane_count = self.hlsl_int_literal_value(argument)
+        if lane_count is None:
+            raise ValueError(
+                f"DirectX WaveSize attribute {label} requires an immediate "
+                "integer argument"
+            )
+        if lane_count not in self.HLSL_WAVE_SIZE_LANE_COUNTS:
+            raise ValueError(
+                f"DirectX WaveSize attribute {label} lane count must be one of "
+                "4, 8, 16, 32, 64, or 128"
+            )
+        return lane_count
+
+    def generate_hlsl_waveops_include_helper_lanes_attribute(self, func, shader_type):
+        found = False
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_waveops_include_helper_lanes_attribute(attr):
+                continue
+            found = True
+            arguments = getattr(attr, "arguments", []) or []
+            if arguments:
+                raise ValueError(
+                    "DirectX WaveOpsIncludeHelperLanes attribute does not "
+                    "accept argument(s)"
+                )
+
+        if not found:
+            return ""
+        if shader_type != "fragment":
+            raise ValueError(
+                "DirectX WaveOpsIncludeHelperLanes attribute is only valid on "
+                "fragment/pixel shader entry points"
+            )
+        return "[WaveOpsIncludeHelperLanes]\n"
+
+    def generate_hlsl_wave_size_attribute(self, func, shader_type):
+        found = False
+        wave_size_values = None
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_wave_size_attribute(attr):
+                continue
+            found = True
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) not in {1, 2, 3}:
+                raise ValueError(
+                    "DirectX WaveSize attribute requires 1, 2, or 3 arguments"
+                )
+
+            labels = (
+                ("lane count",)
+                if len(arguments) == 1
+                else ("minimum", "maximum", "preferred")
+            )
+            wave_size_values = [
+                self.hlsl_wave_size_lane_value(argument, labels[index])
+                for index, argument in enumerate(arguments)
+            ]
+            if len(wave_size_values) >= 2 and wave_size_values[0] > wave_size_values[1]:
+                raise ValueError(
+                    "DirectX WaveSize attribute minimum lane count must be "
+                    "less than or equal to maximum lane count"
+                )
+            if len(wave_size_values) == 3 and not (
+                wave_size_values[0] <= wave_size_values[2] <= wave_size_values[1]
+            ):
+                raise ValueError(
+                    "DirectX WaveSize attribute preferred lane count must be "
+                    "between minimum and maximum lane counts"
+                )
+
+        if not found:
+            return ""
+        if shader_type != "compute":
+            raise ValueError(
+                "DirectX WaveSize attribute is only valid on compute shader "
+                "entry points"
+            )
+        arguments_text = ", ".join(str(value) for value in wave_size_values)
+        return f"[WaveSize({arguments_text})]\n"
+
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
         value = self.hlsl_stage_attribute_argument(func, expected_name)
         if value is None:
@@ -5382,8 +5987,33 @@ class HLSLCodeGen:
         except ValueError:
             return None
 
+    def hlsl_float_literal_value(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "value"):
+            value = value.value
+        elif hasattr(value, "name"):
+            value = value.name
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+
+        text = str(value).strip().strip('"').replace("_", "")
+        if not text:
+            return None
+        while text and text[-1] in {"f", "F"}:
+            text = text[:-1]
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
     def hlsl_stage_attribute_int_argument(self, func, expected_name):
         return self.hlsl_int_literal_value(
+            self.hlsl_stage_attribute_argument(func, expected_name)
+        )
+
+    def hlsl_stage_attribute_float_argument(self, func, expected_name):
+        return self.hlsl_float_literal_value(
             self.hlsl_stage_attribute_argument(func, expected_name)
         )
 
@@ -5608,6 +6238,31 @@ class HLSLCodeGen:
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must be at most "
                 f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
+            )
+
+    def validate_hlsl_max_tess_factor_value(self, func, shader_type):
+        if "maxtessfactor" not in self.hlsl_stage_attribute_names(func):
+            return
+
+        if shader_type != "tessellation_control":
+            raise ValueError(
+                f"DirectX {shader_type or 'helper'} stage maxtessfactor "
+                "attribute is only valid on tessellation_control stages"
+            )
+
+        max_tess_factor = self.hlsl_stage_attribute_float_argument(
+            func, "maxtessfactor"
+        )
+        max_tess_factor_text = self.hlsl_stage_attribute_argument(func, "maxtessfactor")
+        if max_tess_factor is None:
+            raise ValueError(
+                "DirectX tessellation_control stage maxtessfactor "
+                f"'{max_tess_factor_text}' must be a numeric literal"
+            )
+        if not (1.0 <= max_tess_factor <= 64.0):
+            raise ValueError(
+                "DirectX tessellation_control stage maxtessfactor "
+                f"({max_tess_factor_text}) must be in the range 1.0..64.0"
             )
 
     def validate_hlsl_max_vertex_count_value(self, func, shader_type):
@@ -5933,6 +6588,23 @@ class HLSLCodeGen:
             self.validate_hlsl_exact_semantic_type(
                 parameters, shader_type, semantic, "uint3", "uint3"
             )
+
+    def validate_hlsl_mesh_view_id_system_value(self, parameters, shader_type):
+        if not any(
+            self.hlsl_parameter_has_semantic(parameter, "SV_ViewID")
+            for parameter in parameters
+        ):
+            return
+
+        if shader_type in {"task", "amplification", "object"}:
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot use SV_ViewID; "
+                "SV_ViewID is only valid as a mesh stage input"
+            )
+
+        self.validate_hlsl_exact_semantic_type(
+            parameters, shader_type, "SV_ViewID", "uint", "scalar uint"
+        )
 
     def validate_hlsl_compute_system_value_types(self, parameters):
         self.validate_hlsl_thread_system_value_types(parameters, "compute")
@@ -6309,6 +6981,86 @@ class HLSLCodeGen:
                 f"scalar floating, got {self.map_type(argument_type)}"
             )
 
+    def validate_hlsl_ray_instance_inclusion_mask_argument(
+        self, argument, shader_type, operation
+    ):
+        self.validate_hlsl_scalar_int_uint_expression(
+            argument,
+            f"DirectX {shader_type} {operation} instance inclusion mask argument",
+        )
+        mask_value = self.literal_int_value(argument, self.literal_int_constants)
+        if mask_value is None or 0 <= mask_value <= 0xFF:
+            return
+        raise ValueError(
+            f"DirectX {shader_type} {operation} instance inclusion mask argument "
+            f"must be in the range 0 to 255, got {mask_value}"
+        )
+
+    def hlsl_ray_flag_literal_constants(self):
+        constants = dict(self.HLSL_RAY_FLAG_VALUES)
+        constants.update(self.literal_int_constants)
+        return constants
+
+    def hlsl_ray_flag_literal_int_value(self, expr):
+        constants = self.hlsl_ray_flag_literal_constants()
+        value = self.literal_int_value(expr, constants)
+        if value is not None:
+            return value
+
+        class_name = expr.__class__.__name__
+        if "UnaryOp" in class_name:
+            operand = self.hlsl_ray_flag_literal_int_value(
+                getattr(expr, "operand", None)
+            )
+            if operand is None:
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator == "~":
+                return ~operand
+            return None
+
+        if "BinaryOp" not in class_name:
+            return None
+
+        left = self.hlsl_ray_flag_literal_int_value(getattr(expr, "left", None))
+        right = self.hlsl_ray_flag_literal_int_value(getattr(expr, "right", None))
+        if left is None or right is None:
+            return None
+
+        operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if operator == "|":
+            return left | right
+        if operator == "&":
+            return left & right
+        if operator == "^":
+            return left ^ right
+        if operator == "<<":
+            return left << right
+        if operator == ">>":
+            return left >> right
+        return None
+
+    def validate_hlsl_ray_flags_argument(self, argument, shader_type, operation):
+        diagnostic = f"DirectX {shader_type} {operation} ray flags argument"
+        self.validate_hlsl_scalar_int_uint_expression(argument, diagnostic)
+
+        flags = self.hlsl_ray_flag_literal_int_value(argument)
+        if flags is None:
+            return
+        if flags < 0 or flags & ~self.HLSL_RAY_FLAG_KNOWN_MASK:
+            raise ValueError(
+                f"{diagnostic} may only use known RAY_FLAG bits "
+                f"0x0 to 0x{self.HLSL_RAY_FLAG_KNOWN_MASK:X}, got {flags}"
+            )
+
+        for group in self.HLSL_RAY_FLAG_MUTUALLY_EXCLUSIVE_GROUPS:
+            active = [name for name in group if flags & self.HLSL_RAY_FLAG_VALUES[name]]
+            if len(active) > 1:
+                raise ValueError(
+                    f"{diagnostic} combines mutually exclusive ray flags: "
+                    f"{', '.join(active)}"
+                )
+
     def validate_hlsl_trace_ray_arguments(self, args, shader_type):
         self.validate_hlsl_trace_ray_exact_type_argument(
             args[0],
@@ -6316,9 +7068,8 @@ class HLSLCodeGen:
             "acceleration structure",
             "RaytracingAccelerationStructure",
         )
+        self.validate_hlsl_ray_flags_argument(args[1], shader_type, "TraceRay")
         for index, role in (
-            (1, "ray flags"),
-            (2, "instance inclusion mask"),
             (3, "ray contribution to hit group index"),
             (4, "geometry contribution multiplier"),
             (5, "miss shader index"),
@@ -6326,6 +7077,9 @@ class HLSLCodeGen:
             self.validate_hlsl_scalar_int_uint_expression(
                 args[index], f"DirectX {shader_type} TraceRay {role} argument"
             )
+        self.validate_hlsl_ray_instance_inclusion_mask_argument(
+            args[2], shader_type, "TraceRay"
+        )
         if len(args) == 8:
             self.validate_hlsl_trace_ray_exact_type_argument(
                 args[6], shader_type, "ray descriptor", "RayDesc"
@@ -6393,15 +7147,15 @@ class HLSLCodeGen:
                 "acceleration structure",
                 "RaytracingAccelerationStructure",
             )
-            self.validate_hlsl_scalar_int_uint_expression(
+            self.validate_hlsl_ray_flags_argument(
                 args[1],
-                f"DirectX {shader_type} RayQuery.TraceRayInline ray flags argument",
+                shader_type,
+                "RayQuery.TraceRayInline",
             )
-            self.validate_hlsl_scalar_int_uint_expression(
+            self.validate_hlsl_ray_instance_inclusion_mask_argument(
                 args[2],
-                "DirectX "
-                f"{shader_type} RayQuery.TraceRayInline instance inclusion mask "
-                "argument",
+                shader_type,
+                "RayQuery.TraceRayInline",
             )
             self.validate_hlsl_ray_exact_type_argument(
                 args[3],
@@ -6507,6 +7261,62 @@ class HLSLCodeGen:
                 self.validate_hlsl_ray_query_call_arguments(
                     operation, query_expr, args, shader_type
                 )
+        finally:
+            self.local_variable_types = previous_local_variable_types
+
+    def hlsl_nonuniform_resource_index_return_type(self, args):
+        if len(args) != 1:
+            return "uint"
+
+        argument_type = self.expression_result_type(args[0])
+        if argument_type is None:
+            return "uint"
+
+        mapped_type = self.map_type(argument_type)
+        base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if not array_suffix and base_type in {"int", "uint"}:
+            return base_type
+        return "uint"
+
+    def validate_hlsl_nonuniform_resource_index_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            if self.function_call_name(node) != "NonUniformResourceIndex":
+                continue
+            calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+
+        if not calls:
+            return
+
+        previous_local_variable_types = self.local_variable_types
+        self.local_variable_types = {
+            **previous_local_variable_types,
+            **self.function_scope_variable_types(func),
+        }
+        try:
+            for args in calls:
+                if len(args) != 1:
+                    raise ValueError(
+                        "DirectX NonUniformResourceIndex requires exactly "
+                        f"1 argument, got {len(args)}"
+                    )
+
+                argument_type = self.expression_result_type(args[0])
+                if argument_type is None:
+                    continue
+                argument_type_name = self.type_name_string(argument_type)
+                if argument_type_name in {"let", "auto"}:
+                    continue
+
+                mapped_type = self.map_type(argument_type_name)
+                base_type, array_suffix = split_array_type_suffix(mapped_type)
+                if array_suffix or base_type not in {"int", "uint"}:
+                    raise ValueError(
+                        "DirectX NonUniformResourceIndex index argument must be "
+                        f"scalar int or uint, got {mapped_type}"
+                    )
         finally:
             self.local_variable_types = previous_local_variable_types
 
@@ -6818,6 +7628,7 @@ class HLSLCodeGen:
 
         if shader_type in {"mesh", "task", "amplification", "object"}:
             self.validate_hlsl_thread_system_value_types(parameters, shader_type)
+            self.validate_hlsl_mesh_view_id_system_value(parameters, shader_type)
 
     def validate_hlsl_geometry_stream_output_semantics(self, parameters):
         stream_types = {"PointStream", "LineStream", "TriangleStream"}
@@ -8020,6 +8831,72 @@ class HLSLCodeGen:
                 f"InputPatch control point count ({hull_control_points})"
             )
 
+    def hlsl_semantic_key(self, semantic):
+        mapped_semantic = self.semantic_map.get(semantic, semantic)
+        return str(mapped_semantic).lower()
+
+    def hlsl_struct_member_declared_semantic(self, member):
+        semantic = self.semantic_from_struct_member(member)
+        if semantic is not None:
+            return semantic
+
+        name_semantics = {
+            "view": "gl_ViewID",
+            "layer": "gl_Layer",
+            "viewport": "gl_ViewportIndex",
+        }
+        return name_semantics.get(getattr(member, "name", ""))
+
+    def hlsl_can_default_fragment_input_semantic(self, member_type):
+        type_name = self.type_name_string(member_type)
+        if not type_name:
+            return False
+
+        base_type, _array_size = parse_array_type(str(type_name))
+        mapped_type = self.map_type(base_type)
+        if mapped_type in self.structs_by_name:
+            return False
+
+        return not (
+            self.is_resource_parameter_type(mapped_type)
+            or self.is_hlsl_readonly_buffer_type(mapped_type)
+            or self.is_hlsl_uav_buffer_type(mapped_type)
+        )
+
+    def hlsl_default_fragment_input_member_semantics(self, struct_node):
+        if (
+            getattr(struct_node, "name", None)
+            not in self.fragment_entry_input_struct_names
+        ):
+            return {}
+
+        used_semantics = set()
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.hlsl_struct_member_declared_semantic(member)
+            if semantic is not None:
+                used_semantics.add(self.hlsl_semantic_key(semantic))
+
+        defaults = {}
+        next_texcoord = 0
+        for member in getattr(struct_node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            if self.hlsl_struct_member_declared_semantic(member) is not None:
+                continue
+            if not self.hlsl_can_default_fragment_input_semantic(
+                self.hlsl_struct_member_type_name(member)
+            ):
+                continue
+
+            while self.hlsl_semantic_key(f"TEXCOORD{next_texcoord}") in used_semantics:
+                next_texcoord += 1
+            semantic = f"TEXCOORD{next_texcoord}"
+            defaults[member_name] = semantic
+            used_semantics.add(self.hlsl_semantic_key(semantic))
+            next_texcoord += 1
+        return defaults
+
     def hlsl_return_struct(self, func):
         return_type = self.type_name_string(
             getattr(func, "return_type", getattr(func, "vtype", None))
@@ -8091,7 +8968,20 @@ class HLSLCodeGen:
     ):
         return_struct = self.hlsl_return_struct(patch_function)
         if return_struct is None:
-            return
+            return_type = self.type_name_string(
+                getattr(
+                    patch_function,
+                    "return_type",
+                    getattr(patch_function, "vtype", None),
+                )
+            )
+            raise ValueError(
+                "DirectX tessellation_control stage patchconstantfunc "
+                f"'{patch_function_name}' must return a struct containing "
+                "SV_TessFactor member data; direct returns such as "
+                f"'{return_type or '<unknown>'}' cannot represent HLSL "
+                "tessellation factor arrays"
+            )
 
         semantics = self.hlsl_struct_semantics(return_struct)
         if "sv_tessfactor" not in semantics:
@@ -8255,6 +9145,7 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_stage_requirements(self, func, shader_type):
+        self.validate_hlsl_max_tess_factor_value(func, shader_type)
         self.validate_hlsl_mesh_output_topology(func, shader_type)
 
         required_attributes = {
@@ -8368,6 +9259,20 @@ class HLSLCodeGen:
             if entry_point is not None:
                 functions.append(entry_point)
         return functions
+
+    def collect_hlsl_fragment_entry_input_struct_names(self, ast, target_stage=None):
+        if not stage_matches(target_stage, "fragment"):
+            return set()
+
+        struct_names = set()
+        for func in self.hlsl_stage_entry_functions(ast, "fragment"):
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                struct_name = self.hlsl_parameter_user_struct_type(parameter)
+                if struct_name is not None:
+                    struct_names.add(struct_name)
+        return struct_names
 
     def hlsl_program_hull_output_control_points(self, ast):
         counts = {
@@ -8709,7 +9614,9 @@ class HLSLCodeGen:
         return mapped_type in {"SamplerState", "SamplerComparisonState"}
 
     def is_texture_type(self, vtype):
-        return self.map_type(self.resource_base_type(vtype)).startswith("Texture")
+        return self.map_type(self.resource_base_type(vtype)).startswith(
+            ("Texture", "FeedbackTexture")
+        )
 
     def is_image_type(self, vtype):
         return self.map_type(self.resource_base_type(vtype)).startswith(
@@ -8926,11 +9833,16 @@ class HLSLCodeGen:
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if (
                 mapped_type.startswith("Texture")
+                or self.is_hlsl_feedback_texture_type(mapped_type)
                 or self.is_multisample_storage_image_resource_type(mapped_type)
                 or self.is_hlsl_acceleration_structure_type(mapped_type)
             ):
-                prefix = "t"
-                attribute_names = {"binding", "texture"}
+                if self.is_hlsl_feedback_texture_type(mapped_type):
+                    prefix = "u"
+                    attribute_names = {"binding", "texture", "uav"}
+                else:
+                    prefix = "t"
+                    attribute_names = {"binding", "texture"}
             elif self.is_hlsl_rw_texture_type(mapped_type):
                 prefix = "u"
                 attribute_names = {"binding", "texture", "uav"}
@@ -9354,18 +10266,40 @@ class HLSLCodeGen:
             self.map_type,
         )
 
+    def hlsl_atomic_result_expected_label(self, expected_type):
+        type_name = self.type_name_string(expected_type)
+        if not type_name:
+            return None
+        expected_kind = numeric_scalar_type_kind(
+            type_name,
+            self.type_name_string,
+            self.map_type,
+        )
+        if expected_kind is not None:
+            return expected_kind
+        return self.map_type(type_name)
+
     def validate_image_atomic_result_type(
         self, func_name, image_type, component_kind, image_format
     ):
-        expected_kind = image_atomic_result_kind_mismatch(
-            self.scalar_expected_kind(), component_kind
+        expected_label = self.hlsl_atomic_result_expected_label(
+            self.current_expression_expected_type
         )
-        if expected_kind is None:
+        if expected_label is None:
+            return
+        expected_kind = image_atomic_result_kind_mismatch(
+            expected_label, component_kind
+        )
+        if expected_kind is None and expected_label == component_kind:
             return
         format_label = image_format or self.resource_base_type(image_type)
         raise ValueError(
             image_atomic_result_kind_error(
-                "DirectX", func_name, format_label, component_kind, expected_kind
+                "DirectX",
+                func_name,
+                format_label,
+                component_kind,
+                expected_kind or expected_label,
             )
         )
 
@@ -10926,6 +11860,12 @@ class HLSLCodeGen:
             return self.unsupported_multisample_texture_gather_compare_call(
                 func_name, texture_type
             )
+        if not is_texture_gather_compare_offset_operation(
+            func_name
+        ) and not self.texture_gather_supported(texture_type):
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_gather_capability_error()
+            )
 
         compare = self.generate_expression(extra_args[0])
         if func_name == "textureGatherCompare":
@@ -11317,13 +12257,14 @@ class HLSLCodeGen:
         }
 
     def validate_hlsl_typed_buffer_atomic_result_context(self, parts, expected_type):
+        expected_label = self.hlsl_atomic_result_expected_label(expected_type)
+        if expected_label is None:
+            return
         expected_kind = image_atomic_result_kind_mismatch(
-            numeric_scalar_type_kind(
-                expected_type, self.type_name_string, self.map_type
-            ),
+            expected_label,
             parts["target_kind"],
         )
-        if expected_kind is None:
+        if expected_kind is None and expected_label == parts["target_kind"]:
             return
 
         target_type = (
@@ -11332,7 +12273,7 @@ class HLSLCodeGen:
         raise ValueError(
             f"DirectX typed buffer atomic '{parts['func_name']}' requires "
             f"{parts['target_kind']} result context for {target_type} target: "
-            f"expected {expected_kind}"
+            f"expected {expected_kind or expected_label}"
         )
 
     def hlsl_typed_buffer_atomic_original_is_lvalue(self, expr):
@@ -12590,6 +13531,10 @@ class HLSLCodeGen:
         for attr in func.attributes:
             if self.hlsl_stage_attribute_name(attr):
                 continue
+            if self.hlsl_waveops_include_helper_lanes_attribute(attr):
+                continue
+            if self.hlsl_wave_size_attribute(attr):
+                continue
             if (
                 is_image_format_attribute(attr)
                 or self.is_resource_binding_attribute(attr)
@@ -13792,6 +14737,9 @@ class HLSLCodeGen:
             ("RWTexture", "RasterizerOrderedTexture")
         )
 
+    def is_hlsl_feedback_texture_type(self, vtype):
+        return self.hlsl_resource_type_name(vtype).startswith("FeedbackTexture")
+
     def is_hlsl_readonly_buffer_type(self, vtype):
         return self.hlsl_resource_type_name(vtype) in {
             "Buffer",
@@ -13811,9 +14759,277 @@ class HLSLCodeGen:
             "RasterizerOrderedByteAddressBuffer",
         }
 
+    def is_hlsl_synchronization_builtin_call_name(self, callee, shadowed_names=None):
+        if callee not in self.HLSL_SYNCHRONIZATION_INTRINSICS:
+            return False
+        if shadowed_names is None:
+            shadowed_names = getattr(self, "function_return_types", {})
+        return callee not in shadowed_names
+
+    def collect_hlsl_synchronization_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if self.is_hlsl_synchronization_builtin_call_name(
+                    callee, named_functions
+                ):
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_builtin = requirements.get(callee)
+                    if required_builtin is not None:
+                        requirements[func_name] = required_builtin
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_synchronization_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if self.is_hlsl_synchronization_builtin_call_name(callee):
+                calls.append((callee, callee))
+            elif callee in self.hlsl_synchronization_function_names:
+                calls.append((callee, self.hlsl_synchronization_function_names[callee]))
+        return calls
+
+    def hlsl_synchronization_supported_stages(self, builtin_name):
+        intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS.get(builtin_name)
+        compute_like_stages = {"compute", "mesh", "task", "amplification", "object"}
+        if intrinsic == "DeviceMemoryBarrier":
+            return compute_like_stages | {"fragment"}
+        return compute_like_stages
+
+    def hlsl_synchronization_stage_description(self, stages):
+        if stages == {"compute", "mesh", "task", "amplification", "object"}:
+            return "compute, mesh, or amplification/task stages"
+        if stages == {
+            "compute",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "fragment",
+        }:
+            return "fragment/pixel, compute, mesh, or amplification/task stages"
+        return ", ".join(sorted(stages))
+
+    def validate_hlsl_synchronization_stage_calls(self, func, shader_type):
+        if shader_type is None:
+            return
+
+        calls = self.hlsl_synchronization_calls(func)
+        for callee, builtin_name in calls:
+            supported_stages = self.hlsl_synchronization_supported_stages(builtin_name)
+            if shader_type in supported_stages:
+                continue
+
+            intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS[builtin_name]
+            stage_description = self.hlsl_synchronization_stage_description(
+                supported_stages
+            )
+            if callee == builtin_name:
+                detail = (
+                    f"'{builtin_name}' lowers to {intrinsic}, which is only "
+                    f"valid in {stage_description}"
+                )
+            else:
+                detail = (
+                    f"'{callee}' reaches '{builtin_name}', which lowers to "
+                    f"{intrinsic} and is only valid in {stage_description}"
+                )
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot call {callee}; {detail}"
+            )
+
+    def collect_hlsl_pixel_only_feedback_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if callee in self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS:
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_helper = requirements.get(callee)
+                    if required_helper is not None:
+                        requirements[func_name] = required_helper
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_pixel_only_feedback_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if callee in self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS:
+                calls.append((callee, callee))
+            elif callee in self.hlsl_pixel_only_feedback_function_names:
+                calls.append(
+                    (callee, self.hlsl_pixel_only_feedback_function_names[callee])
+                )
+        return calls
+
+    def validate_hlsl_feedback_texture_stage_calls(self, func, shader_type):
+        if shader_type in {None, "fragment"}:
+            return
+
+        calls = self.hlsl_pixel_only_feedback_calls(func)
+        if not calls:
+            return
+
+        callee, helper_name = calls[0]
+        method_name = self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS[helper_name]
+        if callee == helper_name:
+            detail = (
+                f"{method_name} is only valid in fragment/pixel stages; "
+                f"use write_sampler_feedback_grad or write_sampler_feedback_level "
+                f"from DirectX {shader_type} stages"
+            )
+        else:
+            detail = (
+                f"'{callee}' reaches {method_name} via {helper_name}, which is "
+                "only valid in fragment/pixel stages"
+            )
+        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
+
+    def generate_hlsl_feedback_write_call(self, func_name, args):
+        descriptor = self.HLSL_FEEDBACK_WRITE_HELPERS.get(func_name)
+        if descriptor is None:
+            return None
+
+        method_name, allowed_arities = descriptor
+        if len(args) not in allowed_arities:
+            expected = " or ".join(str(count) for count in sorted(allowed_arities))
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+
+        self.validate_hlsl_feedback_write_arguments(func_name, method_name, args)
+        feedback = self.generate_expression(args[0])
+        rendered_args = [self.generate_expression(arg) for arg in args[1:]]
+        return f"{feedback}.{method_name}({', '.join(rendered_args)})"
+
+    def validate_hlsl_feedback_write_arguments(self, func_name, method_name, args):
+        feedback_type = self.texture_resource_type(args[0])
+        feedback_base = self.hlsl_resource_type_name(feedback_type)
+        if not feedback_base.startswith("FeedbackTexture"):
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' requires "
+                f"FeedbackTexture2D or FeedbackTexture2DArray receiver, got "
+                f"{feedback_type or self.type_name_string(self.expression_result_type(args[0]))}"
+            )
+
+        sampled_type = self.texture_resource_type(args[1])
+        sampled_base = self.hlsl_resource_type_name(sampled_type)
+        if sampled_base not in {"Texture2D", "Texture2DArray"}:
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' sampled texture argument "
+                f"must be Texture2D or Texture2DArray, got "
+                f"{sampled_type or self.type_name_string(self.expression_result_type(args[1]))}"
+            )
+
+        expected_sampled_base = (
+            "Texture2DArray"
+            if feedback_base == "FeedbackTexture2DArray"
+            else "Texture2D"
+        )
+        if sampled_base != expected_sampled_base:
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' receiver "
+                f"{feedback_base} requires paired {expected_sampled_base}, got "
+                f"{sampled_base}"
+            )
+
+        sampler_type = self.expression_result_type(args[2])
+        mapped_sampler_type = self.map_type(self.resource_base_type(sampler_type))
+        if sampler_type is not None and mapped_sampler_type != "SamplerState":
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' sampler argument must be "
+                f"SamplerState, got {mapped_sampler_type}"
+            )
+
+        expected_dimension = 3 if sampled_base == "Texture2DArray" else 2
+        self.validate_hlsl_feedback_coordinate_dimension(
+            func_name, args[3], "location", expected_dimension
+        )
+        if method_name == "WriteSamplerFeedbackGrad":
+            self.validate_hlsl_feedback_coordinate_dimension(
+                func_name, args[4], "ddx", expected_dimension
+            )
+            self.validate_hlsl_feedback_coordinate_dimension(
+                func_name, args[5], "ddy", expected_dimension
+            )
+
+    def validate_hlsl_feedback_coordinate_dimension(
+        self, func_name, argument, role, expected_dimension
+    ):
+        arg_type = self.expression_result_type(argument)
+        dimension = floating_coordinate_dimension_from_type_name(
+            self.type_name_string(arg_type), self.map_type
+        )
+        if dimension is None or dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"DirectX feedback helper '{func_name}' {role} argument must be "
+            f"float{expected_dimension}, got {self.type_name_string(arg_type)}"
+        )
+
     def generate_texture_call(self, func_name, args):
         if not func_name:
             return None
+
+        feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
+        if feedback_call is not None:
+            return feedback_call
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)
@@ -14134,6 +15350,13 @@ class HLSLCodeGen:
         if "<" in vtype_str and vtype_str.endswith(">"):
             base_type, generic_args = vtype_str.split("<", 1)
             generic_args = generic_args[:-1].strip()
+            feedback_texture_types = {
+                "feedbackTexture2D": "FeedbackTexture2D",
+                "feedbackTexture2DArray": "FeedbackTexture2DArray",
+            }
+            feedback_texture_type = feedback_texture_types.get(base_type)
+            if feedback_texture_type and generic_args:
+                return f"{feedback_texture_type}<{generic_args}>"
             if "," not in generic_args:
                 return f"{base_type}<{self.map_type(generic_args)}>"
 

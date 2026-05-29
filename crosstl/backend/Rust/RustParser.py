@@ -1378,7 +1378,9 @@ class RustParser:
         statements = []
 
         while self.current_token[0] != "RBRACE" and self.current_token[0] != "EOF":
-            if self.current_token[0] == "LIFETIME":
+            if self.current_starts_function():
+                statements.append(self.parse_function_with_qualifiers())
+            elif self.current_token[0] == "LIFETIME":
                 statements.append(self.parse_labeled_statement())
             elif self.current_token[0] == "LET":
                 stmt = self.parse_let_statement()
@@ -2614,6 +2616,8 @@ class RustParser:
         return args
 
     def peek_is_statement(self):
+        if self.current_starts_function():
+            return True
         if self.current_token[0] == "CONST":
             return self.peek_token_type() != "LBRACE"
         if self.current_token[0] == "STATIC":
@@ -2633,6 +2637,8 @@ class RustParser:
         ]
 
     def parse_statement(self):
+        if self.current_starts_function():
+            return self.parse_function_with_qualifiers()
         if self.current_token[0] == "LIFETIME":
             return self.parse_labeled_statement()
         elif self.current_token[0] == "LET":

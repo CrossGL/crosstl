@@ -14,12 +14,14 @@ from crosstl.translator.ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    BreakNode,
     ConstructorNode,
     ConstructorPatternNode,
     ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
     FunctionNode,
+    FunctionType,
     GenericParameterNode,
     GenericType,
     IdentifierNode,
@@ -28,12 +30,15 @@ from crosstl.translator.ast import (
     LambdaNode,
     LiteralPatternNode,
     LiteralNode,
+    LoopNode,
     MatchArmNode,
     MatchNode,
     MemberAccessNode,
     NamedType,
     ParameterNode,
+    PointerType,
     PrimitiveType,
+    ReferenceType,
     ReturnNode,
     ShaderNode,
     StructMemberNode,
@@ -3520,6 +3525,1831 @@ def test_struct_and_enum_derives_track_nested_non_copy_members_and_compile(tmp_p
         "#[derive(Debug, Clone, Copy, Default)]\npub enum Command" not in generated_code
     )
     assert "Submit(Wrapper)," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_pointer_and_function_type_nodes_smoke_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustTypeNodeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "read_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [ReturnNode(MemberAccessNode(IdentifierNode("value"), "count"))],
+            ),
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("value"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("value"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("value"), "count")),
+                ],
+            ),
+            FunctionNode(
+                "raw_identity",
+                PointerType(payload_type, is_mutable=True),
+                [ParameterNode("value", PointerType(payload_type, is_mutable=True))],
+                [ReturnNode(IdentifierNode("value"))],
+            ),
+            FunctionNode(
+                "apply_int",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", FunctionType(int_type, [int_type])),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn read_payload(value: &Payload) -> i32" in generated_code
+    assert "pub fn bump_payload(mut value: &mut Payload) -> i32" in generated_code
+    assert "value.count = (value.count + 1);" in generated_code
+    assert "pub fn raw_identity(value: *mut Payload) -> *mut Payload" in generated_code
+    assert "pub fn apply_int(input: i32, op: fn(i32) -> i32) -> i32" in generated_code
+    assert "ReferenceType(" not in generated_code
+    assert "PointerType(" not in generated_code
+    assert "FunctionType(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_parameter_calls_auto_borrow_and_mark_mut_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustReferenceCallBorrowSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "read_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [ReturnNode(MemberAccessNode(IdentifierNode("value"), "count"))],
+            ),
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("value"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("value"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("value"), "count")),
+                ],
+            ),
+            FunctionNode(
+                "forward_read",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("read_payload"),
+                            [IdentifierNode("value")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "forward_bump",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [IdentifierNode("value")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "call_refs",
+                int_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode("editable", payload_type, IdentifierNode("payload")),
+                    VariableNode(
+                        "before",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("read_payload"),
+                            [IdentifierNode("editable")],
+                        ),
+                    ),
+                    VariableNode(
+                        "after",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [IdentifierNode("editable")],
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            IdentifierNode("before"),
+                            "+",
+                            IdentifierNode("after"),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "let mut editable: Payload =" in generated_code
+    assert "let before: i32 = read_payload(&editable);" in generated_code
+    assert "let after: i32 = bump_payload(&mut editable);" in generated_code
+    assert "return read_payload(value);" in generated_code
+    assert "return bump_payload(value);" in generated_code
+    assert "read_payload(editable)" not in generated_code
+    assert "bump_payload(editable)" not in generated_code
+    assert "read_payload(&value)" not in generated_code
+    assert "bump_payload(&mut value)" not in generated_code
+    assert "read_payload(&editable.clone())" not in generated_code
+    assert "bump_payload(&mut editable.clone())" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_mutable_reference_call_branch_arguments_mark_all_roots_mut_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def branch_match():
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            IdentifierNode("left"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            IdentifierNode("right"),
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    ast = ShaderNode(
+        "RustMutableReferenceCallBranchArgs",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "bump_payload",
+                int_type,
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    AssignmentNode(
+                        count_of(IdentifierNode("value")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("value")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("value"))),
+                ],
+            ),
+            FunctionNode(
+                "call_mut_branch_args",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "ternaryScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [
+                                TernaryOpNode(
+                                    IdentifierNode("flag"),
+                                    IdentifierNode("left"),
+                                    IdentifierNode("right"),
+                                )
+                            ],
+                        ),
+                    ),
+                    VariableNode(
+                        "matchScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [branch_match()],
+                        ),
+                    ),
+                    VariableNode(
+                        "blockScore",
+                        int_type,
+                        FunctionCallNode(
+                            IdentifierNode("bump_payload"),
+                            [
+                                BlockNode(
+                                    [
+                                        VariableNode(
+                                            "marker",
+                                            int_type,
+                                            LiteralNode(1, int_type),
+                                        ),
+                                        ExpressionStatementNode(
+                                            branch_match(),
+                                            is_tail_expression=True,
+                                        ),
+                                    ]
+                                )
+                            ],
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            BinaryOpNode(
+                                IdentifierNode("ternaryScore"),
+                                "+",
+                                IdentifierNode("matchScore"),
+                            ),
+                            "+",
+                            IdentifierNode("blockScore"),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn call_mut_branch_args(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "let ternaryScore: i32 = bump_payload((if flag { &mut left } else { &mut right }));"
+        in generated_code
+    )
+    assert "let matchScore: i32 = bump_payload(match flag {" in generated_code
+    assert "true => {" in generated_code
+    assert "false => {" in generated_code
+    assert generated_code.count("&mut left") == 3
+    assert generated_code.count("&mut right") == 3
+    assert "let blockScore: i32 = bump_payload({" in generated_code
+    assert "let marker: i32 = 1;" in generated_code
+    assert "&mut (if flag" not in generated_code
+    assert "&mut match flag" not in generated_code
+    assert "&mut {" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_locals_and_returns_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "RustReferenceLocalSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "forward_ref",
+                ReferenceType(payload_type),
+                [ParameterNode("value", ReferenceType(payload_type))],
+                [
+                    VariableNode(
+                        "alias",
+                        ReferenceType(payload_type),
+                        IdentifierNode("value"),
+                    ),
+                    ReturnNode(IdentifierNode("alias")),
+                ],
+            ),
+            FunctionNode(
+                "forward_mut_ref",
+                ReferenceType(payload_type, is_mutable=True),
+                [ParameterNode("value", ReferenceType(payload_type, is_mutable=True))],
+                [
+                    VariableNode(
+                        "alias",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("value"),
+                    ),
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("alias"), "count"),
+                        BinaryOpNode(
+                            MemberAccessNode(IdentifierNode("alias"), "count"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(IdentifierNode("alias")),
+                ],
+            ),
+            FunctionNode(
+                "borrow_locals",
+                int_type,
+                [ParameterNode("payload", payload_type)],
+                [
+                    VariableNode(
+                        "read",
+                        ReferenceType(payload_type),
+                        IdentifierNode("payload"),
+                    ),
+                    VariableNode(
+                        "before",
+                        int_type,
+                        MemberAccessNode(IdentifierNode("read"), "count"),
+                    ),
+                    VariableNode(
+                        "editable",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("payload"),
+                    ),
+                    AssignmentNode(
+                        MemberAccessNode(IdentifierNode("editable"), "count"),
+                        BinaryOpNode(
+                            IdentifierNode("before"),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(MemberAccessNode(IdentifierNode("editable"), "count")),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "pub fn forward_ref(value: &Payload) -> &Payload" in generated_code
+    assert "let alias: &Payload = value;" in generated_code
+    assert "return alias;" in generated_code
+    assert "pub fn forward_mut_ref(value: &mut Payload) -> &mut Payload" in (
+        generated_code
+    )
+    assert "let mut alias: &mut Payload = value;" in generated_code
+    assert "return alias;" in generated_code
+    assert "pub fn borrow_locals(mut payload: Payload) -> i32" in generated_code
+    assert "let read: &Payload = &payload;" in generated_code
+    assert "let before: i32 = read.count;" in generated_code
+    assert "let mut editable: &mut Payload = &mut payload;" in generated_code
+    assert "ReferenceType(" not in generated_code
+    assert "&payload.clone()" not in generated_code
+    assert "&mut payload.clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_branches_and_mutable_places_borrow_without_clones_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    wrapper_type = NamedType("Wrapper")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def payload_member():
+        return MemberAccessNode(IdentifierNode("wrapper"), "payload")
+
+    def payload_slot():
+        return ArrayAccessNode(
+            MemberAccessNode(IdentifierNode("wrapper"), "values"),
+            IdentifierNode("index"),
+        )
+
+    ast = ShaderNode(
+        "RustReferenceBranchSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            StructNode(
+                "Wrapper",
+                [
+                    StructMemberNode("payload", payload_type),
+                    StructMemberNode("values", ArrayType(payload_type, size=2)),
+                ],
+            ),
+        ],
+        functions=[
+            FunctionNode(
+                "choose_ref",
+                ReferenceType(payload_type),
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", ReferenceType(payload_type)),
+                    ParameterNode("right", ReferenceType(payload_type)),
+                ],
+                [
+                    ReturnNode(
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "branch_local_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type),
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "branch_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        TernaryOpNode(
+                            IdentifierNode("flag"),
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(7, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "borrow_mut_places",
+                int_type,
+                [
+                    ParameterNode("wrapper", wrapper_type),
+                    ParameterNode("index", int_type),
+                ],
+                [
+                    VariableNode(
+                        "member",
+                        ReferenceType(payload_type, is_mutable=True),
+                        payload_member(),
+                    ),
+                    VariableNode(
+                        "slot",
+                        ReferenceType(payload_type, is_mutable=True),
+                        payload_slot(),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("member")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("member")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("slot")),
+                        BinaryOpNode(
+                            count_of(IdentifierNode("slot")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                    ),
+                    ReturnNode(
+                        BinaryOpNode(
+                            count_of(IdentifierNode("member")),
+                            "+",
+                            count_of(IdentifierNode("slot")),
+                        )
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn choose_ref<'a>(flag: bool, left: &'a Payload, right: &'a Payload) "
+        "-> &'a Payload"
+    ) in generated_code
+    assert "return (if flag { left } else { right });" in generated_code
+    assert "pub fn branch_local_ref(flag: bool, left: Payload, right: Payload)" in (
+        generated_code
+    )
+    assert "let selected: &Payload = (if flag { &left } else { &right });" in (
+        generated_code
+    )
+    assert (
+        "pub fn branch_local_mut_ref(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if flag { &mut left } else { &mut right });"
+    ) in generated_code
+    assert "pub fn borrow_mut_places(mut wrapper: Wrapper, index: i32)" in (
+        generated_code
+    )
+    assert "let mut member: &mut Payload = &mut wrapper.payload;" in generated_code
+    assert (
+        "let mut slot: &mut Payload = &mut wrapper.values[index as usize];"
+        in generated_code
+    )
+    assert "&(if flag" not in generated_code
+    assert "&mut (if flag" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_match_and_block_tails_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def bool_match(true_expr, false_expr):
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_expr,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_expr,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    def block_tail(expr):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    int_type,
+                    LiteralNode(1, int_type),
+                ),
+                ExpressionStatementNode(expr, is_tail_expression=True),
+            ]
+        )
+
+    ast = ShaderNode(
+        "RustReferenceMatchSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "return_match_ref",
+                ReferenceType(payload_type),
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", ReferenceType(payload_type)),
+                    ParameterNode("right", ReferenceType(payload_type)),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "match_local_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type),
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "match_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(7, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "block_match_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        block_tail(
+                            bool_match(
+                                IdentifierNode("left"),
+                                IdentifierNode("right"),
+                            )
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(11, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn return_match_ref<'a>("
+        "flag: bool, left: &'a Payload, right: &'a Payload"
+        ") -> &'a Payload"
+    ) in generated_code
+    assert "pub fn match_local_ref(flag: bool, left: Payload, right: Payload)" in (
+        generated_code
+    )
+    assert (
+        "pub fn match_local_mut_ref(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "pub fn block_match_local_mut_ref("
+        "flag: bool, mut left: Payload, mut right: Payload"
+        ")"
+    ) in generated_code
+    assert "let selected: &Payload = match flag {" in generated_code
+    assert "let mut selected: &mut Payload = match flag {" in generated_code
+    assert generated_code.count("let mut selected: &mut Payload =") == 2
+    assert "let marker: i32 = 1;" in generated_code
+    assert "&left" in generated_code
+    assert "&right" in generated_code
+    assert generated_code.count("&mut left") == 2
+    assert generated_code.count("&mut right") == 2
+    assert "return match flag {" in generated_code
+    assert "&match flag" not in generated_code
+    assert "&mut match flag" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_match_pattern_bindings_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type, payload_type]),
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", payload_type),
+                    ("backup", payload_type),
+                ],
+            ),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def selected_decl(name, declared_type, initial_value):
+        return VariableNode(name, declared_type, initial_value)
+
+    def increment_selected(name, value):
+        return AssignmentNode(
+            count_of(IdentifierNode(name)),
+            BinaryOpNode(
+                count_of(IdentifierNode(name)),
+                "+",
+                LiteralNode(value, int_type),
+            ),
+        )
+
+    def immutable_pair_choice():
+        return TernaryOpNode(
+            IdentifierNode("take_first"),
+            IdentifierNode("first"),
+            IdentifierNode("second"),
+        )
+
+    def mutable_pair_choice():
+        return TernaryOpNode(
+            IdentifierNode("take_first"),
+            IdentifierNode("first"),
+            IdentifierNode("second"),
+        )
+
+    immutable_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One", [IdentifierPatternNode("payload")]
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        IdentifierNode("payload"),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [
+                        IdentifierPatternNode("first"),
+                        IdentifierPatternNode("second"),
+                    ],
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        immutable_pair_choice(),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                StructPatternNode(
+                    "Choice::Named",
+                    {
+                        "primary": IdentifierPatternNode("primary"),
+                        "backup": IdentifierPatternNode("backup"),
+                    },
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        TernaryOpNode(
+                            IdentifierNode("take_first"),
+                            IdentifierNode("primary"),
+                            IdentifierNode("backup"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    mutable_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One", [IdentifierPatternNode("payload")]
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("payload"),
+                    ),
+                    increment_selected("selected", 3),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [
+                        IdentifierPatternNode("first"),
+                        IdentifierPatternNode("second"),
+                    ],
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        mutable_pair_choice(),
+                    ),
+                    increment_selected("selected", 5),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                StructPatternNode(
+                    "Choice::Named",
+                    {
+                        "primary": IdentifierPatternNode("primary"),
+                        "backup": IdentifierPatternNode("backup"),
+                    },
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        TernaryOpNode(
+                            IdentifierNode("take_first"),
+                            IdentifierNode("primary"),
+                            IdentifierNode("backup"),
+                        ),
+                    ),
+                    increment_selected("selected", 7),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustReferencePatternBindingSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "borrow_pattern_bindings",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("take_first", bool_type),
+                ],
+                [immutable_match],
+            ),
+            FunctionNode(
+                "borrow_mut_pattern_bindings",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("take_first", bool_type),
+                ],
+                [mutable_match],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "Choice::One(payload) =>" in generated_code
+    assert "Choice::Pair(first, second) =>" in generated_code
+    assert "Choice::Named { primary, backup } =>" in generated_code
+    assert "let selected: &Payload = &payload;" in generated_code
+    assert "let selected: &Payload = (if take_first { &first } else { &second });" in (
+        generated_code
+    )
+    assert (
+        "let selected: &Payload = (if take_first { &primary } else { &backup });"
+        in generated_code
+    )
+    assert "Choice::One(mut payload) =>" in generated_code
+    assert "Choice::Pair(mut first, mut second) =>" in generated_code
+    assert "primary: mut primary" in generated_code
+    assert "backup: mut backup" in generated_code
+    assert "let mut selected: &mut Payload = &mut payload;" in generated_code
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if take_first { &mut first } else { &mut second });"
+    ) in generated_code
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if take_first { &mut primary } else { &mut backup });"
+    ) in generated_code
+    assert "&mut (if" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_loop_break_match_preserves_scrutinee_for_later_use_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    loop_break_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [BreakNode()],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [BreakNode()],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustLoopBreakMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "break_then_read_choice",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [
+                    LoopNode([loop_break_match]),
+                    ReturnNode(return_match),
+                ],
+            )
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "loop {" in generated_code
+    assert "match choice.clone() {" in generated_code
+    assert generated_code.count("choice.clone()") == 1
+    assert "return match choice {" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_match_terminal_if_arms_move_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def if_returns(then_value, else_value):
+        return IfNode(
+            IdentifierNode("flag"),
+            [ReturnNode(then_value)],
+            [ReturnNode(else_value)],
+        )
+
+    terminal_if_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    if_returns(
+                        count_of(IdentifierNode("payload")),
+                        LiteralNode(0, int_type),
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    if_returns(
+                        BinaryOpNode(
+                            count_of(IdentifierNode("payload")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                        LiteralNode(1, int_type),
+                    )
+                ],
+            ),
+        ],
+    )
+
+    partial_if_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    IfNode(
+                        IdentifierNode("flag"),
+                        [ReturnNode(count_of(IdentifierNode("payload")))],
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [ReturnNode(count_of(IdentifierNode("payload")))],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustTerminalIfMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "terminal_if_match",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [terminal_if_match],
+            ),
+            FunctionNode(
+                "partial_if_match_then_read",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [
+                    partial_if_match,
+                    ReturnNode(return_match),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    terminal_function = generated_code[
+        generated_code.index("pub fn terminal_if_match") : generated_code.index(
+            "pub fn partial_if_match_then_read"
+        )
+    ]
+    partial_function = generated_code[
+        generated_code.index("pub fn partial_if_match_then_read") :
+    ]
+
+    assert "match choice {" in terminal_function
+    assert ".clone()" not in terminal_function
+    assert "if flag {" in terminal_function
+    assert "return payload.count;" in terminal_function
+    assert "match choice.clone() {" in partial_function
+    assert "return match choice {" in partial_function
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_match_terminal_block_arms_move_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def terminal_block(then_value, else_value):
+        return BlockNode(
+            [
+                IfNode(
+                    IdentifierNode("flag"),
+                    [ReturnNode(then_value)],
+                    [ReturnNode(else_value)],
+                )
+            ]
+        )
+
+    terminal_block_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    terminal_block(
+                        count_of(IdentifierNode("payload")),
+                        LiteralNode(0, int_type),
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    terminal_block(
+                        BinaryOpNode(
+                            count_of(IdentifierNode("payload")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                        LiteralNode(1, int_type),
+                    )
+                ],
+            ),
+        ],
+    )
+
+    partial_block_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    BlockNode(
+                        [
+                            IfNode(
+                                IdentifierNode("flag"),
+                                [ReturnNode(count_of(IdentifierNode("payload")))],
+                            )
+                        ]
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [ReturnNode(count_of(IdentifierNode("payload")))],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustTerminalBlockMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "terminal_block_match",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [terminal_block_match],
+            ),
+            FunctionNode(
+                "partial_block_match_then_read",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [
+                    partial_block_match,
+                    ReturnNode(return_match),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    terminal_function = generated_code[
+        generated_code.index("pub fn terminal_block_match") : generated_code.index(
+            "pub fn partial_block_match_then_read"
+        )
+    ]
+    partial_function = generated_code[
+        generated_code.index("pub fn partial_block_match_then_read") :
+    ]
+
+    assert "match choice {" in terminal_function
+    assert ".clone()" not in terminal_function
+    assert "if flag {" in terminal_function
+    assert "return payload.count;" in terminal_function
+    assert "match choice.clone() {" in partial_function
+    assert "return match choice {" in partial_function
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_match_terminal_loop_arms_move_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    terminal_loop_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [LoopNode([ReturnNode(count_of(IdentifierNode("payload")))])],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    LoopNode(
+                        [
+                            ReturnNode(
+                                BinaryOpNode(
+                                    count_of(IdentifierNode("payload")),
+                                    "+",
+                                    LiteralNode(1, int_type),
+                                )
+                            )
+                        ]
+                    )
+                ],
+            ),
+        ],
+    )
+
+    break_loop_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [LoopNode([BreakNode()])],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [ReturnNode(count_of(IdentifierNode("payload")))],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustTerminalLoopMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "terminal_loop_match",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [terminal_loop_match],
+            ),
+            FunctionNode(
+                "break_loop_match_then_read",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [
+                    break_loop_match,
+                    ReturnNode(return_match),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    terminal_function = generated_code[
+        generated_code.index("pub fn terminal_loop_match") : generated_code.index(
+            "pub fn break_loop_match_then_read"
+        )
+    ]
+    break_function = generated_code[
+        generated_code.index("pub fn break_loop_match_then_read") :
+    ]
+
+    assert "match choice {" in terminal_function
+    assert ".clone()" not in terminal_function
+    assert "loop {" in terminal_function
+    assert "return payload.count;" in terminal_function
+    assert "match choice.clone() {" in break_function
+    assert "break;" in break_function
+    assert "return match choice {" in break_function
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
+    int_type = PrimitiveType("int")
+
+    ast = ShaderNode(
+        "DirectCallableTraitParameters",
+        ExecutionModel.GENERAL_PURPOSE,
+        functions=[
+            FunctionNode(
+                "apply_read",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("Fn(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_mut",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("FnMut(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_once",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", NamedType("FnOnce(i32) -> i32")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "apply_generic_mut",
+                int_type,
+                [
+                    ParameterNode("input", int_type),
+                    ParameterNode("op", GenericType("F")),
+                ],
+                [
+                    ReturnNode(
+                        FunctionCallNode(
+                            IdentifierNode("op"),
+                            [IdentifierNode("input")],
+                        )
+                    )
+                ],
+                generic_params=[
+                    GenericParameterNode(
+                        "F",
+                        constraints=[NamedType("FnMut(i32) -> i32")],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn apply_read(input: i32, op: impl Fn(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_mut(input: i32, mut op: impl FnMut(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_once(input: i32, op: impl FnOnce(i32) -> i32) -> i32"
+        in generated_code
+    )
+    assert (
+        "pub fn apply_generic_mut<F: FnMut(i32) -> i32>(input: i32, mut op: F)"
+        in generated_code
+    )
+    assert "op: Fn(i32) -> i32" not in generated_code
+    assert "op: FnMut(i32) -> i32" not in generated_code
+    assert "op: FnOnce(i32) -> i32" not in generated_code
+    assert "F: impl FnMut" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -14050,7 +15880,7 @@ def test_local_struct_outputs_initialize_with_default_before_field_assignment():
     assert "let mut output: Out;" not in generated_code
 
 
-def test_if_statement():
+def test_if_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -14094,6 +15924,7 @@ def test_if_statement():
         generated_code = generate_code(ast)
         assert "if " in generated_code
         assert "else" in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("If statement codegen not implemented.")
@@ -14787,6 +16618,76 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
+    code = """
+    shader ResourceBundleProbe {
+        struct ResourceBundle {
+            sampler2D texture;
+            sampler samplerState;
+            image2D colorImage;
+            RWStructuredBuffer<int> values;
+            float weights[];
+        };
+
+        fragment {
+            vec4 main(ResourceBundle bundle, ResourceBundle bundles[2], ivec2 pixel, vec2 uv, uint index) @ gl_FragColor {
+                let selected = bundles[index];
+                let aliasTexture = selected.texture;
+                let sampled = texture(aliasTexture, selected.samplerState, uv);
+                let direct = texture(bundle.texture, bundle.samplerState, uv);
+                let color = imageLoad(bundle.colorImage, pixel);
+                imageStore(selected.colorImage, pixel, color);
+                let value = buffer_load(bundle.values, index);
+                buffer_store(selected.values, index, value);
+                return sampled + direct + color + vec4(selected.weights[0] + float(value), 0.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "#[derive(Debug, Clone, Default)]\npub struct ResourceBundle" in (
+        generated_code
+    )
+    assert "#[derive(Debug, Clone, Copy, Default)]\npub struct ResourceBundle" not in (
+        generated_code
+    )
+    assert "pub texture: Texture2D<f32>," in generated_code
+    assert "pub samplerState: Sampler," in generated_code
+    assert "pub colorImage: Image2D<Vec4<f32>>," in generated_code
+    assert "pub values: RWStructuredBuffer<i32>," in generated_code
+    assert "pub weights: Vec<f32>," in generated_code
+    assert (
+        "pub fn main(bundle: ResourceBundle, bundles: [ResourceBundle; 2], "
+        "pixel: Vec2<i32>, uv: Vec2<f32>, index: u32) -> Vec4<f32>"
+    ) in generated_code
+    assert (
+        "let selected: ResourceBundle = bundles[index as usize].clone();"
+        in generated_code
+    )
+    assert "let aliasTexture: Texture2D<f32> = selected.texture;" in generated_code
+    assert (
+        "let sampled: Vec4<f32> = "
+        "sample_sampler(aliasTexture, selected.samplerState, uv);"
+    ) in generated_code
+    assert (
+        "let direct: Vec4<f32> = "
+        "sample_sampler(bundle.texture, bundle.samplerState, uv);"
+    ) in generated_code
+    assert (
+        "let color: Vec4<f32> = image_load(bundle.colorImage, pixel);" in generated_code
+    )
+    assert "image_store(selected.colorImage, pixel, color);" in generated_code
+    assert "let value: i32 = buffer_load(bundle.values, index);" in generated_code
+    assert "buffer_store(selected.values, index, value);" in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "texture(aliasTexture" not in generated_code
+    assert "texture(bundle.texture" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_path):
     code = """
     shader ResourceHelperProbe {
@@ -14976,7 +16877,7 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_for_statement():
+def test_for_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -15007,12 +16908,13 @@ def test_for_statement():
         )  # Rust codegen converts for loops to while loops
         assert "let mut i: i32 = 0;" in generated_code
         assert "let mut i: i32 = 0;;" not in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")
 
 
-def test_for_continue_emits_update_before_continue_in_rust():
+def test_for_continue_emits_update_before_continue_in_rust(tmp_path):
     code = """
     shader main {
         compute {
@@ -15052,9 +16954,10 @@ def test_for_continue_emits_update_before_continue_in_rust():
         not in generated_code
     )
     assert "DoWhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts():
+def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts(tmp_path):
     code = """
     shader main {
         compute {
@@ -15102,9 +17005,10 @@ def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts():
     assert "outer += 1;\n                continue;" not in generated_code
     assert "ForInNode" not in generated_code
     assert "RangeNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts():
+def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts(tmp_path):
     code = """
     shader main {
         compute {
@@ -15154,9 +17058,10 @@ def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts():
     )
     assert "__cgl_do_break_0 = true;" not in generated_code
     assert "WhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts():
+def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts(tmp_path):
     code = """
     shader main {
         compute {
@@ -15207,9 +17112,10 @@ def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts():
     )
     assert "__cgl_do_break_0 = true;" not in generated_code
     assert "LoopNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_increment_and_decrement_emit_rust_assignment_updates():
+def test_increment_and_decrement_emit_rust_assignment_updates(tmp_path):
     code = """
     shader main {
         compute {
@@ -15238,9 +17144,10 @@ def test_increment_and_decrement_emit_rust_assignment_updates():
     assert "--i" not in generated_code
     assert "i--" not in generated_code
     assert "++j" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_increment_and_decrement_initializers_preserve_rust_value_order():
+def test_increment_and_decrement_initializers_preserve_rust_value_order(tmp_path):
     code = """
     shader main {
         compute {
@@ -15273,9 +17180,10 @@ def test_increment_and_decrement_initializers_preserve_rust_value_order():
     assert "let post: i32 = i += 1;" not in generated_code
     assert "let pre_dec: i32 = i -= 1;" not in generated_code
     assert "let post_dec: i32 = i -= 1;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
+def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body(tmp_path):
     code = """
     shader main {
         compute {
@@ -15312,9 +17220,10 @@ def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
     ) in generated_code
     assert "if !((value < 8))" in generated_code
     assert "DoWhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_string_and_char_literals_emit_rust_syntax():
+def test_bool_string_and_char_literals_emit_rust_syntax(tmp_path):
     code = """
     shader main {
         compute {
@@ -15348,6 +17257,7 @@ def test_bool_string_and_char_literals_emit_rust_syntax():
     assert "marker = 'y';" in generated_code
     assert "True" not in generated_code
     assert "False" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_local_bindings_are_mutable_only_when_reassigned_or_mutated():
@@ -15397,7 +17307,7 @@ def test_direct_literal_nodes_emit_rust_escaping():
     )
 
 
-def test_else_if_statement():
+def test_else_if_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -15444,6 +17354,7 @@ def test_else_if_statement():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert "else if " in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Else if codegen not implemented.")
@@ -16877,7 +18788,7 @@ def test_bitwise_or_operator():
         pytest.fail("Bitwise OR codegen not implemented")
 
 
-def test_ternary_operator():
+def test_ternary_operator(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -16910,12 +18821,13 @@ def test_ternary_operator():
         assert (
             "if" in generated_code and "else" in generated_code
         )  # Rust converts ternary to if-else
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Ternary operator codegen not implemented")
 
 
-def test_vector_constructor():
+def test_vector_constructor(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -16943,12 +18855,13 @@ def test_vector_constructor():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert "Vec4::<f32>::new" in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Vector constructor codegen not implemented")
 
 
-def test_double_vector_and_matrix_types_emit_rust_names():
+def test_double_vector_and_matrix_types_emit_rust_names(tmp_path):
     code = """
     shader main {
         compute {
@@ -16985,9 +18898,10 @@ def test_double_vector_and_matrix_types_emit_rust_names():
     assert "bool2" not in generated_code
     assert "dmat2(" not in generated_code
     assert "MatrixType(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_matrix_constructors_flatten_vector_args_once():
+def test_matrix_constructors_flatten_vector_args_once(tmp_path):
     code = """
     vec2 makeCol0() {
         return vec2(1.0, 0.0);
@@ -17029,6 +18943,7 @@ def test_matrix_constructors_flatten_vector_args_once():
     assert "Mat2::<f32>::new(a, b)" not in generated_code
     assert "Mat2::<f32>::new(makeCol0(), makeCol1())" not in generated_code
     assert "makeCol0().xy" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type():
@@ -18393,7 +20308,7 @@ def test_complex_vector_swizzles_use_single_evaluation_blocks():
     assert "Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0).xy" not in generated_code
 
 
-def test_switch_statement_emits_rust_match():
+def test_switch_statement_emits_rust_match(tmp_path):
     code = """
     shader main {
         compute {
@@ -18425,9 +20340,10 @@ def test_switch_statement_emits_rust_match():
     assert "SwitchNode" not in generated_code
     assert "CaseNode" not in generated_code
     assert "BreakNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_match_statement_emits_rust_match():
+def test_match_statement_emits_rust_match(tmp_path):
     code = """
     shader main {
         compute {
@@ -18458,6 +20374,7 @@ def test_match_statement_emits_rust_match():
     assert "value = 2;" in generated_code
     assert "MatchNode" not in generated_code
     assert "MatchArmNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_match_arm_break_and_continue_preserve_loop_control_flow_and_smoke_compile(
@@ -18680,7 +20597,9 @@ def test_match_arm_block_tail_expression_emits_without_semicolon():
     assert "Result::Err(MathError::InvalidInput);" not in generated_code
 
 
-def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
+def test_keyword_like_let_binding_inside_match_arm_preserves_function_body(
+    tmp_path,
+):
     code = """
     shader KeywordBinding {
         fn process_lighting_model(model: int) -> vec3 {
@@ -18704,9 +20623,10 @@ def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
         "pub fn process_lighting_model(model: i32) -> Vec3<f32> {\n}\n"
         not in generated_code
     )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_match_expression_initializer_emits_rust_match_initializer():
+def test_match_expression_initializer_emits_rust_match_initializer(tmp_path):
     code = """
     shader MatchInitializer {
         fn choose(model: int, fallback: vec3) -> vec3 {
@@ -18726,9 +20646,12 @@ def test_match_expression_initializer_emits_rust_match_initializer():
     assert "_ => {\n            fallback" in generated_code
     assert "};\n    processed_normal" in generated_code
     assert "let processed_normal: f32 = match model" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types():
+def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types(
+    tmp_path,
+):
     code = """
     shader StageInference {
         generic<T> struct Vec3 {
@@ -18792,9 +20715,10 @@ def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types()
     assert "let world_pos: f32 = " not in generated_code
     assert "let world_normal: f32 = normalize" not in generated_code
     assert "let normal_vec3: Vec3 = Vec3" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_stage_local_uniform_statics_are_emitted_once():
+def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
     code = """
     shader StageUniforms {
         vertex {
@@ -18837,6 +20761,7 @@ def test_stage_local_uniform_statics_are_emitted_once():
     assert "static MAIN_TEXTURE: sampler2D" not in generated_code
     assert "(*SHARED_TRANSFORM * Vec4::<f32>::new" in generated_code
     assert "sample(*MAIN_TEXTURE, uv)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():

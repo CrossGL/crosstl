@@ -320,6 +320,148 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    METAL_WAVE_INTRINSIC_ARITIES = {
+        "WaveGetLaneCount": 0,
+        "WaveGetLaneIndex": 0,
+        "WaveIsFirstLane": 0,
+        "WaveActiveSum": 1,
+        "WaveActiveProduct": 1,
+        "WaveActiveBitAnd": 1,
+        "WaveActiveBitOr": 1,
+        "WaveActiveBitXor": 1,
+        "WaveActiveMin": 1,
+        "WaveActiveMax": 1,
+        "WaveActiveAllTrue": 1,
+        "WaveActiveAnyTrue": 1,
+        "WaveActiveAllEqual": 1,
+        "WaveActiveCountBits": 1,
+        "WaveActiveBallot": 1,
+        "WaveReadLaneAt": 2,
+        "WaveReadLaneFirst": 1,
+        "WavePrefixSum": 1,
+        "WavePrefixProduct": 1,
+        "WavePrefixCountBits": 1,
+        "WaveMatch": 1,
+        "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
+        "WaveMultiPrefixProduct": 2,
+        "WaveMultiPrefixBitAnd": 2,
+        "WaveMultiPrefixBitOr": 2,
+        "WaveMultiPrefixBitXor": 2,
+        "QuadReadAcrossX": 1,
+        "QuadReadAcrossY": 1,
+        "QuadReadAcrossDiagonal": 1,
+        "QuadReadLaneAt": 2,
+        "QuadAny": 1,
+        "QuadAll": 1,
+    }
+    METAL_WAVE_DIRECT_MAPPINGS = {
+        "WaveActiveSum": "simd_sum",
+        "WaveActiveProduct": "simd_product",
+        "WaveActiveBitAnd": "simd_and",
+        "WaveActiveBitOr": "simd_or",
+        "WaveActiveBitXor": "simd_xor",
+        "WaveActiveMin": "simd_min",
+        "WaveActiveMax": "simd_max",
+        "WaveActiveAllTrue": "simd_all",
+        "WaveActiveAnyTrue": "simd_any",
+        "WaveReadLaneFirst": "simd_broadcast_first",
+        "WavePrefixSum": "simd_prefix_exclusive_sum",
+        "WavePrefixProduct": "simd_prefix_exclusive_product",
+        "QuadAny": "quad_any",
+        "QuadAll": "quad_all",
+    }
+    METAL_WAVE_UNSUPPORTED_OPERATIONS = {}
+    METAL_WAVE_MULTI_PREFIX_INTRINSICS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits",
+        "WaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS = {
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    METAL_WAVE_MULTI_PREFIX_HELPERS = {
+        "WaveMultiPrefixSum": "__crossgl_metal_wave_multi_prefix_sum",
+        "WaveMultiPrefixCountBits": "__crossgl_metal_wave_multi_prefix_count_bits",
+        "WaveMultiPrefixProduct": "__crossgl_metal_wave_multi_prefix_product",
+        "WaveMultiPrefixBitAnd": "__crossgl_metal_wave_multi_prefix_bit_and",
+        "WaveMultiPrefixBitOr": "__crossgl_metal_wave_multi_prefix_bit_or",
+        "WaveMultiPrefixBitXor": "__crossgl_metal_wave_multi_prefix_bit_xor",
+    }
+    METAL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "QuadAny",
+        "QuadAll",
+    }
+    METAL_WAVE_NUMERIC_VALUE_INTRINSICS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+    }
+    METAL_WAVE_INTEGER_VALUE_INTRINSICS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+    }
+    METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS = {
+        "WaveReadLaneAt",
+        "WaveReadLaneFirst",
+        "WaveActiveAllEqual",
+        "QuadReadAcrossX",
+        "QuadReadAcrossY",
+        "QuadReadAcrossDiagonal",
+        "QuadReadLaneAt",
+    }
+    METAL_WAVE_UINT_RESULT_INTRINSICS = {
+        "WaveGetLaneCount",
+        "WaveGetLaneIndex",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
+    }
+    METAL_WAVE_BOOL_RESULT_INTRINSICS = {
+        "WaveIsFirstLane",
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveAllEqual",
+        "QuadAny",
+        "QuadAll",
+    }
+    METAL_WAVE_UINT4_RESULT_INTRINSICS = {
+        "WaveActiveBallot",
+        "WaveMatch",
+    }
+    METAL_WAVE_VALUE_RESULT_INTRINSICS = (
+        METAL_WAVE_NUMERIC_VALUE_INTRINSICS
+        | METAL_WAVE_INTEGER_VALUE_INTRINSICS
+        | METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS
+        | {
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }
+    )
+    METAL_WAVE_NUMERIC_COMPONENT_TYPES = {"float", "half", "int", "uint"}
+    METAL_WAVE_INTEGER_COMPONENT_TYPES = {"int", "uint"}
+
     def __init__(self):
         """Initialize Metal type maps and per-generation resource state."""
         self.current_shader = None
@@ -350,12 +492,16 @@ class MetalCodeGen:
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
+        self.function_metal_wave_lane_dependencies = {}
+        self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_sampler_parameters = set()
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_array_sizes = {}
+        self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.current_structured_buffer_length_parameters = {}
@@ -386,6 +532,12 @@ class MetalCodeGen:
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
+        self.required_metal_wave_ballot_helper = False
+        self.required_metal_wave_match_helper = False
+        self.required_metal_wave_mask_contains_helper = False
+        self.required_metal_wave_multi_prefix_helpers = set()
+        self.current_metal_wave_lane_index_parameter = None
+        self.current_metal_wave_lane_count_parameter = None
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -753,6 +905,7 @@ class MetalCodeGen:
             if getattr(cbuffer, "name", None)
         }
         all_functions = self.all_functions(ast)
+        self.validate_metal_mesh_payload_parameter_placement(ast, all_functions)
         self.user_function_names = {
             func.name for func in all_functions if getattr(func, "name", None)
         }
@@ -792,6 +945,8 @@ class MetalCodeGen:
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_array_sizes = {}
+        self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
         self.current_structured_buffer_length_parameters = {}
@@ -799,6 +954,8 @@ class MetalCodeGen:
         self.function_structured_buffer_length_dependencies = {}
         self.global_structured_buffer_length_dependencies = set()
         self.function_global_resource_dependencies = {}
+        self.function_metal_wave_lane_dependencies = {}
+        self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
@@ -913,6 +1070,10 @@ class MetalCodeGen:
         self.current_expression_expected_type = None
         self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
+        self.required_metal_wave_ballot_helper = False
+        self.required_metal_wave_match_helper = False
+        self.required_metal_wave_mask_contains_helper = False
+        self.required_metal_wave_multi_prefix_helpers = set()
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -993,6 +1154,19 @@ class MetalCodeGen:
                     generic_function_specializations.values()
                 )
             )
+        wave_dependency_functions = list(all_functions) + list(
+            generic_function_specializations.values()
+        )
+        self.function_metal_wave_lane_dependencies = (
+            self.collect_function_metal_wave_lane_dependencies(
+                wave_dependency_functions
+            )
+        )
+        self.function_metal_wave_lane_parameter_names = (
+            self.collect_function_metal_wave_lane_parameter_names(
+                wave_dependency_functions
+            )
+        )
         self.function_metal_mesh_dispatch_contexts = (
             self.collect_function_metal_mesh_dispatch_contexts(
                 list(all_functions) + list(generic_function_specializations.values())
@@ -1190,6 +1364,9 @@ class MetalCodeGen:
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if self.is_metal_function_constant_variable(node):
+                continue
+
             lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
             if lowered_block is not None:
                 binding = self.explicit_resource_binding_index(
@@ -1569,6 +1746,7 @@ class MetalCodeGen:
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_metal_wave_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += functions_code
         return code
@@ -1602,7 +1780,116 @@ class MetalCodeGen:
             value_code = self.generate_constant_expression(value)
             code += f"constant {self.map_type(const_type)} {name} = {value_code};\n"
 
+        used_function_constant_ids = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            function_constant_id = self.metal_function_constant_id(node)
+            if function_constant_id is None:
+                continue
+
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            previous_name = used_function_constant_ids.get(function_constant_id)
+            if previous_name is not None:
+                raise ValueError(
+                    "Duplicate Metal function constant id "
+                    f"{function_constant_id} for '{name}' and '{previous_name}'"
+                )
+            used_function_constant_ids[function_constant_id] = name
+
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            self.validate_metal_function_constant_type(node, var_type)
+            mapped_type = self.map_type(var_type)
+            initial_value = getattr(node, "initial_value", None)
+            if initial_value is not None:
+                code += (
+                    "/* unsupported Metal function constant default: "
+                    f"'{name}' initializers are not allowed by MSL */\n"
+                )
+            code += (
+                f"constant {mapped_type} {name} "
+                f"[[function_constant({function_constant_id})]];\n"
+            )
+
         return f"{code}\n" if code else ""
+
+    def metal_function_constant_attributes(self, node):
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in {"function_constant", "constant_id"}:
+                attributes.append(attr)
+        return attributes
+
+    def is_metal_function_constant_variable(self, node):
+        return bool(self.metal_function_constant_attributes(node))
+
+    def metal_function_constant_id(self, node):
+        attributes = self.metal_function_constant_attributes(node)
+        if not attributes:
+            return None
+
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if len(attributes) > 1:
+            raise ValueError(
+                f"Metal function constant '{name}' has multiple function constant "
+                "attributes"
+            )
+
+        arguments = getattr(attributes[0], "arguments", []) or []
+        function_constant_id = (
+            self.binding_index_value(arguments[0]) if len(arguments) == 1 else None
+        )
+        if function_constant_id is None:
+            raise ValueError(f"Metal function constant '{name}' requires an integer id")
+        return function_constant_id
+
+    def validate_metal_function_constant_type(self, node, var_type):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        type_name = self.type_name_string(var_type)
+        mapped_type = self.map_type(var_type)
+        invalid = (
+            self.is_resource_parameter_type(type_name)
+            or self.is_array_type_node(var_type)
+            or "[" in mapped_type
+            or "]" in mapped_type
+            or "*" in mapped_type
+            or "&" in mapped_type
+        )
+        if invalid:
+            raise ValueError(
+                f"Metal function constant '{name}' cannot use type '{type_name}'"
+            )
+
+        if not self.is_metal_function_constant_value_type(mapped_type):
+            raise ValueError(
+                f"Metal function constant '{name}' cannot use type '{type_name}'"
+            )
+
+    def is_metal_function_constant_value_type(self, mapped_type):
+        scalar_types = {
+            "bool",
+            "int",
+            "uint",
+            "int64_t",
+            "uint64_t",
+            "float",
+            "half",
+        }
+        if mapped_type in scalar_types:
+            return True
+
+        for base_type in scalar_types:
+            if mapped_type in {
+                f"{base_type}2",
+                f"{base_type}3",
+                f"{base_type}4",
+            }:
+                return True
+        return False
 
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)
@@ -1752,6 +2039,7 @@ class MetalCodeGen:
         sampler_parameters = set()
         sampler_parameter_array_sizes = {}
         texture_parameters = {}
+        texture_parameter_array_sizes = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
@@ -1816,6 +2104,12 @@ class MetalCodeGen:
         previous_readonly_metal_parameter_reasons = (
             self.current_readonly_metal_parameter_reasons
         )
+        previous_metal_wave_lane_index_parameter = (
+            self.current_metal_wave_lane_index_parameter
+        )
+        previous_metal_wave_lane_count_parameter = (
+            self.current_metal_wave_lane_count_parameter
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -1850,6 +2144,8 @@ class MetalCodeGen:
         self.current_readonly_raw_buffer_parameters = set()
         self.current_readonly_metal_parameters = set()
         self.current_readonly_metal_parameter_reasons = {}
+        self.current_metal_wave_lane_index_parameter = None
+        self.current_metal_wave_lane_count_parameter = None
         self.local_variable_types = {}
         self.current_address_space_variables = {}
         for p in param_list:
@@ -1907,6 +2203,10 @@ class MetalCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
+                resource_array = self.resource_array_parameter(raw_param_type, p)
+                if resource_array is not None:
+                    _, array_size = resource_array
+                    texture_parameter_array_sizes[p.name] = array_size
                 record_explicit_image_metadata(
                     p.name,
                     p,
@@ -1971,12 +2271,29 @@ class MetalCodeGen:
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
+            explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
+                param_list
+            )
+            self.current_metal_wave_lane_index_parameter = explicit_stage_builtins.get(
+                "thread_index_in_simdgroup"
+            )
+            self.current_metal_wave_lane_count_parameter = explicit_stage_builtins.get(
+                "threads_per_simdgroup"
+            )
+            reserved_builtin_names = set(existing_param_names)
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
             for name, param_type, attribute in self.required_compute_builtin_parameters(
-                func
+                func, reserved_builtin_names, explicit_stage_builtins
             ):
                 if name not in existing_param_names:
                     params.append(f"{param_type} {name} [[{attribute}]]")
                     reserved_parameter_names.add(name)
+                if attribute == "thread_index_in_simdgroup":
+                    self.current_metal_wave_lane_index_parameter = name
+                elif attribute == "threads_per_simdgroup":
+                    self.current_metal_wave_lane_count_parameter = name
 
         reserved_parameter_names.update(self.global_resource_parameter_names())
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
@@ -1998,6 +2315,9 @@ class MetalCodeGen:
                 params_str,
                 func,
                 reserved_parameter_names,
+            )
+            params_str = self.append_required_metal_wave_lane_parameters(
+                params_str, self.current_function_name
             )
 
         if hasattr(func, "return_type"):
@@ -2094,6 +2414,12 @@ class MetalCodeGen:
             self.current_readonly_metal_parameters = previous_readonly_metal_parameters
             self.current_readonly_metal_parameter_reasons = (
                 previous_readonly_metal_parameter_reasons
+            )
+            self.current_metal_wave_lane_index_parameter = (
+                previous_metal_wave_lane_index_parameter
+            )
+            self.current_metal_wave_lane_count_parameter = (
+                previous_metal_wave_lane_count_parameter
             )
             return code
 
@@ -2218,10 +2544,16 @@ class MetalCodeGen:
             self.current_sampler_parameter_array_sizes
         )
         previous_texture_parameters = self.current_texture_parameters
+        previous_texture_parameter_array_sizes = (
+            self.current_texture_parameter_array_sizes
+        )
+        previous_texture_alias_sources = self.current_texture_alias_sources
         previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
         self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
+        self.current_texture_parameter_array_sizes = texture_parameter_array_sizes
+        self.current_texture_alias_sources = {}
         self.current_image_format_parameters = image_format_parameters
         if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
             self.current_metal_mesh_output_accumulators = (
@@ -2244,6 +2576,10 @@ class MetalCodeGen:
             previous_sampler_parameter_array_sizes
         )
         self.current_texture_parameters = previous_texture_parameters
+        self.current_texture_parameter_array_sizes = (
+            previous_texture_parameter_array_sizes
+        )
+        self.current_texture_alias_sources = previous_texture_alias_sources
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_structured_buffer_length_parameters = (
             previous_structured_buffer_length_parameters
@@ -2279,6 +2615,12 @@ class MetalCodeGen:
         self.current_readonly_metal_parameter_reasons = (
             previous_readonly_metal_parameter_reasons
         )
+        self.current_metal_wave_lane_index_parameter = (
+            previous_metal_wave_lane_index_parameter
+        )
+        self.current_metal_wave_lane_count_parameter = (
+            previous_metal_wave_lane_count_parameter
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -2312,8 +2654,20 @@ class MetalCodeGen:
         code += "}\n\n"
         return code
 
-    def required_compute_builtin_parameters(self, func):
+    def required_compute_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
         used_names = self.used_compute_builtin_names(getattr(func, "body", []))
+        used_wave_operations = self.used_wave_stage_builtin_operations(
+            getattr(func, "body", [])
+        )
+        func_name = getattr(func, "name", None)
+        if func_name:
+            used_wave_operations.update(
+                self.function_metal_wave_lane_dependencies.get(func_name, set())
+            )
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
         builtin_parameters = [
             ("gl_GlobalInvocationID", "uint3", "thread_position_in_grid"),
             ("gl_LocalInvocationID", "uint3", "thread_position_in_threadgroup"),
@@ -2322,9 +2676,32 @@ class MetalCodeGen:
             ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
             ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
         ]
-        return [
+        required_parameters = [
             parameter for parameter in builtin_parameters if parameter[0] in used_names
         ]
+        wave_builtin_parameters = [
+            (
+                "WaveGetLaneIndex",
+                "crossglWaveLaneIndex",
+                "uint",
+                "thread_index_in_simdgroup",
+            ),
+            (
+                "WaveGetLaneCount",
+                "crossglWaveLaneCount",
+                "uint",
+                "threads_per_simdgroup",
+            ),
+        ]
+        for operation, base_name, param_type, attribute in wave_builtin_parameters:
+            if operation not in used_wave_operations:
+                continue
+            if attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name(base_name, reserved_names)
+            reserved_names.add(name)
+            required_parameters.append((name, param_type, attribute))
+        return required_parameters
 
     def used_compute_builtin_names(self, body):
         builtin_names = {
@@ -2344,6 +2721,36 @@ class MetalCodeGen:
                     used_names.add(base_name)
         return used_names
 
+    def used_wave_stage_builtin_operations(self, body):
+        operations = set()
+        for node in self.iter_ast_nodes(body):
+            if isinstance(node, WaveOpNode):
+                operation = getattr(node, "operation", None)
+            elif isinstance(node, FunctionCallNode):
+                operation = self.function_call_name(node)
+            else:
+                continue
+            if operation == "WaveMatch":
+                operations.add("WaveGetLaneCount")
+            elif operation in self.METAL_WAVE_MULTI_PREFIX_INTRINSICS:
+                operations.add("WaveGetLaneIndex")
+                operations.add("WaveGetLaneCount")
+            elif operation in {"WaveGetLaneIndex", "WaveGetLaneCount"}:
+                operations.add(operation)
+        return operations
+
+    def explicit_compute_stage_builtin_parameters(self, parameters):
+        stage_parameters = {}
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            metal_semantic = self.canonical_metal_semantic(semantic)
+            if metal_semantic in {
+                "thread_index_in_simdgroup",
+                "threads_per_simdgroup",
+            }:
+                stage_parameters[metal_semantic] = getattr(parameter, "name", None)
+        return stage_parameters
+
     def validate_compute_builtin_parameter_types(self, parameters):
         expected_types = {
             "thread_position_in_grid": "uint3",
@@ -2352,6 +2759,8 @@ class MetalCodeGen:
             "thread_index_in_threadgroup": "uint",
             "threads_per_threadgroup": "uint3",
             "threadgroups_per_grid": "uint3",
+            "thread_index_in_simdgroup": "uint",
+            "threads_per_simdgroup": "uint",
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
@@ -2367,6 +2776,121 @@ class MetalCodeGen:
                     f"'{metal_semantic}' and requires parameter '{name}' to "
                     f"have type {expected_type}, got {actual_type}"
                 )
+
+    def collect_function_metal_wave_lane_dependencies(self, functions):
+        direct_dependencies = {}
+        function_calls = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies[func_name] = self.used_wave_stage_builtin_operations(
+                getattr(func, "body", [])
+            )
+            function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                current_dependencies = dependencies.setdefault(func_name, set())
+                before = set(current_dependencies)
+                for called_name in calls:
+                    current_dependencies.update(dependencies.get(called_name, set()))
+                if current_dependencies != before:
+                    changed = True
+        return dependencies
+
+    def collect_function_metal_wave_lane_parameter_names(self, functions):
+        parameter_names = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            dependencies = self.function_metal_wave_lane_dependencies.get(
+                func_name, set()
+            )
+            if not func_name or not dependencies:
+                continue
+            reserved_names = {
+                getattr(parameter, "name", None)
+                for parameter in getattr(
+                    func, "parameters", getattr(func, "params", [])
+                )
+                if getattr(parameter, "name", None)
+            }
+            reserved_names.update(self.metal_function_local_variable_names(func))
+            names = {}
+            for operation, base_name in (
+                ("WaveGetLaneIndex", "crossglWaveLaneIndex"),
+                ("WaveGetLaneCount", "crossglWaveLaneCount"),
+            ):
+                if operation not in dependencies:
+                    continue
+                name = self.unique_metal_generated_name(base_name, reserved_names)
+                reserved_names.add(name)
+                names[operation] = name
+            parameter_names[func_name] = names
+        return parameter_names
+
+    def append_required_metal_wave_lane_parameters(self, params_str, func_name):
+        parameter_names = self.function_metal_wave_lane_parameter_names.get(
+            func_name, {}
+        )
+        lane_index_name = parameter_names.get("WaveGetLaneIndex")
+        if lane_index_name is not None:
+            params_str = self.append_parameter_declaration(
+                params_str, f"uint {lane_index_name}"
+            )
+            self.current_metal_wave_lane_index_parameter = lane_index_name
+        lane_count_name = parameter_names.get("WaveGetLaneCount")
+        if lane_count_name is not None:
+            params_str = self.append_parameter_declaration(
+                params_str, f"uint {lane_count_name}"
+            )
+            self.current_metal_wave_lane_count_parameter = lane_count_name
+        return params_str
+
+    def required_metal_wave_lane_context_arguments(self, func_name):
+        dependencies = self.function_metal_wave_lane_dependencies.get(func_name, set())
+        if not dependencies:
+            return []
+        args = []
+        if "WaveGetLaneIndex" in dependencies:
+            if self.current_metal_wave_lane_index_parameter is None:
+                return None
+            args.append(self.current_metal_wave_lane_index_parameter)
+        if "WaveGetLaneCount" in dependencies:
+            if self.current_metal_wave_lane_count_parameter is None:
+                return None
+            args.append(self.current_metal_wave_lane_count_parameter)
+        return args
+
+    def metal_wave_lane_helper_call_diagnostic(self, func_name):
+        dependencies = self.function_metal_wave_lane_dependencies.get(func_name, set())
+        if not dependencies:
+            return None
+        missing_requirements = []
+        if (
+            "WaveGetLaneIndex" in dependencies
+            and self.current_metal_wave_lane_index_parameter is None
+        ):
+            missing_requirements.append("thread_index_in_simdgroup")
+        if (
+            "WaveGetLaneCount" in dependencies
+            and self.current_metal_wave_lane_count_parameter is None
+        ):
+            missing_requirements.append("threads_per_simdgroup")
+        if not missing_requirements:
+            return None
+        requirement = " and ".join(missing_requirements)
+        diagnostic = (
+            "/* unsupported Metal wave helper call: function "
+            f"'{func_name}' requires compute-stage {requirement} value */"
+        )
+        return_type = self.function_return_types.get(func_name, "void")
+        if self.map_type(return_type) == "void":
+            return diagnostic
+        return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
 
     def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
         expected_types = {
@@ -2945,6 +3469,36 @@ class MetalCodeGen:
         indent_str = "    " * indent
         if isinstance(stmt, VariableNode):
             var_type = self.local_variable_declared_type(stmt)
+            texture_alias_type = self.local_variable_texture_alias_resource_type(
+                stmt, var_type
+            )
+            if texture_alias_type is not None:
+                var_type = self.local_variable_texture_alias_declaration_type(
+                    stmt, texture_alias_type
+                )
+                self.current_texture_parameters[stmt.name] = texture_alias_type
+                self.record_local_texture_alias_sampler_source(stmt)
+                self.record_local_image_alias_metadata(stmt)
+            sampler_alias_type = self.local_variable_sampler_alias_resource_type(
+                stmt, var_type
+            )
+            if sampler_alias_type is not None:
+                var_type = sampler_alias_type
+                self.current_sampler_parameters.add(stmt.name)
+                _sampler_type, sampler_array_size = self.metal_array_type_parts(
+                    sampler_alias_type
+                )
+                if sampler_array_size is not None:
+                    self.current_sampler_parameter_array_sizes[stmt.name] = (
+                        sampler_array_size
+                    )
+            acceleration_structure_alias_type = (
+                self.local_variable_acceleration_structure_alias_resource_type(
+                    stmt, var_type
+                )
+            )
+            if acceleration_structure_alias_type is not None:
+                var_type = acceleration_structure_alias_type
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -2978,6 +3532,19 @@ class MetalCodeGen:
                 )
                 return code
             if initial_value is not None:
+                address_space_conflict = (
+                    self.local_variable_address_space_conflict_diagnostic(stmt)
+                )
+                if address_space_conflict is not None:
+                    conflict_declaration = (
+                        self.local_variable_address_space_conflict_declaration(
+                            stmt, declaration
+                        )
+                    )
+                    return (
+                        f"{indent_str}{address_space_conflict}\n"
+                        f"{indent_str}{conflict_declaration};\n"
+                    )
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
@@ -3111,6 +3678,263 @@ class MetalCodeGen:
             var_type = self.expression_result_type(getattr(stmt, "initial_value", None))
         return self.type_name_string(var_type) or "float"
 
+    def local_variable_texture_alias_resource_type(self, node, declared_type):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+
+        initial_type = self.texture_argument_resource_type(initial_value)
+        if initial_type is None:
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if not self.is_texture_or_image_resource_type(declared_type_name):
+            if (
+                self.local_variable_type_node(node) is None
+                and explicit_image_access(node, self.attribute_value_to_string) is None
+                and explicit_image_format(node, self.attribute_value_to_string) is None
+            ):
+                return initial_type
+            return None
+
+        declared_resource_type = self.map_resource_type_with_format(
+            declared_type_name, node
+        )
+        self.validate_local_resource_alias_compatibility(
+            node, declared_type_name, declared_resource_type, initial_type
+        )
+        if (
+            explicit_image_access(node, self.attribute_value_to_string) is None
+            and explicit_image_format(node, self.attribute_value_to_string) is None
+        ):
+            return initial_type
+        if explicit_image_access(node, self.attribute_value_to_string) is None:
+            return initial_type
+        return declared_resource_type
+
+    def validate_local_resource_alias_compatibility(
+        self, node, declared_type_name, declared_resource_type, initial_type
+    ):
+        alias_name = getattr(node, "name", "<anonymous>")
+        declared_compat_type = self.local_resource_alias_compatibility_type(
+            declared_resource_type
+        )
+        initial_compat_type = self.local_resource_alias_compatibility_type(initial_type)
+        if declared_compat_type != initial_compat_type:
+            raise ValueError(
+                f"Metal local resource alias '{alias_name}' declares "
+                f"{declared_type_name} but initializer has {initial_type}"
+            )
+
+        declared_access = explicit_image_access(node, self.attribute_value_to_string)
+        if declared_access is not None:
+            initial_access = self.storage_image_access_mode(initial_type)
+            if initial_access is not None and declared_access != initial_access:
+                raise ValueError(
+                    f"Metal local resource alias '{alias_name}' declares "
+                    f"access::{declared_access} but initializer has "
+                    f"access::{initial_access}"
+                )
+
+        declared_format = explicit_image_format(node, self.attribute_value_to_string)
+        if declared_format is not None:
+            initial_format = self.image_resource_format(
+                getattr(node, "initial_value", None)
+            )
+            if initial_format is not None and declared_format != initial_format:
+                raise ValueError(
+                    f"Metal local resource alias '{alias_name}' declares "
+                    f"format {declared_format} but initializer has {initial_format}"
+                )
+
+    def local_resource_alias_compatibility_type(self, resource_type):
+        resource_type = self.resource_base_type(resource_type)
+        if self.is_storage_image_resource(resource_type):
+            return self.storage_image_access_agnostic_type(resource_type)
+        return resource_type
+
+    def local_variable_texture_alias_declaration_type(self, node, resource_type):
+        array_size = self.texture_argument_resource_array_size(
+            getattr(node, "initial_value", None)
+        )
+        if array_size is None:
+            return resource_type
+        return self.format_resource_array_type(resource_type, array_size)
+
+    def texture_argument_resource_array_size(self, texture_arg):
+        if isinstance(texture_arg, ArrayAccessNode):
+            return None
+        member_array_size = self.struct_member_resource_array_size(texture_arg)
+        if member_array_size is not None:
+            return member_array_size
+        texture_name = self.expression_name(texture_arg)
+        if not texture_name:
+            return None
+
+        local_type = self.local_variable_types.get(texture_name)
+        _element_type, array_size = self.metal_array_type_parts(local_type)
+        if array_size is not None:
+            return array_size
+
+        if texture_name in self.current_texture_parameter_array_sizes:
+            return self.current_texture_parameter_array_sizes[texture_name]
+
+        for texture_variable, _, _texture_type, array_size in self.texture_variables:
+            if getattr(texture_variable, "name", None) == texture_name:
+                return array_size
+        return None
+
+    def format_resource_array_type(self, resource_type, array_size):
+        return f"array<{resource_type}, {array_size or '1'}>"
+
+    def metal_array_type_parts(self, type_name):
+        if type_name is None:
+            return None, None
+        type_text = str(type_name).strip()
+        if not (type_text.startswith("array<") and type_text.endswith(">")):
+            return None, None
+
+        inner = type_text[len("array<") : -1]
+        depth = 0
+        for index, char in enumerate(inner):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return inner[:index].strip(), inner[index + 1 :].strip()
+        return inner.strip(), None
+
+    def metal_array_element_type(self, type_name):
+        element_type, _array_size = self.metal_array_type_parts(type_name)
+        return element_type
+
+    def local_variable_sampler_alias_resource_type(self, node, declared_type):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return None
+
+        initial_name = self.expression_name(initial_value)
+        initial_type = self.expression_result_type(initial_value)
+        initial_array_element_type = self.metal_array_element_type(initial_type)
+        if not (
+            self.is_sampler_type(initial_type)
+            or self.is_sampler_type(initial_array_element_type)
+            or initial_name in self.sampler_variable_names()
+            or self.struct_member_is_sampler_resource(
+                self.struct_resource_member_node(initial_value)
+            )
+        ):
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if self.local_variable_type_node(node) is None:
+            array_size = self.sampler_argument_resource_array_size(initial_value)
+            if array_size is not None:
+                return self.format_resource_array_type("sampler", array_size)
+            return "sampler"
+        if self.is_sampler_type(declared_type_name):
+            return "sampler"
+        return None
+
+    def local_variable_acceleration_structure_alias_resource_type(
+        self, node, declared_type
+    ):
+        initial_type = self.acceleration_structure_argument_resource_type(
+            getattr(node, "initial_value", None)
+        )
+        if initial_type is None:
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if self.local_variable_type_node(node) is None:
+            return initial_type
+        if self.is_acceleration_structure_type(declared_type_name):
+            declared_resource_type = self.map_resource_type_with_format(
+                declared_type_name, node
+            )
+            if declared_resource_type != initial_type:
+                alias_name = getattr(node, "name", "<anonymous>")
+                raise ValueError(
+                    f"Metal local acceleration structure alias '{alias_name}' "
+                    f"declares {declared_type_name} but initializer has "
+                    f"{initial_type}"
+                )
+            return declared_resource_type
+        return None
+
+    def acceleration_structure_argument_resource_type(self, argument):
+        if argument is None:
+            return None
+
+        argument_type = self.expression_result_type(argument)
+        if argument_type and self.is_acceleration_structure_type(argument_type):
+            if self.metal_type_is_pointer_like(argument_type):
+                return None
+            return self.map_resource_type_with_format(argument_type)
+
+        argument_name = self.expression_name(argument)
+        if not argument_name:
+            return None
+
+        local_type = self.local_variable_types.get(argument_name)
+        if local_type and self.is_acceleration_structure_type(local_type):
+            if self.metal_type_is_pointer_like(local_type):
+                return None
+            return self.map_resource_type_with_format(local_type)
+
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            array_size,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) != argument_name:
+                continue
+            if array_size is not None and not isinstance(argument, ArrayAccessNode):
+                return None
+            return mapped_type
+        return None
+
+    def sampler_argument_resource_array_size(self, sampler_arg):
+        if isinstance(sampler_arg, ArrayAccessNode):
+            return None
+
+        member_array_size = self.struct_member_resource_array_size(sampler_arg)
+        if member_array_size is not None:
+            return member_array_size
+
+        sampler_name = self.expression_name(sampler_arg)
+        if not sampler_name:
+            return None
+
+        local_type = self.local_variable_types.get(sampler_name)
+        _element_type, array_size = self.metal_array_type_parts(local_type)
+        if array_size is not None:
+            return array_size
+
+        if sampler_name in self.current_sampler_parameter_array_sizes:
+            return self.current_sampler_parameter_array_sizes[sampler_name]
+
+        for sampler_variable, _, array_size in self.sampler_variables:
+            if getattr(sampler_variable, "name", None) == sampler_name:
+                return array_size
+        return None
+
+    def record_local_texture_alias_sampler_source(self, node):
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is not None:
+            self.current_texture_alias_sources[node.name] = initial_value
+
+    def record_local_image_alias_metadata(self, node):
+        image_format = explicit_image_format(node, self.attribute_value_to_string)
+        if image_format is None:
+            image_format = self.image_resource_format(
+                getattr(node, "initial_value", None)
+            )
+        if image_format is not None:
+            self.current_image_format_parameters[node.name] = image_format
+
     def local_variable_type_node(self, stmt):
         return getattr(stmt, "var_type", None) or getattr(stmt, "vtype", None)
 
@@ -3157,6 +3981,39 @@ class MetalCodeGen:
         if self.metal_type_is_pointer_like(self.expression_result_type(value)):
             return False
         return self.assignment_target_root_name(value) is not None
+
+    def address_space_assignment_diagnostic(self, target, value):
+        target_type = self.expression_result_type(target)
+        if self.pointer_pointee_type_name(target_type) is None:
+            return None
+
+        expected_address_space = self.argument_address_space(target)
+        if expected_address_space is None:
+            return None
+
+        target_name = self.assignment_target_display_name(target) or "<target>"
+        conflict = self.argument_address_space_conflict(value)
+        if conflict is not None:
+            return (
+                "/* unsupported Metal address-space assignment: value "
+                f"{self.address_space_conflict_description(conflict)} use "
+                f"different address spaces; assignment to '{target_name}' "
+                f"requires {expected_address_space} */"
+            )
+
+        actual_address_space = self.argument_address_space(value)
+        if (
+            actual_address_space is None
+            or actual_address_space == expected_address_space
+        ):
+            return None
+
+        value_name = self.assignment_target_display_name(value) or "<expr>"
+        return (
+            "/* unsupported Metal address-space assignment: value "
+            f"'{value_name}' uses {actual_address_space} address space but "
+            f"target '{target_name}' uses {expected_address_space} */"
+        )
 
     def local_reference_assignment_target(self, target):
         if not isinstance(target, BinaryOpNode):
@@ -3312,6 +4169,35 @@ class MetalCodeGen:
             f"using read-only {initializer_address_space} alias */"
         )
 
+    def local_variable_address_space_conflict_diagnostic(self, node):
+        raw_type = self.local_variable_type_node(node)
+        if not isinstance(raw_type, (PointerType, ReferenceType)):
+            return None
+        conflict = self.argument_address_space_conflict(
+            getattr(node, "initial_value", None)
+        )
+        if conflict is None:
+            return None
+        target_address_space = self.local_variable_address_space(node)
+        fallback_kind = "value" if isinstance(raw_type, ReferenceType) else "alias"
+        return (
+            "/* unsupported Metal address-space local alias: initializer "
+            f"{self.address_space_conflict_description(conflict)} use different "
+            f"address spaces; using uninitialized {target_address_space} "
+            f"{fallback_kind} */"
+        )
+
+    def local_variable_address_space_conflict_declaration(self, node, declaration):
+        raw_type = self.local_variable_type_node(node)
+        if not isinstance(raw_type, ReferenceType):
+            return declaration
+        address_space = self.local_variable_address_space(node)
+        referent_type = self.map_resource_type_with_format(
+            raw_type.referenced_type, node
+        )
+        value_declaration = format_c_style_array_declaration(referent_type, node.name)
+        return f"{address_space} {value_declaration}"
+
     def record_readonly_metal_mesh_payload_local_alias(self, node):
         if self.local_variable_address_space(node) != "object_data":
             return
@@ -3436,6 +4322,31 @@ class MetalCodeGen:
             "bool4",
         }
 
+    def is_matrix_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        mapped_type, array_suffix = split_array_type_suffix(self.map_type(vtype))
+        if array_suffix:
+            return False
+        for prefix in ("float", "half", "double"):
+            if not mapped_type.startswith(prefix):
+                continue
+            dimensions = mapped_type[len(prefix) :].split("x", 1)
+            return (
+                len(dimensions) == 2
+                and dimensions[0] in {"2", "3", "4"}
+                and dimensions[1] in {"2", "3", "4"}
+            )
+        return False
+
+    def is_builtin_value_constructor_type(self, vtype):
+        return (
+            self.is_scalar_value_type(vtype)
+            or self.is_vector_value_type(vtype)
+            or self.is_matrix_value_type(vtype)
+        )
+
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("float"):
@@ -3462,6 +4373,17 @@ class MetalCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
+            operator = self.map_operator(getattr(expr, "op", ""))
+            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
+                for candidate_type in (left_type, right_type):
+                    mapped_type = self.map_type(candidate_type)
+                    component_type = self.vector_component_type(mapped_type)
+                    if component_type is None:
+                        continue
+                    width = mapped_type[-1] if mapped_type[-1:].isdigit() else ""
+                    if width:
+                        return f"bool{width}"
+                return "bool"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -3499,6 +4421,9 @@ class MetalCodeGen:
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
+            metal_array_element_type = self.metal_array_element_type(array_type)
+            if metal_array_element_type is not None:
+                return metal_array_element_type
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
@@ -3551,10 +4476,14 @@ class MetalCodeGen:
             ) or infer_struct_constructor_type(self, expr)
         if isinstance(expr, MatchNode):
             return infer_match_expression_result_type(self, expr)
+        if isinstance(expr, WaveOpNode):
+            return self.metal_wave_result_type(expr.operation, expr.arguments)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
+                return self.metal_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -3671,6 +4600,18 @@ class MetalCodeGen:
                 "f16vec2",
                 "f16vec3",
                 "f16vec4",
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
                 "f16mat2",
                 "f16mat3",
                 "f16mat4",
@@ -3833,6 +4774,11 @@ class MetalCodeGen:
         )
         if readonly_mesh_payload_alias is not None:
             return readonly_mesh_payload_alias
+        address_space_assignment = self.address_space_assignment_diagnostic(
+            target, value
+        )
+        if address_space_assignment is not None:
+            return address_space_assignment
 
         lhs = self.generate_expression(target)
         if self.pointer_assignment_needs_address(target, value):
@@ -4154,8 +5100,7 @@ class MetalCodeGen:
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
         elif isinstance(expr, WaveOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            return self.generate_metal_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, MeshOpNode):
@@ -4191,6 +5136,14 @@ class MetalCodeGen:
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
+            constructor_type = getattr(expr, "constructor_type", None)
+            if self.is_builtin_value_constructor_type(constructor_type):
+                metal_type = self.map_type(constructor_type)
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, None)
+                    for arg in getattr(expr, "arguments", [])
+                )
+                return f"{metal_type}({args})"
             return str(expr)
         elif isinstance(expr, FunctionCallNode):
             # Resolve callee expression (can be Identifier/Member/Array access)
@@ -4248,6 +5201,10 @@ class MetalCodeGen:
             )
             if synchronization_call is not None:
                 return synchronization_call
+
+            wave_call = self.generate_metal_wave_operation(func_name, expr.args)
+            if wave_call is not None:
+                return wave_call
 
             atomic_call = self.generate_atomic_function_call(func_name, expr.args)
             if atomic_call is not None:
@@ -4352,6 +5309,18 @@ class MetalCodeGen:
                 "f16vec2",
                 "f16vec3",
                 "f16vec4",
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
                 "f16mat2",
                 "f16mat3",
                 "f16mat4",
@@ -4471,6 +5440,9 @@ class MetalCodeGen:
             )
             if address_space_call is not None:
                 return address_space_call
+            wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
+            if wave_lane_call is not None:
+                return wave_lane_call
             readonly_mesh_payload_call = (
                 self.readonly_metal_mesh_payload_call_diagnostic(
                     argument_func_name, expr.args
@@ -4478,6 +5450,7 @@ class MetalCodeGen:
             )
             if readonly_mesh_payload_call is not None:
                 return readonly_mesh_payload_call
+            self.validate_function_resource_argument_types(func_name, expr.args)
             self.validate_function_image_access_arguments(func_name, expr.args)
             args = self.generate_function_call_arguments(argument_func_name, expr.args)
             if func_name in self.user_function_names:
@@ -4489,6 +5462,11 @@ class MetalCodeGen:
                 args.extend(
                     self.required_metal_mesh_dispatch_context_arguments(func_name)
                 )
+                wave_lane_args = self.required_metal_wave_lane_context_arguments(
+                    func_name
+                )
+                if wave_lane_args is not None:
+                    args.extend(wave_lane_args)
             args = ", ".join(args)
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
@@ -4588,6 +5566,455 @@ class MetalCodeGen:
                 "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
             ),
         }.get(func_name)
+
+    def generate_metal_wave_op_expression(self, node):
+        return self.generate_metal_wave_operation(node.operation, node.arguments)
+
+    def generate_metal_wave_operation(self, operation, arguments):
+        expected_arity = self.METAL_WAVE_INTRINSIC_ARITIES.get(operation)
+        if expected_arity is None:
+            return None
+
+        actual_arity = len(arguments)
+        if actual_arity != expected_arity:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                f"expects {expected_arity} arguments, got {actual_arity}",
+            )
+
+        unsupported_reason = self.METAL_WAVE_UNSUPPORTED_OPERATIONS.get(operation)
+        if unsupported_reason is not None:
+            return self.metal_wave_diagnostic_expression(
+                operation, arguments, unsupported_reason
+            )
+
+        type_diagnostic = self.metal_wave_type_diagnostic(operation, arguments)
+        if type_diagnostic is not None:
+            return type_diagnostic
+
+        if operation == "WaveGetLaneIndex":
+            lane_index_parameter = self.current_metal_wave_lane_index_parameter
+            if lane_index_parameter is not None:
+                return lane_index_parameter
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                "requires a compute-stage thread_index_in_simdgroup value",
+            )
+        if operation == "WaveGetLaneCount":
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_count_parameter is not None:
+                return lane_count_parameter
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                "requires a compute-stage threads_per_simdgroup value",
+            )
+        if operation == "WaveIsFirstLane":
+            return "simd_is_first()"
+        if operation == "WaveActiveCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"uint(popcount(simd_vote::vote_t(simd_ballot({predicate}))))"
+        if operation == "WavePrefixCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"simd_prefix_exclusive_sum(({predicate}) ? 1u : 0u)"
+        if operation == "WaveActiveBallot":
+            self.required_metal_wave_ballot_helper = True
+            predicate = self.generate_expression(arguments[0])
+            return f"__crossgl_metal_wave_ballot({predicate})"
+        if operation == "WaveMatch":
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_count_parameter is None:
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    "requires a compute-stage threads_per_simdgroup value",
+                )
+            self.required_metal_wave_match_helper = True
+            value = self.generate_expression(arguments[0])
+            return f"__crossgl_metal_wave_match({value}, {lane_count_parameter})"
+        if operation in self.METAL_WAVE_MULTI_PREFIX_INTRINSICS:
+            lane_index_parameter = self.current_metal_wave_lane_index_parameter
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_index_parameter is None or lane_count_parameter is None:
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    (
+                        "requires compute-stage thread_index_in_simdgroup "
+                        "and threads_per_simdgroup values"
+                    ),
+                )
+            self.required_metal_wave_ballot_helper = True
+            self.required_metal_wave_mask_contains_helper = True
+            self.required_metal_wave_multi_prefix_helpers.add(operation)
+            value = self.generate_expression(arguments[0])
+            mask = self.generate_expression(arguments[1])
+            helper = self.METAL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            return (
+                f"{helper}({value}, {mask}, {lane_index_parameter}, "
+                f"{lane_count_parameter})"
+            )
+        if operation == "WaveReadLaneAt":
+            value = self.generate_expression(arguments[0])
+            lane = self.generate_expression(arguments[1])
+            return f"simd_broadcast({value}, ushort({lane}))"
+        if operation == "QuadReadLaneAt":
+            value = self.generate_expression(arguments[0])
+            lane = self.generate_expression(arguments[1])
+            return f"quad_broadcast({value}, ushort({lane}))"
+        if operation == "QuadReadAcrossX":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(1))"
+        if operation == "QuadReadAcrossY":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(2))"
+        if operation == "QuadReadAcrossDiagonal":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(3))"
+
+        mapped = self.METAL_WAVE_DIRECT_MAPPINGS.get(operation)
+        if mapped is None:
+            return self.metal_wave_diagnostic_expression(
+                operation, arguments, "is not recognized by the Metal backend"
+            )
+        args = ", ".join(self.generate_expression(arg) for arg in arguments)
+        return f"{mapped}({args})"
+
+    def metal_wave_result_type(self, operation, arguments):
+        if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:
+            return "uint"
+        if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "bool"
+        if operation in self.METAL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4"
+        if operation in self.METAL_WAVE_VALUE_RESULT_INTRINSICS and arguments:
+            return self.expression_result_type(arguments[0])
+        return None
+
+    def metal_wave_argument_mapped_type(self, argument):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return None, None, None
+        mapped_type = self.map_type(argument_type)
+        component_type = self.vector_component_type(mapped_type)
+        return mapped_type, component_type, split_array_type_suffix(mapped_type)[1]
+
+    def metal_wave_validate_predicate_argument(self, operation, argument):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or mapped_type != "bool":
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                ("predicate argument must be scalar bool, got " f"{mapped_type}"),
+            )
+        return None
+
+    def metal_wave_validate_value_argument(
+        self, operation, argument, allowed_components, description
+    ):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or component_type not in allowed_components:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be {description}, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_lane_argument(self, operation, argument, role):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or mapped_type not in {"int", "uint"}:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"{role} must be scalar int or uint, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_match_argument(self, operation, argument):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if (
+            array_suffix
+            or mapped_type != component_type
+            or component_type not in self.METAL_WAVE_NUMERIC_COMPONENT_TYPES
+        ):
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be numeric scalar, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_mapped_type_is_matrix(self, mapped_type):
+        return self.is_matrix_value_type(mapped_type)
+
+    def metal_wave_validate_non_matrix_value_argument(
+        self, operation, argument, allowed_components, description
+    ):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if (
+            array_suffix
+            or self.metal_wave_mapped_type_is_matrix(mapped_type)
+            or component_type not in allowed_components
+        ):
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be {description}, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_multi_prefix_mask_argument(
+        self, operation, argument, value_argument=None
+    ):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        diagnostic_arguments = [value_argument] if value_argument is not None else []
+        diagnostic_arguments.append(argument)
+        if array_suffix or mapped_type != "uint4":
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                diagnostic_arguments,
+                f"mask argument must be uint4, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_quad_lane_range(self, operation, argument):
+        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        if lane_index is None:
+            return None
+        if not 0 <= lane_index <= 3:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"quad lane index must be in the range 0 to 3, got {lane_index}",
+            )
+        return None
+
+    def metal_wave_type_diagnostic(self, operation, arguments):
+        if operation == "WaveMultiPrefixCountBits":
+            diagnostic = self.metal_wave_validate_predicate_argument(
+                operation, arguments[0]
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
+        if operation in self.METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS:
+            diagnostic = self.metal_wave_validate_non_matrix_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
+        if operation in self.METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS:
+            diagnostic = self.metal_wave_validate_non_matrix_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar or vector",
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
+        if operation in self.METAL_WAVE_BOOL_ARGUMENT_INTRINSICS:
+            return self.metal_wave_validate_predicate_argument(operation, arguments[0])
+        if operation in self.METAL_WAVE_NUMERIC_VALUE_INTRINSICS:
+            return self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+        if operation in self.METAL_WAVE_INTEGER_VALUE_INTRINSICS:
+            return self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar or vector",
+            )
+        if operation in self.METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS:
+            diagnostic = self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric or integer scalar or vector",
+            )
+            if diagnostic is not None:
+                return diagnostic
+        if operation == "WaveMatch":
+            diagnostic = self.metal_wave_validate_match_argument(
+                operation, arguments[0]
+            )
+            if diagnostic is not None:
+                return diagnostic
+
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            diagnostic = self.metal_wave_validate_lane_argument(
+                operation, arguments[1], "lane index"
+            )
+            if diagnostic is not None:
+                return diagnostic
+            if operation == "QuadReadLaneAt":
+                return self.metal_wave_validate_quad_lane_range(operation, arguments[1])
+        return None
+
+    def metal_wave_default_value(self, operation, arguments):
+        result_type = (
+            self.current_expression_expected_type
+            or self.metal_wave_result_type(operation, arguments)
+        )
+        if result_type:
+            return self.diagnostic_zero_value_for_type(result_type)
+        if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "false"
+        if operation in self.METAL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4(0)"
+        return "0u"
+
+    def metal_wave_diagnostic_expression(self, operation, arguments, reason):
+        return (
+            f"/* unsupported Metal wave intrinsic: {operation} {reason} */ "
+            f"{self.metal_wave_default_value(operation, arguments)}"
+        )
+
+    def generate_metal_wave_helpers(self):
+        code = ""
+        if self.required_metal_wave_ballot_helper:
+            code += (
+                "uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
+                "    simd_vote::vote_t mask = simd_vote::vote_t(simd_ballot(predicate));\n"
+                "    return uint4(\n"
+                "        uint(mask & simd_vote::vote_t(0xffffffffu)),\n"
+                "        uint((mask >> simd_vote::vote_t(32u)) & "
+                "simd_vote::vote_t(0xffffffffu)),\n"
+                "        0u,\n"
+                "        0u);\n"
+                "}\n\n"
+            )
+        if self.required_metal_wave_match_helper:
+            code += (
+                "template <typename T>\n"
+                "uint4 __crossgl_metal_wave_match(T value, uint laneCount) {\n"
+                "    uint4 mask = uint4(0u);\n"
+                "    for (uint lane = 0u; lane < laneCount; ++lane) {\n"
+                "        if (simd_broadcast(value, ushort(lane)) == value) {\n"
+                "            if (lane < 32u) {\n"
+                "                mask.x |= (1u << lane);\n"
+                "            } else if (lane < 64u) {\n"
+                "                mask.y |= (1u << (lane - 32u));\n"
+                "            } else if (lane < 96u) {\n"
+                "                mask.z |= (1u << (lane - 64u));\n"
+                "            } else {\n"
+                "                mask.w |= (1u << (lane - 96u));\n"
+                "            }\n"
+                "        }\n"
+                "    }\n"
+                "    return mask;\n"
+                "}\n\n"
+            )
+        if self.required_metal_wave_mask_contains_helper:
+            code += (
+                "bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane) {\n"
+                "    if (lane < 32u) {\n"
+                "        return (mask.x & (1u << lane)) != 0u;\n"
+                "    }\n"
+                "    if (lane < 64u) {\n"
+                "        return (mask.y & (1u << (lane - 32u))) != 0u;\n"
+                "    }\n"
+                "    if (lane < 96u) {\n"
+                "        return (mask.z & (1u << (lane - 64u))) != 0u;\n"
+                "    }\n"
+                "    return (mask.w & (1u << (lane - 96u))) != 0u;\n"
+                "}\n\n"
+            )
+        for operation in self.METAL_WAVE_MULTI_PREFIX_HELPERS:
+            if operation not in self.required_metal_wave_multi_prefix_helpers:
+                continue
+            helper_name = self.METAL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            if operation == "WaveMultiPrefixCountBits":
+                code += (
+                    f"uint {helper_name}(bool value, uint4 mask, uint laneIndex, "
+                    "uint laneCount) {\n"
+                    "    uint laneValue = value ? 1u : 0u;\n"
+                    "    uint result = 0u;\n"
+                    "    uint4 activeMask = __crossgl_metal_wave_ballot(true);\n"
+                    "    uint limit = min(laneIndex, laneCount);\n"
+                    "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                    "        if (__crossgl_metal_wave_mask_contains(mask, lane) && "
+                    "__crossgl_metal_wave_mask_contains(activeMask, lane)) {\n"
+                    "            result += simd_broadcast(laneValue, ushort(lane));\n"
+                    "        }\n"
+                    "    }\n"
+                    "    return result;\n"
+                    "}\n\n"
+                )
+                continue
+            if operation == "WaveMultiPrefixSum":
+                identity = "T(0)"
+                assignment = "+="
+            elif operation == "WaveMultiPrefixProduct":
+                identity = "T(1)"
+                assignment = "*="
+            elif operation == "WaveMultiPrefixBitAnd":
+                identity = "~T(0)"
+                assignment = "&="
+            elif operation == "WaveMultiPrefixBitOr":
+                identity = "T(0)"
+                assignment = "|="
+            else:
+                identity = "T(0)"
+                assignment = "^="
+            code += (
+                "template <typename T>\n"
+                f"T {helper_name}(T value, uint4 mask, uint laneIndex, "
+                "uint laneCount) {\n"
+                f"    T result = {identity};\n"
+                "    uint4 activeMask = __crossgl_metal_wave_ballot(true);\n"
+                "    uint limit = min(laneIndex, laneCount);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (__crossgl_metal_wave_mask_contains(mask, lane) && "
+                "__crossgl_metal_wave_mask_contains(activeMask, lane)) {\n"
+                f"            result {assignment} simd_broadcast(value, ushort(lane));\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
 
     def generate_ray_tracing_op_expression(self, expr):
         raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)
@@ -5393,7 +6820,11 @@ class MetalCodeGen:
         if not self.is_metal_atomic_function_name(func_name) or not args:
             return None
 
+        args = list(args)
         rendered_args = [self.generate_expression(arg) for arg in args]
+        args, rendered_args = self.strip_metal_atomic_memory_scope_argument(
+            func_name, args, rendered_args
+        )
         if self.metal_atomic_target_needs_address(args[0], rendered_args[0]):
             rendered_args[0] = f"&{rendered_args[0]}"
         if self.is_metal_atomic_compare_exchange_name(func_name) and len(args) >= 2:
@@ -5409,6 +6840,61 @@ class MetalCodeGen:
         return (
             f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
         )
+
+    def strip_metal_atomic_memory_scope_argument(self, func_name, args, rendered_args):
+        expected_count = self.metal_atomic_expected_argument_count(func_name)
+        if (
+            expected_count is not None
+            and len(args) == expected_count + 1
+            and self.is_metal_atomic_memory_scope_argument(args[-1], rendered_args[-1])
+        ):
+            return args[:-1], rendered_args[:-1]
+        return args, rendered_args
+
+    def metal_atomic_expected_argument_count(self, func_name):
+        if self.is_metal_atomic_compare_exchange_name(func_name):
+            return 5
+        if func_name == "atomic_load_explicit":
+            return 2
+        if func_name in {
+            "atomic_fetch_add_explicit",
+            "atomic_fetch_sub_explicit",
+            "atomic_fetch_min_explicit",
+            "atomic_fetch_max_explicit",
+            "atomic_fetch_and_explicit",
+            "atomic_fetch_or_explicit",
+            "atomic_fetch_xor_explicit",
+            "atomic_store_explicit",
+            "atomic_exchange_explicit",
+        }:
+            return 3
+        return None
+
+    def is_metal_atomic_memory_scope_argument(self, arg, rendered_arg):
+        scope_names = {
+            "memory_scope_device",
+            "memory_scope_grid",
+            "memory_scope_invocation",
+            "memory_scope_queuefamily",
+            "memory_scope_queue_family",
+            "memory_scope_simdgroup",
+            "memory_scope_subgroup",
+            "memory_scope_system",
+            "memory_scope_thread",
+            "memory_scope_threadgroup",
+            "memory_scope_workgroup",
+        }
+        for candidate in (self.expression_name(arg), rendered_arg):
+            if candidate is None:
+                continue
+            normalized = str(candidate).strip().lower()
+            normalized = normalized.replace(" ", "")
+            normalized = normalized.replace("::", "_").replace(".", "_")
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in scope_names:
+                return True
+        return False
 
     def metal_atomic_target_needs_address(self, arg, rendered_arg):
         if self.is_metal_address_expression(arg, rendered_arg):
@@ -5818,15 +7304,15 @@ class MetalCodeGen:
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 4
         ):
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(
+                expr.arguments[:3]
+            )
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments[:3])
+                )
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
                 expr.arguments[3]
-            )
-            grid = ", ".join(
-                self.generate_expression(argument) for argument in expr.arguments[:3]
-            )
-            grid_assignment = (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid(uint3({grid}))"
             )
             return "\n".join([payload_assignment, grid_assignment])
         if (
@@ -5834,24 +7320,64 @@ class MetalCodeGen:
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 3
         ):
-            grid = ", ".join(
-                self.generate_expression(argument) for argument in expr.arguments
-            )
-            return (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid(uint3({grid}))"
-            )
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                )
+            return grid_assignment
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
             and len(expr.arguments) == 1
         ):
-            grid = self.generate_expression(expr.arguments[0])
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            if grid_assignment is None:
+                return self.unsupported_metal_mesh_dispatch(
+                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                )
+            return grid_assignment
+        return None
+
+    def metal_dispatch_mesh_grid_assignment(self, grid_args):
+        reason = self.metal_dispatch_mesh_grid_argument_reason(grid_args)
+        if reason is not None:
+            return None
+        if len(grid_args) == 1:
+            grid = self.generate_expression(grid_args[0])
+        else:
+            grid = "uint3({})".format(
+                ", ".join(self.generate_expression(argument) for argument in grid_args)
+            )
+        return (
+            f"{self.current_metal_mesh_grid_properties_parameter}"
+            f".set_threadgroups_per_grid({grid})"
+        )
+
+    def metal_dispatch_mesh_grid_argument_reason(self, grid_args):
+        if len(grid_args) == 1:
+            grid_type = self.expression_result_type(grid_args[0])
+            if self.map_type(grid_type) == "uint3":
+                return None
+            type_label = self.type_name_string(grid_type) or "unknown"
             return (
-                f"{self.current_metal_mesh_grid_properties_parameter}"
-                f".set_threadgroups_per_grid({grid})"
+                "DispatchMesh grid argument must be a uint3-compatible vector"
+                f"; got '{type_label}'"
+            )
+
+        for index, argument in enumerate(grid_args, start=1):
+            argument_type = self.expression_result_type(argument)
+            if self.is_scalar_integer_type(argument_type):
+                continue
+            type_label = self.type_name_string(argument_type) or "unknown"
+            return (
+                f"DispatchMesh grid component argument {index} must be a "
+                f"scalar integer; got '{type_label}'"
             )
         return None
+
+    def unsupported_metal_mesh_dispatch(self, reason):
+        return f"/* unsupported Metal mesh dispatch: {reason} */"
 
     def metal_dispatch_mesh_payload_assignment(self, payload_expr):
         if self.current_metal_mesh_payload_parameter is None:
@@ -5907,9 +7433,12 @@ class MetalCodeGen:
             return None
 
         source_address_space = address_space or "unknown"
+        display_name = (
+            self.assignment_target_access_display_name(payload_expr) or payload_name
+        )
         return (
             "/* unsupported Metal mesh payload dispatch: payload argument "
-            f"'{payload_name}' uses {source_address_space} address space; "
+            f"'{display_name}' uses {source_address_space} address space; "
             "DispatchMesh payload requires a threadgroup lvalue */"
         )
 
@@ -6376,7 +7905,16 @@ class MetalCodeGen:
             return ""
         if semantic:
             return self.map_semantic(semantic)
-        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
+        if shader_type in {
+            "vertex",
+            "fragment",
+            "compute",
+            "ray_generation",
+            "object",
+            "task",
+            "amplification",
+            "mesh",
+        }:
             resource_attr = self.resource_parameter_attribute(raw_param_type, node)
             if resource_attr:
                 return resource_attr
@@ -6634,6 +8172,8 @@ class MetalCodeGen:
     def format_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
+        self.validate_metal_ray_resource_parameter_value_type(raw_param_type, name)
+
         ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
             mapped_type, name, node, shader_type
         )
@@ -6677,6 +8217,43 @@ class MetalCodeGen:
             resource_type, array_size = array_type
             return self.format_resource_parameter(resource_type, name, array_size)
         return format_c_style_array_declaration(mapped_type, name)
+
+    def validate_metal_ray_resource_parameter_value_type(self, raw_param_type, name):
+        resource_kind = self.metal_ray_resource_pointer_or_reference_kind(
+            raw_param_type
+        )
+        if resource_kind is None:
+            return
+
+        type_name = self.type_name_string(raw_param_type) or str(raw_param_type)
+        raise ValueError(
+            f"Metal ray tracing resource parameter '{name}' has pointer or "
+            f"reference type '{type_name}' for {resource_kind}; Metal ray "
+            "tracing resources must be passed by value without address-space "
+            "qualifiers"
+        )
+
+    def metal_ray_resource_pointer_or_reference_kind(self, raw_param_type):
+        if isinstance(raw_param_type, PointerType):
+            base_type = raw_param_type.pointee_type
+        elif isinstance(raw_param_type, ReferenceType):
+            base_type = raw_param_type.referenced_type
+        else:
+            type_name = self.type_name_string(raw_param_type)
+            if not type_name:
+                return None
+            type_name = str(type_name).strip()
+            if not (type_name.endswith("*") or type_name.endswith("&")):
+                return None
+            base_type = type_name[:-1].strip()
+
+        if self.is_acceleration_structure_type(base_type):
+            return "acceleration_structure"
+        if self.is_visible_function_table_type(base_type):
+            return "visible_function_table"
+        if self.is_intersection_function_table_type(base_type):
+            return "intersection_function_table"
+        return None
 
     def format_address_space_parameter_declaration(
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
@@ -6992,6 +8569,18 @@ class MetalCodeGen:
         return None
 
     def argument_address_space(self, arg):
+        if isinstance(arg, TernaryOpNode):
+            if self.argument_address_space_conflict(arg) is not None:
+                return None
+            true_space = self.argument_address_space(getattr(arg, "true_expr", None))
+            false_space = self.argument_address_space(getattr(arg, "false_expr", None))
+            if (
+                true_space is not None
+                and false_space is not None
+                and true_space == false_space
+            ):
+                return true_space
+            return None
         member_address_space = self.address_space_qualified_member_address_space(arg)
         if member_address_space is not None:
             return member_address_space
@@ -7036,6 +8625,57 @@ class MetalCodeGen:
             ).get(str(getattr(expr, "member", "")))
         return None
 
+    def argument_address_space_conflict(self, arg):
+        if arg is None:
+            return None
+        if isinstance(arg, TernaryOpNode):
+            true_expr = getattr(arg, "true_expr", None)
+            false_expr = getattr(arg, "false_expr", None)
+            true_conflict = self.argument_address_space_conflict(true_expr)
+            if true_conflict is not None:
+                return true_conflict
+            false_conflict = self.argument_address_space_conflict(false_expr)
+            if false_conflict is not None:
+                return false_conflict
+            true_space = self.argument_address_space(true_expr)
+            false_space = self.argument_address_space(false_expr)
+            if (
+                true_space is not None
+                and false_space is not None
+                and true_space != false_space
+            ):
+                return (
+                    true_space,
+                    false_space,
+                    self.assignment_target_display_name(true_expr) or "<expr>",
+                    self.assignment_target_display_name(false_expr) or "<expr>",
+                )
+            return None
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) in {
+            "&",
+            "*",
+        }:
+            return self.argument_address_space_conflict(getattr(arg, "operand", None))
+        if isinstance(arg, BinaryOpNode) and getattr(arg, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.argument_address_space_conflict(
+                getattr(arg, "left", None)
+            ) or self.argument_address_space_conflict(getattr(arg, "right", None))
+        if isinstance(arg, ArrayAccessNode):
+            return self.argument_address_space_conflict(
+                getattr(arg, "array", getattr(arg, "array_expr", None))
+            )
+        return None
+
+    def address_space_conflict_description(self, conflict):
+        true_space, false_space, true_name, false_name = conflict
+        return (
+            f"branches '{true_name}' ({true_space}) and "
+            f"'{false_name}' ({false_space})"
+        )
+
     def address_space_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
@@ -7052,6 +8692,23 @@ class MetalCodeGen:
             )
             if expected_address_space is None:
                 continue
+            address_space_conflict = self.argument_address_space_conflict(arg)
+            if address_space_conflict is not None:
+                arg_name = self.assignment_target_display_name(arg) or "<expr>"
+                parameter_name = getattr(parameter, "name", f"arg{index}")
+                diagnostic = (
+                    "/* unsupported Metal address-space call: argument "
+                    f"'{arg_name}' mixes "
+                    f"{self.address_space_conflict_description(address_space_conflict)} "
+                    f"but parameter '{parameter_name}' of '{func_name}' requires "
+                    f"{expected_address_space} */"
+                )
+                return_type = self.function_return_types.get(func_name)
+                if self.map_type(return_type) == "void":
+                    return diagnostic
+                return (
+                    f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+                )
             actual_address_space = self.argument_address_space(arg)
             if (
                 actual_address_space is None
@@ -7191,6 +8848,49 @@ class MetalCodeGen:
             return f"{object_name}->{member_name}" if object_name else member_name
         return self.expression_name(target)
 
+    def assignment_target_access_display_name(self, target):
+        if isinstance(target, UnaryOpNode):
+            operand_name = self.assignment_target_access_display_name(
+                getattr(target, "operand", None)
+            )
+            if getattr(target, "operator", None) == "&":
+                return operand_name
+            if getattr(target, "operator", None) == "*":
+                return f"*{operand_name}" if operand_name else None
+        if isinstance(target, BinaryOpNode) and getattr(target, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.assignment_target_access_display_name(
+                getattr(target, "left", None)
+            ) or self.assignment_target_access_display_name(
+                getattr(target, "right", None)
+            )
+        if isinstance(target, ArrayAccessNode):
+            object_name = self.assignment_target_access_display_name(
+                getattr(target, "array", getattr(target, "array_expr", None))
+            )
+            index_expr = getattr(target, "index", getattr(target, "index_expr", None))
+            index_name = (
+                self.safe_expression_to_string(index_expr)
+                if index_expr is not None
+                else ""
+            )
+            return f"{object_name}[{index_name}]" if object_name else None
+        if isinstance(target, MemberAccessNode):
+            object_name = self.assignment_target_access_display_name(
+                getattr(target, "object", getattr(target, "object_expr", None))
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}.{member_name}" if object_name else member_name
+        if isinstance(target, PointerAccessNode):
+            object_name = self.assignment_target_access_display_name(
+                getattr(target, "pointer_expr", None)
+            )
+            member_name = str(getattr(target, "member", ""))
+            return f"{object_name}->{member_name}" if object_name else member_name
+        return self.expression_name(target)
+
     def readonly_metal_mesh_payload_key(self, target):
         display_name = self.assignment_target_display_name(target)
         if display_name:
@@ -7322,6 +9022,19 @@ class MetalCodeGen:
             normalized = normalized.split("_", 1)[1]
         return normalized in {
             "payload",
+            "mesh_payload",
+            "hlsl_mesh_payload",
+            "task_payload",
+            "taskpayloadsharedext",
+        }
+
+    def is_explicit_metal_mesh_payload_semantic(self, semantic):
+        if semantic is None:
+            return False
+        normalized = str(semantic).strip().lower().replace("-", "_")
+        if normalized.startswith("metal_") or normalized.startswith("msl_"):
+            normalized = normalized.split("_", 1)[1]
+        return normalized in {
             "mesh_payload",
             "hlsl_mesh_payload",
             "task_payload",
@@ -8091,6 +9804,14 @@ class MetalCodeGen:
             )
             return current
 
+        if isinstance(expr, FunctionCallNode):
+            self.validate_metal_mesh_output_helper_call_usage(
+                expr,
+                current.get("counts_seen", False),
+                current.get("counts"),
+            )
+            return current
+
         nested_statements = self.metal_mesh_nested_statements(stmt)
         for nested in nested_statements:
             self.validate_metal_mesh_output_statement_sequence(nested, current)
@@ -8298,6 +10019,131 @@ class MetalCodeGen:
                 f"must be less than SetMeshOutputCounts "
                 f"{'numVertices' if role == 'vertices' else 'numPrimitives'} "
                 f"({active_bound})"
+            )
+
+    def validate_metal_mesh_output_helper_call_usage(
+        self, call, set_counts_seen, set_counts
+    ):
+        func_name = self.function_call_name(call)
+        if func_name == "SetIndex":
+            self.validate_metal_mesh_set_index_helper_call_usage(
+                call, set_counts_seen, set_counts
+            )
+            return
+
+        helper_roles = {
+            "SetVertex": ("vertices", "max_vertices", "numVertices"),
+            "SetPrimitive": ("primitives", "max_primitives", "numPrimitives"),
+        }
+        role_info = helper_roles.get(func_name)
+        if role_info is None:
+            return
+
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if len(args) != 2:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
+            )
+
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' must be called only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(args[0], self.literal_int_constants)
+        if index_value is None:
+            return
+
+        role, declared_key, active_label = role_info
+        mesh_output = self.current_metal_mesh_output_config or {}
+        declared_bound = self.metal_literal_int_text_value(
+            mesh_output.get(declared_key)
+        )
+        if declared_bound is not None and index_value >= declared_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                f"must be less than declared output count ({declared_bound})"
+            )
+
+        active_bound = None
+        if set_counts is not None:
+            active_bound = set_counts.get(role)
+        if active_bound is not None and index_value >= active_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                f"must be less than SetMeshOutputCounts {active_label} "
+                f"({active_bound})"
+            )
+
+    def validate_metal_mesh_set_index_helper_call_usage(
+        self, call, set_counts_seen, set_counts
+    ):
+        func_name = self.function_call_name(call)
+        args = getattr(call, "arguments", getattr(call, "args", []))
+        if len(args) != 2:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' requires exactly 2 arguments"
+            )
+
+        if not set_counts_seen:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' must be called only after "
+                "SetMeshOutputCounts"
+            )
+
+        index_value = self.literal_int_value(args[0], self.literal_int_constants)
+        if index_value is None:
+            return
+
+        write_width = self.metal_mesh_index_vector_width(args[1]) or 1
+        mesh_output = self.current_metal_mesh_output_config or {}
+        topology_width = self.metal_mesh_topology_index_width(
+            mesh_output.get("topology")
+        )
+        if topology_width is None:
+            return
+
+        declared_primitives = self.metal_literal_int_text_value(
+            mesh_output.get("max_primitives")
+        )
+        if declared_primitives is not None:
+            declared_index_count = declared_primitives * topology_width
+            self.validate_metal_mesh_set_index_span(
+                func_name,
+                index_value,
+                write_width,
+                declared_index_count,
+                "declared flattened index count",
+            )
+
+        active_primitives = None
+        if set_counts is not None:
+            active_primitives = set_counts.get("primitives")
+        if active_primitives is not None:
+            active_index_count = active_primitives * topology_width
+            self.validate_metal_mesh_set_index_span(
+                func_name,
+                index_value,
+                write_width,
+                active_index_count,
+                "SetMeshOutputCounts numPrimitives flattened index count",
+            )
+
+    def validate_metal_mesh_set_index_span(
+        self, func_name, index_value, write_width, flattened_bound, bound_label
+    ):
+        last_index = index_value + write_width - 1
+        if index_value < 0:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index ({index_value}) "
+                "must be non-negative"
+            )
+        if last_index >= flattened_bound:
+            raise ValueError(
+                f"Metal mesh output helper '{func_name}' index range "
+                f"[{index_value}, {last_index}] must be less than "
+                f"{bound_label} ({flattened_bound})"
             )
 
     def metal_mesh_nested_statements(self, stmt):
@@ -8529,6 +10375,54 @@ class MetalCodeGen:
             )
         return next(iter(payload_types), None)
 
+    def validate_metal_mesh_payload_parameter_placement(self, ast, functions):
+        mesh_payload_entry_stages_by_id = {}
+        for stage_type, stage in (getattr(ast, "stages", {}) or {}).items():
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name not in {"object", "task", "amplification", "mesh"}:
+                continue
+            entry_point = getattr(stage, "entry_point", None)
+            if entry_point is not None:
+                mesh_payload_entry_stages_by_id[id(entry_point)] = stage_name
+                for parameter in getattr(entry_point, "parameters", []) or []:
+                    if self.is_metal_mesh_payload_parameter(stage_name, parameter):
+                        self.validate_metal_mesh_payload_parameter_address_space(
+                            stage_name, parameter
+                        )
+
+        for func in functions:
+            if id(func) in mesh_payload_entry_stages_by_id:
+                continue
+            for parameter in getattr(func, "parameters", []) or []:
+                if not self.is_explicit_metal_mesh_payload_semantic(
+                    self.semantic_from_node(parameter)
+                ):
+                    continue
+                func_name = getattr(func, "name", "<anonymous>")
+                param_name = getattr(parameter, "name", "<anonymous>")
+                raise ValueError(
+                    "Metal mesh payload parameters are only supported on "
+                    "object, task, amplification, or mesh stage entry points; "
+                    f"function '{func_name}' parameter '{param_name}' declares "
+                    "mesh payload semantics"
+                )
+
+    def validate_metal_mesh_payload_parameter_address_space(
+        self, stage_name, parameter
+    ):
+        address_space = self.normalized_address_space(
+            self.parameter_address_space(parameter)
+        )
+        if address_space in {None, "object_data"}:
+            return
+
+        param_name = getattr(parameter, "name", "<anonymous>")
+        raise ValueError(
+            f"Metal mesh payload parameter '{param_name}' on {stage_name} stage "
+            f"uses {address_space} address space; mesh payload parameters "
+            "require object_data"
+        )
+
     def generated_metal_mesh_payload_parameter(
         self, shader_type, func, reserved_parameter_names
     ):
@@ -8709,6 +10603,9 @@ class MetalCodeGen:
                 f"Metal mesh output topology cannot be lowered: {topology}"
             )
         return mapped
+
+    def metal_mesh_topology_index_width(self, topology):
+        return {"point": 1, "line": 2, "triangle": 3}.get(topology)
 
     def generate_metal_mesh_vertex_output_struct(self, mesh_output):
         return (
@@ -9052,6 +10949,7 @@ class MetalCodeGen:
             | self.global_glsl_buffer_block_names()
         )
         sampler_names = self.global_sampler_names()
+        texture_alias_sources = self.local_texture_alias_sources(func, texture_names)
         dependencies = set()
 
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
@@ -9073,7 +10971,12 @@ class MetalCodeGen:
 
             if isinstance(node, FunctionCallNode):
                 self.add_texture_call_resource_dependencies(
-                    node, local_names, texture_names, sampler_names, dependencies
+                    node,
+                    local_names,
+                    texture_names,
+                    sampler_names,
+                    dependencies,
+                    texture_alias_sources,
                 )
                 self.add_buffer_call_resource_dependencies(
                     node, local_names, buffer_names, dependencies
@@ -9088,6 +10991,36 @@ class MetalCodeGen:
                 )
 
         return dependencies
+
+    def local_texture_alias_sources(self, func, texture_names):
+        aliases = {}
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            initial_value = getattr(node, "initial_value", None)
+            source_name = self.expression_name(initial_value)
+            if (
+                name
+                and source_name
+                and (source_name in texture_names or source_name in aliases)
+            ):
+                aliases[name] = initial_value
+        return aliases
+
+    def texture_alias_dependency_source(self, texture_name, texture_alias_sources):
+        source_arg = texture_alias_sources.get(texture_name)
+        seen = {texture_name}
+        while source_arg is not None:
+            source_name = self.expression_name(source_arg)
+            if not source_name or source_name in seen:
+                return source_arg
+            next_source_arg = texture_alias_sources.get(source_name)
+            if next_source_arg is None:
+                return source_arg
+            seen.add(source_name)
+            source_arg = next_source_arg
+        return None
 
     def add_ray_tracing_resource_dependencies(
         self,
@@ -9132,7 +11065,13 @@ class MetalCodeGen:
                 dependencies.add(table_name)
 
     def add_texture_call_resource_dependencies(
-        self, call, local_names, texture_names, sampler_names, dependencies
+        self,
+        call,
+        local_names,
+        texture_names,
+        sampler_names,
+        dependencies,
+        texture_alias_sources=None,
     ):
         func_name = self.function_call_name(call)
         if not func_name or not str(func_name).startswith(("texture", "image")):
@@ -9159,6 +11098,18 @@ class MetalCodeGen:
             and implicit_sampler_name not in local_names
         ):
             dependencies.add(implicit_sampler_name)
+            return
+
+        source_arg = self.texture_alias_dependency_source(
+            texture_name, texture_alias_sources or {}
+        )
+        source_name = self.expression_name(source_arg)
+        source_sampler_name = f"{source_name}Sampler" if source_name else None
+        if (
+            source_sampler_name in sampler_names
+            and source_sampler_name not in local_names
+        ):
+            dependencies.add(source_sampler_name)
 
     def add_buffer_call_resource_dependencies(
         self, call, local_names, buffer_names, dependencies
@@ -10881,7 +12832,65 @@ class MetalCodeGen:
             if index is not None and self.sampler_array_size(sampler_name) is not None:
                 return f"{sampler_name}[{index}]"
             return sampler_name
+
+        source_arg = self.texture_alias_sampler_source(texture_name)
+        if source_arg is not None:
+            member_sampler = self.struct_member_paired_sampler_expression(
+                source_arg, texture_arg
+            )
+            if member_sampler is not None:
+                return member_sampler
+            source_name = self.expression_name(source_arg)
+            source_sampler_name = f"{source_name}Sampler" if source_name else None
+            if source_sampler_name in self.sampler_variable_names():
+                index = self.array_access_index_expression(
+                    source_arg
+                ) or self.array_access_index_expression(texture_arg)
+                if (
+                    index is not None
+                    and self.sampler_array_size(source_sampler_name) is not None
+                ):
+                    return f"{source_sampler_name}[{index}]"
+                return source_sampler_name
         return self.default_sampler_expression()
+
+    def texture_alias_sampler_source(self, texture_name):
+        source_arg = self.current_texture_alias_sources.get(texture_name)
+        seen = {texture_name}
+        while source_arg is not None:
+            source_name = self.expression_name(source_arg)
+            if not source_name or source_name in seen:
+                return source_arg
+            next_source_arg = self.current_texture_alias_sources.get(source_name)
+            if next_source_arg is None:
+                return source_arg
+            seen.add(source_name)
+            source_arg = next_source_arg
+        return None
+
+    def struct_member_paired_sampler_expression(self, source_arg, texture_arg=None):
+        member_expr = self.member_access_source_expression(source_arg)
+        if member_expr is None:
+            return None
+
+        sampler_member = f"{member_expr.member}Sampler"
+        sampler_node = self.struct_member_named_node(member_expr.object, sampler_member)
+        if sampler_node is None or not self.struct_member_is_sampler_resource(
+            sampler_node
+        ):
+            return None
+
+        object_expr = self.generate_expression(member_expr.object)
+        sampler_expr = f"{object_expr}.{sampler_member}"
+        index = self.array_access_index_expression(
+            source_arg
+        ) or self.array_access_index_expression(texture_arg)
+        if (
+            index is not None
+            and self.struct_member_array_size(sampler_node) is not None
+        ):
+            return f"{sampler_expr}[{index}]"
+        return sampler_expr
 
     def array_access_index_expression(self, expr):
         if not isinstance(expr, ArrayAccessNode):
@@ -10959,14 +12968,25 @@ class MetalCodeGen:
             return None
         return self.map_resource_type_with_format(raw_type, member)
 
+    def struct_member_resource_array_size(self, texture_arg):
+        member = self.struct_resource_member_node(texture_arg)
+        if member is None:
+            return None
+        return self.struct_member_array_size(member)
+
     def struct_resource_member_node(self, texture_arg):
-        expr = texture_arg
-        while isinstance(expr, ArrayAccessNode):
-            expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        expr = self.member_access_source_expression(texture_arg)
         if not isinstance(expr, MemberAccessNode):
             return None
+        return self.struct_member_named_node(expr.object, str(expr.member))
 
-        object_type = self.expression_result_type(expr.object)
+    def member_access_source_expression(self, expr):
+        while isinstance(expr, ArrayAccessNode):
+            expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        return expr if isinstance(expr, MemberAccessNode) else None
+
+    def struct_member_named_node(self, object_expr, member_name):
+        object_type = self.expression_result_type(object_expr)
         if object_type is None:
             return None
         object_type = self.pointer_pointee_type_name(object_type) or object_type
@@ -10974,11 +12994,41 @@ class MetalCodeGen:
         if struct_node is None:
             return None
 
-        member_name = str(expr.member)
         for member in getattr(struct_node, "members", []) or []:
             if getattr(member, "name", None) == member_name:
                 return member
         return None
+
+    def struct_member_array_size(self, member):
+        if isinstance(member, ArrayNode):
+            return (
+                self.safe_expression_to_string(member.size)
+                if member.size is not None
+                else ""
+            )
+
+        raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if self.is_array_type_node(raw_type):
+            return (
+                self.safe_expression_to_string(raw_type.size)
+                if raw_type.size is not None
+                else ""
+            )
+
+        raw_type_name = self.type_name_string(raw_type)
+        if raw_type_name and "[" in raw_type_name and "]" in raw_type_name:
+            _, array_size = parse_array_type(raw_type_name)
+            return array_size or ""
+        return None
+
+    def struct_member_is_sampler_resource(self, member):
+        if isinstance(member, ArrayNode):
+            raw_type = getattr(member, "element_type", getattr(member, "vtype", None))
+        else:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if self.is_array_type_node(raw_type):
+                raw_type = raw_type.element_type
+        return self.is_sampler_type(self.type_name_string(raw_type))
 
     def texture_argument_resource_type(self, texture_arg):
         texture_type = self.texture_resource_type(texture_arg)
@@ -11159,6 +13209,124 @@ class MetalCodeGen:
                 f"Metal function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got access::{actual_access}"
+            )
+
+    def split_metal_array_resource_type(self, type_name):
+        type_name = str(type_name or "").strip()
+        if not type_name.startswith("array<") or not type_name.endswith(">"):
+            return None
+
+        body = type_name[len("array<") : -1]
+        depth = 0
+        for index, char in enumerate(body):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return body[:index].strip(), body[index + 1 :].strip()
+        return None
+
+    def metal_array_resource_type(self, element_type, array_size):
+        return f"array<{element_type}, {array_size or '1'}>"
+
+    def function_parameter_resource_type(self, func_name, parameter):
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        param_name = getattr(parameter, "name", None)
+        function_hints = self.function_resource_array_size_hints.get(func_name, {})
+
+        if self.is_array_type_node(raw_type):
+            base_type = self.type_name_string(raw_type.element_type)
+            if not self.is_resource_parameter_type(base_type):
+                return None
+            array_size = (
+                self.safe_expression_to_string(raw_type.size)
+                if raw_type.size is not None
+                else function_hints.get(param_name, "")
+            )
+            return self.metal_array_resource_type(
+                self.map_resource_type_with_format(base_type, parameter),
+                array_size,
+            )
+
+        type_string = self.type_name_string(raw_type)
+        if "[" in type_string and "]" in type_string:
+            base_type, array_size = parse_array_type(type_string)
+            if not self.is_resource_parameter_type(base_type):
+                return None
+            return self.metal_array_resource_type(
+                self.map_resource_type_with_format(base_type, parameter),
+                (
+                    function_hints.get(param_name, "")
+                    if array_size is None
+                    else array_size
+                ),
+            )
+
+        if not self.is_resource_parameter_type(type_string):
+            return None
+        return self.map_resource_type_with_format(type_string, parameter)
+
+    def function_argument_resource_type(self, arg):
+        resource_type = self.texture_argument_resource_type(arg)
+        if resource_type is None:
+            return None
+        array_size = self.texture_argument_resource_array_size(arg)
+        if array_size is not None:
+            return self.metal_array_resource_type(resource_type, array_size)
+        return resource_type
+
+    def normalize_function_resource_compatibility_type(self, resource_type):
+        array_resource = self.split_metal_array_resource_type(resource_type)
+        if array_resource is not None:
+            element_type, array_size = array_resource
+            return self.metal_array_resource_type(
+                self.normalize_function_resource_compatibility_type(element_type),
+                array_size,
+            )
+        if self.is_storage_image_resource(resource_type):
+            return self.storage_image_access_agnostic_type(resource_type)
+        return self.resource_base_type(resource_type)
+
+    def resource_type_mentions_multisample_storage_image(self, resource_type):
+        array_resource = self.split_metal_array_resource_type(resource_type)
+        if array_resource is not None:
+            element_type, _ = array_resource
+            return self.resource_type_mentions_multisample_storage_image(element_type)
+        return self.is_multisample_storage_image_resource(resource_type)
+
+    def validate_function_resource_argument_types(self, func_name, args):
+        parameter_nodes = self.function_parameter_nodes.get(func_name)
+        if not parameter_nodes:
+            return
+
+        for index, parameter in enumerate(parameter_nodes):
+            if index >= len(args):
+                return
+            expected_type = self.function_parameter_resource_type(func_name, parameter)
+            if expected_type is None:
+                continue
+
+            actual_type = self.function_argument_resource_type(args[index])
+            if not (
+                self.resource_type_mentions_multisample_storage_image(expected_type)
+                or self.resource_type_mentions_multisample_storage_image(actual_type)
+            ):
+                continue
+
+            if self.normalize_function_resource_compatibility_type(
+                expected_type
+            ) == self.normalize_function_resource_compatibility_type(actual_type):
+                continue
+
+            actual_name = expression_debug_name(args[index])
+            actual_type_label = actual_type or self.type_name_string(
+                self.expression_result_type(args[index])
+            )
+            raise ValueError(
+                f"Metal function call '{func_name}' requires resource parameter "
+                f"{getattr(parameter, 'name', None)} of type {expected_type}: "
+                f"argument {actual_name} has {actual_type_label or 'non-resource'}"
             )
 
     def validate_integer_coordinate_argument(self, func_name, args):

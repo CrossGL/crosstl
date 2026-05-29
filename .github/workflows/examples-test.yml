@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
@@ -35,7 +35,23 @@ jobs:
       - name: Run comprehensive test script
         run: |
           cd examples
-          python test.py
+          python test.py --summary-json "$RUNNER_TEMP/examples-summary.json"
+          python - <<'PY'
+          import os
+          import json
+          from pathlib import Path
+          import sys
+
+          summary = json.loads(Path(os.environ["RUNNER_TEMP"], "examples-summary.json").read_text())
+          failed = int(summary["failed"])
+          success_rate = float(summary["success_rate"])
+          if not summary["within_regression_budget"]:
+              print(
+                  f"Example regression detected: failed={failed}, success_rate={success_rate:.1f}%",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          PY
         shell: bash
 
       - name: Validate output structure and content
@@ -70,7 +86,6 @@ jobs:
           python -c "import crosstl; crosstl.translate('gpu_computing/MatrixMultiplication.cgl', backend='hip', save_shader='output/gpu_matrix.hip')" || echo "Matrix multiplication failed, as expected for complex shaders"
         shell: bash
         working-directory: examples
-        continue-on-error: true
 
   backend-specific:
     name: ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
@@ -267,13 +282,13 @@ jobs:
         run: |
           mkdir -p output/${{ matrix.combination.category }}
         shell: bash
+        working-directory: examples
 
       - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
         run: |
           python -c "import crosstl; crosstl.translate('${{ matrix.combination.category }}/${{ matrix.combination.example }}.cgl', backend='${{ matrix.combination.backend }}', save_shader='output/${{ matrix.combination.category }}/${{ matrix.combination.example }}${{ matrix.combination.extension }}')"
         shell: bash
         working-directory: examples
-        continue-on-error: true
 
       - name: Validate output
         run: |
@@ -284,14 +299,15 @@ jobs:
             if [ "$FILE_SIZE" -gt 100 ]; then
               echo "[SUCCESS] Output file has substantial content"
             else
-              echo "[WARNING] Output file is quite small ($FILE_SIZE bytes)"
+              echo "[ERROR] Output file is too small ($FILE_SIZE bytes)"
+              exit 1
             fi
           else
             echo "[ERROR] Output file not created: $OUTPUT_FILE"
+            exit 1
           fi
         shell: bash
         working-directory: examples
-        continue-on-error: true
 
   stability-test:
     name: Stability & Robustness Test
@@ -347,6 +363,8 @@ jobs:
                   print(f'[ERROR] {shader} -> {backend}: {str(e)[:50]}...')
 
           print(f'\\nStability Score: {success_count}/{len(stable_tests)} ({(success_count/len(stable_tests)*100):.1f}%)')
+          if success_count != len(stable_tests):
+              raise SystemExit(1)
           "
         shell: bash
 
@@ -386,4 +404,6 @@ jobs:
           successful_backends = [k for k, v in outputs.items() if v > 100]
           print(f'[SUCCESS] {len(successful_backends)}/{len(backends)} backends produced substantial output')
           print(f'Successful backends: {successful_backends}')
+          if len(successful_backends) != len(backends):
+              raise SystemExit(1)
           "

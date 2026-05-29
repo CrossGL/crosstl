@@ -4,6 +4,16 @@ import re
 from typing import List, Optional, Tuple, Union
 
 from .array_utils import parse_array_type, detect_array_element_type
+from .enum_utils import (
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    enum_struct_fields,
+    enum_variant_payload_fields,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
+    resolve_generic_enum_specialization,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -18,12 +28,16 @@ from ..ast import (
     ArrayNode,
     BinaryOpNode,
     BreakNode,
+    ConstructorNode,
+    ConstructorPatternNode,
     ContinueNode,
     DoWhileNode,
+    EnumNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
+    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     LiteralPatternNode,
@@ -36,6 +50,7 @@ from ..ast import (
     RayTracingOpNode,
     ReturnNode,
     ShaderNode,
+    StructPatternNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -107,10 +122,22 @@ class VulkanSPIRVCodeGen:
         self.resource_types = {}
         self.resource_image_types = {}
         self.ray_query_types = {}
+        self.enum_type_names = set()
+        self.enum_variant_values = {}
+        self.enum_struct_type_names = set()
+        self.enum_struct_fields = {}
+        self.enum_struct_variant_fields = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
+        self.struct_declarations = {}
+        self.enum_declarations = {}
+        self.struct_registration_stack = set()
+        self.enum_struct_registration_stack = set()
 
         self.required_capabilities = set()
         self.global_variables = {}
         self.local_variables = {}
+        self.resource_alias_variables = set()
         self.variable_value_types = {}
         self.value_types = {}
         self.constants = {}
@@ -135,9 +162,12 @@ class VulkanSPIRVCodeGen:
         self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
+        self.current_function_name = None
         self.current_function_id = None
         self.current_stage = None
         self.current_return_type = None
+        self.current_return_type_source = None
+        self.current_expression_expected_type = None
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -151,6 +181,7 @@ class VulkanSPIRVCodeGen:
         self.task_payload_shared_variables = {}
         self.task_payload_interface_by_function = {}
         self.entry_point_private_variables = []
+        self.local_size_warning_keys = set()
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -597,16 +628,30 @@ class VulkanSPIRVCodeGen:
         return f"Offset %{offset_id.id}"
 
     def image_operands(self, *operands: str) -> str:
-        masks = []
-        values = []
+        operand_order = {
+            "Bias": 0,
+            "Lod": 1,
+            "Grad": 2,
+            "ConstOffset": 3,
+            "Offset": 4,
+            "ConstOffsets": 5,
+            "Sample": 6,
+            "MinLod": 7,
+        }
+        entries = []
         for operand in operands:
             if not operand:
                 continue
             parts = operand.split()
-            masks.append(parts[0])
-            values.extend(parts[1:])
-        if not masks:
+            if not parts:
+                continue
+            entries.append((parts[0], parts[1:]))
+        if not entries:
             return ""
+
+        entries.sort(key=lambda entry: operand_order.get(entry[0], len(operand_order)))
+        masks = [mask for mask, _ in entries]
+        values = [value for _, entry_values in entries for value in entry_values]
         return " ".join(["|".join(masks)] + values)
 
     def create_variable(
@@ -1561,7 +1606,17 @@ class VulkanSPIRVCodeGen:
             "atomicExchange",
             "atomicCompSwap",
             "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
             "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
+            "buffer_append",
+            "buffer_consume",
+            "buffer_increment_counter",
+            "buffer_decrement_counter",
             "texture",
             "texture2D",
             "textureCube",
@@ -1628,7 +1683,20 @@ class VulkanSPIRVCodeGen:
         }
 
     def buffer_function_names(self):
-        return {"buffer_load", "buffer_store"}
+        return {
+            "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
+            "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
+            "buffer_append",
+            "buffer_consume",
+            "buffer_increment_counter",
+            "buffer_decrement_counter",
+        }
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
         dim = metadata.get("dim", "2D") if metadata else "2D"
@@ -2718,6 +2786,83 @@ class VulkanSPIRVCodeGen:
         if function_name in self.projected_shadow_function_names():
             return self.call_projected_shadow_function(function_name, args)
 
+        byte_address_load_width = self.byte_address_helper_load_width(function_name)
+        if byte_address_load_width is not None:
+            return self.call_byte_address_buffer_load_helper(
+                function_name, args, byte_address_load_width
+            )
+
+        byte_address_store_width = self.byte_address_helper_store_width(function_name)
+        if byte_address_store_width is not None:
+            return self.call_byte_address_buffer_store_helper(
+                function_name, args, byte_address_store_width
+            )
+
+        if function_name == "buffer_append":
+            if len(args) < 2:
+                self.emit("; WARNING: buffer_append requires buffer and value operands")
+                return None
+            if len(args) > 2:
+                self.emit(
+                    "; WARNING: buffer_append accepts only buffer and value operands"
+                )
+                return None
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_append requires an AppendStructuredBuffer "
+                    "operand"
+                )
+                return None
+            return self.process_structured_buffer_append_call(
+                args[0], metadata, [args[1]], "buffer_append"
+            )[1]
+
+        if function_name == "buffer_consume":
+            if not args:
+                self.emit("; WARNING: buffer_consume requires a buffer operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+            if len(args) > 1:
+                self.emit("; WARNING: buffer_consume accepts only a buffer operand")
+                return self.default_value_for_buffer_load_failure(args)
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_consume requires a ConsumeStructuredBuffer "
+                    "operand"
+                )
+                return self.default_value_for_buffer_load_failure(args)
+            return self.process_structured_buffer_consume_call(
+                args[0], metadata, [], "buffer_consume"
+            )[1]
+
+        if function_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+            if not args:
+                self.emit(f"; WARNING: {function_name} requires a buffer operand")
+                return self.structured_buffer_counter_default_value()
+            if len(args) > 1:
+                self.emit(f"; WARNING: {function_name} accepts only a buffer operand")
+                return self.structured_buffer_counter_default_value()
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    f"; WARNING: {function_name} requires an RWStructuredBuffer "
+                    "operand"
+                )
+                return self.structured_buffer_counter_default_value()
+            return self.process_structured_buffer_counter_method_call(
+                args[0],
+                metadata,
+                [],
+                function_name,
+                function_name == "buffer_increment_counter",
+            )[1]
+
         if function_name == "buffer_load":
             if len(args) < 2:
                 self.emit("; WARNING: buffer_load requires buffer and index operands")
@@ -2732,6 +2877,17 @@ class VulkanSPIRVCodeGen:
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is not None and metadata.get("writeonly"):
                 self.emit("; WARNING: buffer_load requires a readable buffer")
+                return self.default_value_for_buffer_load_failure(args)
+            if (
+                metadata is not None
+                and not metadata.get("byte_address")
+                and metadata.get("buffer_kind")
+                not in {
+                    "StructuredBuffer",
+                    "RWStructuredBuffer",
+                }
+            ):
+                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
                 return self.default_value_for_buffer_load_failure(args)
 
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
@@ -2758,6 +2914,14 @@ class VulkanSPIRVCodeGen:
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+            if (
+                not metadata.get("byte_address")
+                and metadata.get("buffer_kind") != "RWStructuredBuffer"
+            ):
                 self.emit(
                     "; WARNING: buffer_store requires an RWStructuredBuffer operand"
                 )
@@ -4518,6 +4682,14 @@ class VulkanSPIRVCodeGen:
                 "; WARNING: SPIR-V mesh SetMeshOutputCounts requires count operands"
             )
             return self.register_constant(0, uint_type)
+        if not self.validate_mesh_count_operands(
+            "SetMeshOutputCounts",
+            [vertex_count, primitive_count],
+            argument_exprs=arguments,
+        ):
+            return self.register_constant(0, uint_type)
+        if not self.validate_mesh_set_output_count_limits(arguments):
+            return self.register_constant(0, uint_type)
 
         vertex_count = self.convert_value_to_type(vertex_count, uint_type)
         primitive_count = self.convert_value_to_type(primitive_count, uint_type)
@@ -4540,6 +4712,67 @@ class VulkanSPIRVCodeGen:
             )
 
         return self.register_constant(0, uint_type)
+
+    def validate_mesh_set_output_count_limits(self, arguments: List) -> bool:
+        """Reject literal mesh output counts above declared stage limits."""
+        vertex_limit = self.mesh_stage_limit(self.current_stage, "max_vertices")
+        primitive_limit = self.mesh_stage_limit(self.current_stage, "max_primitives")
+        requested_vertices = self.literal_int_argument(arguments[0])
+        requested_primitives = self.literal_int_argument(arguments[1])
+        valid = True
+
+        if (
+            vertex_limit is not None
+            and requested_vertices is not None
+            and requested_vertices > vertex_limit
+        ):
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts vertex count "
+                "exceeds declared max_vertices"
+            )
+            valid = False
+
+        if (
+            primitive_limit is not None
+            and requested_primitives is not None
+            and requested_primitives > primitive_limit
+        ):
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts primitive count "
+                "exceeds declared max_primitives"
+            )
+            valid = False
+
+        return valid
+
+    def validate_mesh_count_operands(
+        self,
+        operation: str,
+        operands: List[SpirvId],
+        count_label: str = "count",
+        argument_exprs: Optional[List] = None,
+    ) -> bool:
+        """Require SPIR-V mesh/task count operands to be scalar integer values."""
+        if all(
+            self.integer_value_component_count(operand) == 1 for operand in operands
+        ):
+            if argument_exprs is not None and any(
+                (literal := self.literal_int_argument(argument)) is not None
+                and literal < 0
+                for argument in argument_exprs
+            ):
+                self.emit(
+                    f"; WARNING: SPIR-V mesh {operation} {count_label} operands "
+                    "must be non-negative integer values"
+                )
+                return False
+            return True
+
+        self.emit(
+            f"; WARNING: SPIR-V mesh {operation} {count_label} operands must be "
+            "scalar integer values"
+        )
+        return False
 
     def process_mesh_output_function_call(
         self, function_name: str, args: List
@@ -4639,14 +4872,53 @@ class VulkanSPIRVCodeGen:
             max_primitives = max(observed_primitives, max_primitives or 0)
         return max(1, max_vertices or 1), max(1, max_primitives or 1)
 
+    def mesh_output_literal_index_limit(
+        self, role: str, info: Optional[dict] = None
+    ) -> Optional[int]:
+        if info is not None and info.get("count") is not None:
+            return int(info["count"])
+
+        max_vertices, max_primitives = self.mesh_stage_current_output_limits()
+        if role == "vertices":
+            return max_vertices
+        if role in {"indices", "primitives"}:
+            return max_primitives
+        return None
+
+    def validate_mesh_output_literal_index(
+        self,
+        role: str,
+        literal_index: Optional[int],
+        diagnostic_name: str,
+        info: Optional[dict] = None,
+    ) -> bool:
+        if literal_index is None:
+            return True
+        if literal_index < 0:
+            self.emit(
+                f"; WARNING: SPIR-V mesh {diagnostic_name} literal index "
+                "must be non-negative"
+            )
+            return False
+
+        limit = self.mesh_output_literal_index_limit(role, info)
+        if limit is None or literal_index < limit:
+            return True
+
+        limit_label = "vertex" if role == "vertices" else "primitive"
+        self.emit(
+            f"; WARNING: SPIR-V mesh {diagnostic_name} literal index exceeds "
+            f"the declared mesh {limit_label} output limit"
+        )
+        return False
+
     def ensure_mesh_vertex_position_output(
         self, literal_index: Optional[int] = None
     ) -> Optional[SpirvId]:
         """Create the mesh Position output array used by SetVertex."""
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetVertex literal index must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            "vertices", literal_index, "SetVertex"
+        ):
             return None
 
         minimum_size = (literal_index + 1) if literal_index is not None else 1
@@ -4690,11 +4962,9 @@ class VulkanSPIRVCodeGen:
     ) -> Optional[SpirvId]:
         """Create a mesh output array for a signature member assignment."""
         role = info["role"]
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            role, literal_index, f"{info['name']} output", info
+        ):
             return None
 
         if role == "vertices":
@@ -4813,11 +5083,9 @@ class VulkanSPIRVCodeGen:
         self, literal_index: Optional[int] = None
     ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
         """Create the topology-specific primitive-index output array."""
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                "; WARNING: SPIR-V mesh SetPrimitive literal index must be "
-                "non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            "indices", literal_index, "SetPrimitive"
+        ):
             return None, None
 
         info = self.mesh_primitive_index_builtin_info()
@@ -4939,11 +5207,9 @@ class VulkanSPIRVCodeGen:
             return True
 
         literal_index = self.literal_int_argument(index_expr)
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return True
 
         role = info["role"]
@@ -4963,7 +5229,10 @@ class VulkanSPIRVCodeGen:
                 info, member_name, member_component
             ):
                 return True
-            value = self.process_expression(value_expr)
+            member_type = member_info["type"]
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
             if value is not None:
                 self.store_mesh_output_member_component(
                     info,
@@ -4983,7 +5252,10 @@ class VulkanSPIRVCodeGen:
                     f"member {member_name}"
                 )
                 return True
-            value = self.process_expression(value_expr)
+            member_type = member_info["type"]
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
             if value is not None:
                 self.store_mesh_output_member(
                     info, member_name, index, literal_index, value
@@ -5068,11 +5340,9 @@ class VulkanSPIRVCodeGen:
             return True
 
         literal_index = self.literal_int_argument(index_expr)
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return True
 
         if info["role"] == "indices":
@@ -5326,11 +5596,9 @@ class VulkanSPIRVCodeGen:
         semantic = member_info.get("semantic")
         member_type = member_info["type"]
 
-        if literal_index is not None and literal_index < 0:
-            self.emit(
-                f"; WARNING: SPIR-V mesh {info['name']} output literal index "
-                "must be non-negative"
-            )
+        if not self.validate_mesh_output_literal_index(
+            info["role"], literal_index, f"{info['name']} output", info
+        ):
             return None, None
 
         if info["role"] == "vertices":
@@ -5682,6 +5950,13 @@ class VulkanSPIRVCodeGen:
                     "; WARNING: SPIR-V mesh DispatchMesh requires group-count operands"
                 )
                 return self.register_constant(0, uint_type)
+            if not self.validate_mesh_count_operands(
+                "DispatchMesh",
+                [group_count],
+                "group-count",
+                argument_exprs=[argument],
+            ):
+                return self.register_constant(0, uint_type)
             group_counts.append(self.convert_value_to_type(group_count, uint_type))
 
         payload_pointer = None
@@ -5793,6 +6068,15 @@ class VulkanSPIRVCodeGen:
                 registered_type = self.value_types.get(variable.id)
                 if registered_type is not None:
                     return registered_type
+
+        if isinstance(expr, FunctionCallNode):
+            callee_name = self.function_call_name(expr)
+            if callee_name in self.function_signatures:
+                return_type = self.function_signatures[callee_name][0]
+                if return_type.type.base_type != "void":
+                    return return_type
+            if callee_name in self.struct_types:
+                return self.struct_types[callee_name]
 
         return None
 
@@ -5969,6 +6253,36 @@ class VulkanSPIRVCodeGen:
             value |= semantic_values[semantic]
         return self.register_constant(value, self.register_primitive_type("uint"))
 
+    def current_synchronization_execution_models(self) -> set:
+        if self.current_stage is None and self.current_function_name is not None:
+            execution_models = self.function_execution_models.get(
+                self.current_function_name, ()
+            )
+            if execution_models:
+                return set(execution_models)
+        if self.current_execution_model is not None:
+            return {self.current_execution_model}
+        if self.current_function_name is None:
+            return set()
+        return set(self.function_execution_models.get(self.current_function_name, ()))
+
+    def current_execution_model_label(self) -> str:
+        execution_models = self.current_synchronization_execution_models()
+        if execution_models:
+            return ", ".join(sorted(execution_models))
+        return "unknown"
+
+    def can_emit_workgroup_synchronization(self) -> bool:
+        execution_models = self.current_synchronization_execution_models()
+        workgroup_execution_models = {
+            "GLCompute",
+            "MeshEXT",
+            "TaskEXT",
+        }
+        return bool(execution_models) and execution_models.issubset(
+            workgroup_execution_models
+        )
+
     def call_synchronization_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -5989,6 +6303,23 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 f"; WARNING: synchronization builtin '{function_name}' "
                 "requires 0 operands"
+            )
+            return self.register_constant(0, self.register_primitive_type("int"))
+
+        workgroup_synchronization_functions = {
+            "barrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+            "workgroupBarrier",
+        }
+        if (
+            function_name in workgroup_synchronization_functions
+            and not self.can_emit_workgroup_synchronization()
+        ):
+            self.emit(
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model; current execution model: "
+                f"{self.current_execution_model_label()}"
             )
             return self.register_constant(0, self.register_primitive_type("int"))
 
@@ -6494,6 +6825,13 @@ class VulkanSPIRVCodeGen:
             "clamp": 3,
             "mix": 3,
             "pow": 2,
+            "fma": 3,
+            "faceforward": 3,
+            "refract": 3,
+            "length": 1,
+            "distance": 2,
+            "normalize": 1,
+            "reflect": 2,
             "step": 2,
             "smoothstep": 3,
         }
@@ -6505,7 +6843,9 @@ class VulkanSPIRVCodeGen:
                 f"{expected_operand_count} {operand_label}"
             )
             fallback_type = self.register_primitive_type("float")
-            if args:
+            if function_name in {"length", "distance"}:
+                fallback_type = self.metric_result_type(args)
+            elif args:
                 fallback_type = self.ensure_registered_type(args[0].type)
             return self.default_value_for_type(fallback_type)
 
@@ -6547,6 +6887,84 @@ class VulkanSPIRVCodeGen:
             self.emit(
                 "; WARNING: pow requires compatible 32-bit floating-point "
                 "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "fma" and len(args) == 3:
+            fused = self.call_fma_function(args)
+            if fused is not None:
+                return fused
+            self.emit(
+                "; WARNING: fma requires compatible floating-point scalar "
+                "or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "faceforward" and len(args) == 3:
+            faced = self.call_faceforward_function(args)
+            if faced is not None:
+                return faced
+            self.emit(
+                "; WARNING: faceforward requires compatible floating-point "
+                "scalar or vector operands"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "refract" and len(args) == 3:
+            refracted = self.call_refract_function(args)
+            if refracted is not None:
+                return refracted
+            self.emit(
+                "; WARNING: refract requires matching floating-point incident "
+                "and normal operands plus scalar eta"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "length" and len(args) == 1:
+            measured = self.call_length_function(args[0])
+            if measured is not None:
+                return measured
+            self.emit(
+                "; WARNING: length requires floating-point scalar or vector operand"
+            )
+            return self.default_value_for_type(self.metric_result_type(args))
+
+        if function_name == "distance" and len(args) == 2:
+            measured = self.call_distance_function(args)
+            if measured is not None:
+                return measured
+            self.emit(
+                "; WARNING: distance requires matching floating-point scalar "
+                "or vector operands"
+            )
+            return self.default_value_for_type(self.metric_result_type(args))
+
+        if function_name == "normalize" and len(args) == 1:
+            normalized = self.call_normalize_function(args[0])
+            if normalized is not None:
+                return normalized
+            self.emit(
+                "; WARNING: normalize requires floating-point scalar or vector operand"
+            )
+            return self.default_value_for_type(
+                self.ensure_registered_type(args[0].type)
+            )
+
+        if function_name == "reflect" and len(args) == 2:
+            reflected = self.call_reflect_function(args)
+            if reflected is not None:
+                return reflected
+            self.emit(
+                "; WARNING: reflect requires matching floating-point scalar "
+                "or vector operands"
             )
             return self.default_value_for_type(
                 self.ensure_registered_type(args[0].type)
@@ -6752,6 +7170,15 @@ class VulkanSPIRVCodeGen:
                 "reflect": "Reflect",
                 "refract": "Refract",
             }
+            if function_name not in glsl_std450_map:
+                self.emit(
+                    f"; WARNING: SPIR-V backend cannot lower unknown function "
+                    f"'{function_name}'; using default value"
+                )
+                return self.default_value_for_type(
+                    self.unknown_function_fallback_type(args)
+                )
+
             unary_std450_functions = {
                 "sin",
                 "cos",
@@ -6865,32 +7292,10 @@ class VulkanSPIRVCodeGen:
                     vector_type = self.register_vector_type(component_type, 3)
                     result_type = vector_type.type
 
-            id_value = self.get_id()
-            arg_list = " ".join([f"%{arg.id}" for arg in args])
-
-            glsl_function = glsl_std450_map.get(
-                function_name, function_name[0].upper() + function_name[1:]
+            result_type_id = self.ensure_registered_type(result_type)
+            return self.emit_glsl_std450_instruction(
+                glsl_std450_map[function_name], result_type_id, args
             )
-
-            # Find the result type ID
-            result_type_id = None
-            for id_obj in (
-                [self.primitive_types.get(result_type.base_type)]
-                + list(self.vector_types.values())
-                + list(self.matrix_types.values())
-            ):
-                if id_obj and id_obj.type.base_type == result_type.base_type:
-                    result_type_id = id_obj.id
-                    break
-
-            if result_type_id is None:
-                result_type_id = float_type.id
-
-            self.emit(
-                f"%{id_value} = OpExtInst %{result_type_id} %{self.glsl_std450_id} {glsl_function} {arg_list}"
-            )
-
-            return SpirvId(id_value, result_type)
 
     def dot_result_type(self, args: List[SpirvId]) -> SpirvId:
         for arg in args:
@@ -6968,6 +7373,17 @@ class VulkanSPIRVCodeGen:
             )
 
         return None
+
+    def unknown_function_fallback_type(self, args: List[SpirvId]) -> SpirvId:
+        if not args:
+            return self.register_primitive_type("float")
+
+        component_type = self.scalar_or_vector_component_type(args[0].type)
+        primitive_type = self.normalize_primitive_name(component_type)
+        if primitive_type in {"float", "double", "int", "uint", "bool"}:
+            return self.register_primitive_type(primitive_type)
+
+        return self.register_primitive_type("float")
 
     def is_float32_unary_std450_function(self, function_name: str) -> bool:
         return function_name in {
@@ -7206,6 +7622,161 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def call_fma_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower fma to GLSL.std.450 with validator-compatible operand types."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Fma {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_faceforward_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower faceforward to GLSL.std.450 with validator-compatible types."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operands = self.match_extinst_operands_to_result_type(result_type, args)
+        if operands is None:
+            return None
+
+        id_value = self.get_id()
+        arg_list = " ".join(f"%{arg.id}" for arg in operands)
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"FaceForward {arg_list}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_refract_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower refract to GLSL.std.450 with result-typed scalar eta."""
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+        operand_component, _ = operand_shape
+        if operand_component != component_type:
+            return None
+
+        eta_vector = self.vector_component_type_and_count(args[2].type.base_type)
+        eta_component = self.scalar_or_vector_component_type(args[2].type)
+        if eta_vector is not None or eta_component not in {"float", "double"}:
+            return None
+
+        eta_type = self.register_primitive_type(component_type)
+        eta = self.convert_scalar_to_type(args[2], eta_type)
+        if self.normalize_primitive_name(eta.type.base_type) != component_type:
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Refract %{args[0].id} %{args[1].id} %{eta.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_length_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower length to GLSL.std.450 with scalar component result type."""
+        if not self.metric_operand_is_valid(value):
+            return None
+
+        result_type = self.metric_result_type([value])
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Length %{value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_distance_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower distance to GLSL.std.450 with matching scalar/vector operands."""
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+
+        component_type, _ = operand_shape
+        result_type = self.register_primitive_type(component_type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Distance %{args[0].id} %{args[1].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_normalize_function(self, value: SpirvId) -> Optional[SpirvId]:
+        """Lower normalize to GLSL.std.450 with the operand result type."""
+        if not self.metric_operand_is_valid(value):
+            return None
+
+        result_type = self.ensure_registered_type(value.type)
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Normalize %{value.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
+    def call_reflect_function(self, args: List[SpirvId]) -> Optional[SpirvId]:
+        """Lower reflect to GLSL.std.450 with matching scalar/vector operands."""
+        operand_shape = self.matching_floating_scalar_or_vector_operands(
+            args[0], args[1]
+        )
+        if operand_shape is None:
+            return None
+
+        result_type = self.ensure_registered_type(args[0].type)
+        component_type = self.scalar_or_vector_component_type(result_type.type)
+        if component_type not in {"float", "double"}:
+            return None
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpExtInst %{result_type.id} %{self.glsl_std450_id} "
+            f"Reflect %{args[0].id} %{args[1].id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        return spirv_id
+
     def call_step_smoothstep_function(
         self, glsl_function: str, args: List[SpirvId], value_index: int
     ) -> Optional[SpirvId]:
@@ -7428,6 +7999,10 @@ class VulkanSPIRVCodeGen:
             value = self.convert_value_to_type(value, self.current_return_type)
         self.emit(f"OpReturnValue %{value.id}")
 
+    def create_unreachable(self):
+        """Create an unreachable terminator for impossible fallthrough paths."""
+        self.emit("OpUnreachable")
+
     def current_block_has_terminator(self) -> bool:
         """Return whether the current block already ends in a terminator."""
         for line in reversed(self.code_lines):
@@ -7437,7 +8012,13 @@ class VulkanSPIRVCodeGen:
             if re.match(r"%\d+ = OpLabel$", stripped):
                 return False
             return stripped.startswith(
-                ("OpBranch", "OpReturn", "OpKill", "OpEmitMeshTasksEXT")
+                (
+                    "OpBranch",
+                    "OpReturn",
+                    "OpKill",
+                    "OpUnreachable",
+                    "OpEmitMeshTasksEXT",
+                )
             )
         return False
 
@@ -7669,7 +8250,20 @@ class VulkanSPIRVCodeGen:
 
     def structured_buffer_type_info(self, type_str: str):
         type_str = re.sub(r"\s+", "", str(type_str))
-        match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
+        if type_str in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            return {
+                "kind": "structured_buffer",
+                "buffer_kind": type_str,
+                "element_type_name": "uint",
+                "readonly": type_str == "ByteAddressBuffer",
+                "byte_address": True,
+            }
+
+        match = re.fullmatch(
+            r"(StructuredBuffer|RWStructuredBuffer|AppendStructuredBuffer|"
+            r"ConsumeStructuredBuffer)<(.+)>",
+            type_str,
+        )
         if not match:
             return None
 
@@ -7678,11 +8272,30 @@ class VulkanSPIRVCodeGen:
             "kind": "structured_buffer",
             "buffer_kind": buffer_kind,
             "element_type_name": element_type_name,
-            "readonly": buffer_kind == "StructuredBuffer",
+            "readonly": buffer_kind in {"StructuredBuffer", "ConsumeStructuredBuffer"},
+            "default_writeonly": buffer_kind == "AppendStructuredBuffer",
+            "append_consume": (
+                buffer_kind in {"AppendStructuredBuffer", "ConsumeStructuredBuffer"}
+            ),
         }
 
     def is_structured_buffer_type_name(self, type_str: str) -> bool:
         return self.structured_buffer_type_info(type_str) is not None
+
+    def structured_buffer_declared_type_info(self, type_str: str):
+        type_str = re.sub(r"\s+", "", str(type_str))
+        metadata = self.structured_buffer_type_info(type_str)
+        if metadata is not None:
+            return metadata
+
+        base_type = self.array_base_type_name(type_str)
+        if base_type == type_str:
+            return None
+
+        return self.structured_buffer_type_info(base_type)
+
+    def is_structured_buffer_declared_type_name(self, type_str: str) -> bool:
+        return self.structured_buffer_declared_type_info(type_str) is not None
 
     def spirv_image_format_map(self):
         return {
@@ -7860,6 +8473,21 @@ class VulkanSPIRVCodeGen:
 
         return self.resource_metadata_for_value(pointer_id)
 
+    def propagate_resource_access_metadata(
+        self, source_pointer: SpirvId, access_pointer: SpirvId, access_type: SpirvId
+    ):
+        target_metadata = self.resource_type_metadata.get(access_type.id)
+        if target_metadata is None:
+            return
+
+        source_metadata = self.resource_metadata_for_pointer(source_pointer)
+        if source_metadata is None or source_metadata.get(
+            "kind"
+        ) != target_metadata.get("kind"):
+            source_metadata = target_metadata
+
+        self.resource_type_metadata[access_pointer.id] = source_metadata
+
     def attribute_value_to_string(self, value):
         if value is None:
             return None
@@ -7987,11 +8615,71 @@ class VulkanSPIRVCodeGen:
             return None
 
         type_name = self.type_name_from_value(param_type)
-        if self.is_structured_buffer_type_name(type_name):
+        if self.is_structured_buffer_declared_type_name(type_name):
             return type_name
         if self.has_attribute(param, "glsl_buffer_block"):
             return type_name
         return None
+
+    def storage_buffer_expression_type_name(self, expr) -> Optional[str]:
+        if isinstance(expr, ArrayAccessNode):
+            base_type = self.storage_buffer_expression_type_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+            if base_type is not None:
+                array_type = self.split_outer_array_type(base_type)
+                if array_type is not None:
+                    return array_type[0]
+
+        pointer = self.variable_pointer_from_expression(expr)
+        metadata = self.structured_buffer_metadata_for_pointer(pointer)
+        if metadata is None:
+            return None
+        return metadata.get("declared_type_name")
+
+    def storage_buffer_parameter_type_is_compatible(
+        self, declared_type: str, actual_type: str
+    ) -> bool:
+        declared_type = re.sub(r"\s+", "", str(declared_type))
+        actual_type = re.sub(r"\s+", "", str(actual_type))
+        declared_info = self.structured_buffer_type_info(
+            self.array_base_type_name(declared_type)
+        )
+        actual_info = self.structured_buffer_type_info(
+            self.array_base_type_name(actual_type)
+        )
+        if declared_info is None or actual_info is None:
+            return True
+
+        declared_dimensions = self.array_dimensions(declared_type) or []
+        actual_dimensions = self.array_dimensions(actual_type) or []
+        if len(declared_dimensions) != len(actual_dimensions):
+            return False
+        for declared_dimension, actual_dimension in zip(
+            declared_dimensions, actual_dimensions
+        ):
+            if declared_dimension and declared_dimension != actual_dimension:
+                return False
+
+        if bool(declared_info.get("byte_address")) != bool(
+            actual_info.get("byte_address")
+        ):
+            return False
+        if declared_info.get("byte_address"):
+            return True
+
+        if declared_info.get("element_type_name") != actual_info.get(
+            "element_type_name"
+        ):
+            return False
+
+        declared_kind = declared_info.get("buffer_kind")
+        actual_kind = actual_info.get("buffer_kind")
+        if declared_kind == "StructuredBuffer":
+            return actual_kind in {"StructuredBuffer", "RWStructuredBuffer"}
+        if declared_kind == "RWStructuredBuffer":
+            return actual_kind in {"StructuredBuffer", "RWStructuredBuffer"}
+        return declared_kind == actual_kind
 
     def function_storage_buffer_parameters(self, function_node) -> set:
         return {
@@ -8100,6 +8788,29 @@ class VulkanSPIRVCodeGen:
             col_type = self.register_vector_type(component_type, row_count)
             return self.register_matrix_type(col_type, col_count)
 
+        if type_str == "str":
+            return self.register_primitive_type("int")
+
+        generic_enum_type = self.generic_enum_specialization_for_type(type_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_base_name, generic_args = generic_type_parts(type_str)
+        if generic_args and generic_base_name in self.struct_types:
+            return self.struct_types[generic_base_name]
+
+        declared_struct_type = self.ensure_declared_struct_type(type_str)
+        if declared_struct_type is not None:
+            return declared_struct_type
+
+        if type_str in self.enum_struct_type_names:
+            enum_struct_type = self.ensure_enum_struct_type_registered(type_str)
+            if enum_struct_type is not None:
+                return enum_struct_type
+
+        if type_str in self.enum_type_names:
+            return self.register_primitive_type("int")
+
         registered_type = self.find_registered_type_by_base(type_str)
         if registered_type:
             return registered_type
@@ -8117,6 +8828,44 @@ class VulkanSPIRVCodeGen:
             # If type is unknown, return a default float type
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def ensure_declared_struct_type(self, type_name: str) -> Optional[SpirvId]:
+        if type_name in self.struct_types:
+            return self.struct_types[type_name]
+
+        struct_node = self.struct_declarations.get(type_name)
+        if struct_node is None:
+            return None
+        if type_name in self.struct_registration_stack:
+            return None
+
+        self.struct_registration_stack.add(type_name)
+        try:
+            return self.process_crossgl_struct(struct_node)
+        finally:
+            self.struct_registration_stack.remove(type_name)
+
+    def ensure_enum_struct_type_registered(self, enum_name: str) -> Optional[SpirvId]:
+        if enum_name in self.struct_types:
+            return self.struct_types[enum_name]
+        if enum_name not in self.enum_struct_type_names:
+            return None
+
+        if (
+            enum_name not in self.enum_declarations
+            or enum_name in self.enum_struct_registration_stack
+        ):
+            return None
+
+        self.enum_struct_registration_stack.add(enum_name)
+        try:
+            int_type = self.register_primitive_type("int")
+            members = [(int_type, "variant")]
+            for field_name, field_type in self.enum_struct_fields.get(enum_name, []):
+                members.append((self.map_crossgl_type(field_type), field_name))
+            return self.register_struct_type(enum_name, members)
+        finally:
+            self.enum_struct_registration_stack.remove(enum_name)
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -8158,8 +8907,368 @@ class VulkanSPIRVCodeGen:
         else:
             return str(type_node)
 
+    def collect_enum_metadata(self, nodes):
+        """Collect SPIR-V-lowerable enum types and variant discriminants."""
+        for node in nodes or []:
+            if isinstance(node, EnumNode):
+                self.register_enum_metadata(node)
+            elif isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
+                self.collect_enum_metadata(getattr(node, "members", []) or [])
+
+    def register_enum_metadata(self, enum_node: EnumNode):
+        variants = getattr(enum_node, "variants", []) or []
+        has_payload = any(
+            self.enum_variant_has_payload(variant) for variant in variants
+        )
+        if has_payload:
+            fields = enum_struct_fields(enum_node)
+            if fields is not None:
+                self.enum_struct_type_names.add(enum_node.name)
+                self.enum_struct_fields[enum_node.name] = fields
+                self.enum_struct_variant_fields[enum_node.name] = {
+                    variant.name: enum_variant_payload_fields(variant) or []
+                    for variant in variants
+                }
+        else:
+            self.enum_type_names.add(enum_node.name)
+
+        next_value = 0
+        for variant in variants:
+            explicit_value = self.literal_int_argument(getattr(variant, "value", None))
+            if explicit_value is not None:
+                next_value = explicit_value
+            self.enum_variant_values[f"{enum_node.name}::{variant.name}"] = next_value
+            next_value += 1
+
+    def register_generic_enum_metadata(self):
+        """Collect generic enum wrapper variant tags shared by all specializations."""
+        for name, definition in self.generic_enum_struct_definitions.items():
+            self.enum_struct_type_names.add(name)
+            next_value = 0
+            for variant in definition["enum"].variants or []:
+                explicit_value = self.literal_int_argument(
+                    getattr(variant, "value", None)
+                )
+                if explicit_value is not None:
+                    next_value = explicit_value
+                self.enum_variant_values[f"{name}::{variant.name}"] = next_value
+                next_value += 1
+
+    def generic_enum_specialization_for_type(self, type_value) -> Optional[SpirvId]:
+        specialization = resolve_generic_enum_specialization(self, type_value)
+        if specialization is None:
+            return None
+        return self.ensure_generic_enum_specialization_registered(specialization)
+
+    def generic_enum_specialization_for_struct_name(self, struct_name: str):
+        for specialization in self.generic_enum_specializations.values():
+            if specialization["struct_name"] == struct_name:
+                return specialization
+        return None
+
+    def generic_enum_constructor_specialization(self, enum_name: str):
+        expected_type = self.current_expression_expected_type
+        specialization = resolve_generic_enum_specialization(
+            self, expected_type, expected_base=enum_name
+        )
+        if specialization is not None:
+            self.ensure_generic_enum_specialization_registered(specialization)
+            return specialization
+
+        specialization = self.generic_enum_specialization_for_struct_name(
+            str(expected_type)
+        )
+        if specialization is not None and specialization["base_name"] == enum_name:
+            return specialization
+
+        candidates = [
+            specialization
+            for specialization in self.generic_enum_specializations.values()
+            if specialization["base_name"] == enum_name
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def ensure_generic_enum_specialization_registered(self, specialization) -> SpirvId:
+        type_name = specialization["type_name"]
+        struct_name = specialization["struct_name"]
+        self.generic_enum_specializations.setdefault(type_name, specialization)
+        self.enum_struct_type_names.add(struct_name)
+
+        if struct_name not in self.enum_struct_fields:
+            self.enum_struct_fields[struct_name] = generic_enum_specialized_fields(
+                self, specialization
+            )
+            self.enum_struct_variant_fields[struct_name] = {
+                variant.name: (
+                    generic_enum_specialized_variant_fields(
+                        self, specialization, variant.name
+                    )
+                    or []
+                )
+                for variant in specialization["definition"]["enum"].variants or []
+            }
+
+        if struct_name not in self.struct_types:
+            int_type = self.register_primitive_type("int")
+            members = [(int_type, "variant")]
+            for field_name, field_type in self.enum_struct_fields.get(struct_name, []):
+                members.append((self.map_crossgl_type(field_type), field_name))
+            self.register_struct_type(struct_name, members)
+
+        return self.struct_types[struct_name]
+
+    def enum_variant_has_payload(self, variant) -> bool:
+        return bool(getattr(variant, "data", None) or getattr(variant, "fields", None))
+
+    def enum_variant_constant(self, name: str) -> Optional[SpirvId]:
+        value = self.enum_variant_values.get(name)
+        if value is None:
+            return None
+        return self.register_constant(value, self.register_primitive_type("int"))
+
+    def process_enum_structs(self, nodes):
+        """Register tagged-struct representations for payload enums."""
+        for node in nodes or []:
+            if isinstance(node, EnumNode) and node.name in self.enum_struct_type_names:
+                self.ensure_enum_struct_type_registered(node.name)
+            elif isinstance(node, StructNode):
+                self.process_enum_structs(getattr(node, "members", []) or [])
+
+    def enum_path_parts(self, path: str):
+        if "::" not in str(path):
+            return None
+        enum_name, variant_name = str(path).split("::", 1)
+        return enum_name, variant_name
+
+    def enum_variant_is_payload_path(self, path: str) -> bool:
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return False
+        enum_name, _variant_name = parts
+        return enum_name in self.enum_struct_type_names
+
+    def enum_variant_fields_for_path(
+        self, path: str, expression: Optional[SpirvId] = None
+    ):
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return None
+        enum_name, variant_name = parts
+        if enum_name in self.generic_enum_struct_definitions:
+            specialization = None
+            if expression is not None:
+                specialization = self.generic_enum_specialization_for_struct_name(
+                    expression.type.base_type
+                )
+            if specialization is None:
+                specialization = self.generic_enum_constructor_specialization(enum_name)
+            if specialization is None:
+                return None
+            return generic_enum_specialized_variant_fields(
+                self, specialization, variant_name
+            )
+        return self.enum_struct_variant_fields.get(enum_name, {}).get(variant_name)
+
+    def process_enum_variant_constructor(
+        self,
+        path: str,
+        positional_args,
+        named_args=None,
+    ) -> Optional[SpirvId]:
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return None
+        enum_name, _variant_name = parts
+        if enum_name in self.generic_enum_struct_definitions:
+            return self.process_generic_enum_variant_constructor(
+                path, positional_args, named_args
+            )
+
+        if enum_name not in self.enum_struct_type_names:
+            if positional_args or named_args:
+                return None
+            return self.enum_variant_constant(path)
+
+        enum_type = self.struct_types.get(enum_name)
+        if enum_type is None:
+            return None
+
+        variant_fields = self.enum_variant_fields_for_path(path)
+        if variant_fields is None:
+            return None
+
+        named_args = dict(named_args or {})
+        if len(positional_args) > len(variant_fields):
+            raise ValueError(
+                f"Enum constructor {path} expects at most {len(variant_fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+
+        unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
+        if unknown_names:
+            raise ValueError(
+                f"Enum constructor {path} has no field {', '.join(unknown_names)}"
+            )
+
+        active_values = {}
+        missing_names = []
+        for index, (field_name, field_type) in enumerate(variant_fields):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif field_name in named_args:
+                value_expr = named_args[field_name]
+            else:
+                missing_names.append(field_name)
+                continue
+
+            value = self.process_expression(value_expr)
+            if value is None:
+                return None
+            active_values[field_name] = self.convert_value_to_type(
+                value, self.map_crossgl_type(field_type)
+            )
+
+        if missing_names:
+            raise ValueError(
+                f"Enum constructor {path} is missing field {', '.join(missing_names)}"
+            )
+
+        components = [self.enum_variant_constant(path)]
+        for field_name, field_type in self.enum_struct_fields.get(enum_name, []):
+            field_type_id = self.map_crossgl_type(field_type)
+            components.append(
+                active_values.get(field_name)
+                or self.default_value_for_type(field_type_id)
+            )
+
+        return self.composite_construct(enum_type, components)
+
+    def process_generic_enum_variant_constructor(
+        self,
+        path: str,
+        positional_args,
+        named_args=None,
+    ) -> Optional[SpirvId]:
+        enum_name, variant_name = self.enum_path_parts(path)
+        specialization = self.generic_enum_constructor_specialization(enum_name)
+        if specialization is None:
+            return None
+
+        enum_type = self.ensure_generic_enum_specialization_registered(specialization)
+        variant_fields = generic_enum_specialized_variant_fields(
+            self, specialization, variant_name
+        )
+        if variant_fields is None:
+            return None
+
+        named_args = dict(named_args or {})
+        if len(positional_args) > len(variant_fields):
+            raise ValueError(
+                f"Enum constructor {path} expects at most {len(variant_fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+
+        unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
+        if unknown_names:
+            raise ValueError(
+                f"Enum constructor {path} has no field {', '.join(unknown_names)}"
+            )
+
+        active_values = {}
+        missing_names = []
+        for index, (field_name, field_type) in enumerate(variant_fields):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif field_name in named_args:
+                value_expr = named_args[field_name]
+            else:
+                missing_names.append(field_name)
+                continue
+
+            value = self.process_expression_with_expected_type(value_expr, field_type)
+            if value is None:
+                return None
+            active_values[field_name] = self.convert_value_to_type(
+                value, self.map_crossgl_type(field_type)
+            )
+
+        if missing_names:
+            raise ValueError(
+                f"Enum constructor {path} is missing field {', '.join(missing_names)}"
+            )
+
+        components = [self.enum_variant_constant(path)]
+        for field_name, field_type in self.enum_struct_fields.get(
+            specialization["struct_name"], []
+        ):
+            field_type_id = self.map_crossgl_type(field_type)
+            components.append(
+                active_values.get(field_name)
+                or self.default_value_for_type(field_type_id)
+            )
+
+        return self.composite_construct(enum_type, components)
+
+    def process_struct_constructor_node(
+        self, expr: ConstructorNode
+    ) -> Optional[SpirvId]:
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        if "::" in type_name:
+            return self.process_enum_variant_constructor(
+                type_name,
+                list(getattr(expr, "arguments", []) or []),
+                getattr(expr, "named_arguments", {}) or {},
+            )
+
+        struct_type = self.struct_types.get(type_name)
+        if struct_type is None:
+            return None
+
+        members = self.current_struct_members.get(type_name, [])
+        positional_args = list(getattr(expr, "arguments", []) or [])
+        named_args = dict(getattr(expr, "named_arguments", {}) or {})
+        member_names = [member_name for _member_type, member_name in members]
+        unknown_names = sorted(set(named_args) - set(member_names))
+        if unknown_names:
+            raise ValueError(
+                f"Struct constructor {type_name} has no field "
+                f"{', '.join(unknown_names)}"
+            )
+
+        components = []
+        for index, (member_type, member_name) in enumerate(members):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif member_name in named_args:
+                value_expr = named_args[member_name]
+            else:
+                components.append(self.default_value_for_type(member_type))
+                continue
+
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
+            if value is None:
+                return None
+            components.append(self.convert_value_to_type(value, member_type))
+
+        if len(positional_args) > len(members):
+            self.emit(
+                f"; WARNING: Constructor {type_name} expected {len(members)} "
+                f"members but got {len(positional_args)}; truncating extra arguments"
+            )
+
+        return self.composite_construct(struct_type, components)
+
     def process_crossgl_struct(self, struct_node: StructNode) -> SpirvId:
         """Process a CrossGL struct definition."""
+        if struct_node.name in self.generic_enum_struct_definitions:
+            return self.struct_types.get(struct_node.name)
+
         members = []
         member_metadata = {}
 
@@ -8235,12 +9344,18 @@ class VulkanSPIRVCodeGen:
         self, node: VariableNode, type_name: str
     ) -> SpirvId:
         """Emit a StructuredBuffer/RWStructuredBuffer as a Vulkan BufferBlock."""
-        metadata = self.structured_buffer_type_info(type_name)
+        metadata = self.structured_buffer_declared_type_info(type_name)
         if metadata is None:
             raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
         memory_flags = self.storage_buffer_memory_flags(
             node, default_readonly=metadata.get("readonly", False)
         )
+        if (
+            metadata.get("default_writeonly")
+            and not memory_flags.get("readonly")
+            and not memory_flags.get("readwrite")
+        ):
+            memory_flags["writeonly"] = True
 
         element_type = self.map_crossgl_type(metadata["element_type_name"])
         self.decorate_storage_buffer_nested_type(element_type)
@@ -8259,7 +9374,10 @@ class VulkanSPIRVCodeGen:
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(block_type, "Uniform", node.name)
+        variable_type, is_descriptor_array = (
+            self.structured_buffer_descriptor_variable_type(type_name, block_type)
+        )
+        var_id = self.create_variable(variable_type, "Uniform", node.name)
         descriptor_set, binding = self.resource_descriptor_slot(node)
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
@@ -8269,15 +9387,88 @@ class VulkanSPIRVCodeGen:
         buffer_metadata = {
             **metadata,
             **memory_flags,
+            "buffer_variable": var_id,
+            "declaration_node": node,
+            "declared_type_name": type_name,
             "element_type": element_type,
             "runtime_array_type": runtime_array_type,
             "block_type": block_type,
             "member_index": 0,
         }
+        if is_descriptor_array:
+            buffer_metadata["descriptor_array"] = True
+            buffer_metadata["descriptor_array_type"] = variable_type
+        if metadata.get("append_consume"):
+            counter_metadata = self.process_structured_buffer_counter_declaration(
+                node, type_name
+            )
+            buffer_metadata.update(counter_metadata)
         self.global_variables[node.name] = var_id
         self.structured_buffer_metadata[var_id.id] = buffer_metadata
         self.structured_buffer_metadata[block_type.id] = buffer_metadata
         return var_id
+
+    def process_structured_buffer_counter_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> dict:
+        """Emit the sidecar counter SSBO used for structured-buffer counters."""
+        uint_type = self.register_primitive_type("uint")
+        block_name = f"{node.name}CounterBuffer"
+        block_type = self.register_struct_type(block_name, [(uint_type, "counter")])
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+
+        variable_type, is_descriptor_array = (
+            self.structured_buffer_descriptor_variable_type(type_name, block_type)
+        )
+        counter_name = f"{node.name}Counter"
+        var_id = self.create_variable(variable_type, "Uniform", counter_name)
+        descriptor_set = self.resource_descriptor_set(node)
+        binding = self.next_available_resource_binding(descriptor_set)
+        self.used_resource_bindings.add((descriptor_set, binding))
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        counter_access_metadata = {
+            "kind": "structured_buffer_counter",
+            "block_type": block_type,
+            "member_index": 0,
+            "element_type": uint_type,
+            "readonly": False,
+            "writeonly": False,
+        }
+        self.storage_buffer_access_metadata[var_id.id] = counter_access_metadata
+        self.storage_buffer_access_metadata[block_type.id] = counter_access_metadata
+        if is_descriptor_array:
+            self.storage_buffer_access_metadata[variable_type.id] = (
+                counter_access_metadata
+            )
+
+        return {
+            "counter_variable": var_id,
+            "counter_block_type": block_type,
+            "counter_variable_type": variable_type,
+            "counter_descriptor_array": is_descriptor_array,
+            "counter_member_index": 0,
+        }
+
+    def structured_buffer_descriptor_variable_type(
+        self, type_name: str, block_type: SpirvId
+    ) -> Tuple[SpirvId, bool]:
+        array_info = self.split_outer_array_type(type_name)
+        if array_info is None:
+            return block_type, False
+
+        element_type_name, size = array_info
+        element_type, _ = self.structured_buffer_descriptor_variable_type(
+            element_type_name, block_type
+        )
+        if size is None:
+            self.require_capability("RuntimeDescriptorArray")
+            self.require_extension("SPV_EXT_descriptor_indexing")
+        return self.register_array_type(element_type, size), True
 
     def is_glsl_buffer_block_node(self, node: VariableNode) -> bool:
         qualifiers = {
@@ -8978,8 +10169,14 @@ class VulkanSPIRVCodeGen:
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
         previous_return_type = self.current_return_type
+        previous_return_type_source = self.current_return_type_source
         previous_stage = self.current_stage
+        previous_function_name = self.current_function_name
         self.current_return_type = return_type
+        self.current_return_type_source = self.type_name_from_value(
+            function_node.return_type
+        )
+        self.current_function_name = function_node.name
         if stage is not None:
             self.current_stage = stage
 
@@ -9082,21 +10279,24 @@ class VulkanSPIRVCodeGen:
 
         self.process_statements(function_node.body)
 
-        if (
-            self.convert_type_node_to_string(function_node.return_type) == "void"
-            and not self.current_block_has_terminator()
-        ):
-            self.create_return()
+        if not self.current_block_has_terminator():
+            if self.convert_type_node_to_string(function_node.return_type) == "void":
+                self.create_return()
+            else:
+                self.create_unreachable()
 
         self.end_function()
 
         self.current_execution_model = previous_execution_model
         self.current_function_id = previous_function_id
         self.current_mesh_output_parameters = previous_mesh_output_parameters
+        self.current_function_name = previous_function_name
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
+        self.current_return_type_source = previous_return_type_source
         self.local_variables.clear()
         self.precise_local_variables.clear()
+        self.resource_alias_variables.clear()
         return function_id
 
     def process_statements(self, statements):
@@ -9149,6 +10349,18 @@ class VulkanSPIRVCodeGen:
             expression = stmt.expression
             if isinstance(expression, AssignmentNode):
                 self.process_assignment(expression)
+            elif (
+                getattr(stmt, "is_tail_expression", False)
+                and self.current_return_type is not None
+                and self.current_return_type.type.base_type != "void"
+            ):
+                return_value = self.process_expression_with_expected_type(
+                    expression, self.current_return_type_source
+                )
+                if return_value is not None:
+                    self.create_return_value(return_value)
+                else:
+                    self.create_return()
             else:
                 self.process_expression(expression)
 
@@ -9156,11 +10368,35 @@ class VulkanSPIRVCodeGen:
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
+        if self.process_local_resource_alias_declaration(
+            node, var_type_source, var_type_name
+        ):
+            return
+
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
             raise ValueError(
                 f"SPIR-V descriptor resource '{node.name}' cannot be declared "
                 "inside a function; declare it at shader or stage scope"
             )
+
+        initial_value = getattr(node, "initial_value", None)
+        is_precise = self.has_attribute(node, "precise")
+        if (
+            var_type_source is None
+            and initial_value is not None
+            and not isinstance(initial_value, (ArrayLiteralNode, MatchNode))
+        ):
+            rhs_value = self.process_expression_with_precision(
+                initial_value, is_precise
+            )
+            if rhs_value is not None:
+                var_type = self.ensure_registered_type(rhs_value.type)
+                var_id = self.create_variable(var_type, "Function", node.name)
+                self.local_variables[node.name] = var_id
+                if is_precise:
+                    self.precise_local_variables.add(node.name)
+                self.store_to_variable(var_id, rhs_value)
+                return
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
         if self.type_contains_runtime_array(var_type):
@@ -9172,24 +10408,62 @@ class VulkanSPIRVCodeGen:
 
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
-        is_precise = self.has_attribute(node, "precise")
         if is_precise:
             self.precise_local_variables.add(node.name)
 
-        initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
-            if isinstance(initial_value, ArrayLiteralNode):
-                rhs_value = self.process_array_literal(initial_value, var_type)
-            else:
-                rhs_value = self.process_expression_with_precision(
-                    initial_value, is_precise
+            if isinstance(initial_value, MatchNode):
+                self.process_match_expression_assignment(
+                    initial_value, var_id, var_type
                 )
-            if rhs_value is not None:
-                self.store_to_variable(var_id, rhs_value)
+            elif isinstance(initial_value, ArrayLiteralNode):
+                rhs_value = self.process_array_literal(initial_value, var_type)
+                if rhs_value is not None:
+                    self.store_to_variable(var_id, rhs_value)
+            else:
+                if is_precise:
+                    rhs_value = self.process_expression_with_precision(
+                        initial_value, is_precise
+                    )
+                else:
+                    rhs_value = self.process_expression_with_expected_type(
+                        initial_value, var_type_name
+                    )
+                if rhs_value is not None:
+                    self.store_to_variable(var_id, rhs_value)
+
+    def process_local_resource_alias_declaration(
+        self, node: VariableNode, var_type_source, var_type_name: str
+    ) -> bool:
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return False
+
+        source_pointer = self.variable_pointer_from_expression(initial_value)
+        if source_pointer is None:
+            return False
+
+        source_metadata = self.resource_metadata_for_pointer(source_pointer)
+        if source_metadata is None:
+            return False
+
+        if var_type_source is not None:
+            base_type_name = self.array_base_type_name(var_type_name)
+            if not (
+                self.is_resource_type_name(base_type_name)
+                or self.is_acceleration_structure_type_name(base_type_name)
+            ):
+                return False
+
+        self.local_variables[node.name] = source_pointer
+        self.resource_alias_variables.add(node.name)
+        return True
 
     def local_variable_requires_descriptor_storage(
         self, node: VariableNode, type_name: str
     ) -> bool:
+        if not type_name:
+            return False
         base_type = self.array_base_type_name(type_name)
         return (
             self.is_resource_type_name(base_type)
@@ -9207,7 +10481,7 @@ class VulkanSPIRVCodeGen:
         if self.is_glsl_buffer_block_node(node):
             return self.process_glsl_buffer_block_declaration(node, var_type_name)
 
-        if self.is_structured_buffer_type_name(var_type_name):
+        if self.is_structured_buffer_declared_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
@@ -9321,7 +10595,7 @@ class VulkanSPIRVCodeGen:
             seen.add(node_id)
             type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
             type_name = self.type_name_from_value(type_source)
-            if self.is_structured_buffer_type_name(
+            if self.is_structured_buffer_declared_type_name(
                 type_name
             ) or self.is_glsl_buffer_block_node(node):
                 yield node
@@ -9615,9 +10889,22 @@ class VulkanSPIRVCodeGen:
         return default_storage_class
 
     def type_name_from_value(self, type_value) -> str:
+        if type_value is None:
+            return None
         if hasattr(type_value, "name") or hasattr(type_value, "element_type"):
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
+
+    def type_name_string(self, type_value) -> str:
+        return self.type_name_from_value(type_value)
+
+    def process_expression_with_expected_type(self, expr, expected_type):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.process_expression(expr)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
 
     def collect_ast_functions(self, root):
         functions = []
@@ -9835,11 +11122,40 @@ class VulkanSPIRVCodeGen:
         )
 
     def buffer_operation_access_requirement(self, func_name):
-        if func_name == "buffer_load":
+        if (
+            func_name == "buffer_load"
+            or self.byte_address_helper_load_width(func_name) is not None
+        ):
             return "read"
-        if func_name == "buffer_store":
+        if (
+            func_name == "buffer_store"
+            or self.byte_address_helper_store_width(func_name) is not None
+        ):
             return "write"
+        if func_name == "buffer_append":
+            return "write"
+        if func_name == "buffer_consume":
+            return "read_write"
+        if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+            return "read_write"
         if func_name in self.buffer_atomic_function_names():
+            return "read_write"
+        return None
+
+    def storage_buffer_member_method_access_requirement(self, method_name):
+        if method_name in {"Load"} or self.byte_address_method_load_width(method_name):
+            return "read"
+        if method_name in {"Store"} or self.byte_address_method_store_width(
+            method_name
+        ):
+            return "write"
+        if method_name == "Append":
+            return "write"
+        if method_name == "Consume":
+            return "read_write"
+        if method_name in {"IncrementCounter", "DecrementCounter"}:
+            return "read_write"
+        if self.byte_address_method_interlocked_info(method_name) is not None:
             return "read_write"
         return None
 
@@ -9931,6 +11247,39 @@ class VulkanSPIRVCodeGen:
             return
 
         if isinstance(expr, FunctionCallNode):
+            callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+            if isinstance(callee_expr, MemberAccessNode):
+                args = getattr(expr, "arguments", getattr(expr, "args", []))
+                required_access = self.storage_buffer_member_method_access_requirement(
+                    getattr(callee_expr, "member", None)
+                )
+                target_name = self.storage_buffer_parameter_root_name(
+                    getattr(callee_expr, "object", None),
+                    storage_buffer_parameters,
+                )
+                if required_access is not None and target_name is not None:
+                    self.merge_storage_buffer_access_requirement_for_parameter(
+                        requirements, func_name, target_name, required_access
+                    )
+                    self.scan_storage_buffer_access_path_indices(
+                        getattr(callee_expr, "object", None),
+                        func_name,
+                        storage_buffer_parameters,
+                        callee_storage_buffer_parameter_indices,
+                        requirements,
+                        visited,
+                    )
+                    for arg in args:
+                        self.scan_storage_buffer_requirement_node(
+                            arg,
+                            func_name,
+                            storage_buffer_parameters,
+                            callee_storage_buffer_parameter_indices,
+                            requirements,
+                            visited,
+                        )
+                    return
+
             callee_name = self.function_call_name(expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
             required_access = self.buffer_operation_access_requirement(callee_name)
@@ -10379,6 +11728,8 @@ class VulkanSPIRVCodeGen:
         )
         if metadata is None:
             return None
+        if metadata.get("append_consume"):
+            return "read_write"
         if metadata.get("readonly"):
             return "read"
         if metadata.get("writeonly"):
@@ -10488,7 +11839,10 @@ class VulkanSPIRVCodeGen:
         try:
             for index, param in enumerate(parameters):
                 param_name = getattr(param, "name", f"param{index}")
-                if self.storage_buffer_parameter_type_name(param) is not None:
+                storage_buffer_type_name = self.storage_buffer_parameter_type_name(
+                    param
+                )
+                if storage_buffer_type_name is not None:
                     pointer_arg = self.variable_pointer_from_expression(
                         call_args[index]
                     )
@@ -10496,6 +11850,22 @@ class VulkanSPIRVCodeGen:
                         self.emit(
                             f"; WARNING: function call '{func_name}' requires a "
                             f"storage buffer argument for parameter {param_name}"
+                        )
+                        return self.default_value_for_function(function_node)
+                    actual_type_name = self.storage_buffer_expression_type_name(
+                        call_args[index]
+                    )
+                    if (
+                        actual_type_name is not None
+                        and not self.storage_buffer_parameter_type_is_compatible(
+                            storage_buffer_type_name, actual_type_name
+                        )
+                    ):
+                        self.emit(
+                            f"; WARNING: function call '{func_name}' requires "
+                            f"{storage_buffer_type_name} storage buffer type for "
+                            f"argument {self.expression_debug_name(call_args[index])} "
+                            f"passed to parameter {param_name}: got {actual_type_name}"
                         )
                         return self.default_value_for_function(function_node)
                     self.local_variables[param_name] = pointer_arg
@@ -10865,6 +12235,24 @@ class VulkanSPIRVCodeGen:
         if metadata is not None:
             self.storage_buffer_access_metadata[target_pointer.id] = metadata
 
+    def propagate_structured_buffer_descriptor_access_metadata(
+        self, source_pointer: SpirvId, target_pointer: SpirvId, index: SpirvId
+    ):
+        metadata = self.structured_buffer_metadata_for_pointer(source_pointer)
+        if metadata is None or not metadata.get("descriptor_array"):
+            return
+
+        source_type = self.variable_value_types.get(source_pointer.id)
+        block_type = metadata.get("block_type")
+        if not self.array_type_contains_element_type(source_type, block_type):
+            return
+
+        descriptor_indices = list(metadata.get("_descriptor_indices", []))
+        descriptor_indices.append(index)
+        access_metadata = {**metadata, "_descriptor_indices": descriptor_indices}
+        self.structured_buffer_metadata[target_pointer.id] = access_metadata
+        self.storage_buffer_access_metadata[target_pointer.id] = access_metadata
+
     def structured_buffer_element_pointer(
         self, buffer_pointer: SpirvId, index_id: SpirvId
     ) -> Optional[SpirvId]:
@@ -10878,8 +12266,7 @@ class VulkanSPIRVCodeGen:
         if (
             descriptor_array is not None
             and block_type is not None
-            and descriptor_array[0] is not None
-            and descriptor_array[0].id == block_type.id
+            and self.array_type_contains_element_type(pointee_type, block_type)
         ):
             return None
 
@@ -10894,6 +12281,912 @@ class VulkanSPIRVCodeGen:
         access_metadata = {**metadata, "_access_path": "element"}
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
+
+    def structured_buffer_default_value(self, metadata) -> SpirvId:
+        element_type = metadata.get("element_type") if metadata is not None else None
+        if element_type is not None:
+            return self.default_value_for_type(element_type)
+        return self.register_constant(0.0, self.register_primitive_type("float"))
+
+    def structured_buffer_counter_default_value(self) -> SpirvId:
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def ensure_structured_buffer_counter_metadata(self, metadata) -> bool:
+        if metadata.get("counter_variable") is not None:
+            return True
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            return False
+
+        root_pointer = metadata.get("buffer_variable")
+        root_metadata = (
+            self.structured_buffer_metadata.get(root_pointer.id)
+            if root_pointer is not None
+            else None
+        )
+        if root_metadata is not None and root_metadata.get("counter_variable"):
+            counter_metadata = {
+                key: value
+                for key, value in root_metadata.items()
+                if key.startswith("counter_")
+            }
+            counter_metadata["counter_variable"] = root_metadata["counter_variable"]
+            metadata.update(counter_metadata)
+            return True
+
+        declaration_node = metadata.get("declaration_node")
+        declared_type_name = metadata.get("declared_type_name")
+        if declaration_node is None or declared_type_name is None:
+            return False
+
+        counter_metadata = self.process_structured_buffer_counter_declaration(
+            declaration_node, declared_type_name
+        )
+        metadata.update(counter_metadata)
+        if root_metadata is not None:
+            root_metadata.update(counter_metadata)
+            self.structured_buffer_metadata[root_pointer.id] = root_metadata
+            block_type = root_metadata.get("block_type")
+            if block_type is not None:
+                self.structured_buffer_metadata[block_type.id] = root_metadata
+        return True
+
+    def structured_buffer_counter_pointer(
+        self, buffer_pointer: SpirvId
+    ) -> Optional[SpirvId]:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            return None
+
+        counter_pointer = metadata.get("counter_variable")
+        counter_block_type = metadata.get("counter_block_type")
+        if counter_pointer is None or counter_block_type is None:
+            return None
+
+        counter_value_type = self.variable_value_types.get(counter_pointer.id)
+        for index in metadata.get("_descriptor_indices", []):
+            counter_element_type = self.array_element_type_from_type(counter_value_type)
+            if counter_element_type is None:
+                return None
+
+            ptr_type = self.register_pointer_type(counter_element_type, "Uniform")
+            counter_pointer = self.access_chain(counter_pointer, [index], ptr_type)
+            self.variable_value_types[counter_pointer.id] = counter_element_type
+            counter_value_type = counter_element_type
+
+        if counter_value_type is None or counter_value_type.id != counter_block_type.id:
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        member_index = self.register_constant(
+            metadata.get("counter_member_index", 0), self.primitive_types["int"]
+        )
+        ptr_type = self.register_pointer_type(uint_type, "Uniform")
+        access = self.access_chain(counter_pointer, [member_index], ptr_type)
+        self.variable_value_types[access.id] = uint_type
+        self.storage_buffer_access_metadata[access.id] = {
+            "kind": "structured_buffer_counter",
+            "block_type": counter_block_type,
+            "readonly": False,
+            "writeonly": False,
+        }
+        return access
+
+    def emit_structured_buffer_counter_atomic(
+        self, opcode: str, counter_pointer: SpirvId, value: SpirvId
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        value = self.convert_value_to_type(value, uint_type)
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{uint_type.id} %{counter_pointer.id} "
+            f"%{scope.id} %{semantics.id} %{value.id}"
+        )
+        self.value_types[id_value] = uint_type
+        return SpirvId(id_value, uint_type.type)
+
+    def process_structured_buffer_append_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        if len(args) < 1:
+            self.emit(f"; WARNING: {diagnostic_name} requires a value operand")
+            return True, None
+        if len(args) > 1:
+            self.emit(f"; WARNING: {diagnostic_name} accepts only a value operand")
+            return True, None
+        if metadata.get("buffer_kind") != "AppendStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+
+        value = (
+            args[0]
+            if isinstance(args[0], SpirvId)
+            else self.process_expression(args[0])
+        )
+        if value is None:
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            return True, None
+        value = self.convert_value_to_type(value, metadata["element_type"])
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, None
+
+        one = self.register_constant(1, self.register_primitive_type("uint"))
+        index = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicIAdd", counter_pointer, one
+        )
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer "
+                "element"
+            )
+            return True, None
+
+        self.store_to_variable(element_pointer, value)
+        return True, None
+
+    def process_structured_buffer_consume_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        if args:
+            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            return True, self.structured_buffer_default_value(metadata)
+        if metadata.get("buffer_kind") != "ConsumeStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer"
+            )
+            return True, self.structured_buffer_default_value(metadata)
+        if metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            return True, self.structured_buffer_default_value(metadata)
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_default_value(metadata)
+
+        uint_type = self.register_primitive_type("uint")
+        one = self.register_constant(1, uint_type)
+        old_count = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicISub", counter_pointer, one
+        )
+        index = self.binary_operation("-", uint_type, old_count, one)
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer "
+                "element"
+            )
+            return True, self.structured_buffer_default_value(metadata)
+
+        element_type = self.variable_value_types[element_pointer.id]
+        return True, self.load_from_variable(element_pointer, element_type)
+
+    def process_structured_buffer_counter_method_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+        increment: bool,
+    ) -> Tuple[bool, SpirvId]:
+        if args:
+            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            return True, self.structured_buffer_counter_default_value()
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            self.emit(f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer")
+            return True, self.structured_buffer_counter_default_value()
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            return True, self.structured_buffer_counter_default_value()
+        if not self.ensure_structured_buffer_counter_metadata(metadata):
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_counter_default_value()
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_counter_default_value()
+
+        uint_type = self.register_primitive_type("uint")
+        one = self.register_constant(1, uint_type)
+        if increment:
+            counter_value = self.emit_structured_buffer_counter_atomic(
+                "OpAtomicIAdd", counter_pointer, one
+            )
+            return True, counter_value
+
+        old_count = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicISub", counter_pointer, one
+        )
+        return True, self.binary_operation("-", uint_type, old_count, one)
+
+    def process_structured_buffer_method_call(
+        self, expr: FunctionCallNode
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee_expr, MemberAccessNode):
+            return False, None
+
+        method_name = getattr(callee_expr, "member", None)
+        if method_name not in {
+            "Load",
+            "Store",
+            "Append",
+            "Consume",
+            "IncrementCounter",
+            "DecrementCounter",
+        }:
+            return False, None
+
+        buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
+        if buffer_pointer is None:
+            return False, None
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None or metadata.get("byte_address"):
+            return False, None
+
+        args = list(getattr(expr, "args", []) or [])
+        if method_name == "Append":
+            return self.process_structured_buffer_append_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "AppendStructuredBuffer.Append",
+            )
+        if method_name == "Consume":
+            return self.process_structured_buffer_consume_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "ConsumeStructuredBuffer.Consume",
+            )
+        if method_name in {"IncrementCounter", "DecrementCounter"}:
+            return self.process_structured_buffer_counter_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                f"RWStructuredBuffer.{method_name}",
+                method_name == "IncrementCounter",
+            )
+
+        if method_name == "Load":
+            diagnostic_name = "StructuredBuffer.Load"
+            if len(args) < 1:
+                self.emit(f"; WARNING: {diagnostic_name} requires an index operand")
+                return True, self.structured_buffer_default_value(metadata)
+            if len(args) > 1:
+                self.emit(f"; WARNING: {diagnostic_name} accepts only an index operand")
+                return True, self.structured_buffer_default_value(metadata)
+            if metadata.get("writeonly"):
+                self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+                return True, self.structured_buffer_default_value(metadata)
+            if metadata.get("buffer_kind") not in {
+                "StructuredBuffer",
+                "RWStructuredBuffer",
+            }:
+                self.emit(
+                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
+                    "element"
+                )
+                return True, self.structured_buffer_default_value(metadata)
+
+            index = self.process_expression(args[0])
+            if index is None:
+                self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+                return True, self.structured_buffer_default_value(metadata)
+            element_pointer = self.structured_buffer_element_pointer(
+                buffer_pointer, index
+            )
+            if element_pointer is None:
+                self.emit(
+                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
+                    "element"
+                )
+                return True, self.structured_buffer_default_value(metadata)
+
+            element_type = self.variable_value_types[element_pointer.id]
+            return True, self.load_from_variable(element_pointer, element_type)
+
+        diagnostic_name = "RWStructuredBuffer.Store"
+        if len(args) < 2:
+            self.emit(f"; WARNING: {diagnostic_name} requires index and value operands")
+            return True, None
+        if len(args) > 2:
+            self.emit(
+                f"; WARNING: {diagnostic_name} accepts only index and value operands"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            )
+            return True, None
+
+        index = self.process_expression(args[0])
+        if index is None:
+            self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+            return True, None
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            )
+            return True, None
+
+        value = self.process_expression(args[1])
+        if value is None:
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            return True, None
+
+        self.store_to_variable(element_pointer, value)
+        return True, None
+
+    def array_type_contains_element_type(
+        self, array_type: Optional[SpirvId], target_type: Optional[SpirvId]
+    ) -> bool:
+        if array_type is None or target_type is None:
+            return False
+
+        element_type = self.array_element_type_from_type(array_type)
+        while element_type is not None:
+            if element_type.id == target_type.id:
+                return True
+            element_type = self.array_element_type_from_type(element_type)
+        return False
+
+    def byte_address_method_load_width(self, method_name: str) -> Optional[int]:
+        return {"Load": 1, "Load2": 2, "Load3": 3, "Load4": 4}.get(method_name)
+
+    def byte_address_method_store_width(self, method_name: str) -> Optional[int]:
+        return {"Store": 1, "Store2": 2, "Store3": 3, "Store4": 4}.get(method_name)
+
+    def byte_address_method_interlocked_info(self, method_name: str):
+        return {
+            "InterlockedAdd": {
+                "opcode": "OpAtomicIAdd",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedAnd": {
+                "opcode": "OpAtomicAnd",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedOr": {
+                "opcode": "OpAtomicOr",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedXor": {
+                "opcode": "OpAtomicXor",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedMin": {
+                "opcode": "OpAtomicUMin",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedMax": {
+                "opcode": "OpAtomicUMax",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedExchange": {
+                "opcode": "OpAtomicExchange",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedCompareExchange": {
+                "opcode": "OpAtomicCompareExchange",
+                "value_roles": ("compare", "value"),
+                "min_args": 4,
+                "max_args": 4,
+                "required": "byte offset, compare, value, and original operands",
+                "accepted": "byte offset, compare, value, and original operands",
+                "original_index": 3,
+            },
+            "InterlockedCompareStore": {
+                "opcode": "OpAtomicCompareExchange",
+                "value_roles": ("compare", "value"),
+                "min_args": 3,
+                "max_args": 3,
+                "required": "byte offset, compare, and value operands",
+                "accepted": "byte offset, compare, and value operands",
+                "original_index": None,
+            },
+        }.get(method_name)
+
+    def byte_address_helper_load_width(self, function_name: str) -> Optional[int]:
+        return {"buffer_load2": 2, "buffer_load3": 3, "buffer_load4": 4}.get(
+            function_name
+        )
+
+    def byte_address_helper_store_width(self, function_name: str) -> Optional[int]:
+        return {"buffer_store2": 2, "buffer_store3": 3, "buffer_store4": 4}.get(
+            function_name
+        )
+
+    def byte_address_value_type(self, component_count: int) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        if component_count == 1:
+            return uint_type
+        return self.register_vector_type(uint_type, component_count)
+
+    def byte_address_default_value(self, component_count: int) -> SpirvId:
+        return self.default_value_for_type(
+            self.byte_address_value_type(component_count)
+        )
+
+    def byte_address_interlocked_default_value(self) -> SpirvId:
+        return self.default_value_for_type(self.register_primitive_type("uint"))
+
+    def byte_address_interlocked_uint_operand(
+        self, expr, diagnostic_name: str, role: str
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand could not be evaluated"
+            )
+            return None
+
+        value_type = self.value_types.get(
+            value.id
+        ) or self.find_registered_type_by_base(value.type.base_type)
+        if value_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand type could not be "
+                "determined"
+            )
+            return None
+
+        if self.vector_type_info_from_type(value_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            )
+            return None
+        if self.matrix_type_info_from_type(value_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            )
+            return None
+
+        type_name = self.normalize_primitive_name(value_type.type.base_type)
+        if type_name not in {"int", "uint"}:
+            self.emit(f"; WARNING: {diagnostic_name} {role} operand must be an integer")
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("uint"))
+
+    def byte_address_interlocked_original_pointer(
+        self, expr, diagnostic_name: str
+    ) -> Optional[SpirvId]:
+        original_pointer = self.assignable_pointer_from_expression(expr)
+        if original_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be an "
+                "assignable scalar uint target"
+            )
+            return None
+
+        original_type = self.pointer_pointee_type(original_pointer)
+        if original_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand type could not be "
+                "determined"
+            )
+            return None
+
+        if self.vector_type_info_from_type(original_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+        if self.matrix_type_info_from_type(original_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+
+        type_name = self.normalize_primitive_name(original_type.type.base_type)
+        if type_name != "uint":
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+
+        return original_pointer
+
+    def emit_byte_address_interlocked_atomic(
+        self,
+        opcode: str,
+        target_pointer: SpirvId,
+        value_operands: List[SpirvId],
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+
+        if opcode == "OpAtomicCompareExchange":
+            compare_id, value_id = value_operands
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{uint_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{compare_id.id}"
+            )
+        else:
+            value_id = value_operands[0]
+            self.emit(
+                f"%{id_value} = {opcode} %{uint_type.id} %{target_pointer.id} "
+                f"%{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = uint_type
+        return SpirvId(id_value, uint_type.type)
+
+    def byte_address_buffer_element_index_from_value(
+        self, byte_offset: SpirvId
+    ) -> Optional[SpirvId]:
+        offset_type_name = self.normalize_primitive_name(byte_offset.type.base_type)
+        if offset_type_name not in {"int", "uint"}:
+            self.emit("; WARNING: ByteAddressBuffer byte offset must be an integer")
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        byte_offset = self.convert_value_to_type(byte_offset, uint_type)
+        element_size = self.register_constant(4, uint_type)
+        return self.binary_operation("/", uint_type, byte_offset, element_size)
+
+    def byte_address_buffer_element_index(self, offset_expr) -> Optional[SpirvId]:
+        byte_offset = self.process_expression(offset_expr)
+        if byte_offset is None:
+            self.emit("; WARNING: ByteAddressBuffer byte offset could not be evaluated")
+            return None
+
+        return self.byte_address_buffer_element_index_from_value(byte_offset)
+
+    def byte_address_component_index(
+        self, element_index: SpirvId, component_index: int
+    ) -> SpirvId:
+        if component_index == 0:
+            return element_index
+
+        uint_type = self.register_primitive_type("uint")
+        component_offset = self.register_constant(component_index, uint_type)
+        return self.binary_operation("+", uint_type, element_index, component_offset)
+
+    def load_byte_address_buffer_value(
+        self,
+        buffer_pointer: SpirvId,
+        element_index: SpirvId,
+        component_count: int,
+        diagnostic_name: str,
+    ) -> SpirvId:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is not None and metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            return self.byte_address_default_value(component_count)
+
+        uint_type = self.register_primitive_type("uint")
+        components = []
+        for component_index in range(component_count):
+            index = self.byte_address_component_index(element_index, component_index)
+            component = self.call_resource_function(
+                "buffer_load", [buffer_pointer, index]
+            )
+            if component is None:
+                component = self.default_value_for_type(uint_type)
+            components.append(self.convert_value_to_type(component, uint_type))
+
+        if component_count == 1:
+            return components[0]
+
+        return self.composite_construct(
+            self.byte_address_value_type(component_count), components
+        )
+
+    def store_byte_address_buffer_value(
+        self,
+        buffer_pointer: SpirvId,
+        element_index: SpirvId,
+        value: SpirvId,
+        component_count: int,
+        diagnostic_name: str,
+    ) -> None:
+        uint_type = self.register_primitive_type("uint")
+        if component_count == 1:
+            value = self.convert_value_to_type(value, uint_type)
+            self.call_resource_function(
+                "buffer_store", [buffer_pointer, element_index, value]
+            )
+            return
+
+        value_type = self.value_types.get(
+            value.id
+        ) or self.find_registered_type_by_base(value.type.base_type)
+        value_type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value.type.base_type
+        )
+        vector_info = self.vector_component_type_and_count(value_type_name)
+        if vector_info is None or vector_info[1] != component_count:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a uvec{component_count} value"
+            )
+            return
+        if vector_info[0] not in {"int", "uint"}:
+            self.emit(f"; WARNING: {diagnostic_name} requires an integer vector value")
+            return
+
+        vector_type = self.byte_address_value_type(component_count)
+        value = self.convert_value_to_type(value, vector_type)
+        if not self.value_has_type(value, vector_type):
+            self.emit(
+                f"; WARNING: {diagnostic_name} value could not be converted to "
+                f"uvec{component_count}"
+            )
+            return
+
+        for component_index in range(component_count):
+            component = self.composite_extract(value, uint_type, component_index)
+            index = self.byte_address_component_index(element_index, component_index)
+            self.call_resource_function(
+                "buffer_store", [buffer_pointer, index, component]
+            )
+
+    def call_byte_address_buffer_load_helper(
+        self, function_name: str, args: List[SpirvId], component_count: int
+    ) -> SpirvId:
+        if len(args) < 2:
+            self.emit(
+                f"; WARNING: {function_name} requires buffer and byte offset operands"
+            )
+            return self.byte_address_default_value(component_count)
+        if len(args) > 2:
+            self.emit(
+                f"; WARNING: {function_name} accepts only buffer and byte offset "
+                "operands"
+            )
+            return self.byte_address_default_value(component_count)
+
+        metadata = self.structured_buffer_metadata_for_pointer(args[0])
+        if metadata is None or not metadata.get("byte_address"):
+            self.emit(
+                f"; WARNING: {function_name} requires a ByteAddressBuffer operand"
+            )
+            return self.byte_address_default_value(component_count)
+
+        element_index = self.byte_address_buffer_element_index_from_value(args[1])
+        if element_index is None:
+            return self.byte_address_default_value(component_count)
+
+        return self.load_byte_address_buffer_value(
+            args[0], element_index, component_count, function_name
+        )
+
+    def call_byte_address_buffer_store_helper(
+        self, function_name: str, args: List[SpirvId], component_count: int
+    ) -> None:
+        if len(args) < 3:
+            self.emit(
+                f"; WARNING: {function_name} requires buffer, byte offset, and "
+                "value operands"
+            )
+            return None
+        if len(args) > 3:
+            self.emit(
+                f"; WARNING: {function_name} accepts only buffer, byte offset, and "
+                "value operands"
+            )
+            return None
+
+        metadata = self.structured_buffer_metadata_for_pointer(args[0])
+        if metadata is None or not metadata.get("byte_address"):
+            self.emit(
+                f"; WARNING: {function_name} requires an RWByteAddressBuffer operand"
+            )
+            return None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {function_name} requires a writable buffer")
+            return None
+
+        element_index = self.byte_address_buffer_element_index_from_value(args[1])
+        if element_index is None:
+            return None
+
+        self.store_byte_address_buffer_value(
+            args[0], element_index, args[2], component_count, function_name
+        )
+        return None
+
+    def process_byte_address_buffer_interlocked_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        method_name: str,
+        args,
+    ) -> SpirvId:
+        diagnostic_name = f"RWByteAddressBuffer.{method_name}"
+        info = self.byte_address_method_interlocked_info(method_name)
+        if info is None:
+            return self.byte_address_interlocked_default_value()
+
+        if len(args) < info["min_args"]:
+            self.emit(f"; WARNING: {diagnostic_name} requires {info['required']}")
+            return self.byte_address_interlocked_default_value()
+        if len(args) > info["max_args"]:
+            self.emit(f"; WARNING: {diagnostic_name} accepts only {info['accepted']}")
+            return self.byte_address_interlocked_default_value()
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            return self.byte_address_interlocked_default_value()
+
+        element_index = self.byte_address_buffer_element_index(args[0])
+        if element_index is None:
+            return self.byte_address_interlocked_default_value()
+
+        value_operands = []
+        for role_index, role in enumerate(info["value_roles"], start=1):
+            value_operand = self.byte_address_interlocked_uint_operand(
+                args[role_index], diagnostic_name, role
+            )
+            if value_operand is None:
+                return self.byte_address_interlocked_default_value()
+            value_operands.append(value_operand)
+
+        original_pointer = None
+        original_index = info["original_index"]
+        if original_index is not None and len(args) > original_index:
+            original_pointer = self.byte_address_interlocked_original_pointer(
+                args[original_index], diagnostic_name
+            )
+            if original_pointer is None:
+                return self.byte_address_interlocked_default_value()
+
+        target_pointer = self.structured_buffer_element_pointer(
+            buffer_pointer, element_index
+        )
+        if target_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a byte-address buffer element"
+            )
+            return self.byte_address_interlocked_default_value()
+
+        atomic_result = self.emit_byte_address_interlocked_atomic(
+            info["opcode"], target_pointer, value_operands
+        )
+
+        if original_pointer is not None:
+            self.store_to_variable(original_pointer, atomic_result)
+
+        return atomic_result
+
+    def process_byte_address_buffer_method_call(
+        self, expr: FunctionCallNode
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee_expr, MemberAccessNode):
+            return False, None
+
+        method_name = getattr(callee_expr, "member", None)
+        load_width = self.byte_address_method_load_width(method_name)
+        store_width = self.byte_address_method_store_width(method_name)
+        interlocked_info = self.byte_address_method_interlocked_info(method_name)
+        if load_width is None and store_width is None and interlocked_info is None:
+            return False, None
+
+        buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
+        if buffer_pointer is None:
+            return False, None
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None or not metadata.get("byte_address"):
+            return False, None
+
+        args = list(getattr(expr, "args", []) or [])
+        if interlocked_info is not None:
+            return True, self.process_byte_address_buffer_interlocked_call(
+                buffer_pointer, metadata, method_name, args
+            )
+
+        if load_width is not None:
+            diagnostic_name = f"ByteAddressBuffer.{method_name}"
+            if len(args) < 1:
+                self.emit(f"; WARNING: {diagnostic_name} requires a byte offset")
+                return True, self.byte_address_default_value(load_width)
+            if len(args) > 1:
+                self.emit(f"; WARNING: {diagnostic_name} accepts only a byte offset")
+                return True, self.byte_address_default_value(load_width)
+
+            element_index = self.byte_address_buffer_element_index(args[0])
+            if element_index is None:
+                return True, self.byte_address_default_value(load_width)
+            return True, self.load_byte_address_buffer_value(
+                buffer_pointer, element_index, load_width, diagnostic_name
+            )
+
+        diagnostic_name = f"RWByteAddressBuffer.{method_name}"
+        if len(args) < 2:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires byte offset and value operands"
+            )
+            return True, None
+        if len(args) > 2:
+            self.emit(
+                f"; WARNING: {diagnostic_name} accepts only byte offset and value "
+                "operands"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+
+        element_index = self.byte_address_buffer_element_index(args[0])
+        if element_index is None:
+            return True, None
+
+        value = self.process_expression(args[1])
+        if value is None:
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            return True, None
+
+        self.store_byte_address_buffer_value(
+            buffer_pointer, element_index, value, store_width, diagnostic_name
+        )
+        return True, None
 
     def variable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
@@ -11289,6 +13582,12 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access
         return None
 
@@ -11328,6 +13627,12 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -11349,6 +13654,12 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
@@ -11356,6 +13667,10 @@ class VulkanSPIRVCodeGen:
         access = self.access_chain(array, [index], ptr_type)
         self.variable_value_types[access.id] = element_type
         self.propagate_storage_buffer_access_metadata(array, access)
+        self.propagate_structured_buffer_descriptor_access_metadata(
+            array, access, index
+        )
+        self.propagate_resource_access_metadata(array, access, element_type)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -11371,6 +13686,21 @@ class VulkanSPIRVCodeGen:
             return
 
         if self.process_mesh_output_assignment(target, node.value):
+            return
+
+        if isinstance(node.value, MatchNode):
+            target_pointer = self.assignable_pointer_from_expression(target)
+            target_type = (
+                self.variable_value_types.get(target_pointer.id)
+                if target_pointer is not None
+                else None
+            )
+            if target_pointer is None or target_type is None:
+                self.emit("; WARNING: Could not determine match assignment target type")
+                return
+            self.process_match_expression_assignment(
+                node.value, target_pointer, target_type
+            )
             return
 
         if isinstance(node.value, ArrayLiteralNode):
@@ -11393,6 +13723,13 @@ class VulkanSPIRVCodeGen:
             target = target.name
 
         if isinstance(target, str):
+            if target in self.resource_alias_variables:
+                self.emit(
+                    f"; WARNING: cannot assign to SPIR-V descriptor resource alias "
+                    f"{target}"
+                )
+                return
+
             var_id = self.ensure_assignable_pointer_for_name(target)
             if var_id is None:
                 var_type = self.primitive_types["float"]
@@ -11828,7 +14165,9 @@ class VulkanSPIRVCodeGen:
         """Process a CrossGL return statement."""
         if hasattr(node, "value") and node.value:
             if isinstance(node.value, list) and node.value:
-                return_value = self.process_expression(node.value[0])
+                return_value = self.process_expression_with_expected_type(
+                    node.value[0], self.current_return_type_source
+                )
                 if return_value:
                     self.create_return_value(return_value)
                 else:
@@ -11838,14 +14177,32 @@ class VulkanSPIRVCodeGen:
                     return_value = self.process_array_literal(
                         node.value, self.current_return_type
                     )
+                elif isinstance(node.value, MatchNode):
+                    return_value = self.process_match_expression_return(node.value)
                 else:
-                    return_value = self.process_expression(node.value)
+                    return_value = self.process_expression_with_expected_type(
+                        node.value, self.current_return_type_source
+                    )
                 if return_value:
                     self.create_return_value(return_value)
                 else:
                     self.create_return()
         else:
             self.create_return()
+
+    def process_match_expression_return(self, node: MatchNode) -> Optional[SpirvId]:
+        """Lower return-position matches through a temporary selected value."""
+        return_type = self.current_return_type
+        if return_type is None or return_type.type.base_type == "void":
+            self.process_match(node)
+            return None
+
+        result_pointer = self.create_variable(return_type, "Function", "__match_return")
+        default_value = self.default_value_for_type(return_type)
+        if default_value is not None:
+            self.store_to_variable(result_pointer, default_value)
+        self.process_match_expression_assignment(node, result_pointer, return_type)
+        return self.load_from_variable(result_pointer, return_type)
 
     def process_if(self, node: IfNode):
         """Process a CrossGL if statement."""
@@ -11994,71 +14351,338 @@ class VulkanSPIRVCodeGen:
             self.local_variables[pattern] = previous_variable
 
     def process_match(self, node: MatchNode):
-        """Process simple literal/wildcard matches as a structured if-chain."""
-        arms = getattr(node, "arms", []) or []
-        if not self.validate_match_arms(arms):
-            raise ValueError(
-                "Unsupported match arm for SPIR-V codegen; only unguarded "
-                "literal patterns and a final wildcard are supported"
-            )
+        """Process CrossGL match statements as an ordered SPIR-V selection chain."""
+        self.process_match_selection(
+            node,
+            lambda arm: self.process_match_statement_body(getattr(arm, "body", [])),
+        )
 
+    def process_match_expression_assignment(
+        self, node: MatchNode, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        """Lower a value-position match into stores to an existing local."""
+        self.process_match_selection(
+            node,
+            lambda arm: self.process_match_expression_arm_body(
+                getattr(arm, "body", []), target_pointer, target_type
+            ),
+        )
+
+    def process_match_selection(self, node: MatchNode, process_arm_body):
+        arms = getattr(node, "arms", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
-        literal_arms = [
-            arm
-            for arm in arms
-            if isinstance(getattr(arm, "pattern", None), LiteralPatternNode)
-        ]
-        wildcard_body = None
-        for arm in arms:
-            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
-                wildcard_body = getattr(arm, "body", [])
-                break
-
-        if not literal_arms:
-            if wildcard_body is not None:
-                self.process_statements(wildcard_body)
+        if not arms:
             return
 
-        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+        bool_type = self.register_primitive_type("bool")
+        matched_variable = self.create_variable(
+            bool_type, "Function", "__match_matched"
+        )
+        self.store_to_variable(
+            matched_variable, self.register_constant(False, bool_type)
+        )
+        matched_true = self.register_constant(True, bool_type)
 
-        for arm in literal_arms:
-            body_label = SpirvId(self.get_id(), SpirvType("label"))
-            next_label = SpirvId(self.get_id(), SpirvType("label"))
-            pattern_value = self.process_expression(arm.pattern.literal)
+        for arm in arms:
+            condition, bindings = self.lower_match_pattern_condition(
+                getattr(arm, "pattern", None), expression
+            )
+            restore_bindings = self.apply_match_bindings(bindings)
+            try:
+                guard = getattr(arm, "guard", None)
+                if guard is not None:
+                    guard_condition = self.process_expression(guard)
+                    condition = self.combine_match_conditions(
+                        condition, guard_condition
+                    )
+
+                already_matched = self.load_from_variable(matched_variable, bool_type)
+                not_matched = self.unary_operation("!", bool_type, already_matched)
+                condition = self.combine_match_conditions(not_matched, condition)
+
+                body_label = SpirvId(self.get_id(), SpirvType("label"))
+                next_label = SpirvId(self.get_id(), SpirvType("label"))
+
+                self.create_selection_merge(next_label)
+                self.create_conditional_branch(condition, body_label, next_label)
+
+                self.emit(f"%{body_label.id} = OpLabel")
+                self.current_label = body_label.id
+                process_arm_body(arm)
+                if not self.current_block_has_terminator():
+                    self.store_to_variable(matched_variable, matched_true)
+                    self.create_branch(next_label)
+
+                self.emit(f"%{next_label.id} = OpLabel")
+                self.current_label = next_label.id
+            finally:
+                restore_bindings()
+
+    def process_match_statement_body(self, body):
+        self.process_statements(body)
+
+    def process_match_expression_arm_body(
+        self, body, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        statements = getattr(body, "statements", None)
+        if statements is not None:
+            statements = list(statements)
+            if statements and getattr(statements[-1], "is_tail_expression", False):
+                self.process_statements(statements[:-1])
+                self.store_match_expression_result(
+                    getattr(statements[-1], "expression", None),
+                    target_pointer,
+                    target_type,
+                )
+                return
+            self.process_statements(statements)
+            return
+
+        if hasattr(body, "expression"):
+            self.store_match_expression_result(
+                getattr(body, "expression", None), target_pointer, target_type
+            )
+            return
+
+        self.process_statement(body)
+
+    def store_match_expression_result(
+        self, expression, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        value = self.process_expression_with_expected_type(
+            expression, target_type.type.base_type
+        )
+        if value is None:
+            return
+        self.store_to_variable(
+            target_pointer, self.convert_value_to_type(value, target_type)
+        )
+
+    def lower_match_pattern_condition(self, pattern, expression: SpirvId):
+        if isinstance(pattern, LiteralPatternNode):
+            pattern_value = self.process_expression(pattern.literal)
             if pattern_value is None:
                 pattern_value = self.register_constant(
                     0, self.register_primitive_type("int")
                 )
-            condition = self.binary_operation(
-                "==",
-                self.ensure_registered_type(expression.type),
-                expression,
-                pattern_value,
+            return self.compare_match_values(expression, pattern_value), []
+
+        if isinstance(pattern, WildcardPatternNode):
+            return None, []
+
+        if isinstance(pattern, IdentifierPatternNode):
+            return self.lower_identifier_match_pattern(pattern, expression)
+
+        if isinstance(pattern, StructPatternNode):
+            return self.lower_struct_match_pattern(pattern, expression)
+
+        if isinstance(pattern, ConstructorPatternNode):
+            return self.lower_constructor_match_pattern(pattern, expression)
+
+        self.raise_match_pattern_gap(
+            f"{type(pattern).__name__} patterns are not lowerable"
+        )
+
+    def lower_identifier_match_pattern(
+        self, pattern: IdentifierPatternNode, expression: SpirvId
+    ):
+        name = pattern.name
+        if name in {"_", ".."}:
+            return None, []
+
+        enum_constant = self.enum_variant_constant(name)
+        if enum_constant is not None:
+            return self.enum_variant_match_condition(expression, name), []
+
+        if "::" in name:
+            self.raise_match_pattern_gap(
+                "enum path patterns without a registered plain enum "
+                f"discriminant are not lowerable: {name}"
             )
 
-            self.create_selection_merge(merge_label)
-            self.create_conditional_branch(condition, body_label, next_label)
+        return None, [(name, expression)]
 
-            self.emit(f"%{body_label.id} = OpLabel")
-            self.current_label = body_label.id
-            self.process_statements(getattr(arm, "body", []))
-            if not self.current_block_has_terminator():
-                self.create_branch(merge_label)
+    def lower_constructor_match_pattern(
+        self, pattern: ConstructorPatternNode, expression: SpirvId
+    ):
+        if pattern.type_name in self.enum_variant_values:
+            condition = self.enum_variant_match_condition(expression, pattern.type_name)
+            field_condition, bindings = self.lower_enum_payload_pattern_bindings(
+                expression,
+                pattern.type_name,
+                list(getattr(pattern, "arguments", []) or []),
+            )
+            return self.combine_match_conditions(condition, field_condition), bindings
 
-            self.emit(f"%{next_label.id} = OpLabel")
-            self.current_label = next_label.id
+        self.raise_match_pattern_gap(
+            "payload enum constructor patterns require tagged enum struct lowering"
+        )
 
-        if wildcard_body is not None:
-            self.process_statements(wildcard_body)
+    def lower_struct_match_pattern(
+        self, pattern: StructPatternNode, expression: SpirvId
+    ):
+        if "::" in pattern.type_name:
+            condition = self.enum_variant_match_condition(expression, pattern.type_name)
+            field_condition, bindings = self.lower_enum_struct_pattern_bindings(
+                expression,
+                pattern.type_name,
+                getattr(pattern, "field_patterns", {}) or {},
+            )
+            return self.combine_match_conditions(condition, field_condition), bindings
 
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+        struct_type_name = expression.type.base_type
+        if pattern.type_name != struct_type_name:
+            self.raise_match_pattern_gap(
+                "struct pattern " f"{pattern.type_name} cannot match {struct_type_name}"
+            )
 
-        self.emit(f"%{merge_label.id} = OpLabel")
-        self.current_label = merge_label.id
+        condition = None
+        bindings = []
+        for field_name, field_pattern in (pattern.field_patterns or {}).items():
+            member_info = self.struct_member_info(struct_type_name, field_name)
+            if member_info is None:
+                self.raise_match_pattern_gap(
+                    "struct pattern "
+                    f"field {field_name} does not exist on {struct_type_name}"
+                )
+            member_index, member_type = member_info
+            field_value = self.composite_extract(expression, member_type, member_index)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                field_pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+
+        return condition, bindings
+
+    def enum_variant_match_condition(self, expression: SpirvId, path: str) -> SpirvId:
+        enum_constant = self.enum_variant_constant(path)
+        if enum_constant is None:
+            self.raise_match_pattern_gap(f"unknown enum variant {path}")
+
+        parts = self.enum_path_parts(path)
+        enum_name = parts[0] if parts else None
+        if enum_name in self.enum_struct_type_names:
+            variant_value = self.enum_struct_variant_value(expression, enum_name)
+            return self.compare_match_values(variant_value, enum_constant)
+
+        return self.compare_match_values(expression, enum_constant)
+
+    def enum_struct_variant_value(self, expression: SpirvId, enum_name: str) -> SpirvId:
+        struct_name = expression.type.base_type
+        if struct_name != enum_name:
+            specialization = self.generic_enum_specialization_for_struct_name(
+                struct_name
+            )
+            if specialization is None or specialization["base_name"] != enum_name:
+                self.raise_match_pattern_gap(
+                    f"enum pattern {enum_name} cannot match {struct_name}"
+                )
+        member_info = self.struct_member_info(struct_name, "variant")
+        if member_info is None:
+            self.raise_match_pattern_gap(f"enum {struct_name} has no variant tag")
+        member_index, member_type = member_info
+        return self.composite_extract(expression, member_type, member_index)
+
+    def lower_enum_payload_pattern_bindings(
+        self, expression: SpirvId, path: str, argument_patterns
+    ):
+        variant_fields = self.enum_variant_fields_for_path(path, expression)
+        if variant_fields is None:
+            return []
+        if len(argument_patterns) != len(variant_fields):
+            raise ValueError(
+                f"Enum pattern {path} expects {len(variant_fields)} arguments, "
+                f"got {len(argument_patterns)}"
+            )
+
+        condition = None
+        bindings = []
+        for pattern, (field_name, _field_type) in zip(
+            argument_patterns, variant_fields
+        ):
+            field_value = self.enum_struct_field_value(expression, field_name)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+        return condition, bindings
+
+    def lower_enum_struct_pattern_bindings(
+        self, expression: SpirvId, path: str, field_patterns
+    ):
+        variant_fields = dict(self.enum_variant_fields_for_path(path, expression) or [])
+        condition = None
+        bindings = []
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in variant_fields:
+                self.raise_match_pattern_gap(
+                    f"enum pattern {path} has no payload field {field_name}"
+                )
+            field_value = self.enum_struct_field_value(expression, field_name)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                field_pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+        return condition, bindings
+
+    def enum_struct_field_value(self, expression: SpirvId, field_name: str) -> SpirvId:
+        member_info = self.struct_member_info(expression.type.base_type, field_name)
+        if member_info is None:
+            self.raise_match_pattern_gap(
+                f"enum payload field {field_name} does not exist on "
+                f"{expression.type.base_type}"
+            )
+        member_index, member_type = member_info
+        return self.composite_extract(expression, member_type, member_index)
+
+    def raise_match_pattern_gap(self, detail: str):
+        raise ValueError(f"SPIR-V match pattern unsupported: {detail}")
+
+    def compare_match_values(self, expression: SpirvId, pattern_value: SpirvId):
+        return self.binary_operation(
+            "==",
+            self.ensure_registered_type(expression.type),
+            expression,
+            pattern_value,
+        )
+
+    def combine_match_conditions(
+        self, left: Optional[SpirvId], right: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return self.binary_operation(
+            "&&", self.register_primitive_type("bool"), left, right
+        )
+
+    def apply_match_bindings(self, bindings):
+        missing = object()
+        previous_values = []
+        for name, value in bindings:
+            if name in {"_", ".."}:
+                continue
+            previous_values.append((name, self.local_variables.get(name, missing)))
+            value_type = self.ensure_registered_type(value.type)
+            variable = self.create_variable(value_type, "Function", name)
+            self.local_variables[name] = variable
+            self.store_to_variable(variable, value)
+
+        def restore():
+            for name, previous in reversed(previous_values):
+                if previous is missing:
+                    self.local_variables.pop(name, None)
+                else:
+                    self.local_variables[name] = previous
+
+        return restore
 
     def is_supported_match_arm(self, arm):
         if getattr(arm, "guard", None) is not None:
@@ -12346,6 +14970,15 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(expr, float_type)
 
         elif isinstance(expr, str):
+            if self.enum_variant_is_payload_path(expr):
+                enum_value = self.process_enum_variant_constructor(expr, [])
+                if enum_value is not None:
+                    return enum_value
+            else:
+                enum_constant = self.enum_variant_constant(expr)
+                if enum_constant is not None:
+                    return enum_constant
+
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
                 return self.get_variable_value(var_id)
@@ -12507,10 +15140,31 @@ class VulkanSPIRVCodeGen:
         elif isinstance(expr, MeshOpNode):
             return self.process_mesh_operation(expr)
 
+        elif isinstance(expr, ConstructorNode):
+            constructed = self.process_struct_constructor_node(expr)
+            if constructed is not None:
+                return constructed
+            self.emit(
+                f"; WARNING: Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}"
+            )
+            return None
+
         elif isinstance(expr, FunctionCallNode):
             ray_query_call = self.ray_query_call_from_function_call(expr)
             if ray_query_call is not None:
                 return self.process_ray_query_operation(ray_query_call)
+
+            handled_byte_address_call, byte_address_result = (
+                self.process_byte_address_buffer_method_call(expr)
+            )
+            if handled_byte_address_call:
+                return byte_address_result
+
+            handled_structured_buffer_call, structured_buffer_result = (
+                self.process_structured_buffer_method_call(expr)
+            )
+            if handled_structured_buffer_call:
+                return structured_buffer_result
 
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None
@@ -12521,6 +15175,17 @@ class VulkanSPIRVCodeGen:
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
+
+            if (
+                isinstance(callee_name, str)
+                and self.enum_path_parts(callee_name) is not None
+            ):
+                enum_value = self.process_enum_variant_constructor(
+                    callee_name,
+                    list(getattr(expr, "args", []) or []),
+                )
+                if enum_value is not None:
+                    return enum_value
 
             if callee_name == "lambda":
                 return self.unsupported_lambda_default_value("lambda expression")
@@ -12925,13 +15590,50 @@ class VulkanSPIRVCodeGen:
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
-                return int(value[0]), int(value[1]), int(value[2])
+                return tuple(
+                    self.positive_local_size_dimension(
+                        value[index], key, "xyz"[index], stage
+                    )
+                    for index in range(3)
+                )
 
         return (
-            int(config.get("local_size_x", 1)),
-            int(config.get("local_size_y", 1)),
-            int(config.get("local_size_z", 1)),
+            self.positive_local_size_dimension(
+                config.get("local_size_x", 1), "local_size_x", "x", stage
+            ),
+            self.positive_local_size_dimension(
+                config.get("local_size_y", 1), "local_size_y", "y", stage
+            ),
+            self.positive_local_size_dimension(
+                config.get("local_size_z", 1), "local_size_z", "z", stage
+            ),
         )
+
+    def positive_local_size_dimension(
+        self, value, source: str, axis: str, stage
+    ) -> int:
+        """Coerce a LocalSize dimension to a valid positive SPIR-V literal."""
+        invalid = isinstance(value, bool)
+        if invalid:
+            dimension = None
+        else:
+            try:
+                dimension = int(value)
+            except (TypeError, ValueError):
+                dimension = None
+
+        if dimension is not None and dimension > 0:
+            return dimension
+
+        warning_key = (id(stage), source, axis)
+        if warning_key not in self.local_size_warning_keys:
+            self.local_size_warning_keys.add(warning_key)
+            self.emit(
+                "; WARNING: SPIR-V LocalSize "
+                f"{axis} dimension from {source} must be a positive integer "
+                "literal; using 1"
+            )
+        return 1
 
     def stage_attribute_value(self, stage, attribute_name: str):
         """Return the first argument for a stage entry-point attribute."""
@@ -13046,6 +15748,8 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+        elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
+            self.require_capability("Tessellation")
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
@@ -13252,10 +15956,49 @@ class VulkanSPIRVCodeGen:
         for i in range(2, 5):
             self.register_vector_type(float_type, i)
 
+        struct_declarations = list(getattr(ast, "structs", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            struct_declarations.extend(getattr(stage, "local_structs", []) or [])
+
+        self.struct_declarations = {}
+        self.enum_declarations = {}
+
+        def collect_type_declarations(nodes):
+            for node in nodes or []:
+                if isinstance(node, StructNode):
+                    self.struct_declarations.setdefault(node.name, node)
+                    collect_type_declarations(getattr(node, "members", []) or [])
+                elif isinstance(node, EnumNode):
+                    self.enum_declarations.setdefault(node.name, node)
+
+        collect_type_declarations(struct_declarations)
+
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            struct_declarations
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+
+        self.collect_enum_metadata(ast.structs)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            self.collect_enum_metadata(getattr(stage, "local_structs", []) or [])
+        self.register_generic_enum_metadata()
+
+        self.process_enum_structs(ast.structs)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            self.process_enum_structs(getattr(stage, "local_structs", []) or [])
+
         for struct in ast.structs:
+            if not isinstance(struct, StructNode):
+                continue
             self.process_crossgl_struct(struct)
         for stage in (getattr(ast, "stages", None) or {}).values():
             for struct in getattr(stage, "local_structs", []) or []:
+                if not isinstance(struct, StructNode):
+                    continue
                 self.process_crossgl_struct(struct)
 
         self.function_resource_array_type_hints = (

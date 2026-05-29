@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,13 +26,79 @@ def compile_hip_if_hipcc_available(hip_code, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, result.stderr + "\n\n" + hip_code
+    compiler_output = (result.stdout or "") + (result.stderr or "")
+    assert result.returncode == 0, compiler_output + "\n\n" + hip_code
 
 
 def convert_native_hip_to_crossgl(hip_code):
     tokens = HipLexer(hip_code).tokenize()
     ast = HipParser(tokens).parse()
     return HipToCrossGLConverter().generate(ast)
+
+
+def test_compile_hip_helper_skips_when_hipcc_missing(monkeypatch, tmp_path):
+    """Test the HIP compiler helper gracefully skips without hipcc."""
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+
+    with pytest.raises(pytest.skip.Exception, match="hipcc is not installed"):
+        compile_hip_if_hipcc_available("__global__ void smoke() {}", tmp_path)
+
+
+def test_compile_hip_helper_invokes_hipcc_and_writes_source(monkeypatch, tmp_path):
+    """Test the HIP compiler helper writes source before invoking hipcc."""
+    hip_code = "__global__ void smoke() {}\n"
+    calls = []
+
+    def fake_run(args, capture_output, text):
+        calls.append((args, capture_output, text))
+        assert (tmp_path / "native_smoke.hip").read_text(encoding="utf-8") == hip_code
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/rocm/bin/hipcc")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    assert calls == [
+        (
+            [
+                "/opt/rocm/bin/hipcc",
+                "-std=c++17",
+                "-c",
+                str(tmp_path / "native_smoke.hip"),
+                "-o",
+                str(tmp_path / "native_smoke.o"),
+            ],
+            True,
+            True,
+        )
+    ]
+
+
+def test_compile_hip_helper_reports_stdout_stderr_and_source(
+    monkeypatch,
+    tmp_path,
+):
+    """Test failed hipcc smoke compiles preserve complete compiler context."""
+    hip_code = "__global__ void broken() { missing_symbol(); }\n"
+
+    def fake_run(args, capture_output, text):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="hipcc stdout context\n",
+            stderr="hipcc stderr context\n",
+        )
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/opt/rocm/bin/hipcc")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(AssertionError) as exc_info:
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    message = str(exc_info.value)
+    assert "hipcc stdout context" in message
+    assert "hipcc stderr context" in message
+    assert hip_code in message
 
 
 def test_native_hip_atomic_barrier_smoke_parses_and_compiles_if_available(tmp_path):
@@ -2478,7 +2545,7 @@ def test_native_hip_device_error_runtime_parses_and_compiles_if_available(
     assert "var peek: hipError_t = hipSuccess;" in crossgl
     assert 'var name: ptr<i8> = /* HIP error name: last */ "";' in crossgl
     assert 'var message: ptr<i8> = /* HIP error string: peek */ "";' in crossgl
-    assert "count_out[0] = count;" in crossgl
+    assert "count_out[0] = (/* HIP device query: deviceCount */ 0);" in crossgl
 
     compile_hip_if_hipcc_available(hip_code, tmp_path)
 

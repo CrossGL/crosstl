@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.component }}" == "general" ]; then
-            pytest tests/test_translator/test_lexer.py tests/test_translator/test_parser.py
+            pytest tests/test_translator --ignore=tests/test_translator/test_codegen
           else
             pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py
           fi

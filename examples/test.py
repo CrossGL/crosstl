@@ -1,20 +1,73 @@
 #!/usr/bin/env python3
-"""
-CrossGL Example Conversion Test
-Comprehensive test to verify translation functionality across all backends and example categories.
-"""
+"""CrossGL example conversion smoke test."""
 
-import sys
+import argparse
+import json
 import os
 from pathlib import Path
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import crosstl
 
+KNOWN_FAILURE_BUDGET = 6
+MIN_SUCCESS_RATE = 90.0
 
-def main():
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        help="Optional path for a machine-readable test summary JSON file.",
+    )
+    return parser.parse_args(argv)
+
+
+def stable_json(data):
+    return json.dumps(data, indent=2, sort_keys=True) + "\n"
+
+
+def build_summary(
+    total_tests,
+    successful_tests,
+    failed_tests,
+    consistency_summary=None,
+):
+    success_rate = (successful_tests / total_tests) * 100 if total_tests else 0.0
+    return {
+        "schema_version": 1,
+        "total": total_tests,
+        "successful": successful_tests,
+        "failed": len(failed_tests),
+        "success_rate": round(success_rate, 1),
+        "known_failure_budget": KNOWN_FAILURE_BUDGET,
+        "minimum_success_rate": MIN_SUCCESS_RATE,
+        "within_regression_budget": (
+            len(failed_tests) <= KNOWN_FAILURE_BUDGET
+            and round(success_rate, 1) >= MIN_SUCCESS_RATE
+        ),
+        "failures": [
+            {
+                "example": example,
+                "backend": backend,
+                "error": error,
+            }
+            for example, backend, error in failed_tests
+        ],
+        "consistency": consistency_summary or {},
+    }
+
+
+def write_summary_json(summary, path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(stable_json(summary), encoding="utf-8")
+
+
+def main(argv=None):
     """Test comprehensive translation functionality across all example categories."""
+    args = parse_args(argv)
 
     # Define the organized example structure
     examples_by_category = {
@@ -141,7 +194,8 @@ def main():
     print(f"Total tests: {total_tests}")
     print(f"Successful: {successful_tests}")
     print(f"Failed: {len(failed_tests)}")
-    print(f"Success rate: {(successful_tests/total_tests)*100:.1f}%")
+    summary = build_summary(total_tests, successful_tests, failed_tests)
+    print(f"Success rate: {summary['success_rate']:.1f}%")
 
     if failed_tests:
         print(f"\n[FAILED] Failed translations:")
@@ -150,7 +204,16 @@ def main():
 
     # Test cross-backend consistency
     print(f"\n[TESTING] Testing cross-backend consistency...")
-    test_cross_backend_consistency()
+    consistency_summary = test_cross_backend_consistency()
+    summary = build_summary(
+        total_tests,
+        successful_tests,
+        failed_tests,
+        consistency_summary,
+    )
+    if args.summary_json:
+        write_summary_json(summary, args.summary_json)
+        print(f"[SUMMARY_JSON] {args.summary_json}")
 
     print(f"\n[COMPLETE] Translation test complete!")
     print(
@@ -163,7 +226,13 @@ def test_cross_backend_consistency():
     test_shader = "graphics/SimpleShader.cgl"
     if not Path(test_shader).exists():
         print("[WARNING] SimpleShader.cgl not found for consistency test")
-        return
+        return {
+            "shader": test_shader,
+            "backends": [],
+            "outputs": {},
+            "successful": 0,
+            "total": 0,
+        }
 
     consistency_backends = ["metal", "directx", "opengl", "vulkan"]
     outputs = {}
@@ -180,6 +249,13 @@ def test_cross_backend_consistency():
     print(
         f"  [SUCCESS] {len(non_zero_outputs)}/{len(consistency_backends)} backends produced substantial output"
     )
+    return {
+        "shader": test_shader,
+        "backends": consistency_backends,
+        "outputs": outputs,
+        "successful": len(non_zero_outputs),
+        "total": len(consistency_backends),
+    }
 
 
 if __name__ == "__main__":

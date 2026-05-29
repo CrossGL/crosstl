@@ -225,6 +225,650 @@ def test_readonly_structured_buffer_uses_readonly_ssbo():
     assert "int v = values[gl_GlobalInvocationID.x];" in generated
 
 
+def test_glsl_structured_buffer_access_metadata_emits_ssbo_qualifiers():
+    code = """
+    shader StructuredBufferAccessMetadataGLSL {
+        RWStructuredBuffer<int> source @binding(1) @readonly;
+        RWStructuredBuffer<int> target @binding(2) @access(writeonly);
+        RWStructuredBuffer<int> scratch @binding(3) @access(readwrite);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int value = buffer_load(source, tid.x);
+                buffer_store(target, tid.x, value);
+                int oldValue = buffer_load(scratch, tid.x);
+                buffer_store(scratch, tid.x, oldValue + 1);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert (
+        "layout(std430, binding = 1) readonly buffer sourceBuffer "
+        "{ int source[]; };" in generated
+    )
+    assert (
+        "layout(std430, binding = 2) writeonly buffer targetBuffer "
+        "{ int target[]; };" in generated
+    )
+    assert (
+        "layout(std430, binding = 3) buffer scratchBuffer { int scratch[]; };"
+        in generated
+    )
+    assert "readwrite buffer" not in generated
+    assert "int value = source[gl_GlobalInvocationID.x];" in generated
+    assert "target[gl_GlobalInvocationID.x] = value;" in generated
+    assert "int oldValue = scratch[gl_GlobalInvocationID.x];" in generated
+    assert "scratch[gl_GlobalInvocationID.x] = (oldValue + 1);" in generated
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StructuredBufferAccessInvalidWriteonlyLoad {
+                RWStructuredBuffer<int> values @writeonly;
+
+                compute {
+                    void main() {
+                        int value = buffer_load(values, 0);
+                    }
+                }
+            }
+            """,
+            "requires read-capable SSBO access.*got writeonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidReadonlyStore {
+                RWStructuredBuffer<int> values @readonly;
+
+                compute {
+                    void main() {
+                        buffer_store(values, 0, 1);
+                    }
+                }
+            }
+            """,
+            "requires write-capable SSBO access.*got readonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidTypedStore {
+                StructuredBuffer<int> values;
+
+                compute {
+                    void main() {
+                        buffer_store(values, 0, 1);
+                    }
+                }
+            }
+            """,
+            "requires write-capable SSBO access.*got readonly",
+        ),
+        (
+            """
+            shader StructuredBufferAccessInvalidTypedMetadata {
+                StructuredBuffer<int> values @writeonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "StructuredBuffer resource 'values' cannot use writeonly",
+        ),
+    ],
+)
+def test_glsl_structured_buffer_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader InvalidStorageImageAccessOperand {
+                image2D image @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'image': access\\(foo\\)",
+        ),
+        (
+            """
+            shader MissingStorageImageAccessOperand {
+                image2D image @access;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'image': "
+            "access\\(<missing>\\)",
+        ),
+        (
+            """
+            shader InvalidStructuredBufferAccessOperand {
+                RWStructuredBuffer<int> values @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'values': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidBufferBlockAccessOperand {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'data': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidSampledTextureAccessOperand {
+                sampler2D tex @access(foo);
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'tex': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidSamplerStateAccessOperand {
+                sampler samp @access(foo);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'samp': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidTextureParameterAccessOperand {
+                sampler2D tex;
+
+                vec4 sampleTex(sampler2D localTex @access(foo), vec2 uv) {
+                    return texture(localTex, uv);
+                }
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return sampleTex(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'localTex': "
+            "access\\(foo\\)",
+        ),
+    ],
+)
+def test_glsl_resource_access_rejects_invalid_metadata_operands(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_buffer_block_access_allows_compatible_operations():
+    shader = """
+    shader BufferBlockAccessCompatible {
+        struct ReadonlyData {
+            uint value;
+        };
+        struct WriteonlyData {
+            uint value;
+        };
+        struct ReadwriteData {
+            uint value;
+        };
+
+        ReadonlyData readonlyData @glsl_buffer_block(std430) @readonly;
+        WriteonlyData writeonlyData @glsl_buffer_block(std430) @writeonly;
+        ReadwriteData readwriteData @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint value = readonlyData.value;
+                writeonlyData.value = value;
+                uint old = atomicAdd(readwriteData.value, 1u);
+                readwriteData.value += old;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(std430, binding = 0) readonly buffer ReadonlyData" in generated
+    assert "layout(std430, binding = 1) writeonly buffer WriteonlyData" in generated
+    assert "layout(std430, binding = 2) buffer ReadwriteData" in generated
+    assert "readwrite buffer" not in generated
+    assert "uint value = readonlyData.value;" in generated
+    assert "writeonlyData.value = value;" in generated
+    assert "uint old = atomicAdd(readwriteData.value, 1u);" in generated
+    assert "readwriteData.value += old;" in generated
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader ConflictingGlobalBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                Data data[2] @glsl_buffer_block(std430, std140);
+
+                compute {
+                    void main() {
+                        int value = data[0].value;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL buffer block memory layout metadata for "
+            "'data': std430 differs from std140",
+        ),
+        (
+            """
+            shader DuplicateBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                Data data @glsl_buffer_block(std430, std430);
+
+                compute {
+                    void main() {
+                        int value = data.value;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL buffer block layout metadata for 'data': std430",
+        ),
+        (
+            """
+            shader ConflictingStageLocalBufferBlockLayouts {
+                struct Data {
+                    int value;
+                };
+
+                compute {
+                    Data localData @glsl_buffer_block(std140, scalar);
+
+                    void main() {
+                        int value = localData.value;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL buffer block memory layout metadata for "
+            "'localData': std140 differs from scalar",
+        ),
+    ],
+)
+def test_glsl_buffer_block_layout_metadata_rejects_duplicates_and_conflicts(
+    shader, match
+):
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader BufferBlockReadFromWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        uint value = data.value;
+                    }
+                }
+            }
+            """,
+            "requires read-capable buffer block access.*got writeonly",
+        ),
+        (
+            """
+            shader BufferBlockWriteToReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        data.value = 1u;
+                    }
+                }
+            }
+            """,
+            "requires write-capable buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockCompoundReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        data.value += 1u;
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockCompoundWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        data.value += 1u;
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got writeonly",
+        ),
+        (
+            """
+            shader BufferBlockAtomicReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.value, 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockAtomicWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.value, 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got writeonly",
+        ),
+        (
+            """
+            shader BufferBlockAtomicReadonlyArrayElement {
+                struct Data {
+                    uint values[4];
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.values[0], 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
+    ],
+)
+def test_glsl_buffer_block_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_buffer_block_nested_and_array_atomically_mutable_members():
+    shader = """
+    shader BufferBlockNestedAtomicMembers {
+        struct Counter {
+            uint value;
+        };
+        struct Data {
+            Counter nested;
+            Counter items[2];
+            uint values[4];
+        };
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint nestedOld = atomicAdd(data.nested.value, 1u);
+                uint itemOld = atomicAdd(data.items[1].value, nestedOld);
+                uint arrayOld = atomicAdd(data.values[0], itemOld);
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "Counter nested;" in generated
+    assert "Counter items[2];" in generated
+    assert "uint values[4];" in generated
+    assert "uint nestedOld = atomicAdd(data.nested.value, 1u);" in generated
+    assert "uint itemOld = atomicAdd(data.items[1].value, nestedOld);" in generated
+    assert "uint arrayOld = atomicAdd(data.values[0], itemOld);" in generated
+
+
+@pytest.mark.parametrize(
+    ("member_declarations", "target", "value", "match"),
+    [
+        (
+            "float value;",
+            "data.value",
+            "1.0",
+            r"requires a scalar int or uint buffer block member.*got float",
+        ),
+        (
+            "uvec2 value;",
+            "data.value",
+            "1u",
+            r"requires a scalar int or uint buffer block member.*got uvec2",
+        ),
+        (
+            "mat2 value;",
+            "data.value",
+            "1.0",
+            r"requires a scalar int or uint buffer block member.*got mat2",
+        ),
+        (
+            "Counter nested;",
+            "data.nested",
+            "1u",
+            r"requires a scalar int or uint buffer block member.*got Counter",
+        ),
+    ],
+)
+def test_glsl_buffer_block_atomics_reject_non_scalar_integer_members(
+    member_declarations,
+    target,
+    value,
+    match,
+):
+    shader = f"""
+    shader BufferBlockInvalidAtomicMember {{
+        struct Counter {{
+            uint value;
+        }};
+        struct Data {{
+            {member_declarations}
+        }};
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {{
+            void main() {{
+                atomicAdd({target}, {value});
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "atomicAdd(data.value, signedDelta);",
+            r"requires uint value argument.*signedDelta has type int",
+        ),
+        (
+            "atomicAdd(data.signedValue, unsignedDelta);",
+            r"requires int value argument.*unsignedDelta has type uint",
+        ),
+        (
+            "atomicCompSwap(data.value, signedDelta, unsignedDelta);",
+            r"requires uint compare argument.*signedDelta has type int",
+        ),
+        (
+            "atomicCompSwap(data.signedValue, signedDelta, unsignedDelta);",
+            r"requires int value argument.*unsignedDelta has type uint",
+        ),
+        (
+            "atomicExchange(data.value, boolDelta);",
+            r"requires uint value argument.*boolDelta has type bool",
+        ),
+        (
+            "atomicAdd(data.value, vectorDelta);",
+            r"requires uint value argument.*vectorDelta has type vec2",
+        ),
+    ],
+)
+def test_glsl_buffer_block_atomics_reject_incompatible_value_arguments(call, match):
+    shader = f"""
+    shader BufferBlockInvalidAtomicArguments {{
+        struct Data {{
+            uint value;
+            int signedValue;
+        }};
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {{
+            void main() {{
+                int signedDelta = 1;
+                uint unsignedDelta = 1u;
+                bool boolDelta = true;
+                vec2 vectorDelta = vec2(1.0, 2.0);
+                {call}
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+def test_glsl_structured_buffer_access_rejects_incompatible_helper_calls():
+    shader = """
+    shader StructuredBufferAccessInvalidHelper {
+        RWStructuredBuffer<int> target @writeonly;
+
+        int readValue(RWStructuredBuffer<int> values, uint index) {
+            return buffer_load(values, index);
+        }
+
+        compute {
+            void main() {
+                int value = readValue(target, 0u);
+            }
+        }
+    }
+    """
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(
+        ValueError,
+        match="function call 'readValue' requires read-capable SSBO access",
+    ):
+        GLSLCodeGen().generate(ast)
+
+
 def test_append_consume_structured_buffers_use_sidecar_counters():
     code = """
     shader StructuredBufferAppendConsumeGLSL {
@@ -992,16 +1636,525 @@ def test_glsl_global_resource_binding_attributes_drive_layout_bindings():
     assert "layout(binding = 9) uniform sampler2D autoTex;" in generated_code
 
 
+def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
+    code = """
+    shader EquivalentResourceBindings {
+        cbuffer Constants @binding(4) @register(b4) {
+            vec4 tint;
+        };
+
+        RWStructuredBuffer<int> values @binding(3) @register(u3);
+        StructuredBuffer<int> readValues @binding(5) @register(t5);
+        sampler linearSampler @sampler(6) @register(s6);
+        sampler2D tex @binding(1) @texture(1) @register(t1);
+        image2D img @binding(2) @register(u2);
+
+        fragment {
+            vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                int value = buffer_load(values, 0);
+                int readValue = buffer_load(readValues, 0);
+                return texture(tex, uv) + imageLoad(img, ivec2(0, 0)) +
+                    tint + vec4(float(value + readValue));
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(std140, binding = 4) uniform Constants" in generated_code
+    assert "layout(std430, binding = 3) buffer valuesBuffer" in generated_code
+    assert "layout(std430, binding = 5) readonly buffer readValuesBuffer" in (
+        generated_code
+    )
+    assert "layout(binding = 1) uniform sampler2D tex;" in generated_code
+    assert "layout(rgba32f, binding = 2) uniform image2D img;" in generated_code
+    assert "sampler linearSampler" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader TextureUsesURegister {
+                sampler2D tex @register(u2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'tex': "
+            "register u2 uses u-register, expected t-register for texture binding",
+        ),
+        (
+            """
+            shader ImageUsesTRegister {
+                image2D img @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'img': "
+            "register t2 uses t-register, expected u-register for image binding",
+        ),
+        (
+            """
+            shader RWBufferUsesTRegister {
+                RWStructuredBuffer<int> values @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'values': "
+            "register t2 uses t-register, expected u-register for buffer binding",
+        ),
+        (
+            """
+            shader ReadonlyBufferUsesURegister {
+                StructuredBuffer<int> values @register(u2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'values': "
+            "register u2 uses u-register, expected t-register for buffer binding",
+        ),
+        (
+            """
+            shader CBufferUsesURegister {
+                cbuffer Constants @register(u2) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'Constants': "
+            "register u2 uses u-register, expected b-register for uniform buffer "
+            "binding",
+        ),
+        (
+            """
+            shader BufferBlockUsesTRegister {
+                struct Data {
+                    int value;
+                };
+
+                Data data @glsl_buffer_block(std430) @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(data.value));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'data': "
+            "register t2 uses t-register, expected u-register for buffer binding",
+        ),
+        (
+            """
+            shader SamplerUsesTRegister {
+                sampler samp @register(t2);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'samp': "
+            "register t2 uses t-register, expected s-register for sampler binding",
+        ),
+        (
+            """
+            shader StageSamplerUsesURegister {
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(sampler samp @register(u2), vec2 uv @TEXCOORD0)
+                        @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'samp': "
+            "register u2 uses u-register, expected s-register for sampler binding",
+        ),
+    ],
+)
+def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader TextureUsesDescriptorSet {
+                sampler2D tex @set(1) @binding(2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader SamplerUsesDescriptorSet {
+                sampler samp @set(1) @sampler(2);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'samp': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader ImageUsesRegisterSpace {
+                image2D img @space(2) @binding(3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'img': "
+            "space 2 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader StageResourceUsesDescriptorSet {
+                fragment {
+                    vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader StageSamplerUsesDescriptorSet {
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(sampler samp @set(1) @sampler(2), vec2 uv @TEXCOORD0)
+                        @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'samp': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+    ],
+)
+def test_glsl_resource_binding_rejects_descriptor_set_space_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader DuplicateTextureBinding {
+                sampler2D tex @binding(1) @binding(1);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'tex': binding 1",
+        ),
+        (
+            """
+            shader DuplicateStageTextureBinding {
+                fragment {
+                    vec4 main(sampler2D tex @texture(2) @texture(2))
+                        @gl_FragColor
+                    {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'tex': "
+            "texture 2 binding 2",
+        ),
+        (
+            """
+            shader DuplicateStructuredBufferRegister {
+                RWStructuredBuffer<int> values[2] @register(u3) @register(u3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values[1], 0)));
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'values': "
+            "register u3 binding 3",
+        ),
+        (
+            """
+            shader DuplicateCBufferBinding {
+                cbuffer Constants @binding(4) @binding(4) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'Constants': binding 4",
+        ),
+    ],
+)
+def test_glsl_resource_binding_aliases_reject_duplicate_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader ConflictingTextureBindings {
+                sampler2D tex @binding(1) @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'tex': "
+            "binding 1 differs from register t2 binding 2",
+        ),
+        (
+            """
+            shader ConflictingImageBindings {
+                image2D img @binding(2) @register(u3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'img': "
+            "binding 2 differs from register u3 binding 3",
+        ),
+        (
+            """
+            shader ConflictingStructuredBufferBindings {
+                RWStructuredBuffer<int> values @binding(3) @register(u4);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'values': "
+            "binding 3 differs from register u4 binding 4",
+        ),
+        (
+            """
+            shader ConflictingCBufferBindings {
+                cbuffer Constants @binding(4) @register(b5) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'Constants': "
+            "binding 4 differs from register b5 binding 5",
+        ),
+        (
+            """
+            shader ConflictingStageResourceBindings {
+                fragment {
+                    vec4 main(sampler2D tex @binding(1) @register(t2))
+                        @gl_FragColor
+                    {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Conflicting OpenGL resource binding metadata for 'tex': "
+            "binding 1 differs from register t2 binding 2",
+        ),
+    ],
+)
+def test_glsl_resource_binding_aliases_reject_conflicting_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader InvalidTextureBindingOperand {
+                sampler2D tex @binding(slot);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "binding slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidTextureRegisterOperand {
+                sampler2D tex @register(q2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "register q2 must use b/s/t/u register syntax or an integer binding",
+        ),
+        (
+            """
+            shader InvalidCBufferBindingOperand {
+                cbuffer Constants @binding(slot) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'Constants': "
+            "binding slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidStructuredBufferRegisterOperand {
+                RWStructuredBuffer<int> values @register(q4);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'values': "
+            "register q4 must use b/s/t/u register syntax or an integer binding",
+        ),
+        (
+            """
+            shader InvalidStageResourceBindingOperand {
+                fragment {
+                    vec4 main(sampler2D tex @texture(slot)) @gl_FragColor {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "texture slot must resolve to a concrete integer binding",
+        ),
+    ],
+)
+def test_glsl_resource_binding_operands_reject_non_integer_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_glsl_stage_local_resources_emit_global_layout_bindings():
     code = """
     shader StageLocalResourcesGLSL {
+        struct LocalData {
+            int value;
+        };
+
         fragment {
             uniform sampler2D localTex @binding(2);
             uniform image2D localImage @binding(5);
+            LocalData localData @glsl_buffer_block(std430) @binding(8);
 
             vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
                 vec4 stored = imageLoad(localImage, ivec2(0, 0));
-                return texture(localTex, uv) + stored;
+                return texture(localTex, uv) + stored + vec4(float(localData.value));
             }
         }
     }
@@ -1013,7 +2166,9 @@ def test_glsl_stage_local_resources_emit_global_layout_bindings():
 
     assert "layout(binding = 2) uniform sampler2D localTex;" in generated_code
     assert "layout(rgba32f, binding = 5) uniform image2D localImage;" in generated_code
+    assert "layout(std430, binding = 8) buffer LocalData" in generated_code
     assert "texture(localTex, uv)" in generated_code
+    assert "float(localData.value)" in generated_code
 
 
 def test_glsl_stage_resource_parameters_emit_global_layout_bindings():
@@ -1088,6 +2243,46 @@ def test_glsl_stage_resource_parameter_auto_binding_skips_explicit_global():
 
     assert "layout(binding = 0) uniform sampler2D explicitTex;" in generated_code
     assert "layout(binding = 1) uniform sampler2D localTex;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader DuplicateStageInputLocation {
+                fragment {
+                    vec4 main(vec2 uv @location(0) @location(0)) @gl_FragColor {
+                        return vec4(uv, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL layout metadata for 'uv': location = 0",
+        ),
+        (
+            """
+            shader DuplicateFragmentOutputComponent {
+                struct PSOutput {
+                    float luminance @location(0) @component(0) @component(0);
+                };
+
+                fragment {
+                    PSOutput main(vec2 uv @TEXCOORD0) {
+                        PSOutput output;
+                        output.luminance = uv.x;
+                        return output;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL layout metadata for 'luminance': component = 0",
+        ),
+    ],
+)
+def test_glsl_stage_io_layout_metadata_rejects_duplicate_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
 def test_glsl_shared_stage_resource_parameter_emits_one_global_binding():
@@ -2133,6 +3328,286 @@ def test_glsl_geometry_layout_rejects_invalid_count_constants(attribute_line, me
 
     with pytest.raises(ValueError, match=message):
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "geometry")
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@triangles(1)\n                @outputtopology(line)\n                @maxvertexcount(2)",
+            "GLSL stage attribute triangles does not accept arguments",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n                @line_strip(1)\n                @maxvertexcount(2)",
+            "GLSL stage attribute line_strip does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @partitioning(equal)\n                @cw(1)",
+            "GLSL stage attribute cw does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @equal_spacing(1)",
+            "GLSL stage attribute equal_spacing does not accept arguments",
+        ),
+    ],
+)
+def test_glsl_stage_bare_layout_attributes_reject_arguments(stage, metadata, message):
+    code = f"""
+    shader BadBareStageLayoutOperand {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @triangles\n"
+            "                @outputtopology(line)\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry input topology layout "
+            "inputtopology line with triangles",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @outputtopology(line)\n"
+            "                @triangle_strip\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry output topology layout "
+            "outputtopology line with triangle_strip",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @quads\n"
+            "                @partitioning(equal)",
+            "Conflicting GLSL tessellation domain layout domain triangle with quads",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @partitioning(equal)\n"
+            "                @fractional_even_spacing",
+            "Conflicting GLSL tessellation partitioning layout "
+            "partitioning equal with fractional_even_spacing",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n" "                @cw\n" "                @ccw",
+            "Conflicting GLSL tessellation winding layout cw with ccw",
+        ),
+    ],
+)
+def test_glsl_stage_layout_attributes_reject_conflicting_aliases(
+    stage, metadata, message
+):
+    code = f"""
+    shader ConflictingStageLayoutAliases {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_stage_layout_attributes_accept_equivalent_aliases():
+    geometry_code = """
+    shader EquivalentGeometryStageLayoutAliases {
+        geometry {
+            void main()
+                @inputtopology(line)
+                @lines
+                @outputtopology(line)
+                @line_strip
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+    tessellation_code = """
+    shader EquivalentTessellationStageLayoutAliases {
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @triangles
+                @partitioning(equal)
+                @equal_spacing
+                @outputtopology(triangle_cw)
+            { }
+        }
+    }
+    """
+
+    geometry = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(geometry_code), "geometry"
+    )
+    tessellation = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(tessellation_code), "tessellation_evaluation"
+    )
+
+    assert "layout(lines) in;" in geometry
+    assert "layout(line_strip, max_vertices = 2) out;" in geometry
+    assert "layout(triangles, equal_spacing, cw) in;" in tessellation
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@triangles(1)\n                @outputtopology(line)\n                @maxvertexcount(2)",
+            "GLSL stage attribute triangles does not accept arguments",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n                @line_strip(1)\n                @maxvertexcount(2)",
+            "GLSL stage attribute line_strip does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @partitioning(equal)\n                @cw(1)",
+            "GLSL stage attribute cw does not accept arguments",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n                @equal_spacing(1)",
+            "GLSL stage attribute equal_spacing does not accept arguments",
+        ),
+    ],
+)
+def test_glsl_stage_bare_layout_attributes_reject_arguments(stage, metadata, message):
+    code = f"""
+    shader BadBareStageLayoutOperand {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+@pytest.mark.parametrize(
+    ("stage", "metadata", "message"),
+    [
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @triangles\n"
+            "                @outputtopology(line)\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry input topology layout "
+            "inputtopology line with triangles",
+        ),
+        (
+            "geometry",
+            "@inputtopology(line)\n"
+            "                @outputtopology(line)\n"
+            "                @triangle_strip\n"
+            "                @maxvertexcount(2)",
+            "Conflicting GLSL geometry output topology layout "
+            "outputtopology line with triangle_strip",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @quads\n"
+            "                @partitioning(equal)",
+            "Conflicting GLSL tessellation domain layout domain triangle with quads",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n"
+            "                @partitioning(equal)\n"
+            "                @fractional_even_spacing",
+            "Conflicting GLSL tessellation partitioning layout "
+            "partitioning equal with fractional_even_spacing",
+        ),
+        (
+            "tessellation_evaluation",
+            "@domain(triangle)\n" "                @cw\n" "                @ccw",
+            "Conflicting GLSL tessellation winding layout cw with ccw",
+        ),
+    ],
+)
+def test_glsl_stage_layout_attributes_reject_conflicting_aliases(
+    stage, metadata, message
+):
+    code = f"""
+    shader ConflictingStageLayoutAliases {{
+        {stage} {{
+            void main()
+                {metadata}
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), stage)
+
+
+def test_glsl_stage_layout_attributes_accept_equivalent_aliases():
+    geometry_code = """
+    shader EquivalentGeometryStageLayoutAliases {
+        geometry {
+            void main()
+                @inputtopology(line)
+                @lines
+                @outputtopology(line)
+                @line_strip
+                @maxvertexcount(2)
+            { }
+        }
+    }
+    """
+    tessellation_code = """
+    shader EquivalentTessellationStageLayoutAliases {
+        tessellation_evaluation {
+            void main()
+                @domain(triangle)
+                @triangles
+                @partitioning(equal)
+                @equal_spacing
+                @outputtopology(triangle_cw)
+            { }
+        }
+    }
+    """
+
+    geometry = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(geometry_code), "geometry"
+    )
+    tessellation = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(tessellation_code), "tessellation_evaluation"
+    )
+
+    assert "layout(lines) in;" in geometry
+    assert "layout(line_strip, max_vertices = 2) out;" in geometry
+    assert "layout(triangles, equal_spacing, cw) in;" in tessellation
 
 
 @pytest.mark.parametrize(
@@ -5071,6 +6546,89 @@ def test_glsl_mesh_layout_counts_accept_positive_integer_constants_and_aliases()
     assert "SetMeshOutputsEXT(MAX_VERTEX_COUNT, MAX_PRIMITIVE_COUNT);" in mesh_code
 
 
+def test_glsl_mesh_layout_accepts_equivalent_aliases():
+    shader = """
+    shader MeshLayoutEquivalentAliases {
+        mesh {
+            void main()
+                @outputtopology(triangle)
+                @triangles
+                @max_vertices(3)
+                @maxvertexcount(3)
+                @max_primitives(1)
+                @maxprimitivecount(1)
+                @numthreads(1, 1, 1)
+            {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    mesh_code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+    assert "layout(triangles, max_vertices = 3, max_primitives = 1) out;" in mesh_code
+    assert "SetMeshOutputsEXT(3, 1);" in mesh_code
+
+
+@pytest.mark.parametrize(
+    ("attribute_lines", "message"),
+    [
+        (
+            "@outputtopology(line)\n                @triangles",
+            "Conflicting GLSL mesh output topology layout outputtopology line "
+            "with triangles",
+        ),
+        (
+            "@max_vertices(3)\n                @maxvertexcount(4)",
+            "Conflicting GLSL mesh max_vertices layout max_vertices 3 "
+            "with maxvertexcount 4",
+        ),
+        (
+            "@max_primitives(1)\n                @maxprimitivecount(2)",
+            "Conflicting GLSL mesh max_primitives layout max_primitives 1 "
+            "with maxprimitivecount 2",
+        ),
+    ],
+)
+def test_glsl_mesh_layout_rejects_conflicting_aliases(attribute_lines, message):
+    fallback_topology = (
+        ""
+        if "@outputtopology" in attribute_lines
+        or any(
+            f"@{name}" in attribute_lines for name in ("points", "lines", "triangles")
+        )
+        else "@outputtopology(triangle)"
+    )
+    fallback_max_vertices = (
+        ""
+        if "@max_vertices" in attribute_lines or "@maxvertexcount" in attribute_lines
+        else "@max_vertices(3)"
+    )
+    fallback_max_primitives = (
+        ""
+        if "@max_primitives" in attribute_lines
+        or "@maxprimitivecount" in attribute_lines
+        else "@max_primitives(1)"
+    )
+    shader = f"""
+    shader BadMeshLayoutAliases {{
+        mesh {{
+            void main()
+                {fallback_topology}
+                {fallback_max_vertices}
+                {fallback_max_primitives}
+                {attribute_lines}
+                @numthreads(1, 1, 1)
+            {{ }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 @pytest.mark.parametrize(
     ("attribute_line", "message"),
     [
@@ -6808,6 +8366,87 @@ def test_glsl_generic_ray_query_member_calls_lower_to_ext_functions():
     assert ".ConfirmIntersection(" not in generated_code
 
 
+def test_glsl_ray_query_member_calls_reject_invalid_arities():
+    cases = [
+        (
+            "rq.Proceed(1u);",
+            r"GLSL ray query Proceed expects 0 arguments, got 1",
+        ),
+        (
+            "rq.Initialize(topLevelAS, gl_RayFlagsNoneEXT);",
+            r"GLSL ray query Initialize expects 4 or 7 arguments, got 2",
+        ),
+        (
+            "vec3 position = rq.CandidateTriangleVertexPositions();",
+            r"GLSL ray query CandidateTriangleVertexPositions requires exactly "
+            r"one output-array argument, got 0",
+        ),
+        (
+            "rq.CommittedTriangleVertexPositions("
+            "trianglePositions, trianglePositions);",
+            r"GLSL ray query CommittedTriangleVertexPositions requires exactly "
+            r"one output-array argument, got 2",
+        ),
+    ]
+
+    for statement, expected_error in cases:
+        shader = f"""
+        shader RayQueryInvalidArity {{
+            accelerationStructureEXT topLevelAS @binding(0);
+
+            compute {{
+                void main() {{
+                    RayQuery<RAY_FLAG_NONE> rq;
+                    vec3 trianglePositions[3];
+                    {statement}
+                }}
+            }}
+        }}
+        """
+
+        with pytest.raises(ValueError, match=expected_error):
+            GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "compute")
+
+
+def test_glsl_ray_query_member_calls_require_ray_query_receiver():
+    invalid_receiver_shader = """
+    shader RayQueryInvalidReceiver {
+        compute {
+            void main() {
+                float notQuery = 0.0;
+                bool stillActive = notQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=r"GLSL ray query Proceed requires a RayQuery receiver, got float",
+    ):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_receiver_shader), "compute"
+        )
+
+    unknown_receiver_shader = """
+    shader RayQueryUnknownReceiver {
+        compute {
+            void main() {
+                bool stillActive = externalQuery.Proceed();
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(unknown_receiver_shader), "compute"
+    )
+
+    assert "#extension GL_EXT_ray_query : require" not in generated_code
+    assert "rayQueryProceedEXT" not in generated_code
+    assert "bool stillActive = externalQuery.Proceed();" in generated_code
+
+
 def test_glsl_shader_record_buffer_rejects_binding_layout():
     shader = """
     shader InvalidShaderRecordBinding {
@@ -7009,6 +8648,52 @@ def test_compute_stage_uses_function_execution_config_attribute(attribute):
     )
     assert f"@{attribute}" not in compute_code
     assert "void main() @" not in compute_code
+
+
+@pytest.mark.parametrize(
+    ("stage", "body", "message"),
+    [
+        (
+            "compute",
+            "void main() @numthreads(8, 1, 1) @workgroup_size(4, 1, 1) { }",
+            r"Conflicting numthreads metadata on compute stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+        (
+            "task",
+            "void main() @numthreads(8, 1, 1) @workgroup_size(4, 1, 1) { }",
+            r"Conflicting numthreads metadata on task stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+        (
+            "mesh",
+            """
+            void main()
+                @outputtopology(triangle)
+                @max_vertices(3)
+                @max_primitives(1)
+                @numthreads(8, 1, 1)
+                @workgroup_size(4, 1, 1)
+            { }
+            """,
+            r"Conflicting numthreads metadata on mesh stage entry function "
+            r"'main': \(8, 1, 1\) vs \(4, 1, 1\)",
+        ),
+    ],
+)
+def test_threadgroup_stages_reject_conflicting_execution_config_metadata(
+    stage, body, message
+):
+    shader = f"""
+    shader BadThreadgroupMetadata {{
+        {stage} {{
+            {body}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), stage)
 
 
 def test_while_switch_and_void_return_emit_c_style_syntax():
@@ -8091,9 +9776,251 @@ def test_glsl_wave_and_mesh_intrinsics():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
     generated = generate_code(ast)
-    assert "WaveActiveSum" in generated
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "uint sum = subgroupAdd(v);" in generated
+    assert "WaveActiveSum" not in generated
     assert "SetMeshOutputsEXT" in generated
     assert "SetMeshOutputCounts" not in generated
+
+
+def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
+    code = """
+    shader GLSLWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool firstLane = WaveIsFirstLane();
+                uint sumValue = WaveActiveSum(lane);
+                uint productValue = WaveActiveProduct(lane + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                uint andValue = WaveActiveBitAnd(maxValue);
+                uint orValue = WaveActiveBitOr(andValue);
+                uint xorValue = WaveActiveBitXor(orValue);
+                uint prefixSum = WavePrefixSum(xorValue);
+                uint prefixProduct = WavePrefixProduct(lane + 1u);
+                bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+                uint quadX = QuadReadAcrossX(firstValue);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for extension in [
+        "#extension GL_KHR_shader_subgroup_basic : require",
+        "#extension GL_KHR_shader_subgroup_vote : require",
+        "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "#extension GL_KHR_shader_subgroup_ballot : require",
+        "#extension GL_KHR_shader_subgroup_shuffle : require",
+        "#extension GL_KHR_shader_subgroup_quad : require",
+    ]:
+        assert extension in generated
+
+    for expected in [
+        "uint lane = gl_SubgroupInvocationID;",
+        "uint count = gl_SubgroupSize;",
+        "bool firstLane = subgroupElect();",
+        "uint sumValue = subgroupAdd(lane);",
+        "uint productValue = subgroupMul((lane + 1u));",
+        "uint minValue = subgroupMin(sumValue);",
+        "uint maxValue = subgroupMax(productValue);",
+        "uint andValue = subgroupAnd(maxValue);",
+        "uint orValue = subgroupOr(andValue);",
+        "uint xorValue = subgroupXor(orValue);",
+        "uint prefixSum = subgroupExclusiveAdd(xorValue);",
+        "uint prefixProduct = subgroupExclusiveMul((lane + 1u));",
+        "bool anyLane = subgroupAny((prefixSum > 0u));",
+        "bool allLane = subgroupAll((prefixProduct > 0u));",
+        "uvec4 ballot = subgroupBallot(anyLane);",
+        "uint broadcast = subgroupBroadcast(prefixSum, 0u);",
+        "uint firstValue = subgroupBroadcastFirst(broadcast);",
+        "uint quadX = subgroupQuadSwapHorizontal(firstValue);",
+        "uint quadY = subgroupQuadSwapVertical(quadX);",
+        "uint quadDiagonal = subgroupQuadSwapDiagonal(quadY);",
+        "uint quadLane = subgroupQuadBroadcast(quadDiagonal, 0u);",
+    ]:
+        assert expected in generated
+
+    assert "WaveActive" not in generated
+    assert "WavePrefix" not in generated
+    assert "WaveReadLane" not in generated
+    assert "QuadRead" not in generated
+
+
+def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
+    code = """
+    shader GLSLWaveDiagnostics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex(1u);
+                uint missing = WaveReadLaneAt(lane);
+                uvec4 matchMask = WaveMatch(lane);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert (
+        "uint lane = /* GLSL wave intrinsic diagnostic: WaveGetLaneIndex "
+        "expects 0 arguments, got 1 */ 0u;" in generated
+    )
+    assert (
+        "uint missing = /* GLSL wave intrinsic diagnostic: WaveReadLaneAt "
+        "expects 2 arguments, got 1 */ 0u;" in generated
+    )
+    assert (
+        "uvec4 matchMask = /* GLSL wave intrinsic diagnostic: WaveMatch "
+        "has no GL_KHR_shader_subgroup equivalent */ uvec4(0u);" in generated
+    )
+    assert "WaveOpNode" not in generated
+
+
+def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
+    code = """
+    shader GLSLWaveTypeDiagnostics {
+        compute {
+            void main() {
+                bool flag;
+                float value;
+                vec2 values;
+                float badSum = WaveActiveSum(flag);
+                uint badBits = WaveActiveBitAnd(value);
+                bool badVote = WaveActiveAnyTrue(values);
+                uint badLane = WaveReadLaneAt(1u, value);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for expected in [
+        (
+            "WaveActiveSum requires a numeric scalar or vector value argument: "
+            "flag has type bool"
+        ),
+        (
+            "WaveActiveBitAnd requires an integer or boolean scalar or vector "
+            "value argument: value has type float"
+        ),
+        (
+            "WaveActiveAnyTrue requires a boolean scalar value argument: "
+            "values has type vec2"
+        ),
+        (
+            "WaveReadLaneAt requires a scalar integer lane argument: "
+            "value has type float"
+        ),
+    ]:
+        assert expected in generated
+
+    assert "subgroupAdd(flag)" not in generated
+    assert "subgroupAnd(value)" not in generated
+    assert "subgroupAny(values)" not in generated
+    assert "subgroupBroadcast(1u, value)" not in generated
+
+
+def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
+    code = """
+    shader GLSLAdditionalWaveIntrinsics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                mat2 transform;
+                vec2 values;
+                bool equalLane = WaveActiveAllEqual(lane);
+                uint activeCount = WaveActiveCountBits(lane > 0u);
+                uint prefixCount = WavePrefixCountBits(lane > 1u);
+                bool badEqual = WaveActiveAllEqual(transform);
+                uint badCount = WaveActiveCountBits(values);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_vote : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "bool equalLane = subgroupAllEqual(lane);" in generated
+    assert (
+        "uint activeCount = "
+        "subgroupBallotBitCount(subgroupBallot((lane > 0u)));" in generated
+    )
+    assert (
+        "uint prefixCount = "
+        "subgroupBallotExclusiveBitCount(subgroupBallot((lane > 1u)));" in generated
+    )
+    assert (
+        "WaveActiveAllEqual requires a scalar or vector value argument: "
+        "transform has type mat2"
+    ) in generated
+    assert (
+        "WaveActiveCountBits requires a boolean scalar value argument: "
+        "values has type vec2"
+    ) in generated
+    assert "WaveOpNode" not in generated
+    assert "WaveActiveAllEqual(" not in generated
+    assert "WaveActiveCountBits(" not in generated
+    assert "WavePrefixCountBits(" not in generated
+
+
+def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
+    code = """
+    shader GLSLWaveMultiPrefixDiagnostics {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uvec4 mask = WaveActiveBallot(lane > 0u);
+                uint sumValue = WaveMultiPrefixSum(lane, mask);
+                uint productValue = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint andValue = WaveMultiPrefixBitAnd(lane, mask);
+                uint orValue = WaveMultiPrefixBitOr(lane, mask);
+                uint xorValue = WaveMultiPrefixBitXor(lane, mask);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "uvec4 mask = subgroupBallot((lane > 0u));" in generated
+    for operation in [
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    ]:
+        assert (
+            f"{operation} requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ) in generated
+
+    assert "subgroupClustered" not in generated
+    assert "subgroupInclusive" not in generated
+    assert "subgroupExclusive" not in generated
+    assert "WaveOpNode" not in generated
 
 
 def test_else_if_statement():
@@ -15368,6 +17295,163 @@ def test_opengl_explicit_storage_image_format_layouts():
     assert "layout(r32ui, binding = 4) uniform uimage2D counters;" in generated_code
 
 
+def test_opengl_image_format_metadata_accepts_equivalent_aliases():
+    shader = """
+    shader EquivalentImageFormatAliases {
+        image2D scalar @r32f @format(r32f);
+
+        fragment {
+            vec4 main(image2D target[2] @format(r32ui) @r32ui @binding(4)) @gl_FragColor {
+                imageStore(target[1], ivec2(0, 0), 7u);
+                float loaded = imageLoad(scalar, ivec2(0, 0));
+                return vec4(loaded);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(r32f, binding = 0) uniform image2D scalar;" in generated_code
+    assert "layout(r32ui, binding = 4) uniform uimage2D target[2];" in generated_code
+    assert "imageStore(target[1], ivec2(0, 0), uvec4(7u));" in generated_code
+    assert "float loaded = imageLoad(scalar, ivec2(0, 0)).x;" in generated_code
+    assert "fragColor = vec4(loaded);" in generated_code
+    assert "vec4 main(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader DuplicateGlobalDirectImageFormat {
+                image2D scalar @r32f @r32f;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'scalar': @r32f",
+        ),
+        (
+            """
+            shader DuplicateGlobalFormatImageFormat {
+                image2D scalar @format(r32f) @format(r32f);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'scalar': format r32f",
+        ),
+        (
+            """
+            shader DuplicateStageParameterDirectImageFormat {
+                fragment {
+                    vec4 main(image2D target[2] @r32ui @r32ui) @gl_FragColor {
+                        imageStore(target[1], ivec2(0, 0), 7u);
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'target': @r32ui",
+        ),
+        (
+            """
+            shader DuplicateStageParameterFormatImageFormat {
+                fragment {
+                    vec4 main(image2D target[2] @format(r32ui) @format(r32ui)) @gl_FragColor {
+                        imageStore(target[1], ivec2(0, 0), 7u);
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'target': format r32ui",
+        ),
+    ],
+)
+def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader InvalidGlobalImageFormat {
+                image2D colorOut @format(rgba64f);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(colorOut, ivec2(uv));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL image format metadata for 'colorOut': "
+            "format rgba64f is not a supported storage image format",
+        ),
+        (
+            """
+            shader InvalidParameterImageFormat {
+                vec4 loadColor(image2D image @format(slot), ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL image format metadata for 'image': "
+            "format slot is not a supported storage image format",
+        ),
+        (
+            """
+            shader SampledTextureFormatMetadata {
+                sampler2D colorTex @format(rgba8);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(colorTex, uv);
+                    }
+                }
+            }
+            """,
+            "Image format metadata on global variable 'colorTex' requires "
+            "storage image type: @rgba8 on sampler2D",
+        ),
+        (
+            """
+            shader SampledTextureParameterFormatMetadata {
+                vec4 sampleColor(sampler2D colorTex @format(rgba8), vec2 uv) {
+                    return texture(colorTex, uv);
+                }
+            }
+            """,
+            "Image format metadata on parameter 'colorTex' of function "
+            "'sampleColor' requires storage image type: @rgba8 on sampler2D",
+        ),
+    ],
+)
+def test_opengl_image_format_metadata_rejects_invalid_targets(shader, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_explicit_scalar_image_formats():
     shader = """
     shader ExplicitScalarImageFormats {
@@ -21542,6 +23626,90 @@ def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
     )
 
 
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageLoadMatrixResultInvalid {
+                image2D image @rg32f;
+
+                compute {
+                    void main() {
+                        mat2 value = imageLoad(image, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector result context.*got mat2",
+        ),
+        (
+            """
+            shader StorageImageLoadMatrixReturnInvalid {
+                image2D image;
+
+                mat4 readPixel() {
+                    return imageLoad(image, ivec2(0, 0));
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector result context.*got mat4",
+        ),
+    ],
+)
+def test_glsl_storage_image_load_rejects_matrix_result_contexts(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageStoreMatrixConstructorInvalid {
+                image2D image @rg32f;
+
+                compute {
+                    void main() {
+                        imageStore(image, ivec2(0, 0), mat2(1.0));
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector value.*has type mat2",
+        ),
+        (
+            """
+            shader StorageImageStoreMatrixVariableInvalid {
+                image2D image;
+
+                compute {
+                    void main() {
+                        mat4 value = mat4(1.0);
+                        imageStore(image, ivec2(0, 0), value);
+                    }
+                }
+            }
+            """,
+            "requires scalar or vector value.*has type mat4",
+        ),
+    ],
+)
+def test_glsl_storage_image_store_rejects_matrix_values(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
 def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
     shader = """
     shader StorageImageAccess {
@@ -21577,6 +23745,233 @@ def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
     )
     assert "image2D image readonly" not in generated_code
     assert "image2D image writeonly" not in generated_code
+
+
+def test_glsl_storage_image_access_function_attributes_emit_qualifiers():
+    shader = """
+    shader StorageImageAccessFunctionSpelling {
+        image2D source @access(readonly);
+        image2D target @access(writeonly);
+
+        float readPixel(image2D image @access(readonly), ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @access(writeonly), ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) readonly uniform image2D source;"
+        in generated_code
+    )
+    assert (
+        "layout(rgba32f, binding = 1) writeonly uniform image2D target;"
+        in generated_code
+    )
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in generated_code
+    assert (
+        "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)"
+        in generated_code
+    )
+
+
+def test_glsl_storage_image_access_accepts_equivalent_aliases():
+    shader = """
+    shader StorageImageAccessEquivalentAliases {
+        image2D source @readonly @access(readonly);
+
+        fragment {
+            vec4 main(
+                image2D target[2] @writeonly @access(writeonly) @binding(4)
+            ) @gl_FragColor {
+                float loaded = imageLoad(source, ivec2(0, 0));
+                imageStore(target[1], ivec2(0, 0), vec4(loaded));
+                return vec4(loaded);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "layout(rgba32f, binding = 0) readonly uniform image2D source;"
+        in generated_code
+    )
+    assert (
+        "layout(rgba32f, binding = 4) writeonly uniform image2D target[2];"
+        in generated_code
+    )
+    assert "float loaded = imageLoad(source, ivec2(0, 0)).x;" in generated_code
+    assert "imageStore(target[1], ivec2(0, 0), vec4(loaded));" in generated_code
+
+
+def test_glsl_storage_image_access_readwrite_operations_stay_qualifier_free():
+    shader = """
+    shader StorageImageReadwriteOperations {
+        uimage2D counters @r32ui @access(readwrite);
+
+        uint bump(uimage2D image @r32ui @access(readwrite), ivec2 pixel, uint value) {
+            uint oldValue = imageAtomicAdd(image, pixel, value);
+            imageStore(image, pixel, oldValue + 1u);
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint directValue = imageLoad(counters, pixel);
+                imageStore(counters, pixel, directValue + 1u);
+                uint oldValue = bump(counters, pixel, 2u);
+                imageStore(counters, ivec2(1, 0), oldValue + 3u);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters;" in generated_code
+    assert "readwrite uniform uimage2D" not in generated_code
+    assert "uint bump(uimage2D image, ivec2 pixel, uint value)" in generated_code
+    assert "readwrite uimage2D image" not in generated_code
+    assert "uint directValue = imageLoad(counters, pixel).x;" in generated_code
+    assert "imageStore(counters, pixel, uvec4((directValue + 1u)));" in generated_code
+    assert "uint oldValue = imageAtomicAdd(counters, pixel, value);" in generated_code
+    assert "imageStore(counters, pixel, uvec4((oldValue + 1u)));" in generated_code
+    assert "return imageLoad(counters, pixel).x;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessConflictGlobal {
+                image2D image @readonly @writeonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on global variable 'image': "
+            "@readonly, @writeonly",
+        ),
+        (
+            """
+            shader StorageImageAccessConflictParameter {
+                void writePixel(image2D image @access(readonly) @writeonly) {
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on parameter 'image' of "
+            "function 'writePixel': @readonly, @writeonly",
+        ),
+        (
+            """
+            shader StorageImageAccessConflictReadWrite {
+                image2D image @readwrite @readonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on global variable 'image': "
+            "@readonly, @readwrite",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_conflicting_metadata(shader, match):
+    with pytest.raises(ValueError, match=match):
+        ast = crosstl.translator.parse(shader)
+        GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader DuplicateGlobalDirectImageAccess {
+                image2D image @readonly @readonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'image': @readonly",
+        ),
+        (
+            """
+            shader DuplicateGlobalFunctionImageAccess {
+                image2D image @access(readonly) @access(readonly);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'image': "
+            "@access(readonly)",
+        ),
+        (
+            """
+            shader DuplicateStageParameterDirectImageAccess {
+                fragment {
+                    vec4 main(image2D target[2] @writeonly @writeonly) @gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'target': @writeonly",
+        ),
+        (
+            """
+            shader DuplicateStageParameterFunctionImageAccess {
+                fragment {
+                    vec4 main(image2D target[2] @access(writeonly) @access(writeonly)) @gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'target': "
+            "@access(writeonly)",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_duplicate_metadata(shader, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
 
 
 @pytest.mark.parametrize(
@@ -21678,6 +24073,375 @@ def test_glsl_storage_image_access_allows_compatible_helper_calls():
 
     assert "float value = readPixel__glsl_image_source(ivec2(0, 0));" in generated_code
     assert "writePixel__glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
+
+
+def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible_calls():
+    shader = """
+    shader StorageImageHelperMetadataContractsValid {
+        image2D counters @r32ui[];
+        image2D target;
+
+        int queryCounter(image2D images[] @r32ui, ivec2 pixel) {
+            return imageSize(images[0]).x;
+        }
+
+        void sizeOnlyWrite(image2D image @writeonly) {
+            ivec2 dims = imageSize(image);
+        }
+
+        compute {
+            void main() {
+                int count = queryCounter(counters, ivec2(0, 1));
+                sizeOnlyWrite(target);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image2D target;" in generated_code
+    assert "int queryCounter__glsl_images_counters(ivec2 pixel)" in generated_code
+    assert "void sizeOnlyWrite__glsl_image_target()" in generated_code
+    assert (
+        "int count = queryCounter__glsl_images_counters(ivec2(0, 1));" in generated_code
+    )
+    assert "sizeOnlyWrite__glsl_image_target();" in generated_code
+
+
+def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitively():
+    shader = """
+    shader StorageImageHelperArrayElementSpecializationValid {
+        image2D counters @r32ui[2];
+
+        int queryElement(image2D image @r32ui) {
+            return imageSize(image).x;
+        }
+
+        int queryViaArray(image2D images[] @r32ui) {
+            return queryElement(images[0]);
+        }
+
+        compute {
+            void main() {
+                int directCount = queryElement(counters[0]);
+                int nestedCount = queryViaArray(counters);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
+    assert "int queryElement__glsl_image_counters_0()" in generated_code
+    assert "return imageSize(counters[0]).x;" in generated_code
+    assert "int queryElement__glsl_image_counters()" not in generated_code
+    assert "return imageSize(counters).x;" not in generated_code
+    assert "int queryViaArray__glsl_images_counters()" in generated_code
+    assert "return queryElement__glsl_image_counters_0();" in generated_code
+    assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
+    assert "int nestedCount = queryViaArray__glsl_images_counters();" in generated_code
+
+
+def test_glsl_multisample_storage_image_helper_array_elements_specialize_operations():
+    shader = """
+    shader GLSLMultisampleImageArrayElementSpecializationValid {
+        image2DMS images @rgba16f[2];
+        uimage2DMS counters @r32ui[2];
+
+        vec4 touch(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+            vec4 oldValue = imageLoad(image, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldValue + value);
+            return oldValue;
+        }
+
+        uint bump(uimage2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            return imageAtomicAdd(image, pixel, sampleIndex, value);
+        }
+
+        vec4 viaArray(image2DMS targets[] @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+            return touch(targets[1], pixel, sampleIndex, value);
+        }
+
+        uint viaCounter(uimage2DMS targets[] @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            return bump(targets[1], pixel, sampleIndex, value);
+        }
+
+        compute {
+            void main() {
+                vec4 directValue = touch(images[0], ivec2(0, 1), 2, vec4(1.0));
+                vec4 nestedValue = viaArray(images, ivec2(2, 3), 0, directValue);
+                uint directCount = bump(counters[0], ivec2(1, 2), 3, 4u);
+                uint nestedCount = viaCounter(counters, ivec2(3, 4), 1, directCount);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS images[2];" in generated_code
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2DMS counters[2];" in generated_code
+    )
+    assert "vec4 touch__glsl_image_images_0(" in generated_code
+    assert "vec4 touch__glsl_image_images_1(" in generated_code
+    assert "imageLoad(images[0], pixel, sampleIndex)" in generated_code
+    assert (
+        "imageStore(images[1], pixel, sampleIndex, (oldValue + value));"
+        in generated_code
+    )
+    assert "uint bump__glsl_image_counters_0(" in generated_code
+    assert "uint bump__glsl_image_counters_1(" in generated_code
+    assert (
+        "return imageAtomicAdd(counters[0], pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return imageAtomicAdd(counters[1], pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return touch__glsl_image_images_1(pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return bump__glsl_image_counters_1(pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert "vec4 directValue = touch__glsl_image_images_0(" in generated_code
+    assert "vec4 nestedValue = viaArray__glsl_targets_images(" in generated_code
+    assert "uint directCount = bump__glsl_image_counters_0(" in generated_code
+    assert "uint nestedCount = viaCounter__glsl_targets_counters(" in generated_code
+
+
+def test_glsl_cube_storage_image_helper_array_elements_specialize_load_store():
+    shader = """
+    shader GLSLCubeImageArrayElementSpecializationValid {
+        imageCube cubeImages @rgba16f[2];
+        imageCubeArray cubeLayerImages @rgba16f[2];
+
+        vec4 touchCube(imageCube image @rgba16f, ivec3 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchCubeLayer(imageCubeArray image @rgba16f, ivec3 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 viaCube(imageCube images[] @rgba16f, ivec3 coord, vec4 value) {
+            return touchCube(images[1], coord, value);
+        }
+
+        vec4 viaCubeLayer(imageCubeArray images[] @rgba16f, ivec3 coord, vec4 value) {
+            return touchCubeLayer(images[1], coord, value);
+        }
+
+        compute {
+            void main() {
+                vec4 directCube = touchCube(cubeImages[0], ivec3(0, 1, 2), vec4(1.0));
+                vec4 nestedCube = viaCube(cubeImages, ivec3(2, 3, 4), directCube);
+                vec4 directLayer = touchCubeLayer(cubeLayerImages[0], ivec3(1, 2, 3), nestedCube);
+                vec4 nestedLayer = viaCubeLayer(cubeLayerImages, ivec3(3, 4, 5), directLayer);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "layout(rgba16f, binding = 0) uniform imageCube cubeImages[2];"
+        in generated_code
+    )
+    assert (
+        "layout(rgba16f, binding = 2) uniform imageCubeArray cubeLayerImages[2];"
+        in generated_code
+    )
+    assert "vec4 touchCube__glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 touchCube__glsl_image_cubeImages_1(" in generated_code
+    assert "imageLoad(cubeImages[0], coord)" in generated_code
+    assert "imageStore(cubeImages[1], coord, (oldValue + value));" in generated_code
+    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_0(" in generated_code
+    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_1(" in generated_code
+    assert "imageLoad(cubeLayerImages[0], coord)" in generated_code
+    assert (
+        "imageStore(cubeLayerImages[1], coord, (oldValue + value));" in generated_code
+    )
+    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in generated_code
+    assert (
+        "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);"
+        in generated_code
+    )
+    assert "vec4 directCube = touchCube__glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 nestedCube = viaCube__glsl_images_cubeImages(" in generated_code
+    assert (
+        "vec4 directLayer = touchCubeLayer__glsl_image_cubeLayerImages_0("
+        in generated_code
+    )
+    assert (
+        "vec4 nestedLayer = viaCubeLayer__glsl_images_cubeLayerImages("
+        in generated_code
+    )
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageHelperFormatContractInvalid {
+                image2D rgImages @rg32f[];
+
+                int queryCounter(image2D images[] @r32ui, ivec2 pixel) {
+                    return imageSize(images[0]).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryCounter(rgImages, ivec2(0, 1));
+                    }
+                }
+            }
+            """,
+            "function call 'queryCounter' requires r32ui storage image format "
+            "for argument rgImages passed to parameter images: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperArrayElementFormatContractInvalid {
+                image2D rgImages @rg32f[2];
+
+                int queryElement(image2D image @r32ui) {
+                    return imageSize(image).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryElement(rgImages[0]);
+                    }
+                }
+            }
+            """,
+            "function call 'queryElement' requires r32ui storage image format "
+            "for argument rgImages\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperMultisampleArrayElementFormatContractInvalid {
+                image2DMS rgImages @rg32f[2];
+
+                vec4 touch(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                    return imageLoad(image, pixel, sampleIndex);
+                }
+
+                compute {
+                    void main() {
+                        vec4 value = touch(rgImages[0], ivec2(0, 1), 2);
+                    }
+                }
+            }
+            """,
+            "function call 'touch' requires rgba16f storage image format "
+            "for argument rgImages\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperTransitiveElementFormatContractInvalid {
+                image2D rgImages @rg32f[2];
+
+                int leaf(image2D image @r32ui) {
+                    return imageSize(image).x;
+                }
+
+                int mid(image2D images[]) {
+                    return leaf(images[0]);
+                }
+
+                compute {
+                    void main() {
+                        int count = mid(rgImages);
+                    }
+                }
+            }
+            """,
+            "function call 'leaf' requires r32ui storage image format "
+            "for argument images\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperTypeContractInvalid {
+                image2D colorImages[];
+
+                int queryCounter(uimage2D images[], ivec2 pixel) {
+                    return imageSize(images[0]).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryCounter(colorImages, ivec2(0, 1));
+                    }
+                }
+            }
+            """,
+            "function call 'queryCounter' requires uimage2D storage image "
+            "for argument colorImages passed to parameter images: got image2D",
+        ),
+        (
+            """
+            shader StorageImageHelperAccessContractInvalid {
+                image2D source @readonly;
+
+                void sizeOnlyWrite(image2D image @writeonly) {
+                    ivec2 dims = imageSize(image);
+                }
+
+                compute {
+                    void main() {
+                        sizeOnlyWrite(source);
+                    }
+                }
+            }
+            """,
+            "function call 'sizeOnlyWrite' requires write-capable storage image "
+            "access for argument source passed to parameter image: got readonly",
+        ),
+        (
+            """
+            shader StorageImageHelperTransitiveAccessContractInvalid {
+                image2D source @readonly;
+
+                void leaf(image2D image @writeonly) {
+                    ivec2 dims = imageSize(image);
+                }
+
+                void mid(image2D image) {
+                    leaf(image);
+                }
+
+                compute {
+                    void main() {
+                        mid(source);
+                    }
+                }
+            }
+            """,
+            "function call 'leaf' requires write-capable storage image access "
+            "for argument image passed to parameter image: got readonly",
+        ),
+    ],
+)
+def test_glsl_storage_image_helper_parameter_metadata_contracts_reject_mismatches(
+    shader, match
+):
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 @pytest.mark.parametrize(

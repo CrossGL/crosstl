@@ -1,12 +1,83 @@
 import json
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 import crosstl.translator.codegen as codegen
 from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "tools" / "support_matrix.py"
+
+
+def load_support_matrix_module():
+    spec = importlib.util.spec_from_file_location("support_matrix", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _status_descriptions(module):
+    return {status: status for status in module.STATUS_ORDER}
+
+
+def _backend(backend_id, aliases, extension):
+    native_backend = {
+        "directx": "crosstl/backend/DirectX",
+        "opengl": "crosstl/backend/GLSL",
+        "metal": "crosstl/backend/Metal",
+    }[backend_id]
+    codegen_path = {
+        "directx": "crosstl/translator/codegen/directx_codegen.py",
+        "opengl": "crosstl/translator/codegen/GLSL_codegen.py",
+        "metal": "crosstl/translator/codegen/metal_codegen.py",
+    }[backend_id]
+    test_path = {
+        "directx": "tests/test_translator/test_codegen/test_directx_codegen.py",
+        "opengl": "tests/test_translator/test_codegen/test_GLSL_codegen.py",
+        "metal": "tests/test_translator/test_codegen/test_metal_codegen.py",
+    }[backend_id]
+    return {
+        "id": backend_id,
+        "name": backend_id,
+        "aliases": aliases,
+        "target_extension": extension,
+        "translator_codegen": codegen_path,
+        "native_backend": native_backend,
+        "tests": [test_path],
+        "docs": [{"name": "Docs", "url": "https://example.com/{}".format(backend_id)}],
+    }
+
+
+def _minimal_catalogs(module):
+    backends = {
+        "backends": [
+            _backend("directx", ["hlsl"], ".hlsl"),
+            _backend("opengl", ["glsl"], ".glsl"),
+            _backend("metal", ["msl"], ".metal"),
+        ]
+    }
+    features = {
+        "statuses": _status_descriptions(module),
+        "features": [
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "Code generation",
+                "description": "Emit target code.",
+                "support": {
+                    "directx": {"status": "supported"},
+                    "opengl": {"status": "partial", "notes": "Needs audit."},
+                },
+            }
+        ],
+    }
+    return backends, features
 
 
 def test_support_matrix_generated_artifacts_are_current():
@@ -19,6 +90,121 @@ def test_support_matrix_generated_artifacts_are_current():
     )
 
     assert "generated artifacts are current" in result.stdout
+
+
+def test_validate_backend_catalog_rejects_duplicate_aliases():
+    module = load_support_matrix_module()
+    backends = {
+        "backends": [
+            _backend("directx", ["shared"], ".hlsl"),
+            _backend("opengl", ["shared"], ".glsl"),
+        ]
+    }
+
+    with pytest.raises(module.SupportMatrixError, match="Duplicate backend alias"):
+        module.validate_backend_catalog(backends)
+
+
+def test_validate_feature_catalog_requires_all_status_definitions():
+    module = load_support_matrix_module()
+    statuses = _status_descriptions(module)
+    statuses.pop("unknown")
+    features = {
+        "statuses": statuses,
+        "features": [
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "Code generation",
+                "description": "Emit target code.",
+                "support": {},
+            }
+        ],
+    }
+
+    with pytest.raises(
+        module.SupportMatrixError,
+        match="missing status definition",
+    ):
+        module.validate_feature_catalog(features, {"directx"})
+
+
+def test_validate_feature_catalog_rejects_typoed_support_keys():
+    module = load_support_matrix_module()
+    features = {
+        "statuses": _status_descriptions(module),
+        "features": [
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "Code generation",
+                "description": "Emit target code.",
+                "support": {
+                    "directx": {
+                        "status": "supported",
+                        "evidnece": [],
+                    }
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(
+        module.SupportMatrixError,
+        match="unsupported support key",
+    ):
+        module.validate_feature_catalog(features, {"directx"})
+
+
+def test_validate_matrix_catches_inconsistent_generated_counts():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    module.validate_catalogs(backends, features)
+    matrix = module.build_matrix(backends, features)
+
+    module.validate_matrix(matrix)
+    matrix["summary"]["feature_count"] += 1
+
+    with pytest.raises(
+        module.SupportMatrixError,
+        match="feature_count is inconsistent",
+    ):
+        module.validate_matrix(matrix)
+
+
+def test_validate_matrix_catches_inconsistent_generated_backlog():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    matrix["backlog"][0]["notes"] = "stale generated note"
+
+    with pytest.raises(
+        module.SupportMatrixError,
+        match="backlog rows are inconsistent",
+    ):
+        module.validate_matrix(matrix)
+
+
+def test_audit_accepts_comma_separated_status_filters(capsys):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    result = module.audit(matrix, [], statuses=["partial,unknown"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "statuses=partial,unknown" in captured.out
+    assert "Backlog rows: 2" in captured.out
+
+
+def test_audit_rejects_unknown_status_filters():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    with pytest.raises(module.SupportMatrixError, match="Unknown status filter"):
+        module.audit(matrix, [], statuses=["partial,nope"])
 
 
 def test_support_matrix_covers_all_cataloged_backends():

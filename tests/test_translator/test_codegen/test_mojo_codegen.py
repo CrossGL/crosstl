@@ -9,10 +9,12 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AtomicOpNode,
     ArrayLiteralNode,
+    AssignmentNode,
     BlockNode,
     BufferOpNode,
     BuiltinVariableNode,
     CastNode,
+    ConstructorNode,
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
@@ -251,6 +253,142 @@ def test_braced_struct_constructors_emit_mojo_initializers():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_braced_struct_constructors_zero_fill_missing_fields():
+    code = """
+    struct Pair {
+        float x;
+        float y;
+    };
+
+    struct Mixed {
+        float value;
+        float2 vectorValue;
+    };
+
+    Pair makePartialNamed() {
+        return Pair { y: 2.0 };
+    }
+
+    Mixed makePartialMixed() {
+        return Mixed { value: 3.0 };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Pair(x=0.0, y=2.0)" in generated_code
+    assert (
+        "return Mixed(value=3.0, vectorValue=SIMD[DType.float32, 2](0.0, 0.0))"
+        in generated_code
+    )
+    assert "Pair(y=2.0)" not in generated_code
+
+
+def test_braced_struct_constructors_zero_fill_nested_struct_and_array_fields():
+    code = """
+    struct Inner {
+        float value;
+        float2 offset;
+    };
+
+    struct Outer {
+        Inner inner;
+        float weights[2];
+        float scalar;
+    };
+
+    Outer makePartialOuter() {
+        return Outer { scalar: 5.0 };
+    }
+
+    Outer makePartialInner() {
+        return Outer { inner: Inner { value: 1.0 } };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "return Outer(inner=Inner(0.0, SIMD[DType.float32, 2](0.0, 0.0)), "
+        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=5.0)" in generated_code
+    )
+    assert (
+        "return Outer(inner=Inner(value=1.0, "
+        "offset=SIMD[DType.float32, 2](0.0, 0.0)), "
+        "weights=InlineArray[Float32, 2](0.0, 0.0), scalar=0.0)" in generated_code
+    )
+    assert "Outer(scalar=5.0)" not in generated_code
+    assert (
+        "return Outer(inner=Inner(value=1.0, "
+        "offset=SIMD[DType.float32, 2](0.0, 0.0)))" not in generated_code
+    )
+
+
+def _braced_struct_matrix_and_array_struct_zero_fill_source():
+    return """
+    struct Leaf {
+        float weight;
+        float2 offset;
+    };
+
+    struct MatrixBundle {
+        mat2 transform;
+        Leaf leaves[2];
+        float scalar;
+    };
+
+    MatrixBundle makeMatrixBundle() {
+        return MatrixBundle { scalar: 7.0 };
+    }
+
+    MatrixBundle makePartialLeaves() {
+        return MatrixBundle { leaves: { Leaf { weight: 3.0 } } };
+    }
+    """
+
+
+def test_braced_struct_constructors_zero_fill_matrix_and_array_struct_fields():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_braced_struct_matrix_and_array_struct_zero_fill_source())
+        )
+    )
+
+    matrix_zero = (
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 0.0))"
+    )
+    leaf_zero = "Leaf(0.0, SIMD[DType.float32, 2](0.0, 0.0))"
+    leaf_partial = "Leaf(weight=3.0, offset=SIMD[DType.float32, 2](0.0, 0.0))"
+
+    assert (
+        f"return MatrixBundle(transform={matrix_zero}, "
+        f"leaves=InlineArray[Leaf, 2]({leaf_zero}, {leaf_zero}), scalar=7.0)"
+        in generated_code
+    )
+    assert (
+        f"return MatrixBundle(transform={matrix_zero}, "
+        f"leaves=InlineArray[Leaf, 2]({leaf_partial}, {leaf_zero}), scalar=0.0)"
+        in generated_code
+    )
+    assert "MatrixBundle(scalar=7.0)" not in generated_code
+    assert "leaves=InlineArray[Leaf, 2](Leaf(weight=3.0))" not in generated_code
+
+
+def test_braced_struct_positional_missing_fields_zero_fill_direct_ast():
+    codegen = MojoCodeGen()
+    codegen.struct_types["Pair"] = {"x": "float", "y": "float"}
+    constructor = ConstructorNode(
+        PrimitiveType("Pair"),
+        [LiteralNode(1.0, PrimitiveType("float"))],
+    )
+
+    assert (
+        codegen.generate_constructor_node(constructor, "Pair", "return value")
+        == "Pair(x=1.0, y=0.0)"
+    )
+
+
 def test_braced_struct_constructors_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -272,6 +410,31 @@ def test_braced_struct_constructors_compile_with_mojo(tmp_path):
         Pair pair = Pair { x: 1.0, y: 2.0 };
         return pair.x + pair.y;
     }
+
+    float sumPartialPairs() {
+        Pair positional = Pair { x: 8.0 };
+        Pair named = Pair { y: 9.0 };
+        return positional.x + positional.y + named.x + named.y;
+    }
+
+    struct Inner {
+        float value;
+        float2 offset;
+    };
+
+    struct Outer {
+        Inner inner;
+        float weights[2];
+        float scalar;
+    };
+
+    Outer makePartialOuter() {
+        return Outer { scalar: 5.0 };
+    }
+
+    Outer makePartialInner() {
+        return Outer { inner: Inner { value: 1.0 } };
+    }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
@@ -279,6 +442,9 @@ fn main():
     print(makePair(4.0, 5.0).y)
     print(makePositionalPair(6.0, 7.0).x)
     print(sumPair())
+    print(sumPartialPairs())
+    print(makePartialOuter().inner.value + makePartialOuter().weights[0] + makePartialOuter().scalar)
+    print(makePartialInner().inner.value + makePartialInner().inner.offset[0] + makePartialInner().weights[1] + makePartialInner().scalar)
 """
 
     source_path = tmp_path / "braced_struct_constructors.mojo"
@@ -293,6 +459,41 @@ fn main():
     assert result.returncode == 0, result.stderr
     assert "5.0" in result.stdout
     assert "6.0" in result.stdout
+    assert "3.0" in result.stdout
+    assert "17.0" in result.stdout
+    assert "5.0" in result.stdout
+    assert "1.0" in result.stdout
+
+
+def test_braced_struct_matrix_and_array_struct_zero_fill_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_braced_struct_matrix_and_array_struct_zero_fill_source())
+        )
+    )
+    generated_code += """
+fn main():
+    print(makeMatrixBundle().transform.c0)
+    print(makeMatrixBundle().leaves[1].offset)
+    print(makeMatrixBundle().scalar)
+    print(makePartialLeaves().leaves[0].weight)
+    print(makePartialLeaves().leaves[1].weight)
+"""
+
+    source_path = tmp_path / "braced_struct_matrix_array_zero_fill.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0.0, 0.0]" in result.stdout
+    assert "7.0" in result.stdout
     assert "3.0" in result.stdout
 
 
@@ -432,15 +633,130 @@ def test_integer_enum_underlying_types_are_preserved():
     assert "return UInt16(Small_Auto)" in generated_code
 
 
-def test_payload_enums_are_rejected_for_mojo_codegen():
+def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { value: float, flag: bool },
+        None
+    };
+
+    MaybeInt makeSome(int value) {
+        return MaybeInt::Some(value);
+    }
+
+    MaybeInt makeNamed(float value) {
+        return MaybeInt::Named(value, true);
+    }
+
+    MaybeInt makeNone() {
+        return MaybeInt::None;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct MaybeInt:" in generated_code
+    assert "var variant: Int32" in generated_code
+    assert "var Some_0: Int32" in generated_code
+    assert "var value: Float32" in generated_code
+    assert "var flag: Bool" in generated_code
+    assert "alias MaybeInt_Some = 0" in generated_code
+    assert "alias MaybeInt_Named = 1" in generated_code
+    assert "alias MaybeInt_None = 2" in generated_code
+    assert "fn MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_Some, Some_0=payload0, "
+        "value=0.0, flag=False)"
+    ) in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_Named, Some_0=0, "
+        "value=payload0, flag=payload1)"
+    ) in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_None, Some_0=0, value=0.0, " "flag=False)"
+    ) in generated_code
+    assert "return MaybeInt_Some_make(value)" in generated_code
+    assert "return MaybeInt_Named_make(value, True)" in generated_code
+    assert "return MaybeInt_None_make()" in generated_code
+
+
+def test_payload_enum_variants_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    MaybeInt makeSome(int value) {
+        return MaybeInt::Some(value);
+    }
+
+    MaybeInt makeNamed(int value) {
+        return MaybeInt::Named(value, true);
+    }
+
+    MaybeInt makeNone() {
+        return MaybeInt::None;
+    }
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some => value.Some_0,
+            MaybeInt::Named => value.count,
+            _ => -1
+        };
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(makeSome(7)))\n"
+        "    print(inspect(makeNamed(3)))\n"
+        "    print(inspect(makeNone()))\n"
+    )
+
+    source_path = tmp_path / "payload_enums.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "3", "-1"]
+
+
+def test_payload_enum_invalid_shapes_are_rejected_for_mojo_codegen():
+    code = """
+    enum Bad {
+        IntValue { value: int },
+        FloatValue { value: float }
+    };
+    """
+
+    with pytest.raises(ValueError, match="payload fields must"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_payload_enum_constructor_arity_is_validated_for_mojo_codegen():
     code = """
     enum MaybeInt {
         Some(int),
         None
     };
+
+    MaybeInt broken() {
+        return MaybeInt::Some();
+    }
     """
 
-    with pytest.raises(ValueError, match="Unsupported enum payload for Mojo"):
+    with pytest.raises(ValueError, match="MaybeInt::Some expects 1 arguments, got 0"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -841,6 +1157,39 @@ def test_compute_stage_local_helper_functions_emit_before_entry_point():
         entry_signature
     )
     assert "var y: Float32 = helper(1.0)" in generated_code
+
+
+def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
+    code = """
+    shader StageLocalResourceMojo {
+        fragment {
+            uniform sampler2D shadowMap;
+
+            vec4 sampleShadow(vec2 uv) {
+                return texture(shadowMap, uv);
+            }
+
+            vec4 main() @ gl_FragColor {
+                return sampleShadow(vec2(0.5, 0.5));
+            }
+        }
+
+        compute {
+            uniform sampler2D shadowMap;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL resource metadata: name=shadowMap kind=texture" in generated_code
+    assert generated_code.count("var shadowMap: Texture2D = Texture2D()") == 1
+    assert "fn sampleShadow(uv: SIMD[DType.float32, 2])" in generated_code
+    assert "return sample(shadowMap, uv)" in generated_code
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
 
 
 @pytest.mark.parametrize(
@@ -2673,6 +3022,80 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
         generate_code(parse_code(tokenize_code(code)))
 
 
+@pytest.mark.parametrize(
+    ("source", "alias_name"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            RWTexture2DMS<float4> msImage;
+            Result<RWTexture2DMS<float4>, int> wrapMS() {
+                return Result::Ok(msImage);
+            }
+            """,
+            "RWTexture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            Result<RasterizerOrderedTexture2DMS<float4>, int> wrapMS(
+                RasterizerOrderedTexture2DMS<float4> image
+            ) {
+                return Result::Ok(image);
+            }
+            """,
+            "RasterizerOrderedTexture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            RWTexture2DMSArray<uint> msImages[2];
+            Result<RWTexture2DMSArray<uint>[2], int> wrapMSArray() {
+                return Result::Ok(msImages);
+            }
+            """,
+            "RWTexture2DMSArray",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSBox {
+                RWTexture2DMS<float4> image;
+                int tag;
+            };
+            Result<MSBox, int> wrapBox(MSBox payload) {
+                return Result::Ok(payload);
+            }
+            """,
+            "RWTexture2DMS",
+        ),
+    ],
+)
+def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_diagnostic(
+    source, alias_name
+):
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unsupported writable texture resource for Mojo codegen; "
+            rf"multisample writable texture alias is not supported: {alias_name}"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -3626,6 +4049,2857 @@ def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen(
 
     with pytest.raises(ValueError, match=message):
         generate_code(ast)
+
+
+def test_match_expression_lowers_guarded_bindings_and_enum_identifier_patterns():
+    code = """
+    enum Mode {
+        Add,
+        Multiply
+    };
+
+    int guardedValue(int value) {
+        return match value {
+            zero if zero == 0 => zero + 1,
+            _ => 2
+        };
+    }
+
+    int guardedStatement(int value) {
+        int output = 0;
+        match value {
+            bound if bound > 0 => {
+                output = bound;
+            }
+            _ => {
+                output = -1;
+            }
+        }
+        return output;
+    }
+
+    int enumValue(Mode mode) {
+        return match mode {
+            Mode::Add => 10,
+            Mode::Multiply => 20,
+            _ => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if (value == 0):" in generated_code
+    assert "__cgl_match_value_0 = (value + 1)" in generated_code
+    assert "if (value > 0):" in generated_code
+    assert "output = value" in generated_code
+    assert "zero +" not in generated_code
+    assert "bound" not in generated_code
+    assert "if mode == Mode_Add:" in generated_code
+    assert "elif mode == Mode_Multiply:" in generated_code
+    assert "identifier binding patterns cannot be lowered" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_expression_lowers_payload_enum_destructuring_patterns():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) if payload > 4 => payload + 1,
+            MaybeInt::Named { count, flag } if flag => count,
+            MaybeInt::None => -1,
+            _ => -2
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "if (value.variant == MaybeInt_Some) and ((value.Some_0 > 4)):"
+        in generated_code
+    )
+    assert "__cgl_match_value_0 = (value.Some_0 + 1)" in generated_code
+    assert "elif (value.variant == MaybeInt_Named) and (value.flag):" in generated_code
+    assert "__cgl_match_value_0 = value.count" in generated_code
+    assert "elif value.variant == MaybeInt_None:" in generated_code
+    assert "payload + 1" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_expression_payload_enum_destructuring_patterns_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) if payload > 4 => payload + 1,
+            MaybeInt::Named { count, flag } if flag => count,
+            MaybeInt::None => -1,
+            _ => -2
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(MaybeInt_Some_make(5)))\n"
+        "    print(inspect(MaybeInt_Some_make(3)))\n"
+        "    print(inspect(MaybeInt_Named_make(8, True)))\n"
+        "    print(inspect(MaybeInt_None_make()))\n"
+    )
+
+    source_path = tmp_path / "payload_enum_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["6", "-2", "8", "-1"]
+
+
+def test_match_expression_allows_exhaustive_payload_enum_patterns_without_wildcard():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) => payload,
+            MaybeInt::Named { count, flag } => count,
+            MaybeInt::None => -1
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if value.variant == MaybeInt_Some:" in generated_code
+    assert "elif value.variant == MaybeInt_Named:" in generated_code
+    assert "else:\n        __cgl_match_value_0 = (-1)" in generated_code
+    assert "match expressions must include a final wildcard arm" not in generated_code
+
+
+def test_match_expression_rejects_constrained_payload_patterns_without_wildcard():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(1) => 1,
+            MaybeInt::None => 0
+        };
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="match expressions must include a final wildcard arm",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_match_expression_allows_final_struct_destructuring_without_wildcard():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int sum(Point point) {
+        return match point {
+            Point { x, y } => x + y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "__cgl_match_value_0 = (point.x + point.y)" in generated_code
+    assert "if True:" not in generated_code
+    assert "match expressions must include a final wildcard arm" not in generated_code
+
+
+def test_match_expression_rejects_nonfinal_irrefutable_struct_pattern():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } => x,
+            _ => y
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="irrefutable pattern must be final"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_match_expression_guarded_struct_destructuring_is_refutable():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } if x > 0 => x,
+            _ => point.y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if (point.x > 0):" in generated_code
+    assert "__cgl_match_value_0 = point.x" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = point.y" in generated_code
+    assert "(True) and" not in generated_code
+    assert "Point {" not in generated_code
+
+
+def test_match_expression_guarded_struct_destructuring_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } if x > 0 => x,
+            _ => point.y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(pick(Point(x=4, y=9)))\n"
+        "    print(pick(Point(x=0, y=9)))\n"
+    )
+
+    source_path = tmp_path / "guarded_struct_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["4", "9"]
+
+
+def test_match_expression_struct_destructuring_patterns_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int sum(Point point) {
+        return match point {
+            Point { x, y } => x + y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n" "    var point = Point(x=4, y=9)\n" "    print(sum(point))\n"
+    )
+
+    source_path = tmp_path / "struct_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["13"]
+
+
+def test_generic_payload_enum_variants_lower_to_specialized_mojo_structs():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    Result<int, int> makeOk(int value) {
+        return Result::Ok(value);
+    }
+
+    Result<int, int> makeErr(int value) {
+        return Result::Err(value);
+    }
+
+    int inspect(Result<int, int> value) {
+        return match value {
+            Result::Ok(ok) => ok,
+            Result::Err(err) => err + 10
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Result_int_int:" in generated_code
+    assert "alias Result_Ok = 0" in generated_code
+    assert "alias Result_Err = 1" in generated_code
+    assert (
+        "fn Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
+        in generated_code
+    )
+    assert (
+        "fn Result_int_int_Err_make(payload0: Int32) -> Result_int_int:"
+        in generated_code
+    )
+    assert "fn makeOk(value: Int32) -> Result_int_int:" in generated_code
+    assert "return Result_int_int_Ok_make(value)" in generated_code
+    assert "if value.variant == Result_Ok:" in generated_code
+    assert "else:\n        __cgl_match_value_0 = (value.Err_0 + 10)" in generated_code
+    assert "Result::" not in generated_code
+
+
+def test_generic_payload_enum_variants_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    Result<int, int> makeOk(int value) {
+        return Result::Ok(value);
+    }
+
+    Result<int, int> makeErr(int value) {
+        return Result::Err(value);
+    }
+
+    int inspect(Result<int, int> value) {
+        return match value {
+            Result::Ok(ok) => ok,
+            Result::Err(err) => err + 10
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(makeOk(7)))\n"
+        "    print(inspect(makeErr(3)))\n"
+    )
+
+    source_path = tmp_path / "generic_payload_enum.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "13"]
+
+
+def _generic_payload_enum_struct_array_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct Payload {
+        int x;
+        int values[2];
+    };
+
+    Payload makePayload(int x, int first, int second) {
+        return Payload { x: x, values: {first, second} };
+    }
+
+    Result<Payload, int> makePayloadResult(int x, int first, int second) {
+        return Result::Ok(makePayload(x, first, second));
+    }
+
+    int inspectPayload(Result<Payload, int> value, int index) {
+        return match value {
+            Result::Ok(payload) => payload.x + payload.values[index],
+            Result::Err(err) => err
+        };
+    }
+
+    Result<int[2], int> makeArray(int first, int second) {
+        return Result::Ok({first, second});
+    }
+
+    int inspectArray(Result<int[2], int> value, int index) {
+        return match value {
+            Result::Ok(values) => values[index],
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_struct_and_array_payload_bindings_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
+    )
+
+    assert "struct Result_Payload_int:" in generated_code
+    assert "var Ok_0: Payload" in generated_code
+    assert "struct Result_int_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Int32, 2]" in generated_code
+    assert (
+        "Ok_0=Payload(0, InlineArray[Int32, 2](0, 0)), Err_0=payload0)"
+        in generated_code
+    )
+    assert "value.Ok_0.x + value.Ok_0.values[int(index)]" in generated_code
+    assert "value.Ok_0[int(index)]" in generated_code
+    assert "Ok_0=Payload()" not in generated_code
+    assert "value.Ok_0[0]" not in generated_code
+    assert "value.Ok_0.values[index]" not in generated_code
+
+
+def test_generic_payload_enum_struct_and_array_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
+    )
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspectPayload(makePayloadResult(4, 5, 6), 1))\n"
+        "    print(inspectArray(makeArray(7, 8), 1))\n"
+    )
+
+    source_path = tmp_path / "generic_payload_struct_array_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["10", "8"]
+
+
+def _generic_payload_enum_resource_struct_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct ResourceSet {
+        sampler2D textures[2];
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+        sampler2D singleTexture;
+        readonly image2D singleInput;
+        writeonly image2D singleOutput;
+        RWStructuredBuffer<int> singleValues;
+        RWByteAddressBuffer singleRaw;
+    };
+
+    Result<ResourceSet, int> makeResources(ResourceSet resources) {
+        return Result::Ok(resources);
+    }
+
+    vec4 sampleResult(Result<ResourceSet, int> value, int slot, vec2 uv) {
+        return match value {
+            Result::Ok(resources) => texture(
+                resources.textures[slot],
+                resources.state,
+                uv
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 sampleDirectResult(Result<ResourceSet, int> value, vec2 uv) {
+        return match value {
+            Result::Ok(resources) => texture(
+                resources.singleTexture,
+                resources.state,
+                uv
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadImageResult(Result<ResourceSet, int> value, int slot, ivec2 pixel) {
+        return match value {
+            Result::Ok(resources) => imageLoad(resources.inputs[slot], pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadDirectImageResult(Result<ResourceSet, int> value, ivec2 pixel) {
+        return match value {
+            Result::Ok(resources) => imageLoad(resources.singleInput, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int loadBufferResult(Result<ResourceSet, int> value, int slot, uint index) {
+        return match value {
+            Result::Ok(resources) => resources.values[slot].Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    int loadDirectBufferResult(Result<ResourceSet, int> value, uint index) {
+        return match value {
+            Result::Ok(resources) => resources.singleValues.Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    void storeResult(
+        Result<ResourceSet, int> value,
+        int slot,
+        ivec2 pixel,
+        vec4 color,
+        uint index,
+        int scalar,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(resources) => {
+                imageStore(resources.outputs[slot], pixel, color);
+                resources.values[slot].Store(index, scalar);
+                resources.rawBuffers[slot].Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeDirectResult(
+        Result<ResourceSet, int> value,
+        ivec2 pixel,
+        vec4 color,
+        uint index,
+        int scalar,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(resources) => {
+                imageStore(resources.singleOutput, pixel, color);
+                resources.singleValues.Store(index, scalar);
+                resources.singleRaw.Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    Result<ResourceSet[2], int> makeResourceArray(ResourceSet sets[2]) {
+        return Result::Ok(sets);
+    }
+
+    vec4 sampleArrayResult(
+        Result<ResourceSet[2], int> value,
+        int index,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(sets) => texture(
+                sets[index].textures[slot],
+                sets[index].state,
+                uv
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int loadArrayBufferResult(
+        Result<ResourceSet[2], int> value,
+        int index,
+        int slot,
+        uint bufferIndex
+    ) {
+        return match value {
+            Result::Ok(sets) => sets[index].values[slot].Load(bufferIndex),
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+        )
+    )
+
+    assert "struct Result_ResourceSet_int:" in generated_code
+    assert "var Ok_0: ResourceSet" in generated_code
+    assert "struct Result_ResourceSet_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[ResourceSet, 2]" in generated_code
+    assert (
+        "Ok_0=ResourceSet(InlineArray[Texture2D, 2](Texture2D(), Texture2D()), "
+        "Sampler(), InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    )
+    assert "Ok_0=ResourceSet()" not in generated_code
+    assert "sample(value.Ok_0.textures[int(slot)], uv)" in generated_code
+    assert "sample(value.Ok_0.singleTexture, uv)" in generated_code
+    assert "image_load(value.Ok_0.inputs[int(slot)], pixel)" in generated_code
+    assert "image_load(value.Ok_0.singleInput, pixel)" in generated_code
+    assert "buffer_load(value.Ok_0.values[int(slot)], index)" in generated_code
+    assert "buffer_load(value.Ok_0.singleValues, index)" in generated_code
+    assert "image_store(value.Ok_0.outputs[int(slot)], pixel, color)" in generated_code
+    assert "image_store(value.Ok_0.singleOutput, pixel, color)" in generated_code
+    assert "buffer_store(value.Ok_0.values[int(slot)], index, scalar)" in generated_code
+    assert "buffer_store(value.Ok_0.singleValues, index, scalar)" in generated_code
+    assert (
+        "buffer_store4(value.Ok_0.rawBuffers[int(slot)], offset, data)"
+        in generated_code
+    )
+    assert "buffer_store4(value.Ok_0.singleRaw, offset, data)" in generated_code
+    assert "sample(value.Ok_0[int(index)].textures[int(slot)], uv)" in generated_code
+    assert (
+        "buffer_load(value.Ok_0[int(index)].values[int(slot)], bufferIndex)"
+        in generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert "fn buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "Result<" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+
+def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+        )
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_resource_struct_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("code", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType {
+                    Ok(T),
+                    Err(E)
+                }
+                ResultType variant;
+            }
+
+            struct ResourceSet {
+                writeonly image2D outputImage;
+            };
+
+            vec4 invalidRead(Result<ResourceSet, int> value, ivec2 pixel) {
+                return match value {
+                    Result::Ok(resources) => imageLoad(resources.outputImage, pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*resources\.outputImage.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType {
+                    Ok(T),
+                    Err(E)
+                }
+                ResultType variant;
+            }
+
+            struct ResourceSet {
+                readonly image2D inputImage;
+            };
+
+            void invalidStore(
+                Result<ResourceSet, int> value,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(resources) => {
+                        imageStore(resources.inputImage, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*resources\.inputImage.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_direct_resource_fields_preserve_access_diagnostics(
+    code, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def _generic_payload_enum_direct_resource_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct ResourceBox {
+        image2D image;
+        RWStructuredBuffer<int> values;
+        int tag;
+    };
+
+    struct MSArrayBox {
+        sampler2DMSArray tex;
+        image2DMSArray image;
+        int tag;
+    };
+
+    readonly image2D readonlyImages[2];
+
+    Result<sampler2D, int> makeTexture(sampler2D texture) {
+        return Result::Ok(texture);
+    }
+
+    Result<image2D, int> makeImage(image2D image) {
+        return Result::Ok(image);
+    }
+
+    Result<sampler2DMS, int> makeMSTexture(sampler2DMS texture) {
+        return Result::Ok(texture);
+    }
+
+    Result<image2DMS, int> makeMSImage(image2DMS image) {
+        return Result::Ok(image);
+    }
+
+    Result<sampler2DMSArray, int> makeMSArrayTexture(
+        sampler2DMSArray texture
+    ) {
+        return Result::Ok(texture);
+    }
+
+    Result<image2DMSArray, int> makeMSArrayImage(image2DMSArray image) {
+        return Result::Ok(image);
+    }
+
+    Result<RWStructuredBuffer<int>, int> makeBuffer(
+        RWStructuredBuffer<int> values
+    ) {
+        return Result::Ok(values);
+    }
+
+    Result<ByteAddressBuffer, int> makeReadRaw(ByteAddressBuffer raw) {
+        return Result::Ok(raw);
+    }
+
+    Result<RWByteAddressBuffer, int> makeRaw(RWByteAddressBuffer raw) {
+        return Result::Ok(raw);
+    }
+
+    Result<sampler2D[2], int> makeTextureArray(sampler2D textures[2]) {
+        return Result::Ok(textures);
+    }
+
+    Result<image2D[2], int> makeImageArray(image2D images[2]) {
+        return Result::Ok(images);
+    }
+
+    Result<sampler2DMS[2], int> makeMSTextureArray(sampler2DMS textures[2]) {
+        return Result::Ok(textures);
+    }
+
+    Result<image2DMS[2], int> makeMSImageArray(image2DMS images[2]) {
+        return Result::Ok(images);
+    }
+
+    Result<RWStructuredBuffer<int>[2], int> makeBufferArray(
+        RWStructuredBuffer<int> values[2]
+    ) {
+        return Result::Ok(values);
+    }
+
+    Result<RWByteAddressBuffer[2], int> makeRawArray(
+        RWByteAddressBuffer values[2]
+    ) {
+        return Result::Ok(values);
+    }
+
+    Result<ResourceBox, int> makeBox(ResourceBox payload) {
+        return Result::Ok(payload);
+    }
+
+    Result<MSArrayBox, int> makeMSArrayBox(MSArrayBox payload) {
+        return Result::Ok(payload);
+    }
+
+    ivec2 queryDirectTexture(Result<sampler2D, int> value) {
+        return match value {
+            Result::Ok(texture) => textureSize(texture, 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    ivec2 queryDirectImage(Result<image2D, int> value) {
+        return match value {
+            Result::Ok(image) => imageSize(image),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    vec4 sampleDirectPayload(
+        Result<sampler2D, int> value,
+        sampler state,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(texture) => texture(texture, state, uv),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryDirectMSTextureSamples(Result<sampler2DMS, int> value) {
+        return match value {
+            Result::Ok(texture) => textureSamples(texture),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchDirectMSTexturePayload(
+        Result<sampler2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(texture) => texture.Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryDirectMSArrayTextureSamples(
+        Result<sampler2DMSArray, int> value
+    ) {
+        return match value {
+            Result::Ok(texture) => textureSamples(texture),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchDirectMSArrayTexturePayload(
+        Result<sampler2DMSArray, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(texture) => texture.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadDirectPayload(Result<image2D, int> value, ivec2 pixel) {
+        return match value {
+            Result::Ok(image) => imageLoad(image, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryDirectMSImageSamples(Result<image2DMS, int> value) {
+        return match value {
+            Result::Ok(image) => imageSamples(image),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 loadDirectMSImagePayload(
+        Result<image2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(image) => image.Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryDirectMSArrayImageSamples(Result<image2DMSArray, int> value) {
+        return match value {
+            Result::Ok(image) => imageSamples(image),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 loadDirectMSArrayImagePayload(
+        Result<image2DMSArray, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(image) => image.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void storeDirectImagePayload(
+        Result<image2D, int> value,
+        ivec2 pixel,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(image) => {
+                imageStore(image, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeDirectMSImagePayload(
+        Result<image2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(image) => {
+                image.Store(pixel, sampleIndex, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeDirectMSArrayImagePayload(
+        Result<image2DMSArray, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(image) => {
+                image.Store(pixelLayer, sampleIndex, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    int loadBufferPayload(Result<RWStructuredBuffer<int>, int> value, uint index) {
+        return match value {
+            Result::Ok(values) => values.Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    void storeBufferPayload(
+        Result<RWStructuredBuffer<int>, int> value,
+        uint index,
+        int scalar
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values.Store(index, scalar);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    uint4 loadReadRawPayload(
+        Result<ByteAddressBuffer, int> value,
+        uint offset
+    ) {
+        return match value {
+            Result::Ok(raw) => raw.Load4(offset),
+            Result::Err(_) => uint4(0)
+        };
+    }
+
+    void storeRawPayload(
+        Result<RWByteAddressBuffer, int> value,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(raw) => {
+                raw.Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    vec4 sampleTextureArrayPayload(
+        Result<sampler2D[2], int> value,
+        sampler state,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(textures) => texture(textures[slot], state, uv),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 fetchMSTextureArrayPayload(
+        Result<sampler2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(textures) => textures[slot].Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadImageArrayPayload(
+        Result<image2D[2], int> value,
+        int slot,
+        ivec2 pixel
+    ) {
+        return match value {
+            Result::Ok(images) => imageLoad(images[slot], pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadMSImageArrayPayload(
+        Result<image2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(images) => images[slot].Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void storeImageArrayPayload(
+        Result<image2D[2], int> value,
+        int slot,
+        ivec2 pixel,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(images) => {
+                imageStore(images[slot], pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeMSImageArrayPayload(
+        Result<image2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(images) => {
+                images[slot].Store(pixel, sampleIndex, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    int loadBufferArrayPayload(
+        Result<RWStructuredBuffer<int>[2], int> value,
+        int slot,
+        uint index
+    ) {
+        return match value {
+            Result::Ok(values) => values[slot].Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    void storeBufferArrayPayload(
+        Result<RWStructuredBuffer<int>[2], int> value,
+        int slot,
+        uint index,
+        int scalar
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values[slot].Store(index, scalar);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    uint4 loadRawArrayPayload(
+        Result<RWByteAddressBuffer[2], int> value,
+        int slot,
+        uint offset
+    ) {
+        return match value {
+            Result::Ok(values) => values[slot].Load4(offset),
+            Result::Err(_) => uint4(0)
+        };
+    }
+
+    void storeRawArrayPayload(
+        Result<RWByteAddressBuffer[2], int> value,
+        int slot,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values[slot].Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void reassignDirectPayloadWrapper() {
+        Result<image2D, int> value = Result::Ok(readonlyImages[0]);
+        value = Result::Err(0);
+    }
+
+    int loadNestedPayload(Result<ResourceBox, int> value, uint index) {
+        return match value {
+            Result::Ok(ResourceBox { image, values, tag }) => values.Load(index) + tag,
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 loadNestedImagePayload(Result<ResourceBox, int> value, ivec2 pixel) {
+        return match value {
+            Result::Ok(ResourceBox { image, values, tag }) => imageLoad(image, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryNestedMSArrayPayload(Result<MSArrayBox, int> value) {
+        return match value {
+            Result::Ok(box) => textureSamples(box.tex) + imageSamples(box.image)
+                + box.tag,
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchNestedMSArrayTexturePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(box) => box.tex.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadNestedMSArrayImagePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(box) => box.image.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void storeNestedMSArrayImagePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(box) => {
+                box.image.Store(pixelLayer, sampleIndex, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+
+def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+        )
+    )
+
+    assert "struct Result_sampler2D_int:" in generated_code
+    assert "var Ok_0: Texture2D" in generated_code
+    assert "struct Result_sampler2D_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Texture2D, 2]" in generated_code
+    assert "struct Result_image2D_int:" in generated_code
+    assert "var Ok_0: Image2D" in generated_code
+    assert "struct Result_image2D_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Image2D, 2]" in generated_code
+    assert "struct Result_sampler2DMS_int:" in generated_code
+    assert "var Ok_0: Texture2DMS" in generated_code
+    assert "struct Result_sampler2DMS_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Texture2DMS, 2]" in generated_code
+    assert "struct Result_image2DMS_int:" in generated_code
+    assert "var Ok_0: Image2DMS" in generated_code
+    assert "struct Result_image2DMS_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Image2DMS, 2]" in generated_code
+    assert "struct Result_sampler2DMSArray_int:" in generated_code
+    assert "var Ok_0: Texture2DMSArray" in generated_code
+    assert "struct Result_image2DMSArray_int:" in generated_code
+    assert "var Ok_0: Image2DMSArray" in generated_code
+    assert "struct Result_MSArrayBox_int:" in generated_code
+    assert "var Ok_0: MSArrayBox" in generated_code
+    assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
+    assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
+    assert "struct Result_ByteAddressBuffer_int:" in generated_code
+    assert "var Ok_0: ByteAddressBuffer" in generated_code
+    assert "struct Result_RWByteAddressBuffer_int:" in generated_code
+    assert "var Ok_0: RWByteAddressBuffer" in generated_code
+    assert "struct Result_RWStructuredBuffer_int_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert "struct Result_RWByteAddressBuffer_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[RWByteAddressBuffer, 2]" in generated_code
+    assert "texture_size(value.Ok_0, 0)" in generated_code
+    assert "image_size(value.Ok_0)" in generated_code
+    assert "sample(value.Ok_0, uv)" in generated_code
+    assert "image_load(value.Ok_0, pixel)" in generated_code
+    assert "image_store(value.Ok_0, pixel, color)" in generated_code
+    assert "texture_samples(value.Ok_0)" in generated_code
+    assert "texel_fetch(value.Ok_0, pixel, sampleIndex)" in generated_code
+    assert "image_samples(value.Ok_0)" in generated_code
+    assert "image_load(value.Ok_0, pixel, sampleIndex)" in generated_code
+    assert "image_store(value.Ok_0, pixel, sampleIndex, color)" in generated_code
+    assert "texel_fetch(value.Ok_0, pixelLayer, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0, pixelLayer, sampleIndex)" in generated_code
+    assert "image_store(value.Ok_0, pixelLayer, sampleIndex, color)" in generated_code
+    assert "buffer_load(value.Ok_0, index)" in generated_code
+    assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
+    assert "buffer_load4(value.Ok_0, offset)" in generated_code
+    assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
+    assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
+    assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
+    assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
+    assert "texel_fetch(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
+    assert (
+        "image_store(value.Ok_0[int(slot)], pixel, sampleIndex, color)"
+        in generated_code
+    )
+    assert "buffer_load(value.Ok_0[int(slot)], index)" in generated_code
+    assert "buffer_store(value.Ok_0[int(slot)], index, scalar)" in generated_code
+    assert "buffer_load4(value.Ok_0[int(slot)], offset)" in generated_code
+    assert "buffer_store4(value.Ok_0[int(slot)], offset, data)" in generated_code
+    assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
+    assert "image_load(value.Ok_0.image, pixel)" in generated_code
+    assert "texture_samples(value.Ok_0.tex)" in generated_code
+    assert "image_samples(value.Ok_0.image)" in generated_code
+    assert "texel_fetch(value.Ok_0.tex, pixelLayer, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0.image, pixelLayer, sampleIndex)" in generated_code
+    assert (
+        "image_store(value.Ok_0.image, pixelLayer, sampleIndex, color)"
+        in generated_code
+    )
+    assert "fn reassignDirectPayloadWrapper() -> None:" in generated_code
+    assert "value = Result_image2D_int_Err_make(0)" in generated_code
+    assert "fn texture_size(tex: Texture2D, lod: Int32)" in generated_code
+    assert "fn image_size(image: Image2D)" in generated_code
+    assert "fn image_store(image: Image2D, " in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32)" in generated_code
+    )
+    assert "fn texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
+        "lod: Int32)" in generated_code
+    )
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32)" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
+    )
+    assert "fn image_samples(image: Image2DMSArray) -> Int32:" in generated_code
+    assert (
+        "fn image_load(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
+        "sample: Int32)" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
+        "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
+    )
+    assert "fn buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "fn buffer_load4(buffer: ByteAddressBuffer, " in generated_code
+    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "Result<" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
+def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+        )
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_direct_resource_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2D inputs[2];
+            void invalidAssignedStore(ivec2 pixel, vec4 color) {
+                Result<image2D, int> value = Result::Err(0);
+                value = Result::Ok(inputs[0]);
+                match value {
+                    Result::Ok(image) => {
+                        imageStore(image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2D outputs[2];
+            vec4 invalidArrayRead(int slot, ivec2 pixel) {
+                Result<image2D[2], int> value = Result::Ok(outputs);
+                return match value {
+                    Result::Ok(images) => imageLoad(images[slot], pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWStructuredBuffer<int> values[2];
+            void invalidArrayBufferStore(int slot, uint index, int scalar) {
+                Result<RWStructuredBuffer<int>[2], int> value = Result::Ok(values);
+                match value {
+                    Result::Ok(buffers) => {
+                        buffers[slot].Store(index, scalar);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*values.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_local_direct_resource_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2D inputs[2];
+            Result<image2D, int> wrapImage(image2D image) {
+                return Result::Ok(image);
+            }
+            void invalidHelperWrappedStore(ivec2 pixel, vec4 color) {
+                Result<image2D, int> value = wrapImage(inputs[0]);
+                match value {
+                    Result::Ok(image) => {
+                        imageStore(image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2D outputs[2];
+            Result<image2D, int> chooseImage(
+                bool choose,
+                image2D first,
+                image2D second
+            ) {
+                return choose ? Result::Ok(first) : Result::Ok(second);
+            }
+            vec4 invalidHelperTernaryWrappedRead(bool choose, ivec2 pixel) {
+                Result<image2D, int> value =
+                    chooseImage(choose, outputs[0], outputs[1]);
+                return match value {
+                    Result::Ok(image) => imageLoad(image, pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWStructuredBuffer<int> buffers[2];
+            Result<RWStructuredBuffer<int>, int> pickBuffer(
+                int mode,
+                RWStructuredBuffer<int> first,
+                RWStructuredBuffer<int> second
+            ) {
+                return match mode {
+                    0 => Result::Ok(first),
+                    _ => Result::Ok(second)
+                };
+            }
+            void invalidHelperMatchWrappedBufferStore(
+                int mode,
+                uint index,
+                int scalar
+            ) {
+                Result<RWStructuredBuffer<int>, int> value =
+                    pickBuffer(mode, buffers[0], buffers[1]);
+                match value {
+                    Result::Ok(values) => {
+                        values.Store(index, scalar);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*buffers.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_direct_resource_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_generic_payload_enum_helper_returned_struct_payload_aliases_are_field_specific():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+    Result<ImagePair, int> wrapPair(ImagePair payload) {
+        return Result::Ok(payload);
+    }
+    vec4 readAllowed(int slot, ivec2 pixel) {
+        ImagePair payload = ImagePair(inputs[slot], outputs[slot]);
+        Result<ImagePair, int> value = wrapPair(payload);
+        return match value {
+            Result::Ok(carried) => imageLoad(carried.readable, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+    void writeAllowed(int slot, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[slot], outputs[slot]);
+        Result<ImagePair, int> value = wrapPair(payload);
+        match value {
+            Result::Ok(carried) => {
+                imageStore(carried.writable, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "image_load(value.Ok_0.readable, pixel)" in generated_code
+    assert "image_store(value.Ok_0.writable, pixel, color)" in generated_code
+    assert "Result<" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_generic_payload_enum_nested_helper_struct_payload_aliases_are_field_specific():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+    ImagePair makePair(readonly image2D source, writeonly image2D target) {
+        return ImagePair(source, target);
+    }
+    Result<ImagePair, int> wrapPair(ImagePair payload) {
+        return Result::Ok(payload);
+    }
+    Result<ImagePair, int> chainPair(int slot) {
+        return wrapPair(makePair(inputs[slot], outputs[slot]));
+    }
+    vec4 readAllowed(int slot, ivec2 pixel) {
+        Result<ImagePair, int> value = chainPair(slot);
+        return match value {
+            Result::Ok(carried) => imageLoad(carried.readable, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+    void writeAllowed(int slot, ivec2 pixel, vec4 color) {
+        Result<ImagePair, int> value = chainPair(slot);
+        match value {
+            Result::Ok(carried) => {
+                imageStore(carried.writable, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "image_load(value.Ok_0.readable, pixel)" in generated_code
+    assert "image_store(value.Ok_0.writable, pixel, color)" in generated_code
+    assert "Result<" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            void invalidHelperStructStore(int slot, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[slot], 1);
+                Result<PayloadBox, int> value = wrapPayload(payload);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            vec4 invalidHelperStructRead(int slot, ivec2 pixel) {
+                PayloadBox payload = PayloadBox(outputs[slot], 1);
+                Result<PayloadBox, int> value = wrapPayload(payload);
+                return match value {
+                    Result::Ok(carried) => imageLoad(carried.image, pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            void invalidHelperStructParamStore(
+                readonly image2D source,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                Result<PayloadBox, int> value =
+                    wrapPayload(PayloadBox(source, 7));
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*source.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_struct_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            PayloadBox makeBox(readonly image2D source) {
+                return PayloadBox(source, 1);
+            }
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> chainPayload(readonly image2D source) {
+                return wrapPayload(makeBox(source));
+            }
+            void invalidNestedHelperStore(int slot, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value = chainPayload(inputs[slot]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> choosePayload(
+                bool choose,
+                readonly image2D first,
+                readonly image2D second
+            ) {
+                return wrapPayload(
+                    choose ? PayloadBox(first, 1) : PayloadBox(second, 2)
+                );
+            }
+            void invalidTernaryHelperStore(bool choose, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value =
+                    choosePayload(choose, inputs[0], inputs[1]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> matchPayload(
+                int mode,
+                readonly image2D first,
+                readonly image2D second
+            ) {
+                return wrapPayload(match mode {
+                    0 => PayloadBox(first, 1),
+                    _ => PayloadBox(second, 2)
+                });
+            }
+            void invalidMatchHelperStore(int mode, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value =
+                    matchPayload(mode, inputs[0], inputs[1]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_nested_helper_struct_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWByteAddressBuffer readRaw[2];
+            RWByteAddressBuffer rawBuffers[2];
+            Result<RWByteAddressBuffer[2], int> pickRaw(bool choose) {
+                return Result::Ok(choose ? readRaw : rawBuffers);
+            }
+            void invalidHelperGlobalRawStore(
+                bool choose,
+                int slot,
+                uint offset,
+                uint4 data
+            ) {
+                Result<RWByteAddressBuffer[2], int> value = pickRaw(choose);
+                match value {
+                    Result::Ok(raws) => {
+                        raws[slot].Store4(offset, data);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store4.*readRaw.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly RWByteAddressBuffer writeRaw;
+            RWByteAddressBuffer rawBuffer;
+            Result<RWByteAddressBuffer, int> pickRaw(int mode) {
+                return match mode {
+                    0 => Result::Ok(writeRaw),
+                    _ => Result::Ok(rawBuffer)
+                };
+            }
+            uint4 invalidHelperGlobalRawRead(int mode, uint offset) {
+                Result<RWByteAddressBuffer, int> value = pickRaw(mode);
+                return match value {
+                    Result::Ok(raw) => raw.Load4(offset),
+                    Result::Err(_) => uint4(0)
+                };
+            }
+            """,
+            r"Load4.*writeRaw.*writeonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_global_byte_address_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2DMS readSamples;
+            image2DMS samples;
+            Result<image2DMS, int> pickSamples(bool choose) {
+                return Result::Ok(choose ? readSamples : samples);
+            }
+            void invalidHelperGlobalMSStore(
+                bool choose,
+                ivec2 pixel,
+                int sampleIndex,
+                vec4 color
+            ) {
+                Result<image2DMS, int> value = pickSamples(choose);
+                match value {
+                    Result::Ok(image) => {
+                        image.Store(pixel, sampleIndex, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*readSamples.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2DMS writeSamples[2];
+            image2DMS samples[2];
+            Result<image2DMS[2], int> pickSamples(int mode) {
+                return match mode {
+                    0 => Result::Ok(writeSamples),
+                    _ => Result::Ok(samples)
+                };
+            }
+            vec4 invalidHelperGlobalMSRead(
+                int mode,
+                int slot,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                Result<image2DMS[2], int> value = pickSamples(mode);
+                return match value {
+                    Result::Ok(images) => images[slot].Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"Load.*writeSamples.*writeonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_global_multisample_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            vec4 invalidTextureArrayCoord(
+                Result<sampler2DMSArray, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(tex) => tex.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"texel_fetch.*coordinate.*Texture2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            vec4 invalidTextureArraySample(
+                Result<sampler2DMSArray, int> value,
+                ivec3 pixelLayer,
+                float sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(tex) => tex.Load(pixelLayer, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"texel_fetch.*lod_or_sample.*Texture2DMSArray.*Int32",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            vec4 invalidImageArrayCoord(
+                Result<image2DMSArray, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(image) => image.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"image_load.*coordinate.*Image2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            void invalidImageArrayStoreSample(
+                Result<image2DMSArray, int> value,
+                ivec3 pixelLayer,
+                float sampleIndex,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(image) => {
+                        image.Store(pixelLayer, sampleIndex, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"image_store.*sample.*Image2DMSArray.*Int32",
+        ),
+    ],
+)
+def test_generic_payload_enum_multisample_array_payload_argument_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            vec4 invalidNestedTextureArrayCoord(
+                Result<MSArrayBox, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(box) => box.tex.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"texel_fetch.*coordinate.*Texture2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            vec4 invalidNestedImageArrayCoord(
+                Result<MSArrayBox, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(box) => box.image.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"image_load.*coordinate.*Image2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            void invalidNestedImageArrayStoreSample(
+                Result<MSArrayBox, int> value,
+                ivec3 pixelLayer,
+                float sampleIndex,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(box) => {
+                        box.image.Store(pixelLayer, sampleIndex, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"image_store.*sample.*Image2DMSArray.*Int32",
+        ),
+    ],
+)
+def test_generic_payload_enum_nested_multisample_array_struct_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _generic_payload_enum_resource_query_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct QueryResources {
+        sampler2D textures[2];
+        sampler2DMS msTextures[2];
+        readonly image2D images[2];
+        readonly image2DMS msImages[2];
+        sampler state;
+    };
+
+    ivec2 queryTextureSize(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureSize(resources.textures[slot], 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryTextureLevels(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureQueryLevels(resources.textures[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    int queryTextureSamples(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureSamples(resources.msTextures[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    ivec2 queryImageSize(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => imageSize(resources.images[slot]),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryImageSamples(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => imageSamples(resources.msImages[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchTextureSample(
+        Result<QueryResources, int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(resources) => texelFetch(
+                resources.msTextures[slot],
+                pixel,
+                sampleIndex
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec2 queryTextureLod(
+        Result<QueryResources, int> value,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(resources) => textureQueryLod(
+                resources.textures[slot],
+                resources.state,
+                uv
+            ),
+            Result::Err(_) => vec2(0.0)
+        };
+    }
+
+    ivec2 queryArrayTextureSize(
+        Result<QueryResources[2], int> value,
+        int index,
+        int slot
+    ) {
+        return match value {
+            Result::Ok(sets) => textureSize(sets[index].textures[slot], 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryArrayImageSamples(
+        Result<QueryResources[2], int> value,
+        int index,
+        int slot
+    ) {
+        return match value {
+            Result::Ok(sets) => imageSamples(sets[index].msImages[slot]),
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
+    )
+
+    assert "struct Result_QueryResources_int:" in generated_code
+    assert "var Ok_0: QueryResources" in generated_code
+    assert "struct Result_QueryResources_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[QueryResources, 2]" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "texture_size(value.Ok_0.textures[int(slot)], 0)" in generated_code
+    assert "texture_query_levels(value.Ok_0.textures[int(slot)])" in generated_code
+    assert "texture_samples(value.Ok_0.msTextures[int(slot)])" in generated_code
+    assert "image_size(value.Ok_0.images[int(slot)])" in generated_code
+    assert "image_samples(value.Ok_0.msImages[int(slot)])" in generated_code
+    assert (
+        "texel_fetch(value.Ok_0.msTextures[int(slot)], pixel, sampleIndex)"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_query_lod_Texture2D_SIMD_DType_float32_2("
+        "value.Ok_0.textures[int(slot)], uv)" in generated_code
+    )
+    assert (
+        "texture_size(value.Ok_0[int(index)].textures[int(slot)], 0)" in generated_code
+    )
+    assert "image_samples(value.Ok_0[int(index)].msImages[int(slot)])" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageSamples(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+
+
+def test_generic_payload_enum_resource_query_bindings_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_resource_query_bindings.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                writeonly image2D outputs[2];
+            };
+            vec4 invalidRead(
+                Result<ResourceSet, int> value,
+                int slot,
+                ivec2 pixel
+            ) {
+                return match value {
+                    Result::Ok(resources) => imageLoad(
+                        resources.outputs[slot],
+                        pixel
+                    ),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*resources\.outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                readonly image2D inputs[2];
+            };
+            void invalidWrite(
+                Result<ResourceSet, int> value,
+                int slot,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(resources) => {
+                        imageStore(resources.inputs[slot], pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*resources\.inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                readonly RWByteAddressBuffer rawBuffers[2];
+            };
+            void invalidRawStore(
+                Result<ResourceSet, int> value,
+                int slot,
+                uint offset,
+                uint4 data
+            ) {
+                match value {
+                    Result::Ok(resources) => {
+                        resources.rawBuffers[slot].Store4(offset, data);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store4.*resources\.rawBuffers.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_resource_struct_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                sampler2DMS msTextures[2];
+            };
+            int invalidLevels(Result<QueryResources, int> value, int slot) {
+                return match value {
+                    Result::Ok(resources) => textureQueryLevels(
+                        resources.msTextures[slot]
+                    ),
+                    Result::Err(err) => err
+                };
+            }
+            """,
+            r"texture_query_levels.*non-multisample texture required: Texture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                image2D images[2];
+            };
+            int invalidSamples(Result<QueryResources, int> value, int slot) {
+                return match value {
+                    Result::Ok(resources) => imageSamples(resources.images[slot]),
+                    Result::Err(err) => err
+                };
+            }
+            """,
+            r"image_samples.*multisample image required: Image2D",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                sampler2DShadow shadows[2];
+                sampler state;
+            };
+            vec2 invalidQueryLod(
+                Result<QueryResources, int> value,
+                int slot,
+                vec2 uv
+            ) {
+                return match value {
+                    Result::Ok(resources) => textureQueryLod(
+                        resources.shadows[slot],
+                        resources.state,
+                        uv
+                    ),
+                    Result::Err(_) => vec2(0.0)
+                };
+            }
+            """,
+            r"texture_query_lod.*non-shadow texture required: Texture2DShadow",
+        ),
+    ],
+)
+def test_generic_payload_enum_resource_query_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _helper_returned_resource_alias_source():
+    return """
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+    sampler2D textures[2];
+
+    image2D chooseInput(readonly image2D inputImage) {
+        return inputImage;
+    }
+
+    image2D chooseViaNestedHelper(writeonly image2D outputImage) {
+        return chooseOutput(outputImage);
+    }
+
+    image2D chooseOutput(writeonly image2D outputImage) {
+        return outputImage;
+    }
+
+    sampler2D chooseTexture(sampler2D tex) {
+        return tex;
+    }
+
+    vec4 readReturnedAlias(int slot, ivec2 pixel) {
+        image2D selected = chooseInput(inputs[slot]);
+        return imageLoad(selected, pixel);
+    }
+
+    void writeReturnedAlias(int slot, ivec2 pixel, vec4 color) {
+        image2D selected = chooseViaNestedHelper(outputs[slot]);
+        imageStore(selected, pixel, color);
+    }
+
+    ivec2 queryReturnedTexture(int slot) {
+        return textureSize(chooseTexture(textures[slot]), 0);
+    }
+    """
+
+
+def test_helper_returned_resource_aliases_preserve_mojo_qualifiers_and_compile(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_helper_returned_resource_alias_source()))
+    )
+
+    assert "fn chooseInput(inputImage: Image2D) -> Image2D:" in generated_code
+    assert "fn chooseViaNestedHelper(outputImage: Image2D) -> Image2D:" in (
+        generated_code
+    )
+    assert "var selected: Image2D = chooseInput(inputs[int(slot)])" in generated_code
+    assert "return image_load(selected, pixel)" in generated_code
+    assert (
+        "var selected: Image2D = chooseViaNestedHelper(outputs[int(slot)])"
+        in generated_code
+    )
+    assert "image_store(selected, pixel, color)" in generated_code
+    assert "return texture_size(chooseTexture(textures[int(slot)]), 0)" in (
+        generated_code
+    )
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "textureSize(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "helper_returned_resource_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D outputs[2];
+
+            image2D chooseOutput(writeonly image2D outputImage) {
+                return outputImage;
+            }
+
+            vec4 invalidRead(int slot, ivec2 pixel) {
+                image2D selected = chooseOutput(outputs[slot]);
+                return imageLoad(selected, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            writeonly image2D outputs[2];
+
+            image2D chooseOutput(writeonly image2D outputImage) {
+                return outputImage;
+            }
+
+            vec4 invalidDirectRead(int slot, ivec2 pixel) {
+                return imageLoad(chooseOutput(outputs[slot]), pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            readonly image2D inputs[2];
+
+            image2D chooseInput(readonly image2D inputImage) {
+                return inputImage;
+            }
+
+            void invalidWrite(int slot, ivec2 pixel, vec4 color) {
+                image2D selected = chooseInput(inputs[slot]);
+                imageStore(selected, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_helper_returned_resource_alias_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_generic_payload_enum_parameterized_specializations_are_rejected_for_mojo_codegen():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    generic<T> fn pass(Result<T, MathError> value) -> Result<T, MathError> {
+        return match value {
+            Result::Ok(ok) => Result::Ok(ok),
+            Result::Err(err) => Result::Err(err)
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="must be concrete"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_generic_payload_enum_match_expression_uses_single_subject_call():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    Result<vec3, MathError> makeResult(bool ok) {
+        match ok {
+            true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); },
+            _ => { return Result::Err(MathError::DivisionByZero); }
+        }
+    }
+
+    vec3 read(bool ok, vec3 fallback) {
+        let value = match makeResult(ok) {
+            Result::Ok(actual) => actual,
+            Result::Err(_) => fallback
+        };
+        return value;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var __cgl_match_subject_0: Result_vec3_MathError = makeResult(ok)"
+        in generated_code
+    )
+    assert generated_code.count("makeResult(ok)") == 1
+    assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
+    assert "else:" in generated_code
+    assert "Result<" not in generated_code
+
+
+def test_nested_generic_payload_enum_field_patterns_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    generic<T> struct Option {
+        enum OptionType {
+            Some(T),
+            None
+        }
+        OptionType variant;
+    }
+
+    enum RenderCommand {
+        Draw {
+            material: Option<int>,
+            value: int
+        },
+        Clear
+    };
+
+    int inspect(RenderCommand command) {
+        return match command {
+            RenderCommand::Draw { material: Option::Some(mat), value } => mat + value,
+            RenderCommand::Draw { material: Option::None, value } => value,
+            RenderCommand::Clear => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(RenderCommand_Draw_make(Option_int_Some_make(3), 4)))\n"
+        "    print(inspect(RenderCommand_Draw_make(Option_int_None_make(), 4)))\n"
+        "    print(inspect(RenderCommand_Clear_make()))\n"
+    )
+
+    source_path = tmp_path / "nested_generic_payload_enum_patterns.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "4", "0"]
+
+
+def test_match_expression_guarded_bindings_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum Mode {
+        Add,
+        Multiply
+    };
+
+    int guardedValue(int value) {
+        return match value {
+            zero if zero == 0 => zero + 1,
+            _ => 2
+        };
+    }
+
+    int guardedStatement(int value) {
+        int output = 0;
+        match value {
+            bound if bound > 0 => {
+                output = bound;
+            }
+            _ => {
+                output = -1;
+            }
+        }
+        return output;
+    }
+
+    int enumValue(Mode mode) {
+        return match mode {
+            Mode::Add => 10,
+            Mode::Multiply => 20,
+            _ => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(guardedValue(0))\n"
+        "    print(guardedValue(4))\n"
+        "    print(guardedStatement(5))\n"
+        "    print(enumValue(Mode_Multiply))\n"
+    )
+
+    source_path = tmp_path / "guarded_match_patterns.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["1", "2", "5", "20"]
 
 
 def test_match_argument_nested_array_resource_size_target_shape_direct_ir_for_mojo_codegen():
@@ -4800,6 +8074,522 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         generate_code(parse_code(tokenize_code(invalid_raw_free_read)))
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D writeImages[2];
+            readonly image2D readImages[2];
+
+            vec4 invalidRead(bool useWrite, int slot, ivec2 pixel) {
+                return imageLoad(
+                    (useWrite ? writeImages : readImages)[slot],
+                    pixel
+                );
+            }
+            """,
+            r"imageLoad.*writeImages.*writeonly",
+        ),
+        (
+            """
+            readonly image2D readImages[2];
+            writeonly image2D writeImages[2];
+
+            void invalidWrite(bool useRead, int slot, ivec2 pixel, vec4 value) {
+                imageStore(
+                    (useRead ? readImages : writeImages)[slot],
+                    pixel,
+                    value
+                );
+            }
+            """,
+            r"imageStore.*readImages.*readonly",
+        ),
+        (
+            """
+            writeonly RWStructuredBuffer<int> writeBuffers[2];
+            RWStructuredBuffer<int> values[2];
+
+            int invalidLoad(bool useWrite, int slot, uint index) {
+                return (useWrite ? writeBuffers : values)[slot].Load(index);
+            }
+            """,
+            r"Load.*writeBuffers.*writeonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readBuffers[2];
+            RWStructuredBuffer<int> values[2];
+
+            void invalidStore(int mode, int slot, uint index, int value) {
+                (match mode { 0 => readBuffers, _ => values })[slot].Store(
+                    index,
+                    value
+                );
+            }
+            """,
+            r"Store.*readBuffers.*readonly",
+        ),
+        (
+            """
+            readonly RWByteAddressBuffer readRaw[2];
+            RWByteAddressBuffer rawBuffers[2];
+
+            void invalidRawStore(int mode, int slot, uint offset, uint4 data) {
+                (match mode { 0 => readRaw, _ => rawBuffers })[slot].Store4(
+                    offset,
+                    data
+                );
+            }
+            """,
+            r"Store4.*readRaw.*readonly",
+        ),
+        (
+            """
+            struct Resources {
+                writeonly image2D images[2];
+            };
+
+            vec4 invalidStructRead(
+                bool useLeft,
+                Resources left,
+                Resources right,
+                int slot,
+                ivec2 pixel
+            ) {
+                return imageLoad((useLeft ? left : right).images[slot], pixel);
+            }
+            """,
+            r"imageLoad.*images.*writeonly",
+        ),
+    ],
+)
+def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D writeImage;
+            image2D colorImage;
+
+            vec4 invalidAliasRead(bool useWrite, ivec2 pixel) {
+                image2D alias = useWrite ? writeImage : colorImage;
+                return imageLoad(alias, pixel);
+            }
+            """,
+            r"imageLoad.*writeImage.*writeonly",
+        ),
+        (
+            """
+            readonly uniform uimage2D readCounters;
+            uimage2D counters;
+
+            uint invalidAliasAtomic(bool useRead, ivec2 pixel, uint value) {
+                uimage2D alias = useRead ? readCounters : counters;
+                return alias.InterlockedAdd(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*readCounters.*readonly",
+        ),
+        (
+            """
+            writeonly uniform uimage2D writeCounters;
+            uimage2D counters;
+
+            uint invalidAliasAtomic(int mode, ivec2 pixel, uint value) {
+                uimage2D alias = match mode {
+                    0 => writeCounters,
+                    _ => counters
+                };
+                return imageAtomicAdd(alias, pixel, value);
+            }
+            """,
+            r"image_atomic_add.*writeCounters.*writeonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidAliasStore(bool useRead, uint index, int value) {
+                RWStructuredBuffer<int> alias = useRead ? readValues : values;
+                alias.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidAssignedAliasStore(bool useRead, uint index, int value) {
+                RWStructuredBuffer<int> alias;
+                alias = useRead ? readValues : values;
+                alias.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            readonly RWByteAddressBuffer readRaw;
+            RWByteAddressBuffer rawBytes;
+
+            void invalidAliasAtomic(
+                int mode,
+                uint offset,
+                uint value,
+                uint original
+            ) {
+                RWByteAddressBuffer alias = match mode {
+                    0 => readRaw,
+                    _ => rawBytes
+                };
+                alias.InterlockedAdd(offset, value, original);
+            }
+            """,
+            r"InterlockedAdd.*readRaw.*readonly",
+        ),
+        (
+            """
+            writeonly uniform uimage2D writeCounters;
+            uimage2D counters;
+
+            uint invalidAssignedAliasAtomic(bool useWrite, ivec2 pixel, uint value) {
+                uimage2D alias;
+                alias = useWrite ? writeCounters : counters;
+                return alias.InterlockedAdd(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*writeCounters.*writeonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidIfElseAssignedWrapperStore(
+                bool choose,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox payload = PayloadBox(outputs[0], 0);
+                if (choose) {
+                    payload = PayloadBox(inputs[0], 1);
+                } else {
+                    payload = PayloadBox(outputs[1], 2);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            image2D images[2];
+
+            vec4 invalidIfElseAssignedWrapperRead(bool choose, ivec2 pixel) {
+                PayloadBox payload = PayloadBox(images[0], 0);
+                if (choose) {
+                    payload = PayloadBox(outputs[0], 1);
+                } else {
+                    payload = PayloadBox(images[1], 2);
+                }
+                return imageLoad(payload.image, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidChainedIfElseWrapperStore(
+                bool choose,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox readable = PayloadBox(inputs[0], 0);
+                PayloadBox writable = PayloadBox(outputs[0], 1);
+                PayloadBox payload = writable;
+                if (choose) {
+                    payload = readable;
+                } else {
+                    payload = writable;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_resource_alias_access_qualifiers_propagate_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_if_else_assigned_struct_resource_aliases_remain_field_specific():
+    source = """
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+
+    vec4 readAllowed(bool choose, ivec2 pixel) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        if (choose) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        } else {
+            payload = ImagePair(inputs[0], outputs[0]);
+        }
+        return imageLoad(payload.readable, pixel);
+    }
+
+    void writeAllowed(bool choose, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        if (choose) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        } else {
+            payload = ImagePair(inputs[0], outputs[0]);
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "return image_load(payload.readable, pixel)" in generated_code
+    assert "image_store(payload.writable, pixel, color)" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidWhileStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                while (count > 0) {
+                    payload = PayloadBox(outputs[0], 1);
+                    count--;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            image2D images[2];
+
+            vec4 invalidWhileRead(int count, ivec2 pixel) {
+                PayloadBox payload = PayloadBox(outputs[0], 0);
+                while (count > 0) {
+                    payload = PayloadBox(images[0], 1);
+                    count--;
+                }
+                return imageLoad(payload.image, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidForStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                for (int i = 0; i < count; i++) {
+                    payload = PayloadBox(outputs[0], 1);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidForInStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                for i in count {
+                    payload = PayloadBox(outputs[0], 1);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidDoWhileStore(
+                bool stop,
+                int count,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                do {
+                    if (stop) {
+                        break;
+                    }
+                    payload = PayloadBox(outputs[0], 1);
+                    count--;
+                } while (count > 0);
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidLoopStore(bool stop, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                loop {
+                    if (stop) {
+                        break;
+                    }
+                    payload = PayloadBox(outputs[0], 1);
+                    break;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_loop_carried_resource_alias_access_qualifiers_apply_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_loop_carried_struct_resource_aliases_remain_field_specific():
+    source = """
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+
+    vec4 readAfterWhile(int count, ivec2 pixel) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        while (count > 0) {
+            payload = ImagePair(inputs[1], outputs[1]);
+            count--;
+        }
+        return imageLoad(payload.readable, pixel);
+    }
+
+    void writeAfterFor(int count, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        for (int i = 0; i < count; i++) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+
+    void writeAfterDoWhile(bool stop, int count, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        do {
+            if (stop) {
+                break;
+            }
+            payload = ImagePair(inputs[1], outputs[1]);
+            count--;
+        } while (count > 0);
+        imageStore(payload.writable, pixel, color);
+    }
+
+    void writeAfterLoop(bool stop, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        loop {
+            if (stop) {
+                break;
+            }
+            payload = ImagePair(inputs[1], outputs[1]);
+            break;
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "return image_load(payload.readable, pixel)" in generated_code
+    assert generated_code.count("image_store(payload.writable, pixel, color)") == 3
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;
@@ -5069,6 +8859,508 @@ def test_nested_struct_resource_array_containers_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "nested_struct_resource_array_containers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_struct_fields_default_initialize_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        image2D inputImage;
+        sampler2D textures[2];
+        image2D images[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    struct ResourceBundle {
+        ResourceSet sets[2];
+        ResourceSet primary;
+    };
+
+    ResourceBundle makeBundle() {
+        ResourceBundle bundle;
+        return bundle;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct ResourceSet:" in generated_code
+    assert "struct ResourceBundle:" in generated_code
+    assert "var bundle = ResourceBundle(" in generated_code
+    assert "InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert "InlineArray[Texture2D, 2](Texture2D(), Texture2D())" in generated_code
+    assert "InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    assert (
+        "InlineArray[RWStructuredBuffer[Int32], 2]"
+        "(RWStructuredBuffer[Int32](), RWStructuredBuffer[Int32]())" in generated_code
+    )
+    assert (
+        "InlineArray[RWByteAddressBuffer, 2]"
+        "(RWByteAddressBuffer(), RWByteAddressBuffer())" in generated_code
+    )
+
+    generated_code += "\nfn main():\n    var bundle = makeBundle()\n    _ = bundle\n"
+
+    source_path = tmp_path / "resource_struct_field_defaults.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_struct_arrays_default_initialize_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        image2D inputImage;
+        sampler2D textures[2];
+        image2D images[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet chooseSet(ResourceSet sets[2], int index) {
+        return sets[index];
+    }
+
+    ResourceSet buildSet(
+        sampler2D texture,
+        sampler state,
+        image2D image,
+        RWStructuredBuffer<int> values[2],
+        RWByteAddressBuffer rawBuffers[2]
+    ) {
+        ResourceSet partials[2] = {
+            ResourceSet {
+                texture: texture,
+                state: state,
+                inputImage: image,
+                values: values,
+                rawBuffers: rawBuffers
+            }
+        };
+        ResourceSet locals[2];
+        locals[0] = partials[0];
+        return chooseSet(locals, 0);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn chooseSet(sets: InlineArray[ResourceSet, 2], index: Int32)" in (
+        generated_code
+    )
+    assert "var locals = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert (
+        "var locals = InlineArray[ResourceSet, 2](unsafe_uninitialized=True)"
+        not in generated_code
+    )
+    assert (
+        "textures=InlineArray[Texture2D, 2](Texture2D(), Texture2D())" in generated_code
+    )
+    assert "images=InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    assert (
+        "InlineArray[RWStructuredBuffer[Int32], 2]"
+        "(RWStructuredBuffer[Int32](), RWStructuredBuffer[Int32]())" in generated_code
+    )
+    assert (
+        "InlineArray[RWByteAddressBuffer, 2]"
+        "(RWByteAddressBuffer(), RWByteAddressBuffer())" in generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "resource_struct_array_defaults.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_struct_array_function_boundaries_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        image2D inputImage;
+        sampler2D textures[2];
+        image2D images[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet[2] cloneSets(ResourceSet sets[2]) {
+        return sets;
+    }
+
+    ResourceSet[2] replaceSets(
+        ResourceSet sets[2],
+        ResourceSet replacement,
+        int index
+    ) {
+        sets[index] = replacement;
+        return sets;
+    }
+
+    ResourceSet forwardSet(ResourceSet sets[2], int index) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[index];
+    }
+
+    ResourceSet buildReplacement() {
+        ResourceSet set;
+        return set;
+    }
+
+    ResourceSet callBoundaries(int index) {
+        ResourceSet sets[2];
+        ResourceSet replacement = buildReplacement();
+        ResourceSet changedSets[2] = replaceSets(sets, replacement, index);
+        ResourceSet forwarded = forwardSet(changedSets, index);
+        return forwarded;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
+        "InlineArray[ResourceSet, 2]:" in generated_code
+    )
+    assert (
+        "fn replaceSets(owned sets: InlineArray[ResourceSet, 2], "
+        "replacement: ResourceSet, index: Int32) -> InlineArray[ResourceSet, 2]:"
+        in generated_code
+    )
+    assert (
+        "var changedSets: InlineArray[ResourceSet, 2] = "
+        "replaceSets(sets, replacement, index)" in generated_code
+    )
+    assert "var sets = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert "unsafe_uninitialized=True" not in generated_code
+
+    generated_code += (
+        "\nfn main():\n    var resourceSet = callBoundaries(1)\n    _ = resourceSet\n"
+    )
+
+    source_path = tmp_path / "resource_struct_array_function_boundaries.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        sampler2D textures[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet[2] cloneSets(ResourceSet sets[2]) {
+        return sets;
+    }
+
+    vec4 sampleCopied(ResourceSet sets[2], int slot, vec2 uv) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return texture(copied[0].textures[slot], copied[0].state, uv);
+    }
+
+    vec4 readCopied(ResourceSet sets[2], int slot, ivec2 pixel) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return imageLoad(copied[0].inputs[slot], pixel);
+    }
+
+    void writeCopied(ResourceSet sets[2], int slot, ivec2 pixel, vec4 value) {
+        ResourceSet copied[2] = cloneSets(sets);
+        imageStore(copied[0].outputs[slot], pixel, value);
+    }
+
+    int loadBufferCopied(ResourceSet sets[2], int slot, uint index) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[0].values[slot].Load(index);
+    }
+
+    void storeBufferCopied(ResourceSet sets[2], int slot, uint index, int value) {
+        ResourceSet copied[2] = cloneSets(sets);
+        copied[0].values[slot].Store(index, value);
+    }
+
+    uint loadRawCopied(ResourceSet sets[2], int slot, uint offset) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[0].rawBuffers[slot].Load(offset);
+    }
+
+    void storeRawCopied(ResourceSet sets[2], int slot, uint offset, uint4 data) {
+        ResourceSet copied[2] = cloneSets(sets);
+        copied[0].rawBuffers[slot].Store4(offset, data);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
+        "InlineArray[ResourceSet, 2]:" in generated_code
+    )
+    assert "return sample(copied[0].textures[int(slot)], uv)" in generated_code
+    assert "return image_load(copied[0].inputs[int(slot)], pixel)" in generated_code
+    assert "image_store(copied[0].outputs[int(slot)], pixel, value)" in (generated_code)
+    assert "return buffer_load(copied[0].values[int(slot)], index)" in generated_code
+    assert "buffer_store(copied[0].values[int(slot)], index, value)" in generated_code
+    assert "return buffer_load(copied[0].rawBuffers[int(slot)], offset)" in (
+        generated_code
+    )
+    assert "buffer_store4(copied[0].rawBuffers[int(slot)], offset, data)" in (
+        generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "unsafe_uninitialized=True" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_struct_array_member_operations.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_resource_struct_array_branch_value_operations_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        sampler2D textures[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    vec4 sampleTernaryDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        vec2 uv
+    ) {
+        return texture(
+            (useLeft ? left : right).textures[slot],
+            (useLeft ? left : right).state,
+            uv
+        );
+    }
+
+    vec4 readTernaryArrayDirect(
+        bool useLeft,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel
+    ) {
+        return imageLoad((useLeft ? left : right)[0].inputs[slot], pixel);
+    }
+
+    void writeTernaryArrayDirect(
+        bool useLeft,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel,
+        vec4 value
+    ) {
+        imageStore((useLeft ? left : right)[0].outputs[slot], pixel, value);
+    }
+
+    int loadTernaryBufferDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index
+    ) {
+        return (useLeft ? left : right).values[slot].Load(index);
+    }
+
+    void storeTernaryBufferDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index,
+        int value
+    ) {
+        (useLeft ? left : right).values[slot].Store(index, value);
+    }
+
+    uint loadTernaryRawDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint offset
+    ) {
+        return (useLeft ? left : right).rawBuffers[slot].Load(offset);
+    }
+
+    void storeTernaryRawDirect(
+        bool useLeft,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint offset,
+        uint4 data
+    ) {
+        (useLeft ? left : right).rawBuffers[slot].Store4(offset, data);
+    }
+
+    vec4 readMatchArrayDirect(
+        int mode,
+        ResourceSet left[2],
+        ResourceSet right[2],
+        int slot,
+        ivec2 pixel
+    ) {
+        return imageLoad(
+            (match mode { 0 => left, _ => right })[0].inputs[slot],
+            pixel
+        );
+    }
+
+    int loadMatchBufferDirect(
+        int mode,
+        ResourceSet left,
+        ResourceSet right,
+        int slot,
+        uint index
+    ) {
+        return (match mode { 0 => left, _ => right }).values[slot].Load(index);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return sample((left if useLeft else right).textures[int(slot)], uv)" in (
+        generated_code
+    )
+    assert (
+        "return image_load((left if useLeft else right)[0].inputs[int(slot)], pixel)"
+        in generated_code
+    )
+    assert (
+        "image_store((left if useLeft else right)[0].outputs[int(slot)], pixel, value)"
+        in generated_code
+    )
+    assert (
+        "return buffer_load((left if useLeft else right).values[int(slot)], index)"
+        in generated_code
+    )
+    assert (
+        "buffer_store((left if useLeft else right).values[int(slot)], index, value)"
+        in generated_code
+    )
+    assert (
+        "return buffer_load((left if useLeft else right).rawBuffers[int(slot)], offset)"
+        in generated_code
+    )
+    assert (
+        "buffer_store4((left if useLeft else right).rawBuffers[int(slot)], "
+        "offset, data)" in generated_code
+    )
+    assert "return image_load(__cgl_match_value_0[0].inputs[int(slot)], pixel)" in (
+        generated_code
+    )
+    assert "return buffer_load(__cgl_match_value_1.values[int(slot)], index)" in (
+        generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "unsafe_uninitialized=True" not in generated_code
+    assert "MatchNode" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_struct_array_branch_values.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],
@@ -7844,6 +12136,222 @@ def test_for_continue_emits_update_before_continue_in_mojo():
         not in generated_code
     )
     assert "DoWhileNode" not in generated_code
+
+
+def _for_update_assignment_prelude_source():
+    return """
+    int updateArrayLoop(int mode) {
+        int values[2] = {0, 0};
+        for (int step = 0; step < 2; values = {
+            match mode {
+                0 => 1,
+                _ => 2
+            },
+            step
+        }) {
+            step++;
+            if (step == 1) {
+                continue;
+            }
+        }
+        return values[0] + values[1];
+    }
+    """
+
+
+def test_for_update_assignment_uses_expression_preludes_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_for_update_assignment_prelude_source()))
+    )
+
+    assert "while (step < 2):" in generated_code
+    assert "if (step == 1):\n            var __cgl_match_value_0: Int32 = 0" in (
+        generated_code
+    )
+    assert "__cgl_match_value_0 = 1" in generated_code
+    assert "__cgl_match_value_0 = 2" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, step)" in (
+        generated_code
+    )
+    assert (
+        "values = InlineArray[Int32, 2](__cgl_match_value_0, step)\n"
+        "            continue"
+    ) in generated_code
+    assert "var __cgl_match_value_1: Int32 = 0" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_1, step)" in (
+        generated_code
+    )
+    assert "values = match mode" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_for_update_assignment_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_for_update_assignment_prelude_source()))
+    )
+    generated_code += """
+fn main():
+    print(updateArrayLoop(0))
+"""
+
+    source_path = tmp_path / "for_update_assignment_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "3" in result.stdout
+
+
+def test_for_update_match_assignment_diagnostics_preserve_target_context():
+    code = """
+    Texture2D<float4> tex;
+
+    float invalidForUpdate(int mode) {
+        float scalar = 0.0;
+        for (int i = 0; i < 1; scalar = match mode {
+            0 => textureSize(tex, 0),
+            _ => 1.0
+        }) {
+            i++;
+        }
+        return scalar;
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*assignment target match arm 1"
+            r".*expects ivec2.*got float"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def _expression_statement_assignment_wrapper_ast():
+    source = """
+    int wrappedAssign(int mode) {
+        int values[2] = {0, 0};
+        return values[0] + values[1];
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+
+    int_type = PrimitiveType("int")
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    match_expr = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                int_literal(1),
+            ),
+            MatchArmNode(WildcardPatternNode(), None, int_literal(2)),
+        ],
+    )
+    assignment = AssignmentNode(
+        IdentifierNode("values"),
+        ArrayLiteralNode([match_expr, int_literal(3)]),
+    )
+    ast.functions[-1].body.statements.insert(
+        1,
+        ExpressionStatementNode(assignment, is_tail_expression=False),
+    )
+    return ast
+
+
+def test_expression_statement_assignment_wrapper_uses_mojo_statement_preludes():
+    generated_code = generate_code(_expression_statement_assignment_wrapper_ast())
+
+    assert "var __cgl_match_value_0: Int32 = 0" in generated_code
+    assert "__cgl_match_value_0 = 1" in generated_code
+    assert "__cgl_match_value_0 = 2" in generated_code
+    assert "values = InlineArray[Int32, 2](__cgl_match_value_0, 3)" in generated_code
+    assert "ExpressionStatementNode" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_expression_statement_assignment_wrapper_compile_smoke_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(_expression_statement_assignment_wrapper_ast())
+    generated_code += """
+fn main():
+    print(wrappedAssign(0))
+"""
+
+    source_path = tmp_path / "expression_statement_assignment_wrapper.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "4" in result.stdout
+
+
+def test_expression_statement_compound_assignment_diagnostics_preserve_target_context():
+    source = """
+    Texture2D<float4> tex;
+
+    float invalidWrappedCompoundAssignment(int mode) {
+        float scalar = 0.0;
+        return scalar;
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+    int_type = PrimitiveType("int")
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    texture_size = FunctionCallNode(
+        IdentifierNode("textureSize"),
+        [IdentifierNode("tex"), int_literal(0)],
+    )
+    match_expr = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                texture_size,
+            ),
+            MatchArmNode(
+                WildcardPatternNode(), None, LiteralNode(1.0, PrimitiveType("float"))
+            ),
+        ],
+    )
+    ast.functions[-1].body.statements.insert(
+        1,
+        ExpressionStatementNode(
+            AssignmentNode(IdentifierNode("scalar"), match_expr, "+="),
+            is_tail_expression=False,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"texture_size target.*assignment target match arm 1"
+            r".*expects ivec2.*got float"
+        ),
+    ):
+        generate_code(ast)
 
 
 def test_for_in_statement_lowers_to_mojo_ranges_and_scopes_loop_contexts():
@@ -12147,6 +16655,479 @@ def test_aggregate_buffer_reinterpret_target_shape_diagnostics(source, pattern):
         generate_code(parse_code(tokenize_code(source)))
 
 
+def _function_style_struct_assignment_target_source():
+    return """
+    struct MixedBox {
+        float2 loaded;
+        float2 imageValue;
+        float2 rawValue;
+    };
+
+    StructuredBuffer<float2> pairs;
+    ConsumeStructuredBuffer<float2> consumed;
+    RWByteAddressBuffer raw;
+    RWTexture2D<float2> image;
+
+    uint index() {
+        return 0u;
+    }
+
+    int2 pixel() {
+        return int2(0, 0);
+    }
+
+    void acceptMixed(MixedBox value) {
+    }
+
+    void useBoxes(int mode, bool choose) {
+        let inferred = MixedBox(
+            choose ? pairs.Load(index()) : consumed.Consume(),
+            image.Load(pixel()),
+            match mode {
+                0 => asfloat(raw.Load2(index())),
+                _ => pairs.Load(index())
+            }
+        );
+        MixedBox explicitValue = MixedBox(
+            consumed.Consume(),
+            choose ? image.Load(pixel()) : pairs.Load(index()),
+            asfloat(raw.Load2(index()))
+        );
+        MixedBox assigned;
+        assigned = MixedBox(
+            match mode {
+                0 => pairs.Load(index()),
+                _ => consumed.Consume()
+            },
+            image.Load(pixel()),
+            choose ? asfloat(raw.Load2(index())) : pairs.Load(index())
+        );
+        inferred = MixedBox(
+            consumed.Consume(),
+            image.Load(pixel()),
+            asfloat(raw.Load2(index()))
+        );
+        acceptMixed(MixedBox(
+            pairs.Load(index()),
+            image.Load(pixel()),
+            asfloat(raw.Load2(index()))
+        ));
+    }
+    """
+
+
+def test_function_style_struct_constructors_preserve_assignment_target_contexts():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
+    )
+
+    assert "fn useBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
+        generated_code
+    )
+    assert "__cgl_match_value_0 = buffer_load(pairs, index())" in generated_code
+    assert (
+        "var inferred = MixedBox((buffer_load(pairs, index()) if choose else "
+        "buffer_consume(consumed)), image_load(image, pixel()), __cgl_match_value_0)"
+    ) in generated_code
+    assert (
+        "var explicitValue: MixedBox = MixedBox(buffer_consume(consumed), "
+        "(image_load(image, pixel()) if choose else buffer_load(pairs, index())), "
+        "asfloat(buffer_load2(raw, index())))"
+    ) in generated_code
+    assert "var assigned = MixedBox(" in generated_code
+    assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_1 = buffer_load(pairs, index())" in generated_code
+    assert "__cgl_match_value_1 = buffer_consume(consumed)" in generated_code
+    assert (
+        "assigned = MixedBox(__cgl_match_value_1, image_load(image, pixel()), "
+        "(asfloat(buffer_load2(raw, index())) if choose else "
+        "buffer_load(pairs, index())))"
+    ) in generated_code
+    assert (
+        "inferred = MixedBox(buffer_consume(consumed), image_load(image, pixel()), "
+        "asfloat(buffer_load2(raw, index())))"
+    ) in generated_code
+    assert (
+        "acceptMixed(MixedBox(buffer_load(pairs, index()), image_load(image, "
+        "pixel()), asfloat(buffer_load2(raw, index()))))"
+    ) in generated_code
+
+
+def test_function_style_struct_assignment_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
+    )
+    generated_code += """
+fn main():
+    useBoxes(0, True)
+"""
+
+    source_path = tmp_path / "function_style_struct_assignment_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            void invalidInferred() {
+                let badValue = ScalarBox(pairs.Load(index()));
+            }
+            """,
+            r"buffer_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWTexture2D<float2> image;
+            int2 pixel() { return int2(0, 0); }
+            void invalidExplicit() {
+                ScalarBox badValue = ScalarBox(image.Load(pixel()));
+            }
+            """,
+            r"image_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            void invalidAssignment() {
+                ScalarBox assigned;
+                assigned = ScalarBox(asfloat(raw.Load2(index())));
+            }
+            """,
+            r"asfloat target.*assignment target field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            ConsumeStructuredBuffer<float2> consumed;
+            void invalidInferredAssignment() {
+                let assigned = ScalarBox(1.0);
+                assigned = ScalarBox(consumed.Consume());
+            }
+            """,
+            r"buffer_consume target.*assignment target field ScalarBox\.value"
+            r".*expects float2.*got float",
+        ),
+    ],
+)
+def test_function_style_struct_constructor_assignment_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_function_style_struct_constructor_field_diagnostics():
+    source = """
+    struct PairBox {
+        float value;
+        float alt;
+    };
+    void invalidExtraPositional() {
+        let badValue = PairBox(1.0, 2.0, 3.0);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"too many positional fields.*declaration badValue" r".*field 3.*PairBox"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_function_style_struct_constructor_missing_field_diagnostics():
+    source = """
+    struct PairBox {
+        float value;
+        float alt;
+    };
+    void invalidMissingField() {
+        let badValue = PairBox(1.0);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"missing field PairBox\.alt.*declaration badValue"
+            r".*expected fields: value, alt"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _braced_struct_assignment_target_source():
+    return """
+    struct MixedBox {
+        float2 loaded;
+        float2 imageValue;
+        float2 rawValue;
+    };
+
+    StructuredBuffer<float2> pairs;
+    ConsumeStructuredBuffer<float2> consumed;
+    RWByteAddressBuffer raw;
+    RWTexture2D<float2> image;
+
+    uint index() {
+        return 0u;
+    }
+
+    int2 pixel() {
+        return int2(0, 0);
+    }
+
+    void acceptMixed(MixedBox value) {
+    }
+
+    void useBracedBoxes(int mode, bool choose) {
+        let inferred = MixedBox {
+            loaded: choose ? pairs.Load(index()) : consumed.Consume(),
+            imageValue: image.Load(pixel()),
+            rawValue: match mode {
+                0 => asfloat(raw.Load2(index())),
+                _ => pairs.Load(index())
+            }
+        };
+        MixedBox explicitValue = MixedBox {
+            loaded: consumed.Consume(),
+            imageValue: choose ? image.Load(pixel()) : pairs.Load(index()),
+            rawValue: asfloat(raw.Load2(index()))
+        };
+        MixedBox assigned;
+        assigned = MixedBox {
+            loaded: match mode {
+                0 => pairs.Load(index()),
+                _ => consumed.Consume()
+            },
+            imageValue: image.Load(pixel()),
+            rawValue: choose ? asfloat(raw.Load2(index())) : pairs.Load(index())
+        };
+        inferred = MixedBox {
+            loaded: consumed.Consume(),
+            imageValue: image.Load(pixel()),
+            rawValue: asfloat(raw.Load2(index()))
+        };
+        acceptMixed(MixedBox {
+            loaded: pairs.Load(index()),
+            imageValue: image.Load(pixel()),
+            rawValue: asfloat(raw.Load2(index()))
+        });
+    }
+    """
+
+
+def test_braced_struct_constructors_preserve_assignment_target_contexts():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_braced_struct_assignment_target_source()))
+    )
+
+    assert "fn useBracedBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
+        generated_code
+    )
+    assert "__cgl_match_value_0 = buffer_load(pairs, index())" in generated_code
+    assert (
+        "var inferred = MixedBox(loaded=(buffer_load(pairs, index()) if choose "
+        "else buffer_consume(consumed)), imageValue=image_load(image, pixel()), "
+        "rawValue=__cgl_match_value_0)"
+    ) in generated_code
+    assert (
+        "var explicitValue: MixedBox = MixedBox(loaded=buffer_consume(consumed), "
+        "imageValue=(image_load(image, pixel()) if choose else "
+        "buffer_load(pairs, index())), rawValue=asfloat(buffer_load2(raw, index())))"
+    ) in generated_code
+    assert "var assigned = MixedBox(" in generated_code
+    assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
+    assert "__cgl_match_value_1 = buffer_load(pairs, index())" in generated_code
+    assert "__cgl_match_value_1 = buffer_consume(consumed)" in generated_code
+    assert (
+        "assigned = MixedBox(loaded=__cgl_match_value_1, "
+        "imageValue=image_load(image, pixel()), rawValue=(asfloat(buffer_load2(raw, "
+        "index())) if choose else buffer_load(pairs, index())))"
+    ) in generated_code
+    assert (
+        "inferred = MixedBox(loaded=buffer_consume(consumed), "
+        "imageValue=image_load(image, pixel()), rawValue=asfloat(buffer_load2(raw, "
+        "index())))"
+    ) in generated_code
+    assert (
+        "acceptMixed(MixedBox(loaded=buffer_load(pairs, index()), "
+        "imageValue=image_load(image, pixel()), rawValue=asfloat(buffer_load2(raw, "
+        "index()))))"
+    ) in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_braced_struct_assignment_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_braced_struct_assignment_target_source()))
+    )
+    generated_code += """
+fn main():
+    useBracedBoxes(0, True)
+"""
+
+    source_path = tmp_path / "braced_struct_assignment_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            StructuredBuffer<float2> pairs;
+            uint index() { return 0u; }
+            void invalidInferred() {
+                let badValue = ScalarBox { value: pairs.Load(index()) };
+            }
+            """,
+            r"buffer_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects float2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWTexture2D<float2> image;
+            int2 pixel() { return int2(0, 0); }
+            void invalidInferredImage() {
+                let badValue = ScalarBox { value: image.Load(pixel()) };
+            }
+            """,
+            r"image_load target.*declaration badValue field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            RWByteAddressBuffer raw;
+            uint index() { return 0u; }
+            void invalidInferredReinterpret() {
+                let badValue = ScalarBox { value: asfloat(raw.Load2(index())) };
+            }
+            """,
+            r"asfloat target.*declaration badValue field ScalarBox\.value"
+            r".*expects vec2.*got float",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            ConsumeStructuredBuffer<float2> consumed;
+            void invalidInferredMatch(int mode) {
+                let badValue = ScalarBox {
+                    value: match mode {
+                        0 => consumed.Consume(),
+                        _ => 1.0
+                    }
+                };
+            }
+            """,
+            r"buffer_consume target.*declaration badValue field ScalarBox\.value "
+            r"match arm 1.*expects float2.*got float",
+        ),
+    ],
+)
+def test_braced_struct_constructor_assignment_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    "source, pattern",
+    [
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            void invalidUnknownField() {
+                let badValue = ScalarBox { missing: 1.0 };
+            }
+            """,
+            r"unknown field ScalarBox\.missing.*declaration badValue"
+            r".*expected one of: value",
+        ),
+        (
+            """
+            struct ScalarBox {
+                float value;
+            };
+            void invalidExtraPositional() {
+                let badValue = ScalarBox { 1.0, 2.0 };
+            }
+            """,
+            r"too many positional fields.*declaration badValue" r".*field 2.*ScalarBox",
+        ),
+        (
+            """
+            struct PairBox {
+                float value;
+                float alt;
+            };
+            void invalidDuplicateField() {
+                let badValue = PairBox { 1.0, value: 2.0 };
+            }
+            """,
+            r"duplicate field PairBox\.value.*declaration badValue",
+        ),
+    ],
+)
+def test_braced_struct_constructor_field_diagnostics(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _constructor_helper_match_and_ternary_source():
     return """
     vec2 makeUv() {
@@ -14510,7 +19491,7 @@ def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen():
         generate_code(ast)
 
 
-def test_match_guarded_arm_is_rejected_for_mojo_codegen():
+def test_match_guarded_literal_arm_lowers_for_mojo_codegen():
     code = """
     shader main {
         compute {
@@ -14533,8 +19514,12 @@ def test_match_guarded_arm_is_rejected_for_mojo_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
 
-    with pytest.raises(ValueError, match="Unsupported match arm for Mojo"):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+
+    assert "if (mode == 0) and ((mode > 0)):" in generated_code
+    assert "value = 1" in generated_code
+    assert "else:\n        value = 2" in generated_code
+    assert "Unsupported match arm" not in generated_code
 
 
 def test_mojo_imports():

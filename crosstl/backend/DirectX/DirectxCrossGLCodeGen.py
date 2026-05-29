@@ -197,6 +197,12 @@ class HLSLToCrossGLConverter:
             "GatherCmp": "textureGatherCompare",
             "GetDimensions": "texture_dimensions",
         }
+        self.feedback_method_map = {
+            "WriteSamplerFeedback": "write_sampler_feedback",
+            "WriteSamplerFeedbackBias": "write_sampler_feedback_bias",
+            "WriteSamplerFeedbackGrad": "write_sampler_feedback_grad",
+            "WriteSamplerFeedbackLevel": "write_sampler_feedback_level",
+        }
         self.texture_gather_component_map = {
             "GatherRed": "0",
             "GatherGreen": "1",
@@ -220,6 +226,8 @@ class HLSLToCrossGLConverter:
             "Store4": "buffer_store4",
             "Append": "buffer_append",
             "Consume": "buffer_consume",
+            "IncrementCounter": "buffer_increment_counter",
+            "DecrementCounter": "buffer_decrement_counter",
             "GetDimensions": "buffer_dimensions",
         }
         self.semantic_map = {
@@ -369,6 +377,27 @@ class HLSLToCrossGLConverter:
                 descriptor["drop_trailing_args"] = len(parameters)
                 descriptor["dropped_parameters"] = list(parameters)
             return descriptor
+
+        if member in self.feedback_method_map:
+            resource_base = self.raw_type_base(resource_type)
+            if resource_base.startswith("FeedbackTexture"):
+                return {
+                    "member": member,
+                    "function": self.feedback_method_map[member],
+                    "texture_function": self.feedback_method_map[member],
+                    "buffer_function": None,
+                    "component": None,
+                    "usage": None,
+                    "buffer_when_max_args": None,
+                    "resource": "feedback_texture",
+                    "resource_type": resource_type,
+                    "operation": {
+                        "WriteSamplerFeedback": "write_sampler_feedback",
+                        "WriteSamplerFeedbackBias": "write_sampler_feedback_bias",
+                        "WriteSamplerFeedbackGrad": "write_sampler_feedback_grad",
+                        "WriteSamplerFeedbackLevel": "write_sampler_feedback_level",
+                    }[member],
+                }
 
         cube_family_resource = self.raw_type_base(resource_type) in {
             "TextureCube",
@@ -812,6 +841,8 @@ class HLSLToCrossGLConverter:
                         "Store": "store",
                         "Append": "append",
                         "Consume": "consume",
+                        "IncrementCounter": "increment_counter",
+                        "DecrementCounter": "decrement_counter",
                         "Load": "load",
                         "GetDimensions": "dimensions",
                     }.get(member)
@@ -2343,6 +2374,9 @@ class HLSLToCrossGLConverter:
             )
             if rasterizer_buffer_type:
                 return rasterizer_buffer_type
+            feedback_texture_type = self.map_feedback_texture_type(base, generic_type)
+            if feedback_texture_type:
+                return feedback_texture_type
             if base in self.structured_buffer_types:
                 return type_name
             storage_image_type = self.map_rw_texture_type(base, generic_type)
@@ -2359,6 +2393,15 @@ class HLSLToCrossGLConverter:
         if buffer_type is None:
             return None
         return f"{buffer_type}<{element_type}>"
+
+    def map_feedback_texture_type(self, base_type, feedback_type):
+        texture_type = {
+            "FeedbackTexture2D": "feedbackTexture2D",
+            "FeedbackTexture2DArray": "feedbackTexture2DArray",
+        }.get(base_type)
+        if texture_type is None:
+            return None
+        return f"{texture_type}<{feedback_type}>"
 
     def map_rw_texture_type(self, base_type, element_type):
         image_type = {

@@ -211,6 +211,12 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
         ]
     }
     docs_report = {
+        "summary": {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "linked_documents": 0,
+        },
         "documents": [
             {
                 "backend_id": "directx",
@@ -220,11 +226,18 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
                 "ok": True,
                 "candidate_terms": [{"term": "SV_Position", "count": 3}],
             }
-        ]
+        ],
     }
 
     report = module.build_report(backends, features, docs_report=docs_report)
 
+    assert report["summary"]["docs_probe"] == {
+        "provided": True,
+        "total": 1,
+        "ok": 1,
+        "failed": 0,
+        "linked_documents": 0,
+    }
     assert any(
         issue["kind"] == "documented_candidate_not_detected"
         and issue["feature"] == "SV_Position"
@@ -275,3 +288,29 @@ def test_build_report_skips_documented_candidates_mapped_to_existing_features():
     assert not any(
         issue["feature"] == "ByteAddressBuffer" for issue in report["issues"]
     )
+
+
+def test_build_report_records_missing_docs_probe_health():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+
+    report = module.build_report(backends, features)
+
+    assert report["summary"]["docs_probe"] == {
+        "provided": False,
+        "total": 0,
+        "ok": 0,
+        "failed": 0,
+        "linked_documents": 0,
+    }

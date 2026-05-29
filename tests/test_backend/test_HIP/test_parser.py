@@ -119,6 +119,30 @@ class TestHipParser:
         assert right_value.builtin_name == "warpSize"
         assert right_value.component is None
 
+    def test_hip_device_property_member_names_can_match_builtin_tokens(self):
+        """Test HIP property names still parse after member-access operators."""
+        code = """
+        void host(hipDeviceProp_t* props_ptr) {
+            hipDeviceProp_t props;
+            int warp = props.warpSize;
+            int pointer_warp = props_ptr->warpSize;
+        }
+        """
+        ast = self.parse_code(code)
+
+        body = ast.statements[0].body
+        warp_value = body[1].value
+        pointer_warp_value = body[2].value
+
+        assert isinstance(warp_value, MemberAccessNode)
+        assert warp_value.object == "props"
+        assert warp_value.member == "warpSize"
+        assert not warp_value.is_pointer
+        assert isinstance(pointer_warp_value, MemberAccessNode)
+        assert pointer_warp_value.object == "props_ptr"
+        assert pointer_warp_value.member == "warpSize"
+        assert pointer_warp_value.is_pointer
+
     def test_fixed_arrays_and_initializer_lists_parsing(self):
         """Test fixed arrays and brace initializer lists"""
         code = """
@@ -1339,6 +1363,64 @@ class TestHipParser:
         assert "__device__" in ast.statements[5].qualifiers
         assert ast.statements[6].name == "bounded"
         assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
+
+    def test_hip_opaque_and_declared_type_pointer_declarations_parsing(self):
+        """Test HIP handle and declared struct pointer declarations parse."""
+        code = """
+        struct Pair {
+            float x;
+        };
+
+        hipGraph_t* getGraph(hipGraph_t* graph) {
+            return graph;
+        }
+
+        Pair* choosePair(Pair* pair) {
+            return pair;
+        }
+
+        void host() {
+            hipGraph_t* graphPtr;
+            hipGraphExec_t *execPtr = nullptr;
+            Pair* pairPtr = choosePair(nullptr);
+            const hipStream_t* streams = nullptr;
+            graphPtr = getGraph(graphPtr);
+        }
+
+        void expressionHost() {
+            foo * bar;
+        }
+        """
+
+        ast = self.parse_code(code)
+
+        assert ast.statements[0].name == "Pair"
+        get_graph = ast.statements[1]
+        assert get_graph.return_type == "hipGraph_t *"
+        assert get_graph.params == [{"type": "hipGraph_t *", "name": "graph"}]
+
+        choose_pair = ast.statements[2]
+        assert choose_pair.return_type == "Pair *"
+        assert choose_pair.params == [{"type": "Pair *", "name": "pair"}]
+
+        host_body = ast.statements[3].body
+        assert [stmt.vtype for stmt in host_body[:4]] == [
+            "hipGraph_t *",
+            "hipGraphExec_t *",
+            "Pair *",
+            "const hipStream_t *",
+        ]
+        assert host_body[0].name == "graphPtr"
+        assert host_body[1].value == "nullptr"
+        assert host_body[2].value.name == "choosePair"
+        assert host_body[3].value == "nullptr"
+        assert isinstance(host_body[4], AssignmentNode)
+
+        expression = ast.statements[4].body[0]
+        assert isinstance(expression, BinaryOpNode)
+        assert expression.left == "foo"
+        assert expression.op == "*"
+        assert expression.right == "bar"
 
     def test_template_prefixed_kernel_parsing(self):
         """Test C++ template-prefixed HIP kernels"""

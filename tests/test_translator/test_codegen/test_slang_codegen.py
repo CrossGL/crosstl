@@ -2442,6 +2442,188 @@ def test_user_defined_workgroup_barrier_is_not_lowered_to_group_sync():
     assert "GroupMemoryBarrierWithGroupSync();" not in generated_code
 
 
+def test_synchronization_intrinsics_lower_to_slang_barriers():
+    code = """
+    shader SlangSynchronizationBuiltins {
+        compute {
+            void main() {
+                barrier();
+                workgroupBarrier();
+                groupMemoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                deviceMemoryBarrier();
+                memoryBarrierImage();
+                memoryBarrier();
+                allMemoryBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
+    assert generated_code.count("GroupMemoryBarrier();") == 2
+    assert generated_code.count("DeviceMemoryBarrier();") == 3
+    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert "barrier();" not in generated_code
+    assert "workgroupBarrier();" not in generated_code
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+    assert "memoryBarrier();" not in generated_code
+    assert "allMemoryBarrier();" not in generated_code
+
+
+def test_user_defined_synchronization_names_are_not_lowered_to_slang_barriers():
+    code = """
+    shader UserDefinedSlangSynchronization {
+        compute {
+            void barrier() {
+                return;
+            }
+
+            void memoryBarrier() {
+                return;
+            }
+
+            void main() {
+                barrier();
+                memoryBarrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void barrier()" in generated_code
+    assert "void memoryBarrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "memoryBarrier();" in generated_code
+    assert "GroupMemoryBarrier" not in generated_code
+    assert "DeviceMemoryBarrier" not in generated_code
+    assert "AllMemoryBarrier" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "builtin_name",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "deviceMemoryBarrier",
+        "memoryBarrierImage",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_synchronization_intrinsics_reject_arguments(builtin_name):
+    code = f"""
+    shader InvalidSlangSynchronization {{
+        compute {{
+            void main() {{
+                {builtin_name}(1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Slang synchronization builtin '{builtin_name}' requires "
+            r"0 argument\(s\), got 1"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    "builtin_name",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "deviceMemoryBarrier",
+        "memoryBarrierImage",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_synchronization_intrinsics_reject_value_contexts(builtin_name):
+    code = f"""
+    shader InvalidSlangSynchronizationValue {{
+        compute {{
+            void main() {{
+                int value = {builtin_name}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Slang synchronization builtin '{builtin_name}' is "
+            r"statement-only and cannot be used as a value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_synchronization_intrinsics_reject_condition_contexts():
+    code = """
+    shader InvalidSlangSynchronizationCondition {
+        compute {
+            void main() {
+                if (memoryBarrier()) {
+                    return;
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Slang synchronization builtin 'memoryBarrier' is "
+            "statement-only and cannot be used as a value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_user_defined_synchronization_names_can_return_values():
+    code = """
+    shader UserDefinedSlangSynchronizationValue {
+        compute {
+            int barrier() {
+                return 7;
+            }
+
+            void main() {
+                int value = barrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int barrier()" in generated_code
+    assert "int value = barrier();" in generated_code
+    assert "GroupMemoryBarrier" not in generated_code
+
+
 def test_threadgroup_memory_qualifiers_emit_slang_groupshared():
     code = """
     shader SharedMemoryQualifiers {
@@ -2490,6 +2672,7 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
                 bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
                 bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
                 uvec4 ballot = WaveActiveBallot(anyLane);
+                uvec4 comparisonBallot = WaveActiveBallot(lane != 0u);
                 uint broadcast = WaveReadLaneAt(prefixSum, 0u);
                 uint firstValue = WaveReadLaneFirst(broadcast);
                 uint quadX = QuadReadAcrossX(firstValue);
@@ -2524,6 +2707,7 @@ def test_wave_intrinsics_lower_to_native_slang_calls():
     assert "bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);" in generated_code
     assert "bool allLane = WaveActiveAllTrue(prefixProduct > 0u);" in generated_code
     assert "uint4 ballot = WaveActiveBallot(anyLane);" in generated_code
+    assert "uint4 comparisonBallot = WaveActiveBallot(lane != 0u);" in generated_code
     assert "uint broadcast = WaveReadLaneAt(prefixSum, 0u);" in generated_code
     assert "uint firstValue = WaveReadLaneFirst(broadcast);" in generated_code
     assert "uint quadX = QuadReadAcrossX(firstValue);" in generated_code
@@ -2607,6 +2791,212 @@ def test_wave_intrinsic_invalid_arities_emit_slang_diagnostics():
         "uint quad = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
         "expects 2 arguments, got 1 */ 0;" in generated_code
     )
+    assert "WaveOpNode" not in generated_code
+
+
+def test_wave_vote_intrinsics_validate_predicate_types():
+    code = """
+    shader InvalidSlangWaveVotePredicates {
+        compute {
+            void main() {
+                uint value = 1u;
+                bvec2 vectorMask = bvec2(true, false);
+                uvec2 lanes = uvec2(value, value);
+                bool badAnyValue = WaveActiveAnyTrue(value);
+                bool badAllVector = WaveActiveAllTrue(vectorMask);
+                uvec4 badBallotVectorComparison =
+                    WaveActiveBallot(lanes == uvec2(1u, 2u));
+                uvec4 badBallotNumeric = WaveActiveBallot(WaveActiveSum(value));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "bool badAnyValue = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAnyTrue predicate must be scalar bool, got uint */ false;"
+        in generated_code
+    )
+    assert (
+        "bool badAllVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ false;"
+        in generated_code
+    )
+    assert (
+        "uint4 badBallotVectorComparison = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot predicate must be scalar bool, got bool2 */ uint4(0);"
+        in generated_code
+    )
+    assert (
+        "uint4 badBallotNumeric = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot predicate must be scalar bool, got uint */ uint4(0);"
+        in generated_code
+    )
+    assert "WaveActiveAnyTrue(value)" not in generated_code
+    assert "WaveActiveAllTrue(vectorMask)" not in generated_code
+    assert "WaveActiveBallot(lanes == uint2(1u, 2u))" not in generated_code
+    assert "WaveActiveBallot(WaveActiveSum(value))" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
+def test_wave_intrinsic_invalid_argument_types_emit_slang_diagnostics():
+    code = """
+    shader InvalidSlangWaveArgumentTypes {
+        compute {
+            void main() {
+                uint value = 1u;
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
+                uint badQuadLane = QuadReadLaneAt(value, false);
+                uint badPartition = WaveMultiPrefixSum(value, vec3(1.0, 0.0, 0.0));
+                uint badPartitionCall = WaveMultiPrefixSum(value, WaveActiveSum(value));
+                uint badBitValue = WaveMultiPrefixBitAnd(false, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "uint badLane = /* unsupported Slang wave intrinsic: WaveReadLaneAt "
+        "lane index must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert (
+        "uint badQuadLane = /* unsupported Slang wave intrinsic: QuadReadLaneAt "
+        "lane index must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "uint badPartition = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixSum partition mask must be uint4, got float3 */ 0;"
+        in generated_code
+    )
+    assert (
+        "uint badPartitionCall = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixSum partition mask must be uint4, got uint */ 0;"
+        in generated_code
+    )
+    assert (
+        "uint badBitValue = /* unsupported Slang wave intrinsic: "
+        "WaveMultiPrefixBitAnd value must be scalar or vector int or uint, "
+        "got bool */ 0;" in generated_code
+    )
+    assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
+    assert "QuadReadLaneAt(value, false)" not in generated_code
+    assert "WaveMultiPrefixSum(value, float3(1.0, 0.0, 0.0))" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
+def test_wave_intrinsic_diagnostics_use_vector_target_fallbacks():
+    code = """
+    shader InvalidSlangWaveVectorFallbacks {
+        compute {
+            void main() {
+                vec2 badBitVector = WaveActiveBitAnd(vec2(1.0, 2.0));
+                bvec2 badVoteVector = WaveActiveAllTrue(bvec2(true, false));
+                uvec2 badMissingVector = WaveActiveSum();
+                vec4 badBallotShape = WaveActiveBallot();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float2 badBitVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBitAnd value must be scalar or vector int or uint, "
+        "got float2 */ float2(0.0);" in generated_code
+    )
+    assert (
+        "bool2 badVoteVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ "
+        "bool2(false);" in generated_code
+    )
+    assert (
+        "uint2 badMissingVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum expects 1 arguments, got 0 */ uint2(0u);" in generated_code
+    )
+    assert (
+        "float4 badBallotShape = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot expects 1 arguments, got 0 */ float4(0.0);" in generated_code
+    )
+    assert "*/ 0;" not in generated_code
+    assert "*/ false;" not in generated_code
+    assert "WaveActiveBitAnd(float2(1.0, 2.0))" not in generated_code
+    assert "WaveActiveAllTrue(bool2(true, false))" not in generated_code
+    assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveBallot()" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
+def test_wave_intrinsics_validate_target_result_types():
+    code = """
+    shader InvalidSlangWaveTargetTypes {
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec2 value) {
+            }
+
+            void main() {
+                vec2 values = vec2(1.0, 2.0);
+                uvec3 lanes = uvec3(1u, 2u, 3u);
+                bool predicate = true;
+                vec2 validVector = WaveActiveSum(values);
+                uint validLane = WaveGetLaneIndex();
+                vec2 scalarToVector = WaveActiveSum(1.0);
+                float scalarFromBallot = WaveActiveBallot(predicate);
+                bool boolFromLane = WaveGetLaneIndex();
+                uvec2 widthMismatch = WaveActiveSum(lanes);
+                acceptVector(WaveReadLaneAt(1.0, 0u));
+                acceptFloat(WaveActiveBallot(predicate));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 validVector = WaveActiveSum(values);" in generated_code
+    assert "uint validLane = WaveGetLaneIndex();" in generated_code
+    assert (
+        "float2 scalarToVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum returns float but target expects float2 */ float2(0.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarFromBallot = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot returns uint4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "bool boolFromLane = /* unsupported Slang wave intrinsic: "
+        "WaveGetLaneIndex returns uint but target expects bool */ false;"
+        in generated_code
+    )
+    assert (
+        "uint2 widthMismatch = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum returns uint3 but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang wave intrinsic: WaveReadLaneAt "
+        "returns float but target expects float2 */ float2(0.0));" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang wave intrinsic: WaveActiveBallot "
+        "returns uint4 but target expects float */ 0);" in generated_code
+    )
+    assert "float2 scalarToVector = WaveActiveSum(1.0);" not in generated_code
+    assert "float scalarFromBallot = WaveActiveBallot(predicate);" not in generated_code
+    assert "bool boolFromLane = WaveGetLaneIndex();" not in generated_code
+    assert "uint2 widthMismatch = WaveActiveSum(lanes);" not in generated_code
+    assert "acceptVector(WaveReadLaneAt(1.0, 0u));" not in generated_code
+    assert "acceptFloat(WaveActiveBallot(predicate));" not in generated_code
     assert "WaveOpNode" not in generated_code
 
 
@@ -2868,6 +3258,67 @@ def test_mesh_and_task_intrinsics_lower_to_native_slang_calls():
     assert "SetMeshOutputCounts(3, 1);" in generated_code
     assert "MeshOpNode" not in generated_code
     assert "unsupported Slang mesh intrinsic" not in generated_code
+
+
+def test_mesh_intrinsics_validate_value_contexts():
+    dispatch_code = """
+    shader InvalidSlangDispatchMeshValues {
+        task {
+            void acceptVector(vec3 value) {
+                return;
+            }
+
+            vec3 dispatchReturn() {
+                return DispatchMesh(1, 2, 3);
+            }
+
+            void main() {
+                vec3 dispatchVector = DispatchMesh(1, 2, 3);
+                acceptVector(DispatchMesh(1, 2, 3));
+            }
+        }
+    }
+    """
+
+    dispatch_generated = generate_code(parse_code(tokenize_code(dispatch_code)))
+
+    assert (
+        "float3 dispatchReturn()\n{\n"
+        "    return /* unsupported Slang mesh intrinsic: DispatchMesh returns void "
+        "but target expects float3 */ float3(0.0);\n}" in dispatch_generated
+    )
+    assert (
+        "float3 dispatchVector = /* unsupported Slang mesh intrinsic: DispatchMesh "
+        "returns void but target expects float3 */ float3(0.0);" in dispatch_generated
+    )
+    assert (
+        "acceptVector(/* unsupported Slang mesh intrinsic: DispatchMesh returns void "
+        "but target expects float3 */ float3(0.0));" in dispatch_generated
+    )
+    assert "return DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "float3 dispatchVector = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "acceptVector(DispatchMesh(1, 2, 3));" not in dispatch_generated
+
+    counts_code = """
+    shader InvalidSlangSetMeshOutputCountsValues {
+        mesh {
+            void main() @outputtopology(triangle) {
+                bvec2 countsVector = SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    counts_generated = generate_code(parse_code(tokenize_code(counts_code)))
+
+    assert (
+        "bool2 countsVector = /* unsupported Slang mesh intrinsic: "
+        "SetMeshOutputCounts returns void but target expects bool2 */ bool2(false);"
+        in counts_generated
+    )
+    assert "bool2 countsVector = SetMeshOutputCounts(3, 1);" not in counts_generated
+    assert "MeshOpNode" not in dispatch_generated
+    assert "MeshOpNode" not in counts_generated
 
 
 def test_mesh_payload_parameter_lowers_to_native_slang_payload_qualifier():
@@ -3416,6 +3867,187 @@ def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter(
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_dispatch_mesh_payload_argument_accepts_array_element_lvalue():
+    code = """
+    shader SlangDispatchMeshPayloadArrayLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payloads[2];
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                uint slot = 1u;
+                payloads[slot].meshlet = 7u;
+                DispatchMesh(1, 1, 1, payloads[slot]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "groupshared MeshPayload payloads[2];" in generated_code
+    assert "DispatchMesh(1, 1, 1, payloads[slot]);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
+def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
+    code = """
+    shader SlangDispatchMeshPayloadHelperLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payloads[2];
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                uint slot = 1u;
+                payloads[slot].meshlet = 7u;
+                launchMesh(payloads[slot]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void launchMesh(inout MeshPayload payload)" in generated_code
+    assert "DispatchMesh(1, 1, 1, payload);" in generated_code
+    assert "launchMesh(payloads[slot]);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "call_source", "message"),
+    [
+        (
+            "",
+            "launchMesh(makePayload());",
+            "launchMesh payload argument must be an lvalue, got MeshPayload",
+        ),
+        (
+            "OtherPayload otherPayload;",
+            "launchMesh(otherPayload);",
+            (
+                "launchMesh payload argument type OtherPayload "
+                "must match parameter type MeshPayload"
+            ),
+        ),
+    ],
+)
+def test_dispatch_mesh_payload_helper_rejects_invalid_payload_arguments(
+    setup_source, call_source, message
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadHelper {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+        struct OtherPayload {{
+            uint meshlet;
+        }};
+
+        MeshPayload makePayload() {{
+            MeshPayload payload;
+            payload.meshlet = 7u;
+            return payload;
+        }}
+
+        task {{
+            void launchMesh(inout MeshPayload payload) {{
+                DispatchMesh(1, 1, 1, payload);
+            }}
+
+            void main() @numthreads(1, 1, 1) {{
+                {setup_source}
+                {call_source}
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    "payload_expression",
+    [
+        "MeshPayload(7u)",
+        "makePayload()",
+    ],
+)
+def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions(
+    payload_expression,
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadLvalue {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+
+        MeshPayload makePayload() {{
+            MeshPayload payload;
+            payload.meshlet = 7u;
+            return payload;
+        }}
+
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                DispatchMesh(1, 1, 1, {payload_expression});
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="DispatchMesh payload argument must be an lvalue, got MeshPayload",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     code = """
     shader InvalidSlangMeshIntrinsics {
@@ -3441,6 +4073,83 @@ def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
     assert "MeshOpNode" not in generated_code
 
 
+def test_set_mesh_output_counts_validates_count_argument_types():
+    code = """
+    shader InvalidSlangMeshOutputCountTypes {
+        mesh {
+            void main() @outputtopology(triangle) {
+                uint vertexCount = 3u;
+                bool useMeshlet = true;
+                vec2 primitiveCounts = vec2(1.0, 2.0);
+                SetMeshOutputCounts(vertexCount, 1u);
+                SetMeshOutputCounts(useMeshlet, 1u);
+                SetMeshOutputCounts(3u, primitiveCounts);
+                SetMeshOutputCounts(1.5, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SetMeshOutputCounts(vertexCount, 1u);" in generated_code
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
+        "must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts primitive count "
+        "must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: SetMeshOutputCounts vertex count "
+        "must be scalar int or uint, got float */ 0;" in generated_code
+    )
+    assert "SetMeshOutputCounts(useMeshlet, 1u)" not in generated_code
+    assert "SetMeshOutputCounts(3u, primitiveCounts)" not in generated_code
+    assert "SetMeshOutputCounts(1.5, 1u)" not in generated_code
+    assert "MeshOpNode" not in generated_code
+
+
+def test_dispatch_mesh_validates_thread_count_argument_types():
+    code = """
+    shader InvalidSlangDispatchMeshCountTypes {
+        task {
+            void main() {
+                uint dispatchX = 2u;
+                bool enabled = true;
+                float yCount = 1.5;
+                vec2 zCounts = vec2(1.0, 2.0);
+                DispatchMesh(dispatchX, 1u, 1u);
+                DispatchMesh(enabled, 1u, 1u);
+                DispatchMesh(1u, yCount, 1u);
+                DispatchMesh(1u, 1u, zCounts);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "DispatchMesh(dispatchX, 1u, 1u);" in generated_code
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh x count "
+        "must be scalar int or uint, got bool */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh y count "
+        "must be scalar int or uint, got float */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang mesh intrinsic: DispatchMesh z count "
+        "must be scalar int or uint, got float2 */ 0;" in generated_code
+    )
+    assert "DispatchMesh(enabled, 1u, 1u)" not in generated_code
+    assert "DispatchMesh(1u, yCount, 1u)" not in generated_code
+    assert "DispatchMesh(1u, 1u, zCounts)" not in generated_code
+    assert "MeshOpNode" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [
@@ -3457,6 +4166,89 @@ def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics():
 def test_mesh_intrinsics_reject_invalid_slang_stages(stage_source, message):
     code = f"""
     shader InvalidSlangMeshIntrinsicStage {{
+        {stage_source}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_task_stage_helper_can_dispatch_mesh():
+    code = """
+    shader SlangTaskHelperDispatchMesh {
+        task {
+            void launchMesh() {
+                DispatchMesh(1, 1, 1);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                launchMesh();
+            }
+        }
+
+        mesh {
+            void main(
+                @vertices out vec4 verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void launchMesh()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "launchMesh();" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            """
+            compute {
+                void launchMesh() {
+                    DispatchMesh(1, 1, 1);
+                }
+
+                void main() {
+                    launchMesh();
+                }
+            }
+            """,
+            "compute stage cannot call DispatchMesh",
+        ),
+        (
+            """
+            mesh {
+                void launchMesh() {
+                    DispatchMesh(1, 1, 1);
+                }
+
+                void main(
+                    @vertices out vec4 verts[3],
+                    @indices out uvec3 tris[1]
+                ) @outputtopology(triangle) {
+                    SetMeshOutputCounts(3, 1);
+                    launchMesh();
+                    verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+            """,
+            "mesh stage cannot call DispatchMesh",
+        ),
+    ],
+)
+def test_mesh_intrinsics_reject_invalid_helper_stage_contexts(stage_source, message):
+    code = f"""
+    shader InvalidSlangHelperDispatchMeshStage {{
         {stage_source}
     }}
     """
@@ -3945,6 +4737,193 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     assert "accelerationStructureEXT" not in generated_code
 
 
+def test_slang_ray_tracing_intrinsics_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayIntrinsicTargets {
+        accelerationStructureEXT scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        bool acceptBool(bool value) {
+            return value;
+        }
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        float reportAsFloat(HitAttributes attributes) {
+            return ReportHit(6.0, 5, attributes);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData callableData;
+                float traced = TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                float callableValue = CallShader(1, callableData);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool take = true;
+                bool validReport = ReportHit(1.0, 0, attributes);
+                acceptBool(ReportHit(2.0, 1, attributes));
+                float reportScalar = ReportHit(3.0, 2, attributes);
+                bvec2 reportVector = ReportHit(4.0, 3, attributes);
+                acceptFloat(ReportHit(5.0, 4, attributes));
+                float reportReturn = reportAsFloat(attributes);
+                float reportTernary = take ? ReportHit(7.0, 6, attributes) : 1.0;
+                float reportArray[2] = {ReportHit(8.0, 7, attributes), 1.0};
+            }
+        }
+
+        ray_any_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) {
+                bool ignoredValue = IgnoreHit();
+                vec2 acceptedVector = AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) { }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool validReport = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "acceptBool(ReportHit(2.0, 1, attributes));" in generated_code
+    assert (
+        "float traced = /* unsupported Slang ray tracing intrinsic: TraceRay "
+        "returns void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float callableValue = /* unsupported Slang ray tracing intrinsic: "
+        "CallShader returns void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float reportScalar = /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "bool2 reportVector = /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects bool2 */ bool2(false);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang ray tracing intrinsic: ReportHit "
+        "returns bool but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang ray tracing intrinsic: ReportHit returns bool "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert "float reportReturn = reportAsFloat(attributes);" in generated_code
+    assert (
+        "float reportTernary = (take ? /* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0 : 1.0);" in generated_code
+    )
+    assert (
+        "float reportArray[2] = {/* unsupported Slang ray tracing intrinsic: "
+        "ReportHit returns bool but target expects float */ 0, 1.0};" in generated_code
+    )
+    assert (
+        "bool ignoredValue = /* unsupported Slang ray tracing intrinsic: "
+        "IgnoreHit returns void but target expects bool */ false;" in generated_code
+    )
+    assert (
+        "float2 acceptedVector = /* unsupported Slang ray tracing intrinsic: "
+        "AcceptHitAndEndSearch returns void but target expects float2 */ "
+        "float2(0.0);" in generated_code
+    )
+    assert "float traced = TraceRay(" not in generated_code
+    assert "float callableValue = CallShader(" not in generated_code
+    assert "float reportScalar = ReportHit(" not in generated_code
+    assert "bool2 reportVector = ReportHit(" not in generated_code
+    assert "bool ignoredValue = IgnoreHit();" not in generated_code
+    assert "float2 acceptedVector = AcceptHitAndEndSearch();" not in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
+def test_user_defined_ray_tracing_intrinsic_names_are_not_validated_as_native_calls():
+    code = """
+    shader SlangUserDefinedRayIntrinsicNames {
+        bool TraceRay(uint value) {
+            return value != 0u;
+        }
+
+        float CallShader(float value) {
+            return value + 1.0;
+        }
+
+        float ReportHit(float distance) {
+            return distance * 2.0;
+        }
+
+        bool IgnoreHit(uint value) {
+            return value == 0u;
+        }
+
+        vec2 AcceptHitAndEndSearch(vec2 value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                bool traced = TraceRay(1u);
+                float callableValue = CallShader(2.0);
+                float reported = ReportHit(3.0);
+                bool ignored = IgnoreHit(0u);
+                vec2 accepted = AcceptHitAndEndSearch(vec2(1.0, 2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool TraceRay(uint value)" in generated_code
+    assert "float CallShader(float value)" in generated_code
+    assert "float ReportHit(float distance)" in generated_code
+    assert "bool IgnoreHit(uint value)" in generated_code
+    assert "float2 AcceptHitAndEndSearch(float2 value)" in generated_code
+    assert "bool traced = TraceRay(1u);" in generated_code
+    assert "float callableValue = CallShader(2.0);" in generated_code
+    assert "float reported = ReportHit(3.0);" in generated_code
+    assert "bool ignored = IgnoreHit(0u);" in generated_code
+    assert (
+        "float2 accepted = AcceptHitAndEndSearch(float2(1.0, 2.0));" in generated_code
+    )
+    assert "unsupported Slang ray tracing intrinsic" not in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_report_hit_helper_return_attributes_emit_native_calls():
     code = """
     shader SlangReportHitHelperReturnAttributes {
@@ -4387,6 +5366,226 @@ def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
     assert "RayTracingOpNode" not in generated_code
 
 
+def test_slang_ray_tracing_helper_address_of_pointer_relays_emit_native_calls():
+    code = """
+    shader SlangRayAddressOfPointerRelays {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+        };
+
+        struct HitAttributeHolder {
+            HitAttributes primary;
+        };
+
+        void traceLeaf(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            inout RayPayload payload
+        ) {
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, payload);
+        }
+
+        void tracePointerRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder* rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays->primary);
+        }
+
+        void callableLeaf(uint shaderIndex, inout CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        void callablePointerRelay(
+            uint shaderIndex,
+            CallableDataHolder* callables
+        ) {
+            callableLeaf(shaderIndex, callables->primary);
+        }
+
+        bool reportPointerRelay(HitAttributeHolder* hits) {
+            return ReportHit(1.0, 0, hits->primary);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                CallableDataHolder callables;
+                tracePointerRelay(scene, ray, &rays);
+                callablePointerRelay(2, &callables);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributeHolder hits;
+                bool accepted = reportPointerRelay(&hits);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(RayPayload payload @ payload, HitAttributes attributes @ hit_attribute) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "tracePointerRelay(scene, ray, &rays);" in generated_code
+    assert "callablePointerRelay(2, &callables);" in generated_code
+    assert "bool accepted = reportPointerRelay(&hits);" in generated_code
+    assert "traceLeaf(accelerationStructure, ray, rays->primary);" in generated_code
+    assert "callableLeaf(shaderIndex, callables->primary);" in generated_code
+    assert "return ReportHit(1.0, 0, hits->primary);" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
+def test_slang_nested_ray_interface_relay_helpers_preserve_lvalues():
+    code = """
+    shader SlangRayNestedRelayHelpers {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct RayPayloadHolder {
+            RayPayload primary;
+            RayPayload payloads[2];
+        };
+
+        struct CallableDataHolder {
+            CallableData primary;
+            CallableData items[2];
+        };
+
+        void traceLeaf(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            inout RayPayload payload
+        ) {
+            TraceRay(accelerationStructure, 0, 0xFF, 0, 1, 0, ray, payload);
+        }
+
+        void traceReferenceRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder& rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays.payloads[1]);
+        }
+
+        void tracePointerRelay(
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray,
+            RayPayloadHolder* rays
+        ) {
+            traceLeaf(accelerationStructure, ray, rays->primary);
+        }
+
+        void callableLeaf(uint shaderIndex, inout CallableData data) {
+            CallShader(shaderIndex, data);
+        }
+
+        void callableReferenceRelay(uint shaderIndex, CallableData& data) {
+            callableLeaf(shaderIndex, data);
+        }
+
+        void callablePointerRelay(
+            uint shaderIndex,
+            CallableDataHolder* callables
+        ) {
+            callableLeaf(shaderIndex + 1u, callables->items[0]);
+        }
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayloadHolder rays;
+                RayPayloadHolder& rayRef = rays;
+                RayPayloadHolder* rayPtr = &rays;
+                CallableData data;
+                CallableData& dataRef = data;
+                CallableDataHolder callables;
+                CallableDataHolder* callablePtr = &callables;
+                traceReferenceRelay(scene, ray, rayRef);
+                tracePointerRelay(scene, ray, rayPtr);
+                callableReferenceRelay(0, dataRef);
+                callablePointerRelay(1, callablePtr);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void traceReferenceRelay("
+        "RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, RayPayloadHolder& rays)" in generated_code
+    )
+    assert "traceLeaf(accelerationStructure, ray, rays.payloads[1]);" in generated_code
+    assert (
+        "void tracePointerRelay("
+        "RaytracingAccelerationStructure accelerationStructure, "
+        "RayDesc ray, RayPayloadHolder* rays)" in generated_code
+    )
+    assert "traceLeaf(accelerationStructure, ray, rays->primary);" in generated_code
+    assert (
+        "void callableReferenceRelay(uint shaderIndex, CallableData& data)"
+        in generated_code
+    )
+    assert "callableLeaf(shaderIndex, data);" in generated_code
+    assert (
+        "void callablePointerRelay(uint shaderIndex, CallableDataHolder* callables)"
+        in generated_code
+    )
+    assert "callableLeaf(shaderIndex + 1u, callables->items[0]);" in generated_code
+    assert "traceReferenceRelay(scene, ray, rayRef);" in generated_code
+    assert "tracePointerRelay(scene, ray, rayPtr);" in generated_code
+    assert "callableReferenceRelay(0, dataRef);" in generated_code
+    assert "callablePointerRelay(1, callablePtr);" in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     code = """
     shader SlangRayQuery {
@@ -4432,6 +5631,208 @@ def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
     assert "rq.Abort();" in generated_code
     assert "RayQueryOpNode" not in generated_code
+
+
+def test_slang_ray_query_methods_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayQueryTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec3 value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                bool validProceed = rq.Proceed();
+                uint validStatus = rq.CommittedStatus();
+                vec3 validOrigin = rq.CandidateObjectRayOrigin();
+                float proceedFloat = rq.Proceed();
+                bool statusBool = rq.CommittedStatus();
+                vec3 rayTVector = rq.CandidateRayT();
+                float originScalar = rq.CandidateObjectRayOrigin();
+                acceptVector(rq.CandidateRayT());
+                acceptFloat(rq.CommittedObjectRayDirection());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool validProceed = rq.Proceed();" in generated_code
+    assert "uint validStatus = rq.CommittedStatus();" in generated_code
+    assert "float3 validOrigin = rq.CandidateObjectRayOrigin();" in generated_code
+    assert (
+        "float proceedFloat = /* unsupported Slang RayQuery: Proceed returns bool "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "bool statusBool = /* unsupported Slang RayQuery: CommittedStatus returns "
+        "uint but target expects bool */ false;" in generated_code
+    )
+    assert (
+        "float3 rayTVector = /* unsupported Slang RayQuery: CandidateRayT returns "
+        "float but target expects float3 */ float3(0.0);" in generated_code
+    )
+    assert (
+        "float originScalar = /* unsupported Slang RayQuery: "
+        "CandidateObjectRayOrigin returns float3 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang RayQuery: CandidateRayT returns float "
+        "but target expects float3 */ float3(0.0));" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang RayQuery: CommittedObjectRayDirection "
+        "returns float3 but target expects float */ 0);" in generated_code
+    )
+    assert "float proceedFloat = rq.Proceed();" not in generated_code
+    assert "bool statusBool = rq.CommittedStatus();" not in generated_code
+    assert "float3 rayTVector = rq.CandidateRayT();" not in generated_code
+    assert "float originScalar = rq.CandidateObjectRayOrigin();" not in generated_code
+    assert "acceptVector(rq.CandidateRayT());" not in generated_code
+    assert "acceptFloat(rq.CommittedObjectRayDirection());" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_slang_ray_query_matrix_methods_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayQueryMatrixTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptMatrix(mat4 value) {
+            }
+
+            void acceptMatrix3x4(mat3x4 value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                mat3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();
+                acceptMatrix3x4(rq.CommittedWorldToObject3x4());
+                float matrixScalar = rq.CommittedObjectToWorld3x4();
+                vec3 matrixVector = rq.CandidateWorldToObject3x4();
+                mat4 matrixWrongShape = rq.CandidateObjectToWorld3x4();
+                acceptMatrix(rq.CommittedWorldToObject3x4());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();"
+        in generated_code
+    )
+    assert "acceptMatrix3x4(rq.CommittedWorldToObject3x4());" in generated_code
+    assert (
+        "float matrixScalar = /* unsupported Slang RayQuery: "
+        "CommittedObjectToWorld3x4 returns float3x4 but target expects float */ "
+        "0;" in generated_code
+    )
+    assert (
+        "float3 matrixVector = /* unsupported Slang RayQuery: "
+        "CandidateWorldToObject3x4 returns float3x4 but target expects float3 */ "
+        "float3(0.0);" in generated_code
+    )
+    assert (
+        "float4x4 matrixWrongShape = /* unsupported Slang RayQuery: "
+        "CandidateObjectToWorld3x4 returns float3x4 but target expects float4x4 */ "
+        "float4x4(0.0);" in generated_code
+    )
+    assert (
+        "acceptMatrix(/* unsupported Slang RayQuery: CommittedWorldToObject3x4 "
+        "returns float3x4 but target expects float4x4 */ float4x4(0.0));"
+        in generated_code
+    )
+    assert "float matrixScalar = rq.CommittedObjectToWorld3x4();" not in generated_code
+    assert "float3 matrixVector = rq.CandidateWorldToObject3x4();" not in generated_code
+    assert (
+        "float4x4 matrixWrongShape = rq.CandidateObjectToWorld3x4();"
+        not in generated_code
+    )
+    assert "acceptMatrix(rq.CommittedWorldToObject3x4());" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_slang_ray_query_void_methods_validate_value_contexts():
+    code = """
+    shader InvalidSlangRayQueryVoidTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptBool(bool value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
+                float traceValue = rq.TraceRayInline(scene, 0, 0xFF, ray);
+                float commitProceduralValue = rq.CommitProceduralPrimitiveHit(1.0);
+                bool commitTriangleValue = rq.CommitNonOpaqueTriangleHit();
+                uint abortValue = rq.Abort();
+                acceptBool(rq.Abort());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated_code
+    assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
+    assert "rq.Abort();" in generated_code
+    assert (
+        "float traceValue = /* unsupported Slang RayQuery: TraceRayInline returns "
+        "void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float commitProceduralValue = /* unsupported Slang RayQuery: "
+        "CommitProceduralPrimitiveHit returns void but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "bool commitTriangleValue = /* unsupported Slang RayQuery: "
+        "CommitNonOpaqueTriangleHit returns void but target expects bool */ false;"
+        in generated_code
+    )
+    assert (
+        "uint abortValue = /* unsupported Slang RayQuery: Abort returns void "
+        "but target expects uint */ 0u;" in generated_code
+    )
+    assert (
+        "acceptBool(/* unsupported Slang RayQuery: Abort returns void but target "
+        "expects bool */ false);" in generated_code
+    )
+    assert (
+        "float traceValue = rq.TraceRayInline(scene, 0, 255, ray);"
+        not in generated_code
+    )
+    assert (
+        "float commitProceduralValue = rq.CommitProceduralPrimitiveHit(1.0);"
+        not in generated_code
+    )
+    assert "bool commitTriangleValue = rq.CommitNonOpaqueTriangleHit();" not in (
+        generated_code
+    )
+    assert "uint abortValue = rq.Abort();" not in generated_code
+    assert "acceptBool(rq.Abort());" not in generated_code
 
 
 def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
@@ -4895,6 +6296,107 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
         ),
         (
             """
+            RayPayload makePayload() {
+                RayPayload payload;
+                return payload;
+            }
+
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceReferenceRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayload& payload
+            ) {
+                traceLeaf(scene, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceReferenceRelay(scene, ray, makePayload());
+                }
+            }
+            """,
+            "traceReferenceRelay payload argument.*lvalue",
+        ),
+        (
+            """
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceReferenceRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayload& payload
+            ) {
+                traceLeaf(scene, ray, payload);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceReferenceRelay(
+                        scene,
+                        ray,
+                        RayPayload(vec3(0.0, 0.0, 0.0))
+                    );
+                }
+            }
+            """,
+            "traceReferenceRelay payload argument.*lvalue",
+        ),
+        (
+            """
+            RayPayloadHolder makeHolder() {
+                RayPayloadHolder holder;
+                return holder;
+            }
+
+            void traceLeaf(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void traceHolderRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayloadHolder rays
+            ) {
+                traceLeaf(scene, ray, rays.primary);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    traceHolderRelay(scene, ray, makeHolder());
+                }
+            }
+            """,
+            "traceHolderRelay payload argument.*lvalue",
+        ),
+        (
+            """
             void invokeCallable(uint shaderIndex, inout CallableData data) {
                 CallShader(shaderIndex, data);
             }
@@ -4946,6 +6448,55 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
             }
             """,
             "invokeCallable callable data argument.*lvalue",
+        ),
+        (
+            """
+            CallableData makeCallableData() {
+                CallableData data;
+                return data;
+            }
+
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callableReferenceRelay(
+                uint shaderIndex,
+                CallableData& data
+            ) {
+                callableLeaf(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callableReferenceRelay(0, makeCallableData());
+                }
+            }
+            """,
+            "callableReferenceRelay callable data argument.*lvalue",
+        ),
+        (
+            """
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callableReferenceRelay(
+                uint shaderIndex,
+                CallableData& data
+            ) {
+                callableLeaf(shaderIndex, data);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callableReferenceRelay(0, CallableData(1u));
+                }
+            }
+            """,
+            "callableReferenceRelay callable data argument.*lvalue",
         ),
         (
             """
@@ -5227,6 +6778,87 @@ def test_slang_ray_hit_control_helpers_validate_through_deep_calls():
                 "reportHolder hit attribute argument type OtherHitAttributeHolder\\* "
                 "must match parameter type HitAttributeHolder\\*"
             ),
+        ),
+        (
+            """
+            RayPayloadHolder makeHolder() {
+                RayPayloadHolder holder;
+                return holder;
+            }
+
+            void tracePayload(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                inout RayPayload payload
+            ) {
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+
+            void tracePointerRelay(
+                RaytracingAccelerationStructure scene,
+                RayDesc ray,
+                RayPayloadHolder* rays
+            ) {
+                tracePayload(scene, ray, rays->primary);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
+                    tracePointerRelay(scene, ray, &makeHolder());
+                }
+            }
+            """,
+            "tracePointerRelay payload argument.*address of an lvalue",
+        ),
+        (
+            """
+            CallableDataHolder makeCallableHolder() {
+                CallableDataHolder holder;
+                return holder;
+            }
+
+            void callableLeaf(uint shaderIndex, inout CallableData data) {
+                CallShader(shaderIndex, data);
+            }
+
+            void callablePointerRelay(
+                uint shaderIndex,
+                CallableDataHolder* callables
+            ) {
+                callableLeaf(shaderIndex, callables->items[0]);
+            }
+            """,
+            """
+            ray_generation {
+                void main() {
+                    callablePointerRelay(0, &makeCallableHolder());
+                }
+            }
+            """,
+            "callablePointerRelay callable data argument.*address of an lvalue",
+        ),
+        (
+            """
+            HitAttributeHolder makeHitHolder() {
+                HitAttributeHolder holder;
+                return holder;
+            }
+
+            bool reportPointerRelay(HitAttributeHolder* hits) {
+                return ReportHit(1.0, 0, hits->items[1]);
+            }
+            """,
+            """
+            ray_intersection {
+                void main() {
+                    bool accepted = reportPointerRelay(&makeHitHolder());
+                }
+            }
+            """,
+            "reportPointerRelay hit attribute argument.*address of an lvalue",
         ),
     ],
 )
@@ -7939,8 +9571,14 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec3 badUv = vec3(0.25, 0.5, 0.75);
                 vec2 ddx = vec2(0.1, 0.0);
                 vec2 ddy = vec2(0.0, 0.1);
+                ivec2 intDdx = ivec2(1, 0);
+                bvec2 boolDdy = bvec2(true, false);
                 ivec2 pixel = ivec2(2, 3);
                 ivec3 badPixel = ivec3(2, 3, 4);
+                float floatFetchLod = 1.0;
+                bool boolSampleIndex = true;
+                bool boolBias = true;
+                bool boolLod = true;
                 vec2 badLod = vec2(0.0, 1.0);
                 ivec2 badSampleIndex = ivec2(0, 1);
                 vec4 missingTexture = texture();
@@ -7970,10 +9608,14 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                     1.0
                 );
                 vec4 badBiasRank = texture(colorMap, uv, badUv);
+                vec4 boolBiasType = texture(colorMap, uv, boolBias);
                 vec4 badLodCoordRank = textureLod(colorMap, badUv, 1.0);
                 vec4 badLodRank = textureLod(colorMap, uv, badLod);
+                vec4 boolLodType = textureLod(colorMap, uv, boolLod);
                 vec4 badGradCoordRank = textureGrad(colorMap, scalarCoord, ddx, ddy);
                 vec4 badGradRank = textureGrad(colorMap, uv, badUv, ddy);
+                vec4 intGradType = textureGrad(colorMap, uv, intDdx, ddy);
+                vec4 boolGradType = textureGrad(colorMap, uv, ddx, boolDdy);
                 vec4 missingFetchLevel = texelFetch(colorMap, pixel);
                 vec4 extraFetchLevel = texelFetch(
                     colorMap,
@@ -7987,6 +9629,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec4 fetchShadow = texelFetch(shadowMap, pixel, 0);
                 vec4 fetchCube = texelFetch(cubeTex, pixel, 0);
                 vec4 badFetchCoordRank = texelFetch(colorMap, badPixel, 0);
+                vec4 floatFetchLevel = texelFetch(colorMap, pixel, floatFetchLod);
+                vec4 boolFetchSample = texelFetch(msTex, pixel, boolSampleIndex);
                 vec4 badFetchIndexRank = texelFetch(msTex, pixel, badSampleIndex);
             }
         }
@@ -8070,6 +9714,11 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texture requires a scalar bias argument */ float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolBiasType = /* unsupported Slang sampled texture: "
+        "texture bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badLodCoordRank = /* unsupported Slang sampled texture: "
         "textureLod requires a 2-component coordinate for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -8079,6 +9728,11 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "textureLod requires a scalar lod argument */ float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolLodType = /* unsupported Slang sampled texture: "
+        "textureLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badGradCoordRank = /* unsupported Slang sampled texture: "
         "textureGrad requires a 2-component coordinate for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -8086,6 +9740,16 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
     assert (
         "float4 badGradRank = /* unsupported Slang sampled texture: "
         "textureGrad requires a 2-component gradient for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 intGradType = /* unsupported Slang sampled texture: "
+        "textureGrad gradient must be scalar or vector float or double, got int2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolGradType = /* unsupported Slang sampled texture: "
+        "textureGrad gradient must be scalar or vector float or double, got bool2 */ "
         "float4(0.0);" in generated_code
     )
     assert (
@@ -8123,16 +9787,108 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
     )
     assert (
         "float4 badFetchIndexRank = /* unsupported Slang sampled texture: "
-        "texelFetch requires a scalar fetch index argument */ float4(0.0);"
-        in generated_code
+        "texelFetch fetch index argument must be scalar int or uint, got int2 */ "
+        "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 27
+    assert (
+        "float4 floatFetchLevel = /* unsupported Slang sampled texture: "
+        "texelFetch fetch index argument must be scalar int or uint, got float */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolFetchSample = /* unsupported Slang sampled texture: "
+        "texelFetch fetch index argument must be scalar int or uint, got bool */ "
+        "float4(0.0);" in generated_code
+    )
+    assert generated_code.count("unsupported Slang sampled texture") == 33
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
     assert "texelFetch(" not in generated_code
     assert "querySampler.Sample" not in generated_code
     assert "colorImage.Sample" not in generated_code
+
+
+def test_sampled_texture_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(sampler2d tex, vec2 uv) {
+                return texture(tex, uv);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 pixel = ivec2(2, 3);
+                bool take = true;
+                vec4 validTexture = texture(colorMap, uv);
+                float scalarTexture = texture(colorMap, uv);
+                ivec2 vectorLod = textureLod(colorMap, uv, 1.0);
+                acceptFloat(textureGrad(colorMap, uv, ddx, ddy));
+                float fetchedScalar = texelFetch(colorMap, pixel, 0);
+                float scalarTernary = take ? texture(colorMap, uv) : 1.0;
+                float scalarArray[2] = {textureLod(colorMap, uv, 1.0), 1.0};
+                float missingTexture = texture(colorMap);
+                float missingFetch = texelFetch(colorMap, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validTexture = colorMap.Sample(uv);" in generated_code
+    assert (
+        "float scalarTexture = /* unsupported Slang sampled texture: "
+        "texture returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorLod = /* unsupported Slang sampled texture: "
+        "textureLod returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang sampled texture: textureGrad "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float fetchedScalar = /* unsupported Slang sampled texture: "
+        "texelFetch returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang sampled texture: texture returns float4 "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang sampled texture: "
+        "texture returns float4 but target expects float */ 0 : 1.0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang sampled texture: "
+        "textureLod returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingTexture = /* unsupported Slang sampled texture: "
+        "texture requires texture and coordinate arguments */ 0;" in generated_code
+    )
+    assert (
+        "float missingFetch = /* unsupported Slang sampled texture: "
+        "texelFetch requires one lod/sample argument */ 0;" in generated_code
+    )
+    assert "float scalarTexture = colorMap.Sample(uv);" not in generated_code
+    assert "int2 vectorLod = colorMap.SampleLevel" not in generated_code
+    assert "acceptFloat(colorMap.SampleGrad" not in generated_code
+    assert "float fetchedScalar = colorMap.Load" not in generated_code
 
 
 def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices():
@@ -8247,7 +10003,8 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                 vec3 uvw,
                 vec2 ddx,
                 vec2 ddy,
-                ivec2 offset
+                ivec2 offset,
+                float bias
             ) {
                 vec4 offsetColor = textureOffset(tex, uv, offset);
                 vec4 explicitOffset = textureOffset(
@@ -8257,6 +10014,14 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                     offset
                 );
                 vec4 arrayOffset = textureOffset(layers, sampleState, uvw, offset);
+                vec4 biasOffset = textureOffset(tex, uv, offset, bias);
+                vec4 explicitBiasOffset = textureOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    offset,
+                    0.5
+                );
                 vec4 lodOffset = textureLodOffset(tex, uv, 2.0, offset);
                 vec4 explicitLodOffset = textureLodOffset(
                     tex,
@@ -8277,6 +10042,8 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                 return offsetColor
                     + explicitOffset
                     + arrayOffset
+                    + biasOffset
+                    + explicitBiasOffset
                     + lodOffset
                     + explicitLodOffset
                     + gradOffset
@@ -8298,6 +10065,10 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
     assert "float4 offsetColor = tex.Sample(uv, offset);" in generated_code
     assert "float4 explicitOffset = tex.Sample(uv, offset);" in generated_code
     assert "float4 arrayOffset = layers.Sample(uvw, offset);" in generated_code
+    assert "float4 biasOffset = tex.SampleBias(uv, bias, offset);" in generated_code
+    assert (
+        "float4 explicitBiasOffset = tex.SampleBias(uv, 0.5, offset);" in generated_code
+    )
     assert "float4 lodOffset = tex.SampleLevel(uv, 2.0, offset);" in generated_code
     assert (
         "float4 explicitLodOffset = tex.SampleLevel(uv, 3.0, offset);" in generated_code
@@ -8332,7 +10103,19 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 ivec2 offset = ivec2(1, 0);
                 ivec3 badOffset = ivec3(1, 0, 0);
+                vec2 floatOffset = vec2(1.0, 0.0);
+                bvec2 boolOffset = bvec2(true, false);
+                bool boolBias = true;
+                bool boolLod = true;
+                vec2 badBias = vec2(0.0, 1.0);
                 vec4 missingOffset = textureOffset(colorMap, uv);
+                vec4 extraOffsetBias = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    0.5,
+                    1.0
+                );
                 vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
                 vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
                 vec4 samplerOffset = textureOffset(querySampler, uv, offset);
@@ -8347,6 +10130,38 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 multisampleOffset = textureOffset(msTex, uv, offset);
                 vec4 badCoordRank = textureOffset(colorMap, scalarCoord, offset);
                 vec4 badOffsetRank = textureLodOffset(colorMap, uv, 1.0, badOffset);
+                vec4 boolLodOffsetType = textureLodOffset(
+                    colorMap,
+                    uv,
+                    boolLod,
+                    offset
+                );
+                vec4 floatOffsetType = textureOffset(colorMap, uv, floatOffset);
+                vec4 boolBiasOffsetType = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    boolBias
+                );
+                vec4 badBiasOffsetRank = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    badBias
+                );
+                vec4 boolOffsetType = textureLodOffset(
+                    colorMap,
+                    uv,
+                    1.0,
+                    boolOffset
+                );
+                vec4 floatGradOffsetType = textureGradOffset(
+                    colorMap,
+                    uv,
+                    ddx,
+                    ddx,
+                    floatOffset
+                );
                 vec4 badGradRank = textureGradOffset(
                     colorMap,
                     uv,
@@ -8365,7 +10180,13 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
 
     assert (
         "float4 missingOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires one offset argument */ float4(0.0);" in generated_code
+        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 extraOffsetBias = /* unsupported Slang texture offset: "
+        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
+        in generated_code
     )
     assert (
         "float4 missingLodOffset = /* unsupported Slang texture offset: "
@@ -8408,6 +10229,36 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolLodOffsetType = /* unsupported Slang texture offset: "
+        "textureLodOffset lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatOffsetType = /* unsupported Slang texture offset: "
+        "textureOffset offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolBiasOffsetType = /* unsupported Slang texture offset: "
+        "textureOffset bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badBiasOffsetRank = /* unsupported Slang texture offset: "
+        "textureOffset requires a scalar bias argument */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 boolOffsetType = /* unsupported Slang texture offset: "
+        "textureLodOffset offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatGradOffsetType = /* unsupported Slang texture offset: "
+        "textureGradOffset offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badGradRank = /* unsupported Slang texture offset: "
         "textureGradOffset requires a 2-component gradient for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -8419,6 +10270,88 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
     assert "colorImage.Sample" not in generated_code
     assert "shadowMap.Sample" not in generated_code
     assert "msTex.Sample" not in generated_code
+
+
+def test_texture_offset_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(
+                sampler2d tex,
+                vec2 uv,
+                ivec2 offset
+            ) {
+                return textureOffset(tex, uv, offset);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                bool take = true;
+                vec4 validOffset = textureOffset(colorMap, uv, offset);
+                float scalarOffset = textureOffset(colorMap, uv, offset);
+                ivec2 vectorLodOffset = textureLodOffset(colorMap, uv, 1.0, offset);
+                acceptFloat(textureGradOffset(colorMap, uv, ddx, ddy, offset));
+                float scalarTernary = take
+                    ? textureOffset(colorMap, uv, offset)
+                    : 1.0;
+                float scalarArray[2] = {
+                    textureLodOffset(colorMap, uv, 1.0, offset),
+                    1.0
+                };
+                float missingOffset = textureOffset(colorMap, uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validOffset = colorMap.Sample(uv, offset);" in generated_code
+    assert (
+        "float scalarOffset = /* unsupported Slang texture offset: "
+        "textureOffset returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorLodOffset = /* unsupported Slang texture offset: "
+        "textureLodOffset returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang texture offset: textureGradOffset "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang texture offset: textureOffset returns "
+        "float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang texture offset: "
+        "textureOffset returns float4 but target expects float */ 0 : 1.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang texture offset: "
+        "textureLodOffset returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingOffset = /* unsupported Slang texture offset: "
+        "textureOffset requires offset and optional bias arguments */ 0;"
+        in generated_code
+    )
+    assert "float scalarOffset = colorMap.Sample(uv, offset);" not in generated_code
+    assert "int2 vectorLodOffset = colorMap.SampleLevel" not in generated_code
+    assert "acceptFloat(colorMap.SampleGrad" not in generated_code
 
 
 def test_projected_texture_builtins_emit_slang_projected_samples():
@@ -8549,12 +10482,21 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                 vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 ivec2 offset = ivec2(1, 0);
                 ivec3 badOffset = ivec3(1, 0, 0);
+                vec2 floatOffset = vec2(1.0, 0.0);
+                bvec2 boolOffset = bvec2(true, false);
+                bool boolBias = true;
+                bool boolLod = true;
+                vec2 badBias = vec2(0.0, 1.0);
+                vec2 badLod = vec2(0.0, 1.0);
                 vec4 badCoord = textureProj(colorMap, uv);
                 vec4 samplerProjected = textureProj(querySampler, uvq);
                 vec4 imageProjected = textureProj(colorImage, uvq);
                 vec4 shadowProjected = textureProj(shadowMap, uvq);
                 vec4 multisampleProjected = textureProj(msTex, uvq);
+                vec4 badProjectedBiasRank = textureProj(colorMap, uvq, badBias);
+                vec4 boolProjectedBias = textureProj(colorMap, uvq, boolBias);
                 vec4 missingLod = textureProjLod(colorMap, uvq);
+                vec4 boolProjectedLod = textureProjLod(colorMap, uvq, boolLod);
                 vec4 missingGrad = textureProjGrad(colorMap, uvq, ddx);
                 vec4 missingOffset = textureProjGradOffset(
                     colorMap,
@@ -8563,6 +10505,29 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                     ddx
                 );
                 vec4 badProjectedOffset = textureProjOffset(colorMap, uvq, badOffset);
+                vec4 floatProjectedOffset = textureProjOffset(
+                    colorMap,
+                    uvq,
+                    floatOffset
+                );
+                vec4 boolProjectedOffsetBias = textureProjOffset(
+                    colorMap,
+                    uvq,
+                    offset,
+                    boolBias
+                );
+                vec4 boolProjectedLodOffset = textureProjLodOffset(
+                    colorMap,
+                    uvq,
+                    1.0,
+                    boolOffset
+                );
+                vec4 vectorProjectedLodOffset = textureProjLodOffset(
+                    colorMap,
+                    uvq,
+                    badLod,
+                    offset
+                );
                 vec4 badProjectedGrad = textureProjGrad(
                     colorMap,
                     uvq,
@@ -8604,8 +10569,22 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         in generated_code
     )
     assert (
+        "float4 badProjectedBiasRank = /* unsupported Slang projected texture: "
+        "textureProj requires a scalar bias argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedBias = /* unsupported Slang projected texture: "
+        "textureProj bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 missingLod = /* unsupported Slang projected texture: "
         "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedLod = /* unsupported Slang projected texture: "
+        "textureProjLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
     )
     assert (
         "float4 missingGrad = /* unsupported Slang projected texture: "
@@ -8621,6 +10600,26 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 badProjectedOffset = /* unsupported Slang projected texture: "
         "textureProjOffset requires a 2-component offset for sampler2D */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatProjectedOffset = /* unsupported Slang projected texture: "
+        "textureProjOffset offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedOffsetBias = /* unsupported Slang projected texture: "
+        "textureProjOffset bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedLodOffset = /* unsupported Slang projected texture: "
+        "textureProjLodOffset offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 vectorProjectedLodOffset = /* unsupported Slang projected texture: "
+        "textureProjLodOffset requires a scalar lod argument */ float4(0.0);"
+        in generated_code
     )
     assert (
         "float4 badProjectedGrad = /* unsupported Slang projected texture: "
@@ -8721,6 +10720,8 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                 vec3 uvLayer,
                 ivec2 offset,
                 ivec2 offsets[4],
+                ivec2 offsetSets[2][4],
+                int offsetSetIndex,
                 int component
             ) {
                 vec4 gathered = textureGather(tex, uv);
@@ -8761,6 +10762,16 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                     offsets,
                     component
                 );
+                vec4 nestedOffsetsGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetSets[0]
+                );
+                vec4 dynamicNestedOffsetsGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetSets[offsetSetIndex]
+                );
                 return gathered
                     + explicitGathered
                     + greenGather
@@ -8770,7 +10781,9 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                     + offsetsGather
                     + dynamicGather
                     + dynamicOffsetGather
-                    + dynamicOffsetsGather;
+                    + dynamicOffsetsGather
+                    + nestedOffsetsGather
+                    + dynamicNestedOffsetsGather;
             }
 
             void main() {}
@@ -8818,6 +10831,17 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
         "layers.GatherAlpha("
         "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]));" in generated_code
     )
+    assert (
+        "float4 nestedOffsetsGather = tex.Gather("
+        "uv, offsetSets[0][0], offsetSets[0][1], "
+        "offsetSets[0][2], offsetSets[0][3]);" in generated_code
+    )
+    assert (
+        "float4 dynamicNestedOffsetsGather = tex.Gather("
+        "uv, offsetSets[offsetSetIndex][0], offsetSets[offsetSetIndex][1], "
+        "offsetSets[offsetSetIndex][2], offsetSets[offsetSetIndex][3]);"
+        in generated_code
+    )
     assert "textureGather" not in generated_code
     assert ".Gather(sampleState" not in generated_code
     assert ".GatherBlue(sampleState" not in generated_code
@@ -8838,11 +10862,37 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 sampler2d tex,
                 vec2 uv,
                 ivec2 offset,
+                vec2 floatOffset,
+                bvec2 boolOffset,
                 ivec3 badOffset,
+                vec2 floatOffsetArray[4],
+                bvec2 boolOffsetArray[4],
+                uvec2 uintOffsetArray[4],
+                ivec2 offsetArray[4],
+                int offsetIndex,
                 ivec3 badOffsetArray[4]
             ) {
                 float scalarCoord = 0.25;
+                float floatComponent = 1.0;
+                bool boolComponent = true;
+                ivec2 vectorComponent = ivec2(1, 2);
                 vec4 badComponent = textureGather(tex, uv, 4);
+                vec4 floatComponentGather = textureGather(tex, uv, floatComponent);
+                vec4 boolComponentGather = textureGatherOffset(
+                    tex,
+                    uv,
+                    offset,
+                    boolComponent
+                );
+                vec4 vectorComponentGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offset,
+                    offset,
+                    offset,
+                    offset,
+                    vectorComponent
+                );
                 vec4 missingOffset = textureGatherOffset(tex, uv);
                 vec4 badOffsets = textureGatherOffsets(tex, uv, offset);
                 vec4 samplerGather = textureGather(querySampler, uv);
@@ -8851,6 +10901,40 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 vec4 multisampleGather = textureGather(msTex, uv);
                 vec4 badCoordRank = textureGather(tex, scalarCoord);
                 vec4 badOffsetRank = textureGatherOffset(tex, uv, badOffset);
+                vec4 floatOffsetGather = textureGatherOffset(tex, uv, floatOffset);
+                vec4 boolOffsetsGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    boolOffset,
+                    boolOffset,
+                    boolOffset,
+                    boolOffset
+                );
+                vec4 floatOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    floatOffsetArray
+                );
+                vec4 boolOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    boolOffsetArray
+                );
+                vec4 uintOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    uintOffsetArray
+                );
+                vec4 indexedOffsetElementGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetArray[0]
+                );
+                vec4 dynamicIndexedOffsetElementGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetArray[offsetIndex]
+                );
                 vec4 badOffsetsRank = textureGatherOffsets(tex, uv, badOffsetArray);
                 return badComponent + missingOffset + badOffsets;
             }
@@ -8868,6 +10952,21 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 badComponent = /* unsupported Slang texture gather: "
         "textureGather component literal must be 0, 1, 2, or 3 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatComponentGather = /* unsupported Slang texture gather: "
+        "textureGather component argument must be scalar int or uint, got float */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolComponentGather = /* unsupported Slang texture gather: "
+        "textureGatherOffset component argument must be scalar int or uint, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 vectorComponentGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets component argument must be scalar int or uint, "
+        "got int2 */ float4(0.0);" in generated_code
     )
     assert (
         "float4 missingOffset = /* unsupported Slang texture gather: "
@@ -8910,6 +11009,41 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "float4(0.0);" in generated_code
     )
     assert (
+        "float4 floatOffsetGather = /* unsupported Slang texture gather: "
+        "textureGatherOffset offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolOffsetsGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 uintOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got uint2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 indexedOffsetElementGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets requires a typed offsets array or four offset "
+        "arguments */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 dynamicIndexedOffsetElementGather = /* unsupported Slang texture "
+        "gather: textureGatherOffsets requires a typed offsets array or four "
+        "offset arguments */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badOffsetsRank = /* unsupported Slang texture gather: "
         "textureGatherOffsets requires a 2-component offset for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -8945,6 +11079,9 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                 vec2 ddy,
                 ivec2 offset
             ) {
+                int integerLod = 2;
+                uint unsignedLod = 3u;
+                double preciseLod = 4.0;
                 float direct = textureCompare(tex, uv, depth);
                 float explicitCompare = textureCompare(
                     tex,
@@ -8960,6 +11097,27 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                 );
                 float cubeCompare = textureCompare(cube, direction, depth);
                 float lod = textureCompareLod(tex, compareState, uv, depth, 2.0);
+                float intLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    integerLod
+                );
+                float uintLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    unsignedLod
+                );
+                float doubleLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    preciseLod
+                );
                 float grad = textureCompareGrad(
                     tex,
                     compareState,
@@ -8981,6 +11139,9 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                     + arrayCompare
                     + cubeCompare
                     + lod
+                    + intLod
+                    + uintLod
+                    + doubleLod
                     + grad
                     + offsetCompare
                     + gathered.x
@@ -9005,6 +11166,13 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert "float arrayCompare = layers.SampleCmp(uvLayer, depth);" in generated_code
     assert "float cubeCompare = cube.SampleCmp(direction, depth);" in generated_code
     assert "float lod = tex.SampleCmpLevel(uv, depth, 2.0);" in generated_code
+    assert "float intLod = tex.SampleCmpLevel(uv, depth, integerLod);" in generated_code
+    assert (
+        "float uintLod = tex.SampleCmpLevel(uv, depth, unsignedLod);" in generated_code
+    )
+    assert (
+        "float doubleLod = tex.SampleCmpLevel(uv, depth, preciseLod);" in generated_code
+    )
     assert "float grad = tex.SampleCmpGrad(uv, depth, ddx, ddy);" in generated_code
     assert "float offsetCompare = tex.SampleCmp(uv, depth, offset);" in generated_code
     assert "float4 gathered = tex.GatherCmp(uv, depth);" in generated_code
@@ -9013,6 +11181,245 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert "textureGatherCompare" not in generated_code
     assert ".SampleCmp(compareState" not in generated_code
     assert ".GatherCmp(compareState" not in generated_code
+
+
+def test_shadow_compare_builtins_validate_target_result_types():
+    code = """
+    shader InvalidShadowCompareTargets {
+        sampler2dshadow shadowMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec4 value) {
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                ivec2 offset = ivec2(1, 0);
+                float depth = 0.5;
+                int intCompareTarget = textureCompare(shadowMap, uv, depth);
+                vec2 vectorCompareTarget =
+                    textureCompareOffset(shadowMap, uv, depth, offset);
+                float scalarGatherTarget =
+                    textureGatherCompare(shadowMap, uv, depth);
+                ivec2 intVectorGatherTarget =
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset);
+                acceptFloat(textureGatherCompare(shadowMap, uv, depth));
+                acceptVector(textureCompare(shadowMap, uv, depth));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "int intCompareTarget = /* unsupported Slang shadow compare: "
+        "textureCompare returns float but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "float2 vectorCompareTarget = /* unsupported Slang shadow compare: "
+        "textureCompareOffset returns float but target expects float2 */ "
+        "float2(0.0);" in generated_code
+    )
+    assert (
+        "float scalarGatherTarget = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare returns float4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int2 intVectorGatherTarget = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset returns float4 but target expects int2 */ "
+        "int2(0);" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang shadow gather compare: "
+        "textureGatherCompare returns float4 but target expects float */ 0);"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang shadow compare: textureCompare returns "
+        "float but target expects float4 */ float4(0.0));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang shadow compare") == 3
+    assert generated_code.count("unsupported Slang shadow gather compare") == 3
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+    assert ".SampleCmp(" not in generated_code
+    assert ".GatherCmp(" not in generated_code
+
+
+def test_shadow_compare_expected_types_flow_through_nested_contexts():
+    code = """
+    struct ShadowQueryResult {
+        float validCompare;
+        vec4 validGather;
+        int invalidCompare;
+        float invalidGather;
+    };
+
+    shader ShadowCompareNestedExpectedContexts {
+        sampler2dshadow shadowMap;
+
+        compute {
+            float chooseCompare(bool take, vec2 uv, float depth) {
+                return take ? textureCompare(shadowMap, uv, depth) : 1.0;
+            }
+
+            int chooseBadCompare(bool take, vec2 uv, float depth) {
+                return take
+                    ? textureCompare(shadowMap, uv, depth)
+                    : textureCompare(shadowMap, uv, depth);
+            }
+
+            vec4 chooseGather(bool take, vec2 uv, float depth) {
+                return take ? textureGatherCompare(shadowMap, uv, depth) : vec4(1.0);
+            }
+
+            float chooseBadGather(bool take, vec2 uv, float depth) {
+                return take
+                    ? textureGatherCompare(shadowMap, uv, depth)
+                    : textureGatherCompare(shadowMap, uv, depth);
+            }
+
+            void acceptCompareArray(float values[2]) {
+            }
+
+            void acceptBadCompareArray(int values[2]) {
+            }
+
+            void acceptGatherArray(vec4 values[2]) {
+            }
+
+            void acceptBadGatherArray(float values[2]) {
+            }
+
+            void main() {
+                bool take = true;
+                vec2 uv = vec2(0.25, 0.5);
+                ivec2 offset = ivec2(1, 0);
+                float depth = 0.5;
+                float validCompareArray[2] = {
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                };
+                int invalidCompareArray[2] = {
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                };
+                vec4 validGatherArray[2] = {
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                };
+                float invalidGatherArray[2] = {
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                };
+                ShadowQueryResult constructed = ShadowQueryResult(
+                    textureCompare(shadowMap, uv, depth),
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                );
+                acceptCompareArray({
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptBadCompareArray({
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptGatherArray({
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptBadGatherArray({
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    shadow_compare_diag = "/* unsupported Slang shadow compare: "
+    shadow_gather_diag = "/* unsupported Slang shadow gather compare: "
+    compare_int = (
+        f"{shadow_compare_diag}textureCompare returns float but target expects int */ 0"
+    )
+    compare_offset_int = (
+        f"{shadow_compare_diag}textureCompareOffset returns float but target expects "
+        "int */ 0"
+    )
+    gather_float = (
+        f"{shadow_gather_diag}textureGatherCompare returns float4 but target "
+        "expects float */ 0"
+    )
+    gather_offset_float = (
+        f"{shadow_gather_diag}textureGatherCompareOffset returns float4 but target "
+        "expects float */ 0"
+    )
+
+    assert "return (take ? shadowMap.SampleCmp(uv, depth) : 1.0);" in generated_code
+    assert f"return (take ? {compare_int} : {compare_int});" in generated_code
+    assert (
+        "return (take ? shadowMap.GatherCmp(uv, depth) : float4(1.0));"
+        in generated_code
+    )
+    assert f"return (take ? {gather_float} : {gather_float});" in generated_code
+    assert (
+        "float validCompareArray[2] = {shadowMap.SampleCmp(uv, depth), "
+        "shadowMap.SampleCmp(uv, depth, offset)};" in generated_code
+    )
+    assert (
+        f"int invalidCompareArray[2] = {{{compare_int}, {compare_offset_int}}};"
+        in generated_code
+    )
+    assert (
+        "float4 validGatherArray[2] = {shadowMap.GatherCmp(uv, depth), "
+        "shadowMap.GatherCmp(uv, depth, offset)};" in generated_code
+    )
+    assert (
+        f"float invalidGatherArray[2] = {{{gather_float}, {gather_offset_float}}};"
+        in generated_code
+    )
+    assert (
+        "ShadowQueryResult constructed = ShadowQueryResult("
+        "shadowMap.SampleCmp(uv, depth), shadowMap.GatherCmp(uv, depth), "
+        f"{compare_offset_int}, {gather_offset_float});" in generated_code
+    )
+    assert (
+        "acceptCompareArray({shadowMap.SampleCmp(uv, depth), "
+        "shadowMap.SampleCmp(uv, depth, offset)});" in generated_code
+    )
+    assert (
+        f"acceptBadCompareArray({{{compare_int}, {compare_offset_int}}});"
+        in generated_code
+    )
+    assert (
+        "acceptGatherArray({shadowMap.GatherCmp(uv, depth), "
+        "shadowMap.GatherCmp(uv, depth, offset)});" in generated_code
+    )
+    assert (
+        f"acceptBadGatherArray({{{gather_float}, {gather_offset_float}}});"
+        in generated_code
+    )
+    assert generated_code.count(shadow_compare_diag) == 7
+    assert generated_code.count(shadow_gather_diag) == 7
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
 
 
 def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
@@ -9032,7 +11439,17 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 vec2 badDepth = vec2(0.5, 0.25);
+                ivec2 intDdx = ivec2(1, 0);
+                bvec2 boolDdy = bvec2(true, false);
+                bool boolLod = true;
+                vec2 badLod = vec2(0.0, 1.0);
+                int intDepth = 1;
+                bool boolDepth = true;
+                ivec2 intDepthPair = ivec2(1, 2);
+                ivec2 offset = ivec2(1, 0);
                 ivec3 badOffset = ivec3(1, 0, 0);
+                vec2 floatOffset = vec2(1.0, 0.0);
+                bvec2 boolOffset = bvec2(true, false);
                 float badResource = textureCompare(colorMap, uv, 0.5);
                 float samplerCompare = textureCompare(querySampler, uv, 0.5);
                 float imageCompare = textureCompare(colorImage, uv, 0.5);
@@ -9048,11 +11465,36 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 );
                 float badCoordRank = textureCompare(shadowMap, scalarCoord, 0.5);
                 float badCompareRank = textureCompare(shadowMap, uv, badDepth);
+                float boolLodCompare = textureCompareLod(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    boolLod
+                );
+                float vectorLodCompare = textureCompareLod(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    badLod
+                );
+                float intCompare = textureCompare(shadowMap, uv, intDepth);
+                float boolOffsetCompare = textureCompareOffset(
+                    shadowMap,
+                    uv,
+                    boolDepth,
+                    offset
+                );
                 float badOffsetRank = textureCompareOffset(
                     shadowMap,
                     uv,
                     0.5,
                     badOffset
+                );
+                float floatOffsetCompare = textureCompareOffset(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    floatOffset
                 );
                 float badGradRank = textureCompareGrad(
                     shadowMap,
@@ -9060,6 +11502,20 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                     0.5,
                     badDdx,
                     ddx
+                );
+                float intGradCompare = textureCompareGrad(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    intDdx,
+                    ddx
+                );
+                float boolGradCompare = textureCompareGrad(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    ddx,
+                    boolDdy
                 );
                 vec4 badGatherCoordRank = textureGatherCompare(
                     shadowMap,
@@ -9070,6 +11526,28 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                     shadowMap,
                     uv,
                     badDepth
+                );
+                vec4 intGatherCompare = textureGatherCompare(
+                    shadowMap,
+                    uv,
+                    intDepth
+                );
+                vec4 boolGatherOffsetCompare = textureGatherCompareOffset(
+                    shadowMap,
+                    uv,
+                    boolDepth,
+                    offset
+                );
+                vec4 boolOffsetGatherCompare = textureGatherCompareOffset(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    boolOffset
+                );
+                vec4 intVectorGatherCompare = textureGatherCompare(
+                    shadowMap,
+                    uv,
+                    intDepthPair
                 );
             }
         }
@@ -9127,11 +11605,37 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     )
     assert (
         "float badCompareRank = /* unsupported Slang shadow compare: "
-        "textureCompare requires a scalar compare reference */ 0.0;" in generated_code
+        "textureCompare compare reference must be scalar float or double, got float2 */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float intCompare = /* unsupported Slang shadow compare: "
+        "textureCompare compare reference must be scalar float or double, got int */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float boolLodCompare = /* unsupported Slang shadow compare: "
+        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ 0.0;" in generated_code
+    )
+    assert (
+        "float vectorLodCompare = /* unsupported Slang shadow compare: "
+        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
+        "got float2 */ 0.0;" in generated_code
+    )
+    assert (
+        "float boolOffsetCompare = /* unsupported Slang shadow compare: "
+        "textureCompareOffset compare reference must be scalar float or double, "
+        "got bool */ 0.0;" in generated_code
     )
     assert (
         "float badOffsetRank = /* unsupported Slang shadow compare: "
         "textureCompareOffset requires a 2-component offset for sampler2DShadow */ "
+        "0.0;" in generated_code
+    )
+    assert (
+        "float floatOffsetCompare = /* unsupported Slang shadow compare: "
+        "textureCompareOffset offset must be scalar or vector int, got float2 */ "
         "0.0;" in generated_code
     )
     assert (
@@ -9140,14 +11644,44 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         "0.0;" in generated_code
     )
     assert (
+        "float intGradCompare = /* unsupported Slang shadow compare: "
+        "textureCompareGrad gradient must be scalar or vector float or double, "
+        "got int2 */ 0.0;" in generated_code
+    )
+    assert (
+        "float boolGradCompare = /* unsupported Slang shadow compare: "
+        "textureCompareGrad gradient must be scalar or vector float or double, "
+        "got bool2 */ 0.0;" in generated_code
+    )
+    assert (
         "float4 badGatherCoordRank = /* unsupported Slang shadow gather compare: "
         "textureGatherCompare requires a 2-component coordinate for sampler2DShadow */ "
         "float4(0.0);" in generated_code
     )
     assert (
         "float4 badGatherCompareRank = /* unsupported Slang shadow gather compare: "
-        "textureGatherCompare requires a scalar compare reference */ float4(0.0);"
-        in generated_code
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got float2 */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 intGatherCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got int */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolGatherOffsetCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset compare reference must be scalar float or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolOffsetGatherCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 intVectorGatherCompare = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare compare reference must be scalar float or double, "
+        "got int2 */ float4(0.0);" in generated_code
     )
     assert "textureCompare(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
@@ -9227,6 +11761,12 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         image2D colorImage;
 
         compute {
+            void acceptScalarLod(float value) {
+            }
+
+            void acceptWideLod(vec3 value) {
+            }
+
             void main() {
                 float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.5);
@@ -9251,6 +11791,11 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
                 vec2 shadowLod = textureQueryLod(shadowMap, uv);
                 vec2 msLod = textureQueryLod(msTex, uv);
                 vec2 imageLod = textureQueryLod(colorImage, uv);
+                float scalarTarget = textureQueryLod(colorMap, uv);
+                vec3 wideTarget = textureQueryLod(colorMap, uv);
+                ivec2 integerVectorTarget = textureQueryLod(colorMap, uv);
+                acceptScalarLod(textureQueryLod(colorMap, uv));
+                acceptWideLod(textureQueryLod(colorMap, uv));
             }
         }
     }
@@ -9315,7 +11860,30 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         "textureQueryLod requires a non-shadow non-multisampled sampled texture "
         "resource */ float2(0.0, 0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 11
+    assert (
+        "float scalarTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "float3 wideTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects float3 */ float3(0.0);"
+        in generated_code
+    )
+    assert (
+        "int2 integerVectorTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptScalarLod(/* unsupported Slang resource query: textureQueryLod "
+        "returns float2 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "acceptWideLod(/* unsupported Slang resource query: textureQueryLod "
+        "returns float2 but target expects float3 */ float3(0.0));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 16
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
 
@@ -11780,7 +14348,9 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
 
         compute {
             void main() {
+                uint uintMip = 2u;
                 ivec2 texSize = textureSize(colorMap, 2);
+                ivec2 texSizeFromUintMip = textureSize(colorMap, uintMip);
                 ivec3 layerSize = textureSize(layers, 1);
                 ivec3 volumeSize = textureSize(volumeTex, 0);
                 ivec2 shadowSize = textureSize(shadowMap, 0);
@@ -11788,6 +14358,7 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
                 ivec2 cubeShadowSize = textureSize(cubeShadow, 0);
                 ivec3 cubeShadowLayerSize = textureSize(cubeShadowLayers, 0);
                 ivec2 msSize = textureSize(msTex, 0);
+                ivec2 msSizeFromUintMip = textureSize(msTex, uintMip);
                 ivec3 msLayerSize = textureSize(msLayers, 0);
                 int texLevels = textureQueryLevels(colorMap);
                 int layerLevels = textureQueryLevels(layers);
@@ -11909,6 +14480,10 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert "return samples;" in generated_code
     assert "int2 texSize = cgl_textureSize_sampler2D(colorMap, 2);" in generated_code
     assert (
+        "int2 texSizeFromUintMip = cgl_textureSize_sampler2D(colorMap, uintMip);"
+        in generated_code
+    )
+    assert (
         "int3 layerSize = cgl_textureSize_sampler2DArray(layers, 1);" in generated_code
     )
     assert (
@@ -11958,6 +14533,9 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
         "cubeShadowLayers);" in generated_code
     )
     assert "int2 msSize = cgl_textureSize_sampler2DMS(msTex);" in generated_code
+    assert (
+        "int2 msSizeFromUintMip = cgl_textureSize_sampler2DMS(msTex);" in generated_code
+    )
     assert (
         "int3 msLayerSize = cgl_textureSize_sampler2DMSArray(msLayers);"
         in generated_code
@@ -12026,6 +14604,8 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
 
             void main() {
                 vec2 badMip = vec2(0.0, 1.0);
+                float floatMip = 1.0;
+                bool boolMip = true;
                 int missingTextureSize = textureSize();
                 int missingImageSize = imageSize();
                 int textureSizeFromSampler = textureSize(querySampler, 0);
@@ -12034,7 +14614,11 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int imageSizeFromSampler = imageSize(querySampler);
                 int extraTextureSize = textureSize(colorMap, 0, 1);
                 int badTextureMip = textureSize(colorMap, badMip);
+                int floatTextureMip = textureSize(colorMap, floatMip);
+                int boolTextureMip = textureSize(colorMap, boolMip);
                 int badMultisampleTextureMip = textureSize(msTex, badMip);
+                int floatMultisampleTextureMip = textureSize(msTex, floatMip);
+                int boolMultisampleTextureMip = textureSize(msTex, boolMip);
                 int extraImageSize = imageSize(colorImage, 0);
                 int msLevels = textureQueryLevels(msTex);
                 int msArrayLevels = textureQueryLevels(msLayers);
@@ -12048,6 +14632,12 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int extraTextureSamples = textureSamples(msTex, 0);
                 int extraImageSamples = imageSamples(msImage, 0);
                 int extraLevels = textureQueryLevels(colorMap, 0);
+                float levelsFloatTarget = textureQueryLevels(colorMap);
+                ivec2 levelsVectorTarget = textureQueryLevels(colorMap);
+                float textureSamplesFloatTarget = textureSamples(msTex);
+                ivec2 textureSamplesVectorTarget = textureSamples(msTex);
+                float imageSamplesFloatTarget = imageSamples(msImage);
+                ivec2 imageSamplesVectorTarget = imageSamples(msImage);
                 ivec3 scalarTextureTarget = textureSize(line, 0);
                 int vectorTextureTarget = textureSize(colorMap, 0);
                 ivec2 scalarImageTarget = imageSize(values);
@@ -12121,8 +14711,28 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "textureSize requires a scalar mip argument */ 0;" in generated_code
     )
     assert (
+        "int floatTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int boolTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
+        in generated_code
+    )
+    assert (
         "int badMultisampleTextureMip = /* unsupported Slang resource query: "
         "textureSize requires a scalar mip argument */ 0;" in generated_code
+    )
+    assert (
+        "int floatMultisampleTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int boolMultisampleTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
+        in generated_code
     )
     assert (
         "int extraImageSize = /* unsupported Slang resource query: "
@@ -12179,6 +14789,33 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
     assert (
         "int extraLevels = /* unsupported Slang resource query: "
         "textureQueryLevels accepts only a resource argument */ 0;" in generated_code
+    )
+    assert (
+        "float levelsFloatTarget = /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int2 levelsVectorTarget = /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "float textureSamplesFloatTarget = /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 textureSamplesVectorTarget = /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "float imageSamplesFloatTarget = /* unsupported Slang resource query: "
+        "imageSamples returns int but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 imageSamplesVectorTarget = /* unsupported Slang resource query: "
+        "imageSamples returns int but target expects int2 */ int2(0);" in generated_code
     )
     assert (
         "int3 scalarTextureTarget = /* unsupported Slang resource query: "
@@ -12257,7 +14894,7 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0))));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 45
+    assert generated_code.count("unsupported Slang resource query") == 55
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
@@ -12418,6 +15055,178 @@ def test_resource_query_expected_types_flow_into_ternaries_and_array_literals():
     )
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
+
+
+def test_scalar_resource_query_expected_types_flow_through_nested_contexts():
+    code = """
+    struct ScalarQueryResult {
+        float levelsFloat;
+        ivec2 samplesVector;
+        int validLevels;
+    };
+
+    shader ScalarResourceQueryExpectedContexts {
+        sampler2d colorMap;
+        sampler2dms msTex;
+        image2DMS msImage;
+
+        compute {
+            int chooseScalar(bool take) {
+                return take ? textureQueryLevels(colorMap) : textureSamples(msTex);
+            }
+
+            float chooseFloat(bool take) {
+                return take ? textureQueryLevels(colorMap) : imageSamples(msImage);
+            }
+
+            ivec2 chooseVector(bool take) {
+                return take ? textureSamples(msTex) : imageSamples(msImage);
+            }
+
+            void acceptScalar(int value) {
+            }
+
+            void acceptFloatArray(float values[2]) {
+            }
+
+            void acceptVectorArray(ivec2 values[2]) {
+            }
+
+            void acceptScalarArray(int values[3]) {
+            }
+
+            void main() {
+                bool take = true;
+                int scalarFromTernary =
+                    take ? textureQueryLevels(colorMap) : imageSamples(msImage);
+                float floatFromTernary =
+                    take ? textureQueryLevels(colorMap) : textureSamples(msTex);
+                ivec2 vectorFromTernary =
+                    take ? textureSamples(msTex) : imageSamples(msImage);
+                ScalarQueryResult constructed = ScalarQueryResult(
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                );
+                float floatArray[2] = {
+                    textureQueryLevels(colorMap),
+                    imageSamples(msImage)
+                };
+                ivec2 vectorArray[2] = {
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                };
+                int scalarArray[3] = {
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                };
+                acceptScalar(
+                    take ? textureQueryLevels(colorMap) : textureSamples(msTex)
+                );
+                acceptFloatArray({
+                    textureQueryLevels(colorMap),
+                    imageSamples(msImage)
+                });
+                acceptVectorArray({
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                });
+                acceptScalarArray({
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "return (take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
+        "cgl_textureSamples_sampler2DMS(msTex));" in generated_code
+    )
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureQueryLevels "
+        "returns int but target expects float */ 0 : /* unsupported Slang resource "
+        "query: imageSamples returns int but target expects float */ 0);"
+        in generated_code
+    )
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureSamples "
+        "returns int but target expects int2 */ int2(0) : /* unsupported Slang "
+        "resource query: imageSamples returns int but target expects int2 */ "
+        "int2(0));" in generated_code
+    )
+    assert (
+        "int scalarFromTernary = (take ? cgl_textureQueryLevels_sampler2D(colorMap) "
+        ": cgl_imageSamples_image2DMS(msImage));" in generated_code
+    )
+    assert (
+        "float floatFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0 : "
+        "/* unsupported Slang resource query: textureSamples returns int but "
+        "target expects float */ 0);" in generated_code
+    )
+    assert (
+        "int2 vectorFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0) : "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects int2 */ int2(0));" in generated_code
+    )
+    assert (
+        "ScalarQueryResult constructed = ScalarQueryResult("
+        "/* unsupported Slang resource query: textureQueryLevels returns int but "
+        "target expects float */ 0, /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0), "
+        "cgl_imageSamples_image2DMS(msImage));" in generated_code
+    )
+    assert (
+        "float floatArray[2] = {/* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0, "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects float */ 0};" in generated_code
+    )
+    assert (
+        "int2 vectorArray[2] = {/* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0), "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects int2 */ int2(0)};" in generated_code
+    )
+    assert (
+        "int scalarArray[3] = {cgl_textureQueryLevels_sampler2D(colorMap), "
+        "cgl_textureSamples_sampler2DMS(msTex), "
+        "cgl_imageSamples_image2DMS(msImage)};" in generated_code
+    )
+    assert (
+        "acceptScalar((take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
+        "cgl_textureSamples_sampler2DMS(msTex)));" in generated_code
+    )
+    assert (
+        "acceptFloatArray({/* unsupported Slang resource query: textureQueryLevels "
+        "returns int but target expects float */ 0, /* unsupported Slang resource "
+        "query: imageSamples returns int but target expects float */ 0});"
+        in generated_code
+    )
+    assert (
+        "acceptVectorArray({/* unsupported Slang resource query: textureSamples "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSamples returns int but target expects int2 */ "
+        "int2(0)});" in generated_code
+    )
+    assert (
+        "acceptScalarArray({cgl_textureQueryLevels_sampler2D(colorMap), "
+        "cgl_textureSamples_sampler2DMS(msTex), "
+        "cgl_imageSamples_image2DMS(msImage)});" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 18
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSamples(" not in generated_code
 
 
 def test_resource_query_expected_types_flow_through_nested_array_return_helpers():

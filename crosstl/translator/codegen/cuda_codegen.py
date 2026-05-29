@@ -2,12 +2,14 @@
 
 from ..ast import (
     AssignmentNode,
+    BinaryOpNode,
     BreakNode,
     ContinueNode,
     ForInNode,
     ForNode,
     IfNode,
     LiteralPatternNode,
+    LiteralNode,
     RangeNode,
     ReturnNode,
     StructNode,
@@ -21,7 +23,9 @@ from ..ast import (
     ExpressionStatementNode,
     IdentifierNode,
     MemberAccessNode,
+    PointerAccessNode,
     UnaryOpNode,
+    TernaryOpNode,
     BlockNode,
     WildcardPatternNode,
 )
@@ -35,6 +39,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "CUDA"
+    query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
+    synchronization_builtins = {
+        "barrier",
+        "groupMemoryBarrier",
+        "memoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+        "workgroupBarrier",
+    }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
         "Texture1DArray": "sampler1DArray",
@@ -63,12 +77,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level = 0
         self.output = []
         self.variable_types = {}
+        self.image_resource_accesses = {}
         self.struct_member_types = {}
+        self.struct_member_image_accesses = {}
         self.function_return_types = {}
         self.helper_functions = {}
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
         self.query_functions_by_name = {}
+        self.query_metadata_aliases = {}
+        self.query_return_sources = {}
+        self.query_local_resource_names_by_function = {}
+        self.query_metadata_snapshot_locals_by_function = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
@@ -97,9 +117,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.output = []
         self.indent_level = 0
         self.variable_types = {}
-        self.struct_member_types = {}
+        self.image_resource_accesses = {}
+        (
+            self.struct_member_types,
+            self.struct_member_image_accesses,
+        ) = self.collect_struct_member_metadata(ast_node)
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
+        self.query_metadata_aliases = {}
+        self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
+        self.query_local_resource_names_by_function = {}
+        self.query_metadata_snapshot_locals_by_function = {}
         self.resource_query_info_required = False
         (
             self.query_resource_names,
@@ -147,6 +175,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if node is None:
             return
 
+        if isinstance(node, AssignmentNode):
+            self.emit_assignment_statement(node)
+            return
+
         result = self.visit(node)
         if isinstance(result, str) and result.strip():
             self.emit(f"{result};")
@@ -171,6 +203,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if hasattr(body, "statements"):
             return body.statements
         return [body]
+
+    def collect_struct_member_metadata(self, root):
+        """Collect struct member types and storage-image access before emission."""
+        member_types_by_struct = {}
+        member_accesses_by_struct = {}
+        for struct in getattr(root, "structs", []) or []:
+            struct_name = getattr(struct, "name", None)
+            if not struct_name:
+                continue
+            member_types = {}
+            member_accesses = {}
+            for member in getattr(struct, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if not member_name:
+                    continue
+                if hasattr(member, "member_type"):
+                    member_type = member.member_type
+                elif hasattr(member, "vtype"):
+                    member_type = member.vtype
+                else:
+                    member_type = "float"
+                member_type = self.apply_readonly_qualifier_to_type(member_type, member)
+                member_types[member_name] = member_type
+                member_access = self.explicit_resource_access(member)
+                if member_access is not None and self.is_storage_image_type(
+                    member_type
+                ):
+                    member_accesses[member_name] = member_access
+            member_types_by_struct[struct_name] = member_types
+            member_accesses_by_struct[struct_name] = member_accesses
+        return member_types_by_struct, member_accesses_by_struct
 
     def statement_body_terminates(self, body):
         """Return true when the body already exits the active control flow."""
@@ -246,12 +309,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
+        saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_query_metadata_aliases = self.query_metadata_aliases
         saved_current_function_name = self.current_function_name
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
         self.current_structured_buffer_length_parameters = {}
+        self.query_metadata_aliases = {}
         qualifiers = []
 
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -290,8 +356,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 param_type = "void"
 
-            self.register_variable_type(param.name, param_type)
-            params.append(self.format_typed_declarator(param_type, param.name))
+            self.register_variable_type(param.name, param_type, param)
+            declaration_type = self.apply_readonly_qualifier_to_type(param_type, param)
+            params.append(self.format_typed_declarator(declaration_type, param.name))
             metadata_param = self.query_metadata_parameter(param.name, param_type)
             if metadata_param:
                 params.append(metadata_param)
@@ -320,6 +387,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level -= 1
         self.emit("}")
         self.variable_types = saved_variable_types
+        self.image_resource_accesses = saved_image_resource_accesses
+        self.query_metadata_aliases = saved_query_metadata_aliases
         self.current_function_name = saved_current_function_name
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -331,6 +400,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         members = getattr(node, "members", [])
         member_types = {}
+        member_image_accesses = {}
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -339,10 +409,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 member_type = "float"
 
+            member_type = self.apply_readonly_qualifier_to_type(member_type, member)
             member_types[member.name] = member_type
+            member_access = self.explicit_resource_access(member)
+            if member_access is not None and self.is_storage_image_type(member_type):
+                member_image_accesses[member.name] = member_access
             self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_image_accesses[node.name] = member_image_accesses
         self.indent_level -= 1
         self.emit("};")
 
@@ -373,11 +448,34 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if not var_type and initial_value is not None:
             inferred_type = self.expression_result_type(initial_value)
-            self.register_variable_type(node.name, inferred_type or "auto")
+            self.register_variable_type(
+                node.name,
+                inferred_type or "auto",
+                source_node=initial_value,
+            )
+            if self.is_query_metadata_snapshot_local(
+                node.name,
+                inferred_type or "auto",
+            ):
+                self.query_metadata_aliases[node.name] = self.query_metadata_name(
+                    node.name
+                )
+            else:
+                self.register_query_metadata_alias(
+                    node.name,
+                    inferred_type or "auto",
+                    initial_value,
+                )
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
-            self.register_variable_type(node.name, var_type)
+            self.register_variable_type(node.name, var_type, node, initial_value)
+            if self.is_query_metadata_snapshot_local(node.name, var_type):
+                self.query_metadata_aliases[node.name] = self.query_metadata_name(
+                    node.name
+                )
+            else:
+                self.register_query_metadata_alias(node.name, var_type, initial_value)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -406,10 +504,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return node.name
 
     def format_typed_declarator(self, type_name, name, dynamic_array_as_pointer=True):
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
-            type_name = self.convert_type_node_to_string(type_name)
-        else:
-            type_name = str(type_name)
+        type_name = self.type_name_string(type_name)
 
         if "[" not in type_name or "]" not in type_name:
             return f"{self.convert_crossgl_type_to_cuda(type_name)} {name}"
@@ -438,7 +533,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
             self.emit(f"{declaration};")
-            metadata_declaration = self.query_metadata_declaration(node.name, var_type)
+            initial_value = getattr(
+                node,
+                "initial_value",
+                getattr(node, "value", None),
+            )
+            effective_var_type = var_type
+            if effective_var_type is None and initial_value is not None:
+                effective_var_type = self.expression_result_type(initial_value)
+            metadata_declaration = self.query_metadata_snapshot_declaration(
+                node.name,
+                effective_var_type,
+                initial_value,
+            )
+            if metadata_declaration is None:
+                metadata_declaration = self.query_metadata_declaration(
+                    node.name,
+                    effective_var_type,
+                )
             if metadata_declaration:
                 self.emit(f"{metadata_declaration};")
             length_declaration = self.structured_buffer_length_declaration(
@@ -456,9 +568,42 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return node.name
 
     def visit_ExpressionStatementNode(self, node):
+        if isinstance(node.expression, AssignmentNode):
+            self.emit_assignment_statement(node.expression)
+            return None
+
         expr = self.visit(node.expression)
         if expr and expr.strip():
             self.emit(f"{expr};")
+
+    def emit_assignment_statement(self, node):
+        assignment = self.format_assignment_expression(node)
+        if assignment and assignment.strip():
+            self.emit(f"{assignment};")
+
+        metadata_assignment = self.format_query_metadata_assignment(node)
+        if metadata_assignment:
+            self.emit(f"{metadata_assignment};")
+
+    def format_for_clause_expression(self, node):
+        """Return a for-clause expression, preserving CUDA metadata sidecars."""
+        if node is None:
+            return ""
+        if isinstance(node, VariableNode):
+            return self.format_variable_declaration(node)
+
+        expr_node = getattr(node, "expression", node)
+        if isinstance(expr_node, AssignmentNode):
+            assignment = self.format_assignment_expression(expr_node)
+            metadata_assignment = self.format_query_metadata_assignment(expr_node)
+            parts = [
+                part
+                for part in (assignment, metadata_assignment)
+                if part and part.strip()
+            ]
+            return ", ".join(parts)
+
+        return self.visit(expr_node) or ""
 
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
@@ -653,6 +798,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if structured_atomic_call is not None:
                 return structured_atomic_call
 
+            plain_atomic_call = self.generate_plain_atomic_call(
+                func_name, raw_args, args
+            )
+            if plain_atomic_call is not None:
+                return plain_atomic_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
@@ -660,6 +811,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
+
+        if func_name in self.synchronization_builtins and raw_args:
+            raise ValueError(
+                f"CUDA synchronization builtin '{func_name}' requires 0 "
+                f"arguments; got {len(raw_args)}"
+            )
 
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)
@@ -976,6 +1133,179 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         target_expr = self.visit(target["target_expr"])
         value_args = ", ".join(args[1:])
         return f"{intrinsic}(&{target_expr}, {value_args})"
+
+    def generate_plain_atomic_call(self, func_name, raw_args, args):
+        """Lower CUDA atomics on ordinary scalar lvalues to pointer operands."""
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None:
+            return None
+
+        intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
+            operation
+        )
+        raw_target = raw_args[0] if raw_args else None
+        target_expr = (
+            self.strip_address_of_expression(raw_target) if raw_target else None
+        )
+        address_taken = target_expr is not raw_target
+        target_type = self.expression_result_type(target_expr) if target_expr else None
+        indirect_info = self.cuda_indirect_type_info(target_type)
+        pointee_type = (
+            indirect_info["pointee_type"] if indirect_info is not None else None
+        )
+        atomic_type = pointee_type or target_type
+        fallback = self.diagnostic_zero_value_for_type(atomic_type)
+
+        if len(args) != required_arg_count:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"requires {required_arg_count} argument(s)",
+                fallback,
+            )
+
+        if target_expr is None or (
+            pointee_type is None and not self.is_plain_atomic_lvalue(target_expr)
+        ):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                "requires assignable scalar target",
+                fallback,
+            )
+
+        if (
+            address_taken
+            and indirect_info is not None
+            and indirect_info["kind"] == "pointer"
+        ):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {indirect_info['type_label']} requires pointer target, "
+                "not address of pointer",
+                fallback,
+            )
+
+        readonly_reason = self.plain_atomic_readonly_target_reason(
+            target_expr, indirect_info
+        )
+        if readonly_reason is not None:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                readonly_reason,
+                fallback,
+            )
+
+        scalar_kind = self.cuda_atomic_scalar_kind(atomic_type)
+        if scalar_kind not in supported_kinds:
+            type_label = (
+                indirect_info["type_label"]
+                if indirect_info is not None
+                else self.type_name_string(atomic_type) or "unknown target"
+            )
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {type_label} requires supported scalar "
+                f"{supported_kinds_label} target",
+                fallback,
+            )
+
+        target_code = self.visit(target_expr)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            target_pointer = target_code
+        else:
+            target_pointer = f"&{target_code}"
+        value_args = ", ".join(args[1:])
+        return f"{intrinsic}({target_pointer}, {value_args})"
+
+    def is_plain_atomic_lvalue(self, expr):
+        """Return whether an expression can be addressed for a CUDA atomic."""
+        return isinstance(
+            expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        )
+
+    def cuda_atomic_pointer_pointee_type(self, type_name):
+        """Return a scalar pointee type for pointer-typed CUDA atomic operands."""
+        info = self.cuda_indirect_type_info(type_name)
+        return info["pointee_type"] if info is not None else None
+
+    def cuda_indirect_type_info(self, type_name):
+        """Return pointer/reference metadata for CUDA indirect type spellings."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        if type_name.startswith("ptr<") and type_name.endswith(">"):
+            pointee = type_name[4:-1].strip()
+            return {
+                "kind": "pointer",
+                "pointee_type": pointee,
+                "readonly": False,
+                "type_label": f"{pointee}*",
+            }
+
+        mapped_type = self.convert_crossgl_type_to_cuda(type_name)
+        for candidate in (type_name, mapped_type):
+            info = self.cuda_pointer_or_reference_type_info(candidate)
+            if info is not None:
+                return info
+        return None
+
+    def cuda_pointer_or_reference_type_info(self, type_name):
+        """Parse a CUDA pointer/reference spelling into target metadata."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        stripped = type_name.strip()
+        for suffix, kind in (("*", "pointer"), ("&", "reference")):
+            if not stripped.endswith(suffix):
+                continue
+            pointee = stripped[: -len(suffix)].strip()
+            readonly = pointee.startswith("const ")
+            if readonly:
+                pointee = pointee[len("const ") :].strip()
+            return {
+                "kind": kind,
+                "pointee_type": pointee,
+                "readonly": readonly,
+                "type_label": stripped,
+            }
+        return None
+
+    def plain_atomic_readonly_target_reason(self, target_expr, indirect_info):
+        """Return a diagnostic reason for readonly plain atomic targets."""
+        if indirect_info is not None and indirect_info["readonly"]:
+            if indirect_info["kind"] == "reference":
+                return (
+                    f"on {indirect_info['type_label']} requires mutable "
+                    "reference target"
+                )
+            return (
+                f"on {indirect_info['type_label']} requires writable pointer " "target"
+            )
+
+        if isinstance(target_expr, ArrayAccessNode):
+            array_expr = getattr(
+                target_expr, "array_expr", getattr(target_expr, "array", None)
+            )
+            array_type = self.expression_result_type(array_expr)
+            array_info = self.cuda_indirect_type_info(array_type)
+            if array_info is not None and array_info["readonly"]:
+                if array_info["kind"] == "reference":
+                    return (
+                        f"on {array_info['type_label']} requires mutable "
+                        "reference target"
+                    )
+                return (
+                    f"on {array_info['type_label']} requires writable pointer " "target"
+                )
+        return None
+
+    def unsupported_plain_atomic_call(self, operation, reason, fallback):
+        """Return diagnostic code for unsupported plain CUDA atomics."""
+        return (
+            f"/* unsupported {self.resource_backend_name()} atomic call: "
+            f"{operation} {reason} */ {fallback}"
+        )
 
     def structured_buffer_atomic_target(self, target_expr):
         """Return RWStructuredBuffer target metadata for an atomic lvalue."""
@@ -1835,6 +2165,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return member_access
 
+    def visit_PointerAccessNode(self, node):
+        """Visit C-style pointer member access."""
+        pointer_expr = self.visit(getattr(node, "pointer_expr", None))
+        return f"{pointer_expr}->{node.member}"
+
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
         vector_info = self.vector_type_info(self.expression_result_type(object_node))
@@ -1921,12 +2256,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Visit for loop"""
         init_str = ""
         if node.init:
-            if isinstance(node.init, VariableNode):
-                init_str = self.format_variable_declaration(node.init)
-            elif hasattr(node.init, "expression"):
-                init_str = self.visit(node.init.expression)
-            else:
-                init_str = self.visit(node.init)
+            init_str = self.format_for_clause_expression(node.init)
 
         condition_str = ""
         if node.condition:
@@ -1934,7 +2264,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         update_str = ""
         if node.update:
-            update_str = self.visit(node.update)
+            update_str = self.format_for_clause_expression(node.update)
 
         self.emit(f"for ({init_str}; {condition_str}; {update_str}) {{")
 
@@ -2069,10 +2399,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
-        if hasattr(crossgl_type, "name") or hasattr(crossgl_type, "element_type"):
-            crossgl_type = self.convert_type_node_to_string(crossgl_type)
-        else:
-            crossgl_type = str(crossgl_type)
+        crossgl_type = self.type_name_string(crossgl_type)
+        if crossgl_type is None:
+            return "void"
 
         structured_buffer_type = self.cuda_structured_buffer_type(crossgl_type)
         if structured_buffer_type is not None:
@@ -2238,7 +2567,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return a stable string spelling for TypeNode or legacy type values."""
         if type_name is None:
             return None
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+        if (
+            hasattr(type_name, "name")
+            or hasattr(type_name, "element_type")
+            or hasattr(type_name, "pointee_type")
+            or hasattr(type_name, "referenced_type")
+        ):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
 
@@ -2588,8 +2922,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             param_name = getattr(param, "name", None)
             if param_name in query_params:
                 metadata_arg = self.query_metadata_expression(raw_args[index])
-                if metadata_arg:
-                    expanded_args.append(metadata_arg)
+                if metadata_arg is None:
+                    metadata_arg = self.unavailable_query_metadata_argument(
+                        param_name,
+                        self.get_parameter_type(param),
+                    )
+                expanded_args.append(metadata_arg)
 
             param_type = self.get_parameter_type(param)
             if self.structured_buffer_parameter_requires_length(
@@ -2606,6 +2944,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if counter_arg:
                     expanded_args.append(counter_arg)
         return expanded_args
+
+    def unavailable_query_metadata_argument(self, param_name, param_type):
+        """Return a deterministic zero metadata sidecar for untraceable resources."""
+        self.resource_query_info_required = True
+        type_name = self.query_type_name(param_type)
+        resource_type = self.resource_base_type(type_name) or "unknown resource"
+        fallback = "nullptr" if "[" in type_name else "CglResourceQueryInfo{}"
+        param_label = f" argument {param_name}" if param_name else " argument"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"metadata unavailable for {resource_type}{param_label} */ {fallback}"
+        )
 
     def diagnostic_zero_value_for_type(self, type_name):
         """Return a CUDA fallback expression for unsupported value-producing calls."""
@@ -2678,6 +3028,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if array_element_type is not None:
             return array_element_type
 
+        indirect_info = self.cuda_indirect_type_info(type_name)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            return indirect_info["pointee_type"]
+
         parts = self.structured_buffer_type_parts(type_name)
         if parts is not None:
             return parts[1]
@@ -2685,11 +3039,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, PointerAccessNode):
+            member_type = self.pointer_access_member_type(node)
+            if member_type is not None:
+                return member_type
         if isinstance(node, FunctionCallNode):
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
         return super().expression_result_type(node)
+
+    def pointer_access_member_type(self, node):
+        """Return the member type for ``ptr->field`` expressions."""
+        pointer_expr = getattr(node, "pointer_expr", None)
+        pointer_type = self.expression_result_type(pointer_expr)
+        pointer_info = self.cuda_indirect_type_info(pointer_type)
+        if pointer_info is None:
+            return None
+
+        struct_type = pointer_info["pointee_type"]
+        if struct_type.startswith("const "):
+            struct_type = struct_type[len("const ") :].strip()
+        return self.struct_member_types.get(struct_type, {}).get(
+            getattr(node, "member", "")
+        )
 
     def resource_call_result_type(self, func_name, raw_args):
         """Infer CUDA-specific resource diagnostic result types."""
@@ -2699,14 +3072,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.cuda_shadow_scalar_diagnostic_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_shadow_resource_type(resource_type):
                 return "float"
 
         if func_name in self.cuda_sampled_diagnostic_float4_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if resource_type is None:
                 return None
@@ -2716,7 +3089,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in self.cuda_image_atomic_calls() and raw_args:
             resource_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             return self.cuda_image_atomic_result_type(resource_type)
 
@@ -2885,6 +3258,1335 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         dimensions, mip, samples = spec
         return {"dimensions": dimensions, "mip": mip, "samples": samples}
 
+    def is_queryable_resource_type(self, type_name):
+        """Return whether a resource type can use CUDA query metadata."""
+        if type_name is None:
+            return False
+        resource_type = self.resource_base_type(self.query_type_name(type_name))
+        return self.dimension_query_spec(resource_type) is not None
+
+    def collect_function_resource_aliases(self, func):
+        """Collect local queryable resource declarations and initializers."""
+        local_names = set()
+        alias_sources = {}
+        body = getattr(func, "body", [])
+
+        for node in self.query_walk_nodes(body):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            var_type = self.get_variable_node_type(node)
+            if not name or not self.is_queryable_resource_type(var_type):
+                continue
+            local_names.add(name)
+            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+            if initial_value is not None:
+                alias_sources[name] = initial_value
+
+        return local_names, alias_sources
+
+    def collect_function_resource_assignments(self, func, local_resource_names):
+        """Collect simple assignments into local queryable resource variables."""
+        assignment_sources = {}
+        body = getattr(func, "body", [])
+
+        for node in self.query_walk_nodes(body):
+            if not isinstance(node, AssignmentNode):
+                continue
+            if getattr(node, "operator", "=") != "=":
+                continue
+            target = getattr(node, "target", None)
+            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+                continue
+            target_name = self.get_expression_name(target)
+            if target_name not in local_resource_names:
+                continue
+            value = getattr(node, "value", None)
+            if value is not None:
+                assignment_sources.setdefault(target_name, []).append(value)
+
+        return assignment_sources
+
+    def collect_simple_query_return_sources(self, root):
+        """Collect direct resource returns that can reuse caller-side metadata."""
+        return_sources = {}
+        functions = self.query_collect_functions(root)
+        global_resource_names = {
+            getattr(var, "name", None)
+            for var in getattr(root, "global_variables", [])
+            if self.is_queryable_resource_type(self.get_variable_node_type(var))
+        }
+        global_resource_names = {name for name in global_resource_names if name}
+        global_variable_types = {
+            getattr(var, "name", None): self.type_name_string(
+                self.get_variable_node_type(var)
+            )
+            for var in getattr(root, "global_variables", [])
+        }
+        global_variable_types = {
+            name: type_name
+            for name, type_name in global_variable_types.items()
+            if name and type_name
+        }
+
+        function_infos = []
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            return_type = getattr(func, "return_type", None)
+            if not func_name or not self.is_queryable_resource_type(return_type):
+                continue
+
+            statements = self.statement_list(getattr(func, "body", []))
+            if not statements or not isinstance(statements[-1], ReturnNode):
+                continue
+
+            local_alias_sources = {}
+            supported_return_body = True
+            for statement in statements[:-1]:
+                if not isinstance(statement, VariableNode):
+                    supported_return_body = False
+                    break
+                var_type = self.get_variable_node_type(statement)
+                if not self.is_queryable_resource_type(var_type):
+                    supported_return_body = False
+                    break
+                name = getattr(statement, "name", None)
+                initial_value = getattr(
+                    statement,
+                    "initial_value",
+                    getattr(statement, "value", None),
+                )
+                if not name or initial_value is None:
+                    supported_return_body = False
+                    break
+                local_alias_sources[name] = initial_value
+            if not supported_return_body:
+                continue
+
+            return_expr = getattr(statements[-1], "value", None)
+            params = getattr(func, "parameters", getattr(func, "params", []))
+            resource_param_indices = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(params)
+                if self.is_queryable_resource_type(self.get_parameter_type(param))
+            }
+            resource_param_indices = {
+                name: index for name, index in resource_param_indices.items() if name
+            }
+            all_param_indices = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(params)
+            }
+            all_param_indices = {
+                name: index for name, index in all_param_indices.items() if name
+            }
+            param_types = {
+                getattr(param, "name", None): self.type_name_string(
+                    self.get_parameter_type(param)
+                )
+                for param in params
+            }
+            param_types = {
+                name: type_name
+                for name, type_name in param_types.items()
+                if name and type_name
+            }
+            function_infos.append(
+                (
+                    func_name,
+                    return_expr,
+                    resource_param_indices,
+                    all_param_indices,
+                    param_types,
+                    local_alias_sources,
+                )
+            )
+
+        changed = True
+        while changed:
+            changed = False
+            for (
+                func_name,
+                return_expr,
+                resource_param_indices,
+                all_param_indices,
+                param_types,
+                local_alias_sources,
+            ) in function_infos:
+                if func_name in return_sources:
+                    continue
+                return_source = self.query_return_source_descriptor(
+                    return_expr,
+                    resource_param_indices,
+                    global_resource_names,
+                    all_param_indices,
+                    return_sources,
+                    local_alias_sources,
+                    param_types=param_types,
+                    global_variable_types=global_variable_types,
+                )
+                if return_source is not None:
+                    return_sources[func_name] = return_source
+                    changed = True
+
+        return return_sources
+
+    def query_return_source_descriptor(
+        self,
+        return_expr,
+        resource_param_indices,
+        global_resource_names,
+        all_param_indices,
+        known_return_sources=None,
+        local_alias_sources=None,
+        local_visited=None,
+        param_types=None,
+        global_variable_types=None,
+    ):
+        """Describe a traceable resource-return expression for caller metadata."""
+        if known_return_sources is None:
+            known_return_sources = {}
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
+        if param_types is None:
+            param_types = {}
+        if global_variable_types is None:
+            global_variable_types = {}
+
+        if isinstance(return_expr, TernaryOpNode):
+            true_source = self.query_return_source_descriptor(
+                return_expr.true_expr,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                local_visited.copy(),
+                param_types=param_types,
+                global_variable_types=global_variable_types,
+            )
+            false_source = self.query_return_source_descriptor(
+                return_expr.false_expr,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                local_visited.copy(),
+                param_types=param_types,
+                global_variable_types=global_variable_types,
+            )
+            if true_source is None or false_source is None:
+                return None
+            return {
+                "kind": "ternary",
+                "condition": return_expr.condition,
+                "true_source": true_source,
+                "false_source": false_source,
+                "param_indices": all_param_indices,
+            }
+
+        if isinstance(return_expr, FunctionCallNode):
+            callee_name = self.raw_function_call_name(return_expr)
+            return_source = known_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                return_expr,
+                "arguments",
+                getattr(return_expr, "args", []),
+            )
+            return self.inline_query_return_source_descriptor(
+                return_source,
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                param_types,
+                global_variable_types,
+            )
+
+        return_base_expr = return_expr
+        return_indices = []
+        if isinstance(return_expr, ArrayAccessNode):
+            return_base_expr, return_indices = self.query_array_access_parts(
+                return_expr
+            )
+        elif isinstance(return_expr, MemberAccessNode):
+            return_base_expr = return_expr
+        elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
+            return None
+
+        if isinstance(return_base_expr, MemberAccessNode):
+            return self.query_return_member_source_descriptor(
+                return_base_expr,
+                return_indices,
+                all_param_indices,
+                param_types,
+                global_variable_types,
+            )
+
+        return_name = self.get_expression_name(return_base_expr)
+        if not return_name:
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, all_param_indices)
+            for index in return_indices
+        ):
+            return None
+        if return_name in local_alias_sources:
+            if return_name in local_visited:
+                return None
+            source_descriptor = self.query_return_source_descriptor(
+                local_alias_sources[return_name],
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                local_visited | {return_name},
+                param_types=param_types,
+                global_variable_types=global_variable_types,
+            )
+            if source_descriptor is None:
+                return None
+            return self.append_query_return_indices(
+                source_descriptor,
+                return_indices,
+                all_param_indices,
+            )
+        if return_name in resource_param_indices:
+            return {
+                "kind": "parameter",
+                "index": resource_param_indices[return_name],
+                "indices": return_indices,
+                "param_indices": all_param_indices,
+            }
+        if return_name in global_resource_names:
+            return {
+                "kind": "global",
+                "name": return_name,
+                "indices": return_indices,
+                "param_indices": all_param_indices,
+            }
+        return None
+
+    def query_return_member_source_descriptor(
+        self,
+        member_expr,
+        return_indices,
+        all_param_indices,
+        param_types,
+        global_variable_types,
+    ):
+        """Describe a storage-image struct member returned by a helper."""
+        object_node = getattr(
+            member_expr,
+            "object_expr",
+            getattr(member_expr, "object", None),
+        )
+        member = getattr(member_expr, "member", None)
+        member_name = getattr(member, "name", member)
+        if object_node is None or not isinstance(member_name, str):
+            return None
+
+        object_name = self.get_expression_name(object_node)
+        if not object_name:
+            return None
+
+        object_kind = None
+        object_type = None
+        descriptor = {
+            "kind": "member",
+            "member": member_name,
+            "indices": return_indices,
+            "param_indices": all_param_indices,
+        }
+        if object_name in param_types:
+            object_kind = "parameter"
+            object_type = param_types[object_name]
+            descriptor["object_index"] = all_param_indices.get(object_name)
+        elif object_name in global_variable_types:
+            object_kind = "global"
+            object_type = global_variable_types[object_name]
+            descriptor["object_name"] = object_name
+        else:
+            return None
+
+        object_type = self.type_name_string(object_type)
+        member_type = self.struct_member_types.get(object_type, {}).get(member_name)
+        if not self.is_storage_image_type(member_type):
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, all_param_indices)
+            for index in return_indices
+        ):
+            return None
+
+        descriptor["object_kind"] = object_kind
+        descriptor["object_type"] = object_type
+        return descriptor
+
+    def inline_query_return_source_descriptor(
+        self,
+        return_source,
+        raw_args,
+        resource_param_indices,
+        global_resource_names,
+        all_param_indices,
+        known_return_sources,
+        local_alias_sources=None,
+        param_types=None,
+        global_variable_types=None,
+    ):
+        """Inline a traceable callee resource return into the caller context."""
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if param_types is None:
+            param_types = {}
+        if global_variable_types is None:
+            global_variable_types = {}
+        source_param_indices = return_source.get("param_indices", {})
+        kind = return_source["kind"]
+
+        if kind == "global":
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            return {
+                "kind": "global",
+                "name": return_source["name"],
+                "indices": indices,
+                "param_indices": all_param_indices,
+            }
+
+        if kind == "parameter":
+            index = return_source["index"]
+            if index >= len(raw_args):
+                return None
+            base_source = self.query_return_source_descriptor(
+                raw_args[index],
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                param_types=param_types,
+                global_variable_types=global_variable_types,
+            )
+            if base_source is None:
+                return None
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            return self.append_query_return_indices(
+                base_source,
+                indices,
+                all_param_indices,
+            )
+
+        if kind == "ternary":
+            condition = self.substitute_query_return_expr(
+                return_source["condition"],
+                source_param_indices,
+                raw_args,
+            )
+            if condition is None:
+                return None
+            true_source = self.inline_query_return_source_descriptor(
+                return_source["true_source"],
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                param_types,
+                global_variable_types,
+            )
+            false_source = self.inline_query_return_source_descriptor(
+                return_source["false_source"],
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                param_types,
+                global_variable_types,
+            )
+            if true_source is None or false_source is None:
+                return None
+            return {
+                "kind": "ternary",
+                "condition": condition,
+                "true_source": true_source,
+                "false_source": false_source,
+                "param_indices": all_param_indices,
+            }
+
+        if kind == "member":
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            inlined = dict(return_source)
+            inlined["indices"] = indices
+            inlined["param_indices"] = all_param_indices
+            return inlined
+
+        return None
+
+    def append_query_return_indices(self, return_source, indices, param_indices):
+        """Append array indices to a flattened resource-return descriptor."""
+        if not indices:
+            return return_source
+        if return_source["kind"] not in {"global", "parameter", "member"}:
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, param_indices)
+            for index in indices
+        ):
+            return None
+        combined = dict(return_source)
+        combined["indices"] = list(return_source.get("indices", [])) + list(indices)
+        combined["param_indices"] = param_indices
+        return combined
+
+    def substitute_query_return_indices(
+        self,
+        indices,
+        param_indices,
+        raw_args,
+        target_param_indices,
+    ):
+        """Substitute callee index parameters with caller-context expressions."""
+        substituted_indices = []
+        for index_expr in indices:
+            substituted = self.substitute_query_return_expr(
+                index_expr,
+                param_indices,
+                raw_args,
+            )
+            if substituted is None or not self.is_safe_query_return_index(
+                substituted,
+                target_param_indices,
+            ):
+                return None
+            substituted_indices.append(substituted)
+        return substituted_indices
+
+    def substitute_query_return_expr(self, expr, param_indices, raw_args):
+        """Replace callee parameters in a return-source expression."""
+        expr_name = self.get_expression_name(expr)
+        if isinstance(expr, (IdentifierNode, VariableNode, str)):
+            if expr_name in param_indices:
+                param_index = param_indices[expr_name]
+                if param_index >= len(raw_args):
+                    return None
+                return raw_args[param_index]
+            return expr
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.substitute_query_return_expr(
+                expr.left,
+                param_indices,
+                raw_args,
+            )
+            right = self.substitute_query_return_expr(
+                expr.right,
+                param_indices,
+                raw_args,
+            )
+            if left is None or right is None:
+                return None
+            return BinaryOpNode(left, expr.operator, right)
+
+        if isinstance(expr, UnaryOpNode):
+            operand = self.substitute_query_return_expr(
+                expr.operand,
+                param_indices,
+                raw_args,
+            )
+            if operand is None:
+                return None
+            return UnaryOpNode(expr.operator, operand, expr.is_postfix)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.substitute_query_return_expr(
+                expr.condition,
+                param_indices,
+                raw_args,
+            )
+            true_expr = self.substitute_query_return_expr(
+                expr.true_expr,
+                param_indices,
+                raw_args,
+            )
+            false_expr = self.substitute_query_return_expr(
+                expr.false_expr,
+                param_indices,
+                raw_args,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return TernaryOpNode(condition, true_expr, false_expr)
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = self.substitute_query_return_expr(
+                expr.array_expr,
+                param_indices,
+                raw_args,
+            )
+            index_expr = self.substitute_query_return_expr(
+                expr.index_expr,
+                param_indices,
+                raw_args,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return ArrayAccessNode(array_expr, index_expr)
+
+        if isinstance(expr, MemberAccessNode):
+            object_expr = self.substitute_query_return_expr(
+                expr.object_expr,
+                param_indices,
+                raw_args,
+            )
+            if object_expr is None:
+                return None
+            return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, FunctionCallNode):
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                substituted = self.substitute_query_return_expr(
+                    argument,
+                    param_indices,
+                    raw_args,
+                )
+                if substituted is None:
+                    return None
+                arguments.append(substituted)
+            return FunctionCallNode(
+                expr.function,
+                arguments,
+                getattr(expr, "generic_args", []),
+            )
+
+        return expr
+
+    def query_array_access_parts(self, expr):
+        """Return the base expression and ordered indices for nested array access."""
+        indices = []
+        current = expr
+        while isinstance(current, ArrayAccessNode):
+            index_node = getattr(
+                current,
+                "index_expr",
+                getattr(current, "index", None),
+            )
+            array_node = getattr(
+                current,
+                "array_expr",
+                getattr(current, "array", None),
+            )
+            if index_node is None or array_node is None:
+                return None, []
+            indices.insert(0, index_node)
+            current = array_node
+        return current, indices
+
+    def is_safe_query_return_index(self, index_expr, param_indices):
+        """Return whether a returned-array index can be rendered in the caller."""
+        if isinstance(index_expr, LiteralNode) or isinstance(index_expr, int):
+            return True
+        if isinstance(index_expr, BinaryOpNode):
+            operator = getattr(index_expr, "operator", getattr(index_expr, "op", None))
+            return (
+                operator in self.query_return_index_binary_ops
+                and self.is_safe_query_return_index(index_expr.left, param_indices)
+                and self.is_safe_query_return_index(index_expr.right, param_indices)
+            )
+        index_name = self.get_expression_name(index_expr)
+        if index_name:
+            return index_name in param_indices
+        if isinstance(index_expr, str):
+            return index_expr.lstrip("-").isdigit()
+        return False
+
+    def collect_resource_query_requirements(self, node):
+        """Collect query metadata needs, resolving local CUDA resource aliases."""
+        global_names, function_params = (
+            ResourceQueryMixin.collect_resource_query_requirements(self, node)
+        )
+
+        functions = self.query_collect_functions(node)
+        functions_by_name = {getattr(func, "name", None): func for func in functions}
+        functions_by_name = {
+            name: func for name, func in functions_by_name.items() if name
+        }
+        function_parameter_names = {
+            func_name: {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+            }
+            for func_name, func in functions_by_name.items()
+        }
+        function_parameter_names = {
+            func_name: {name for name in names if name}
+            for func_name, names in function_parameter_names.items()
+        }
+
+        local_resource_names = {}
+        local_alias_sources = {}
+        local_assignment_sources = {}
+        for func_name, func in functions_by_name.items():
+            names, aliases = self.collect_function_resource_aliases(func)
+            local_resource_names[func_name] = names
+            local_alias_sources[func_name] = aliases
+            local_assignment_sources[func_name] = (
+                self.collect_function_resource_assignments(func, names)
+            )
+        local_metadata_snapshots = {func_name: set() for func_name in functions_by_name}
+
+        global_resource_names = {
+            getattr(var, "name", None)
+            for var in getattr(node, "global_variables", [])
+            if self.is_queryable_resource_type(self.get_variable_node_type(var))
+        }
+        global_resource_names = {name for name in global_resource_names if name}
+
+        def mark_resolved_resource(func_name, resource_expr, visited=None):
+            if visited is None:
+                visited = set()
+            if isinstance(resource_expr, TernaryOpNode):
+                if not self.is_safe_query_return_actual_index(resource_expr.condition):
+                    return False
+                true_changed = mark_resolved_resource(
+                    func_name,
+                    resource_expr.true_expr,
+                    visited.copy(),
+                )
+                false_changed = mark_resolved_resource(
+                    func_name,
+                    resource_expr.false_expr,
+                    visited.copy(),
+                )
+                return true_changed or false_changed
+
+            if isinstance(resource_expr, FunctionCallNode):
+                callee_name = self.raw_function_call_name(resource_expr)
+                return_source = self.query_return_sources.get(callee_name)
+                if return_source is None:
+                    return False
+                raw_args = getattr(
+                    resource_expr,
+                    "arguments",
+                    getattr(resource_expr, "args", []),
+                )
+                return mark_return_source_resources(
+                    func_name,
+                    return_source,
+                    raw_args,
+                    visited,
+                )
+
+            resource_name = self.get_expression_name(resource_expr)
+            if not resource_name:
+                return False
+            if resource_name in visited:
+                return False
+            visited.add(resource_name)
+
+            aliases = local_alias_sources.get(func_name, {})
+            assignments = local_assignment_sources.get(func_name, {})
+            if resource_name in local_resource_names.get(func_name, set()):
+                if resource_name in assignments:
+                    snapshot_names = local_metadata_snapshots.setdefault(
+                        func_name,
+                        set(),
+                    )
+                    before = len(snapshot_names)
+                    snapshot_names.add(resource_name)
+                    changed = len(snapshot_names) != before
+                    sources = []
+                    if resource_name in aliases:
+                        sources.append(aliases[resource_name])
+                    sources.extend(assignments.get(resource_name, []))
+                    for source in sources:
+                        changed = (
+                            mark_resolved_resource(
+                                func_name,
+                                source,
+                                visited.copy(),
+                            )
+                            or changed
+                        )
+                    return changed
+                if resource_name in aliases:
+                    return mark_resolved_resource(
+                        func_name,
+                        aliases[resource_name],
+                        visited,
+                    )
+                return False
+
+            if resource_name in function_parameter_names.get(func_name, set()):
+                before = len(function_params.setdefault(func_name, set()))
+                function_params[func_name].add(resource_name)
+                return len(function_params[func_name]) != before
+
+            before = len(global_names)
+            global_names.add(resource_name)
+            return len(global_names) != before
+
+        def mark_return_source_resources(func_name, return_source, raw_args, visited):
+            kind = return_source["kind"]
+            if kind == "global":
+                before = len(global_names)
+                global_names.add(return_source["name"])
+                return len(global_names) != before
+            if kind == "parameter":
+                index = return_source["index"]
+                if index >= len(raw_args):
+                    return False
+                return mark_resolved_resource(func_name, raw_args[index], visited)
+            if kind == "ternary":
+                true_changed = mark_return_source_resources(
+                    func_name,
+                    return_source["true_source"],
+                    raw_args,
+                    visited.copy(),
+                )
+                false_changed = mark_return_source_resources(
+                    func_name,
+                    return_source["false_source"],
+                    raw_args,
+                    visited.copy(),
+                )
+                return true_changed or false_changed
+            return False
+
+        for func_name, func in functions_by_name.items():
+            for call in self.query_walk_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                func_call_name = self.raw_function_call_name(call)
+                raw_args = getattr(call, "arguments", getattr(call, "args", []))
+                if func_call_name in self.query_function_names and raw_args:
+                    mark_resolved_resource(func_name, raw_args[0])
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, caller in functions_by_name.items():
+                for call in self.query_walk_nodes(getattr(caller, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.raw_function_call_name(call)
+                    callee = functions_by_name.get(callee_name)
+                    if callee is None:
+                        continue
+
+                    callee_required = function_params.get(callee_name, set())
+                    if not callee_required:
+                        continue
+
+                    callee_params = getattr(
+                        callee, "parameters", getattr(callee, "params", [])
+                    )
+                    raw_args = getattr(call, "arguments", getattr(call, "args", []))
+                    for index, param in enumerate(callee_params):
+                        if index >= len(raw_args):
+                            continue
+                        param_name = getattr(param, "name", None)
+                        if param_name not in callee_required:
+                            continue
+                        changed = (
+                            mark_resolved_resource(caller_name, raw_args[index])
+                            or changed
+                        )
+
+        for names in local_resource_names.values():
+            global_names.difference_update(names - global_resource_names)
+
+        self.query_local_resource_names_by_function = {
+            func_name: names
+            for func_name, names in local_resource_names.items()
+            if names
+        }
+        self.query_metadata_snapshot_locals_by_function = {
+            func_name: names
+            for func_name, names in local_metadata_snapshots.items()
+            if names
+        }
+        return (
+            global_names,
+            {func_name: names for func_name, names in function_params.items() if names},
+        )
+
+    def register_query_metadata_alias(self, name, type_name, source_node=None):
+        """Track local resource aliases that can reuse an existing metadata sidecar."""
+        if not self.current_function_name or not name:
+            return
+        if not self.is_queryable_resource_type(type_name) or source_node is None:
+            self.query_metadata_aliases.pop(name, None)
+            return
+
+        metadata_expr = self.query_metadata_expression(source_node)
+        if metadata_expr is None:
+            self.query_metadata_aliases.pop(name, None)
+            return
+        self.query_metadata_aliases[name] = metadata_expr
+
+    def is_query_metadata_snapshot_local(self, name, type_name=None):
+        """Return whether a local resource needs its own mutable metadata sidecar."""
+        if not self.current_function_name or not name:
+            return False
+        snapshot_names = self.query_metadata_snapshot_locals_by_function.get(
+            self.current_function_name,
+            set(),
+        )
+        if name not in snapshot_names:
+            return False
+        if type_name is not None and not self.is_queryable_resource_type(type_name):
+            return False
+        return True
+
+    def query_metadata_snapshot_declaration(self, name, type_name, initial_value=None):
+        """Return a local metadata sidecar declaration for reassigned resources."""
+        if not self.is_query_metadata_snapshot_local(name, type_name):
+            return None
+
+        declarator = self.format_typed_declarator(
+            self.query_metadata_type(type_name),
+            self.query_metadata_name(name),
+            dynamic_array_as_pointer=False,
+        )
+        metadata_expr = None
+        if initial_value is not None:
+            metadata_expr = self.query_metadata_expression(initial_value)
+        if metadata_expr is None:
+            metadata_expr = "{}"
+        return f"{declarator} = {metadata_expr}"
+
+    def format_query_metadata_assignment(self, node):
+        """Return a metadata sidecar update for a reassigned local resource."""
+        if getattr(node, "operator", "=") != "=":
+            return None
+
+        target_node = getattr(node, "target", None)
+        if not isinstance(target_node, (IdentifierNode, VariableNode, str)):
+            return None
+        target_name = self.get_expression_name(target_node)
+        target_type = self.variable_types.get(target_name)
+        if not self.is_query_metadata_snapshot_local(target_name, target_type):
+            return None
+
+        metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
+        if metadata_expr is None:
+            resource_type = self.resource_base_type(target_type) or target_type
+            resource_type = resource_type or "resource"
+            metadata_expr = (
+                "/* unsupported CUDA resource query: metadata unavailable for "
+                f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+            )
+        return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
+
+    def query_metadata_expression(self, resource_expr):
+        """Return CUDA query metadata paired with a resource expression."""
+        if isinstance(resource_expr, TernaryOpNode):
+            if not self.is_safe_query_return_actual_index(resource_expr.condition):
+                return None
+            true_type = self.resource_base_type(
+                self.resource_expression_type(resource_expr.true_expr)
+            )
+            false_type = self.resource_base_type(
+                self.resource_expression_type(resource_expr.false_expr)
+            )
+            if true_type is None or false_type is None or true_type != false_type:
+                return None
+            true_metadata = self.query_metadata_expression(resource_expr.true_expr)
+            false_metadata = self.query_metadata_expression(resource_expr.false_expr)
+            if true_metadata is None or false_metadata is None:
+                return None
+            condition = self.visit(resource_expr.condition)
+            return f"({condition} ? {true_metadata} : {false_metadata})"
+
+        if isinstance(resource_expr, FunctionCallNode):
+            callee_name = self.raw_function_call_name(resource_expr)
+            return_source = self.query_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                resource_expr,
+                "arguments",
+                getattr(resource_expr, "args", []),
+            )
+            return self.query_return_source_metadata_expression(
+                return_source,
+                raw_args,
+            )
+
+        if isinstance(resource_expr, ArrayAccessNode):
+            array_node = getattr(
+                resource_expr,
+                "array_expr",
+                getattr(resource_expr, "array", None),
+            )
+            index_node = getattr(
+                resource_expr,
+                "index_expr",
+                getattr(resource_expr, "index", None),
+            )
+            if index_node is None or not self.is_safe_query_return_actual_index(
+                index_node
+            ):
+                return None
+            base_expr = self.query_metadata_expression(array_node)
+            if base_expr is None:
+                return None
+            return f"{base_expr}[{self.visit(index_node)}]"
+
+        resource_name = self.get_expression_name(resource_expr)
+        if not resource_name:
+            return None
+
+        alias_expr = self.query_metadata_aliases.get(resource_name)
+        if alias_expr is not None:
+            return alias_expr
+
+        current_function = self.current_function_name
+        local_names = self.query_local_resource_names_by_function.get(
+            current_function,
+            set(),
+        )
+        if resource_name in local_names:
+            return None
+
+        if current_function:
+            query_params = self.query_metadata_function_params.get(
+                current_function,
+                set(),
+            )
+            if resource_name in query_params:
+                return self.query_metadata_name(resource_name)
+
+        if resource_name in self.query_resource_names:
+            return self.query_metadata_name(resource_name)
+        return None
+
+    def query_return_source_metadata_expression(self, return_source, raw_args):
+        """Render query metadata for a resource returned by a user function."""
+        if return_source["kind"] == "ternary":
+            condition = self.format_query_return_safe_expression(
+                return_source["condition"],
+                return_source.get("param_indices", {}),
+                raw_args,
+            )
+            if condition is None:
+                return None
+            true_metadata = self.query_return_source_metadata_expression(
+                return_source["true_source"],
+                raw_args,
+            )
+            false_metadata = self.query_return_source_metadata_expression(
+                return_source["false_source"],
+                raw_args,
+            )
+            if true_metadata is None or false_metadata is None:
+                return None
+            return f"({condition} ? {true_metadata} : {false_metadata})"
+
+        if return_source["kind"] == "global":
+            metadata_expr = self.query_metadata_name(return_source["name"])
+        elif return_source["kind"] == "parameter":
+            index = return_source["index"]
+            if index >= len(raw_args):
+                return None
+            metadata_expr = self.query_metadata_expression(raw_args[index])
+        else:
+            return None
+        if metadata_expr is None:
+            return None
+
+        param_indices = return_source.get("param_indices", {})
+        for index_expr in return_source.get("indices", []):
+            rendered_index = self.format_query_return_index(
+                index_expr,
+                param_indices,
+                raw_args,
+            )
+            if rendered_index is None:
+                return None
+            metadata_expr = f"{metadata_expr}[{rendered_index}]"
+        return metadata_expr
+
+    def format_query_return_safe_expression(
+        self,
+        expr,
+        param_indices,
+        raw_args,
+        allow_free_identifiers=False,
+    ):
+        """Render a side-effect-safe returned-resource selector expression."""
+        if isinstance(expr, BinaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator not in (
+                self.query_return_index_binary_ops
+                | {"&&", "||", "==", "!=", "<", "<=", ">", ">="}
+            ):
+                return None
+            left = self.format_query_return_safe_expression(
+                expr.left,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            right = self.format_query_return_safe_expression(
+                expr.right,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if left is None or right is None:
+                return None
+            return f"({left} {operator} {right})"
+
+        if isinstance(expr, UnaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if getattr(expr, "is_postfix", False) or operator not in {
+                "!",
+                "+",
+                "-",
+                "~",
+            }:
+                return None
+            operand = self.format_query_return_safe_expression(
+                expr.operand,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if operand is None:
+                return None
+            return f"{operator}{operand}"
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.format_query_return_safe_expression(
+                expr.condition,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            true_expr = self.format_query_return_safe_expression(
+                expr.true_expr,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            false_expr = self.format_query_return_safe_expression(
+                expr.false_expr,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return f"({condition} ? {true_expr} : {false_expr})"
+
+        if isinstance(expr, ArrayAccessNode):
+            array_node = getattr(
+                expr,
+                "array_expr",
+                getattr(expr, "array", None),
+            )
+            index_node = getattr(
+                expr,
+                "index_expr",
+                getattr(expr, "index", None),
+            )
+            if array_node is None or index_node is None:
+                return None
+            array_expr = self.format_query_return_safe_expression(
+                array_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            index_expr = self.format_query_return_safe_expression(
+                index_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return f"{array_expr}[{index_expr}]"
+
+        if isinstance(expr, MemberAccessNode):
+            object_node = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", None),
+            )
+            member = getattr(expr, "member", None)
+            member_name = getattr(member, "name", member)
+            if object_node is None or not isinstance(member_name, str):
+                return None
+            object_expr = self.format_query_return_safe_expression(
+                object_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if object_expr is None:
+                return None
+            return f"{object_expr}.{member_name}"
+
+        expr_name = self.get_expression_name(expr)
+        if expr_name in param_indices:
+            param_index = param_indices[expr_name]
+            if param_index >= len(raw_args):
+                return None
+            return self.format_query_return_safe_expression(
+                raw_args[param_index],
+                {},
+                [],
+                allow_free_identifiers=True,
+            )
+        if allow_free_identifiers and expr_name:
+            return self.visit(expr)
+        if isinstance(expr, LiteralNode):
+            return self.visit(expr)
+        if isinstance(expr, bool):
+            return "true" if expr else "false"
+        if isinstance(expr, (int, float)):
+            return str(expr)
+        if isinstance(expr, str):
+            stripped = expr.strip()
+            if stripped in {"true", "false"} or stripped.lstrip("-").isdigit():
+                return stripped
+            if allow_free_identifiers and stripped.isidentifier():
+                return stripped
+        return None
+
+    def format_query_return_index(self, index_expr, param_indices, raw_args):
+        """Render a returned-array index in the caller's argument context."""
+        if isinstance(index_expr, BinaryOpNode):
+            operator = getattr(index_expr, "operator", getattr(index_expr, "op", None))
+            if operator not in self.query_return_index_binary_ops:
+                return None
+            left = self.format_query_return_index(
+                index_expr.left,
+                param_indices,
+                raw_args,
+            )
+            right = self.format_query_return_index(
+                index_expr.right,
+                param_indices,
+                raw_args,
+            )
+            if left is None or right is None:
+                return None
+            return f"({left} {operator} {right})"
+        index_name = self.get_expression_name(index_expr)
+        if index_name in param_indices:
+            param_index = param_indices[index_name]
+            if param_index >= len(raw_args):
+                return None
+            actual_expr = raw_args[param_index]
+            if not self.is_safe_query_return_actual_index(actual_expr):
+                return None
+            return self.visit(actual_expr)
+        if isinstance(index_expr, LiteralNode):
+            return self.visit(index_expr)
+        if isinstance(index_expr, int):
+            return str(index_expr)
+        if isinstance(index_expr, str) and index_expr.lstrip("-").isdigit():
+            return index_expr
+        return None
+
+    def is_safe_query_return_actual_index(self, actual_expr):
+        """Return whether a caller argument can be reused as a metadata index."""
+        if isinstance(actual_expr, LiteralNode) or isinstance(actual_expr, int):
+            return True
+        if isinstance(actual_expr, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(actual_expr, str):
+            actual_expr = actual_expr.strip()
+            return actual_expr.lstrip("-").isdigit() or actual_expr.isidentifier()
+        if isinstance(actual_expr, BinaryOpNode):
+            operator = getattr(
+                actual_expr, "operator", getattr(actual_expr, "op", None)
+            )
+            return (
+                operator in self.query_return_index_binary_ops
+                and self.is_safe_query_return_actual_index(actual_expr.left)
+                and self.is_safe_query_return_actual_index(actual_expr.right)
+            )
+        if isinstance(actual_expr, UnaryOpNode):
+            operator = getattr(
+                actual_expr, "operator", getattr(actual_expr, "op", None)
+            )
+            return (
+                not getattr(actual_expr, "is_postfix", False)
+                and operator in {"+", "-", "~"}
+                and self.is_safe_query_return_actual_index(actual_expr.operand)
+            )
+        if isinstance(actual_expr, TernaryOpNode):
+            return (
+                self.is_safe_query_return_actual_index(actual_expr.condition)
+                and self.is_safe_query_return_actual_index(actual_expr.true_expr)
+                and self.is_safe_query_return_actual_index(actual_expr.false_expr)
+            )
+        if isinstance(actual_expr, ArrayAccessNode):
+            array_node = getattr(
+                actual_expr,
+                "array_expr",
+                getattr(actual_expr, "array", None),
+            )
+            index_node = getattr(
+                actual_expr,
+                "index_expr",
+                getattr(actual_expr, "index", None),
+            )
+            return (
+                array_node is not None
+                and index_node is not None
+                and self.is_safe_query_return_actual_index(array_node)
+                and self.is_safe_query_return_actual_index(index_node)
+            )
+        if isinstance(actual_expr, MemberAccessNode):
+            object_expr = getattr(
+                actual_expr,
+                "object_expr",
+                getattr(actual_expr, "object", None),
+            )
+            return object_expr is not None and self.is_safe_query_return_actual_index(
+                object_expr
+            )
+        return False
+
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
         function_mapping = {
@@ -3015,12 +4717,122 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return function_mapping.get(func_name, func_name)
 
-    def register_variable_type(self, name, type_name):
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        return str(value)
+
+    def explicit_resource_access(self, node):
+        if node is None:
+            return None
+
+        access_names = {
+            "read": "readonly",
+            "readonly": "readonly",
+            "write": "writeonly",
+            "writeonly": "writeonly",
+            "read_write": "readwrite",
+            "readwrite": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = access_names.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                raw_access = self.attribute_value_to_string(arguments[0])
+                access = access_names.get(str(raw_access).lower())
+            else:
+                access = access_names.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def declaration_qualifier_names(self, node):
+        """Return normalized qualifier and attribute names on declarations."""
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name:
+                names.add(attr_name)
+        return names
+
+    def apply_readonly_qualifier_to_type(self, type_name, node):
+        """Apply readonly declaration qualifiers to pointer/reference types."""
+        type_string = self.type_name_string(type_name)
+        if not type_string:
+            return type_name
+
+        if self.cuda_pointer_or_reference_type_info(type_string) is None:
+            return type_string
+
+        if not (
+            self.declaration_qualifier_names(node) & {"const", "readonly", "constant"}
+        ):
+            return type_string
+
+        if type_string.startswith("const "):
+            return type_string
+        return f"const {type_string}"
+
+    def is_storage_image_type(self, type_name):
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        base_type = self.resource_base_type(type_name)
+        if not isinstance(base_type, str):
+            return False
+        image_shapes = {
+            "image1D",
+            "image1DArray",
+            "image2D",
+            "image2DArray",
+            "image3D",
+            "imageCube",
+            "imageCubeArray",
+            "image2DMS",
+            "image2DMSArray",
+        }
+        return base_type in image_shapes or any(
+            base_type == f"{prefix}{shape}"
+            for prefix in ("i", "u")
+            for shape in image_shapes
+        )
+
+    def register_variable_type(self, name, type_name, node=None, source_node=None):
         if not name or type_name is None:
             return
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
+        type_name = self.apply_readonly_qualifier_to_type(type_name, node)
         self.variable_types[name] = type_name
+        if not self.is_storage_image_type(type_name):
+            self.image_resource_accesses.pop(name, None)
+            return
+
+        access = self.explicit_resource_access(node)
+        if access is None and source_node is not None:
+            access = self.image_resource_access(source_node)
+        if access is None:
+            self.image_resource_accesses.pop(name, None)
+        else:
+            self.image_resource_accesses[name] = access
 
     def get_expression_name(self, node):
         if isinstance(node, IdentifierNode):
@@ -3039,6 +4851,119 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if name is None:
             return None
         return self.variable_types.get(name)
+
+    def resource_expression_type(self, node):
+        type_name = self.get_expression_type(node)
+        if type_name is None:
+            type_name = self.expression_result_type(node)
+        if type_name is not None and not isinstance(type_name, str):
+            return self.convert_type_node_to_string(type_name)
+        return type_name
+
+    def resource_query_metadata_unavailable_call(
+        self, func_name, resource_type, fallback
+    ):
+        resource_type = resource_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} metadata unavailable on {resource_type} */ {fallback}"
+        )
+
+    def unsupported_dimension_metadata_query_call(self, func_name, resource_type):
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+        return_type = self.query_return_type(spec["dimensions"])
+        fallback = self.query_constructor(
+            return_type,
+            ["0"] * len(spec["dimensions"]),
+        )
+        return self.resource_query_metadata_unavailable_call(
+            func_name, resource_type, fallback
+        )
+
+    def unsupported_scalar_metadata_query_call(self, func_name, resource_type):
+        return self.resource_query_metadata_unavailable_call(
+            func_name, resource_type, "0"
+        )
+
+    def generate_dimension_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_dimension_metadata_query_call(
+                func_name, resource_type
+            )
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        if spec["mip"]:
+            self.ensure_query_prefix_helper()
+        self.require_helper_function(
+            helper_name, self.build_dimension_query_helper(helper_name, spec)
+        )
+
+        if spec["mip"]:
+            lod = args[1] if len(args) > 1 else "0"
+            return f"{helper_name}({metadata_expr}, {lod})"
+        return f"{helper_name}({metadata_expr})"
+
+    def generate_sample_count_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None or not spec["samples"]:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_scalar_metadata_query_call(func_name, resource_type)
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_{func_name}_{resource_type}"
+        self.require_helper_function(
+            helper_name, self.build_sample_count_query_helper(helper_name)
+        )
+        return f"{helper_name}({metadata_expr})"
+
+    def generate_texture_query_levels(self, raw_args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        if not self.is_sampled_resource_type(resource_type):
+            return None
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+
+        metadata_expr = self.query_metadata_expression(raw_args[0])
+        if metadata_expr is None:
+            return self.unsupported_scalar_metadata_query_call(
+                "textureQueryLevels", resource_type
+            )
+
+        self.resource_query_info_required = True
+        helper_name = f"cgl_textureQueryLevels_{resource_type}"
+        self.require_helper_function(
+            helper_name, self.build_texture_query_levels_helper(helper_name, spec)
+        )
+        return f"{helper_name}({metadata_expr})"
 
     def map_vector_arithmetic_type(self, type_name):
         return self.convert_crossgl_type_to_cuda(type_name)
@@ -3151,6 +5076,43 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return None
 
+    def texture_offset_argument_index(self, func_name):
+        return {
+            "textureOffset": 2,
+            "textureLodOffset": 3,
+            "textureGradOffset": 4,
+            "textureProjOffset": 2,
+            "textureProjLodOffset": 3,
+            "textureProjGradOffset": 4,
+            "texelFetchOffset": 3,
+        }.get(func_name)
+
+    def expected_texture_offset_coordinate_count(self, texture_type):
+        return {
+            "sampler1D": 1,
+            "sampler1DArray": 1,
+            "sampler2D": 2,
+            "sampler2DArray": 2,
+            "sampler3D": 3,
+        }.get(texture_type)
+
+    def texture_offset_rank_diagnostic(self, func_name, texture_type, raw_offset):
+        expected_offset_count = self.expected_texture_offset_coordinate_count(
+            texture_type
+        )
+        actual_offset_count = self.texel_fetch_coordinate_count(raw_offset)
+        if (
+            expected_offset_count is not None
+            and actual_offset_count is not None
+            and actual_offset_count != expected_offset_count
+        ):
+            return self.unsupported_sampled_resource_call(
+                f"{func_name} offset rank",
+                texture_type,
+                [],
+            )
+        return None
+
     def expected_texture_gradient_coordinate_counts(self, texture_type):
         return {
             "sampler1D": {1},
@@ -3222,6 +5184,102 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             f"{func_name} coordinate rank on {image_type} */ {fallback}"
         )
 
+    def image_resource_access(self, image_arg):
+        if isinstance(image_arg, FunctionCallNode):
+            callee_name = self.raw_function_call_name(image_arg)
+            return_source = self.query_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                image_arg,
+                "arguments",
+                getattr(image_arg, "args", []),
+            )
+            return self.query_return_source_image_access(return_source, raw_args)
+
+        if isinstance(image_arg, ArrayAccessNode):
+            array_node = getattr(
+                image_arg, "array", getattr(image_arg, "array_expr", None)
+            )
+            return self.image_resource_access(array_node)
+
+        if isinstance(image_arg, MemberAccessNode):
+            object_node = getattr(
+                image_arg,
+                "object_expr",
+                getattr(image_arg, "object", None),
+            )
+            object_type = self.type_name_string(
+                self.expression_result_type(object_node)
+            )
+            member = getattr(image_arg, "member", None)
+            access = self.struct_member_image_accesses.get(object_type, {}).get(member)
+            if access is not None:
+                return access
+
+        image_name = self.get_expression_name(image_arg)
+        if not image_name:
+            return None
+        return self.image_resource_accesses.get(image_name)
+
+    def query_return_source_image_access(self, return_source, raw_args):
+        """Return storage-image access for a traceable returned resource."""
+        kind = return_source.get("kind")
+        if kind == "ternary":
+            true_access = self.query_return_source_image_access(
+                return_source["true_source"],
+                raw_args,
+            )
+            false_access = self.query_return_source_image_access(
+                return_source["false_source"],
+                raw_args,
+            )
+            if true_access is None or true_access != false_access:
+                return None
+            return true_access
+
+        if kind == "global":
+            return self.image_resource_access(return_source.get("name"))
+
+        if kind == "parameter":
+            index = return_source.get("index")
+            if index is None or index >= len(raw_args):
+                return None
+            return self.image_resource_access(raw_args[index])
+
+        if kind == "member":
+            object_type = return_source.get("object_type")
+            member = return_source.get("member")
+            return self.struct_member_image_accesses.get(object_type, {}).get(member)
+
+        return None
+
+    def unsupported_image_access_call(self, func_name, image_type, reason):
+        image_type = image_type or "unknown resource"
+        fallback = "((void)0)"
+        if func_name == "imageLoad":
+            fallback = self.zero_value_for_type(self.image_value_type(image_type))
+        return (
+            f"/* unsupported CUDA image access: "
+            f"{func_name} {reason} on {image_type} */ {fallback}"
+        )
+
+    def image_access_diagnostic(self, func_name, image_type, raw_image):
+        access = self.image_resource_access(raw_image)
+        if func_name == "imageLoad" and access == "writeonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires readable image resource",
+            )
+        if func_name == "imageStore" and access == "readonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires writable image resource",
+            )
+        return None
+
     def image_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
         expected_coord_count = self.expected_image_coordinate_count(image_type)
         actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
@@ -3241,6 +5299,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             f"{self.image_atomic_zero_value(image_type)}"
         )
 
+    def unsupported_image_atomic_access_call(self, func_name, image_type):
+        image_type = image_type or "unknown resource"
+        return (
+            f"/* unsupported CUDA image atomic resource call: "
+            f"{func_name} requires readwrite image resource on {image_type} */ "
+            f"{self.image_atomic_zero_value(image_type)}"
+        )
+
+    def image_atomic_access_diagnostic(self, func_name, image_type, raw_image):
+        if self.image_resource_access(raw_image) in {"readonly", "writeonly"}:
+            return self.unsupported_image_atomic_access_call(func_name, image_type)
+        return None
+
     def image_atomic_coordinate_rank_diagnostic(self, func_name, image_type, raw_coord):
         expected_coord_count = self.expected_image_coordinate_count(image_type)
         actual_coord_count = self.texel_fetch_coordinate_count(raw_coord)
@@ -3254,19 +5325,39 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return None
 
+    def unsupported_scalar_resource_query_call(self, func_name, resource_type):
+        resource_type = resource_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} on {resource_type} */ 0"
+        )
+
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
 
         if func_name in {"textureSamples", "imageSamples"}:
-            return self.generate_sample_count_query(func_name, raw_args, args)
+            sample_count_query = self.generate_sample_count_query(
+                func_name, raw_args, args
+            )
+            if sample_count_query is not None:
+                return sample_count_query
+            if raw_args:
+                resource_type = self.resource_base_type(
+                    self.resource_expression_type(raw_args[0])
+                )
+                if resource_type is not None:
+                    return self.unsupported_scalar_resource_query_call(
+                        func_name, resource_type
+                    )
+            return None
 
         if func_name == "textureQueryLevels":
             return self.generate_texture_query_levels(raw_args)
 
         if func_name == "textureQueryLod" and len(args) >= 2:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 return self.unsupported_resource_query_call(
@@ -3298,7 +5389,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and len(args) >= 2
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_shadow_resource_type(texture_type):
                 return self.unsupported_shadow_resource_call(
@@ -3320,7 +5411,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and len(args) >= 2
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 return self.unsupported_sampled_resource_call(
@@ -3344,7 +5435,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             and raw_args
         ):
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if texture_type is not None:
                 if self.is_shadow_resource_type(texture_type):
@@ -3355,6 +5446,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return self.unsupported_multisample_resource_call(
                         func_name, texture_type, args
                     )
+                offset_arg_index = self.texture_offset_argument_index(func_name)
+                if offset_arg_index is not None and len(raw_args) > offset_arg_index:
+                    offset_diagnostic = self.texture_offset_rank_diagnostic(
+                        func_name,
+                        texture_type,
+                        raw_args[offset_arg_index],
+                    )
+                    if offset_diagnostic is not None:
+                        return offset_diagnostic
                 return self.unsupported_sampled_resource_call(
                     func_name, texture_type, args
                 )
@@ -3372,8 +5472,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             image_type = None
             if raw_args:
                 image_type = self.resource_base_type(
-                    self.get_expression_type(raw_args[0])
+                    self.resource_expression_type(raw_args[0])
                 )
+                access_diagnostic = self.image_atomic_access_diagnostic(
+                    func_name, image_type, raw_args[0]
+                )
+                if access_diagnostic is not None:
+                    return access_diagnostic
             if len(raw_args) >= 2:
                 coordinate_diagnostic = self.image_atomic_coordinate_rank_diagnostic(
                     func_name, image_type, raw_args[1]
@@ -3386,7 +5491,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name in {"texture", "textureLod", "textureGrad"} and len(args) >= 2:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
@@ -3522,7 +5627,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "texelFetch" and len(args) >= 3:
             texture_type = self.resource_base_type(
-                self.get_expression_type(raw_args[0])
+                self.resource_expression_type(raw_args[0])
             )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
@@ -3579,13 +5684,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
 
         if func_name == "imageLoad" and len(args) >= 2:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            image_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
             if image_type is None:
                 return None
             if self.is_multisample_resource_type(image_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
@@ -3626,13 +5738,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return f"surf2Dread<{value_type}>({image_name}, {x}, {y})"
 
         if func_name == "imageStore" and len(args) >= 3:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+            image_type = self.resource_base_type(
+                self.resource_expression_type(raw_args[0])
+            )
             if image_type is None:
                 return None
             if self.is_multisample_resource_type(image_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
@@ -3673,12 +5792,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def generate_texture_gather_call(self, raw_args, args):
-        texture_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        texture_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
         if texture_type != "sampler2D":
             return None
 
         coordinate_index = 1
         component = None
+        component_arg = None
         if len(args) == 2:
             pass
         elif len(args) == 3:
@@ -3686,9 +5808,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 coordinate_index = 2
             else:
                 component = args[2]
+                component_arg = raw_args[2]
         elif len(args) == 4 and self.is_sampler_state_argument(raw_args[1]):
             coordinate_index = 2
             component = args[3]
+            component_arg = raw_args[3]
         else:
             return None
 
@@ -3700,6 +5824,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if coordinate_diagnostic is not None:
             return coordinate_diagnostic
 
+        component_diagnostic = self.texture_gather_component_diagnostic(
+            texture_type, component_arg
+        )
+        if component_diagnostic is not None:
+            return component_diagnostic
+
         texture_name = args[0]
         coord = args[coordinate_index]
         gather_args = (
@@ -3710,6 +5840,59 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if component is not None:
             return f"tex2Dgather<float4>({gather_args}, {component})"
         return f"tex2Dgather<float4>({gather_args})"
+
+    def texture_gather_component_diagnostic(self, texture_type, component_arg):
+        if not self.is_texture_gather_literal_component(component_arg):
+            return None
+        component_value = self.literal_int_value(component_arg)
+        if component_value in {0, 1, 2, 3}:
+            return None
+        return self.unsupported_sampled_resource_call(
+            "textureGather component literal must be 0, 1, 2, or 3",
+            texture_type,
+            [],
+        )
+
+    def is_texture_gather_literal_component(self, node):
+        if isinstance(node, LiteralNode):
+            return True
+        if isinstance(node, UnaryOpNode) and not getattr(node, "is_postfix", False):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator in {"+", "-"}:
+                return self.is_texture_gather_literal_component(node.operand)
+        return False
+
+    def literal_int_value(self, node):
+        if isinstance(node, LiteralNode):
+            value = node.value
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                literal_type = getattr(
+                    getattr(node, "literal_type", None), "name", None
+                )
+                if literal_type in {"char", "string"}:
+                    return None
+                try:
+                    return int(value, 0)
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(node, UnaryOpNode) and not getattr(node, "is_postfix", False):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator not in {"+", "-"}:
+                return None
+            value = self.literal_int_value(node.operand)
+            if value is None:
+                return None
+            if operator == "-":
+                return -value
+            return value
+
+        return None
 
     def is_sampler_state_argument(self, raw_arg):
         return self.resource_base_type(self.get_expression_type(raw_arg)) == "sampler"
@@ -3780,6 +5963,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "pointee_type"):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            prefix = "" if getattr(type_node, "is_mutable", True) else "const "
+            return f"{prefix}{pointee_type}*"
+        if hasattr(type_node, "referenced_type"):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            prefix = "" if getattr(type_node, "is_mutable", False) else "const "
+            return f"{prefix}{referenced_type}&"
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:

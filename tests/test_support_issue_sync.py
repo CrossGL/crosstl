@@ -85,6 +85,15 @@ def sample_matrix():
 
 def sample_signals():
     return {
+        "summary": {
+            "docs_probe": {
+                "provided": True,
+                "total": 1,
+                "ok": 1,
+                "failed": 0,
+                "linked_documents": 0,
+            }
+        },
         "features": [
             {
                 "id": "target.codegen",
@@ -288,6 +297,85 @@ def test_build_desired_issues_includes_generated_support_signal_issues():
     assert "test_gather" in child.body
 
 
+def test_desired_issue_counts_summarizes_planned_parent_backlog_and_signal_issues():
+    module = load_sync_module()
+
+    desired = module.build_desired_issues(sample_matrix(), sample_signals())
+
+    assert module.desired_issue_counts(desired) == {
+        "total": 5,
+        "parents": 2,
+        "backlog": 1,
+        "extracted": 2,
+    }
+
+
+def test_validate_desired_issues_accepts_complete_plan():
+    module = load_sync_module()
+    matrix = sample_matrix()
+    signals = sample_signals()
+    desired = module.build_desired_issues(matrix, signals)
+
+    assert (
+        module.validate_desired_issues(
+            matrix,
+            signals,
+            desired,
+            min_desired_issues=5,
+        )
+        == []
+    )
+
+
+def test_validate_desired_issues_catches_empty_or_incomplete_plan():
+    module = load_sync_module()
+
+    errors = module.validate_desired_issues(
+        sample_matrix(),
+        sample_signals(),
+        {},
+        min_desired_issues=5,
+    )
+
+    assert "desired issue plan has 0 issues, below minimum 5" in errors
+    assert "missing desired parent issue: parent:directx" in errors
+    assert "missing desired parent issue: parent:frontend" in errors
+    assert "missing desired backlog issue: backlog:directx:textures.gather" in errors
+    assert (
+        "missing desired extracted issue: extracted:directx:target.codegen:supported_without_detected_tests"
+        in errors
+    )
+
+
+def test_validate_desired_issues_catches_parent_and_marker_regressions():
+    module = load_sync_module()
+    desired = {
+        "backlog:directx:textures.gather": module.DesiredIssue(
+            key="backlog:directx:textures.gather",
+            title="bad",
+            body="missing marker",
+            labels=(module.LABEL_MANAGED, module.LABEL_BACKLOG),
+            parent_key="parent:missing",
+        )
+    }
+
+    errors = module.validate_desired_issues(
+        sample_matrix(),
+        None,
+        desired,
+        min_desired_issues=1,
+    )
+
+    assert (
+        "desired issue backlog:directx:textures.gather body is missing its sync marker"
+        in errors
+    )
+    assert (
+        "desired issue backlog:directx:textures.gather references missing parent parent:missing"
+        in errors
+    )
+
+
 def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches():
     module = load_sync_module()
     desired = module.build_desired_issues(sample_matrix())
@@ -332,6 +420,83 @@ def test_sync_issues_skips_existing_sub_issue_relationships():
 
     assert summary["attached"] == 0
     assert client.attached == []
+
+
+def test_sync_issues_closes_duplicate_managed_markers():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing_parent = issue(1, "parent:directx")
+    duplicate_parent = issue(2, "parent:directx")
+    client = FakeClient(existing=[existing_parent, duplicate_parent])
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        throttle_seconds=0,
+    )
+
+    assert summary["closed"] == 1
+    assert client.closed[0]["number"] == duplicate_parent["number"]
+    assert "# Duplicate Managed Support Issue" in client.closed[0]["body"]
+    assert module.marker_for("parent:directx") in client.closed[0]["body"]
+
+
+def test_sync_issues_preserves_stale_extracted_issues_when_signals_are_not_clean():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    stale_extracted = issue(
+        5,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+    )
+    client = FakeClient(existing=[stale_extracted])
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        close_extracted_issues=False,
+        throttle_seconds=0,
+    )
+
+    assert summary["closed"] == 0
+    assert summary["unchanged"] == 1
+    assert client.closed == []
+
+
+def test_signals_allow_extracted_closure_only_for_clean_docs_probe():
+    module = load_sync_module()
+
+    assert module.signals_allow_extracted_closure(sample_signals()) is True
+    assert module.signals_allow_extracted_closure(None) is False
+    assert (
+        module.signals_allow_extracted_closure(
+            {
+                "summary": {
+                    "docs_probe": {
+                        "provided": True,
+                        "failed": 1,
+                    }
+                }
+            }
+        )
+        is False
+    )
+    assert (
+        module.signals_allow_extracted_closure(
+            {
+                "summary": {
+                    "docs_probe": {
+                        "provided": False,
+                        "failed": 0,
+                    }
+                }
+            }
+        )
+        is False
+    )
 
 
 def test_dry_run_does_not_touch_client():
@@ -422,6 +587,8 @@ def test_parse_args_exposes_rate_limit_controls():
             "600",
             "--throttle-seconds",
             "2",
+            "--min-desired-issues",
+            "10",
         ]
     )
 
@@ -429,3 +596,4 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.retry_base_seconds == 60
     assert args.retry_max_seconds == 600
     assert args.throttle_seconds == 2
+    assert args.min_desired_issues == 10

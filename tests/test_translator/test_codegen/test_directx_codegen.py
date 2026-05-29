@@ -180,6 +180,158 @@ def test_directx_synchronization_builtins_reject_arguments():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_directx_synchronization_builtins_reject_unsupported_fragment_stages(builtin):
+    shader = f"""
+    shader BadSynchronizationStage {{
+        fragment {{
+            void main() {{
+                {builtin}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX fragment stage cannot call {re.escape(builtin)}; "
+            r".*only valid in compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_device_memory_synchronization_builtins_allow_fragment_stage():
+    shader = """
+    shader FragmentDeviceMemorySynchronization {
+        fragment {
+            void main() {
+                deviceMemoryBarrier();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("DeviceMemoryBarrier();") == 3
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        "deviceMemoryBarrier",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+    ],
+)
+def test_directx_device_memory_synchronization_rejects_vertex_stage(builtin):
+    shader = f"""
+    shader BadDeviceMemorySynchronizationStage {{
+        vertex {{
+            void main() {{
+                {builtin}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX vertex stage cannot call {re.escape(builtin)}; "
+            r".*valid in fragment/pixel, compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_synchronization_builtins_reject_transitive_non_compute_calls():
+    shader = """
+    shader TransitiveSynchronizationStage {
+        void synchronize_workgroup() {
+            workgroupBarrier();
+        }
+
+        fragment {
+            void main() {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"DirectX fragment stage cannot call synchronize_workgroup; "
+            r"'synchronize_workgroup' reaches 'workgroupBarrier'.*"
+            r"compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_synchronization_helper_calls_remain_compute_compatible():
+    shader = """
+    shader ComputeSynchronizationHelper {
+        void synchronize_workgroup() {
+            workgroupBarrier();
+        }
+
+        compute {
+            void main() {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void synchronize_workgroup()" in generated_code
+    assert "GroupMemoryBarrierWithGroupSync();" in generated_code
+    assert "synchronize_workgroup();" in generated_code
+
+
+def test_directx_synchronization_helper_calls_remain_mesh_compatible():
+    shader = """
+    shader MeshSynchronizationHelper {
+        void synchronize_workgroup() {
+            groupMemoryBarrier();
+        }
+
+        mesh {
+            void main() @numthreads(32, 1, 1) @outputtopology(triangle) {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert '[shader("mesh")]' in generated_code
+    assert "GroupMemoryBarrier();" in generated_code
+    assert "synchronize_workgroup();" in generated_code
+
+
 def test_directx_interpolation_builtins_lower_to_hlsl_intrinsics():
     shader = """
     shader InterpolationBuiltins {
@@ -1683,6 +1835,14 @@ def test_directx_typed_buffer_atomics_reject_non_lvalue_explicit_originals(
             "useFloat(atomicAdd(counters[index], 1u)); return 0u;",
             "atomic 'atomicAdd' requires uint result context.*expected float",
         ),
+        (
+            "uvec2 wrong = atomicAdd(counters[index], 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected uint2",
+        ),
+        (
+            "bool wrong = atomicAdd(counters[index], 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected bool",
+        ),
     ],
 )
 def test_directx_typed_buffer_atomics_validate_result_contexts(function_body, match):
@@ -2291,6 +2451,18 @@ def test_directx_buffer_store_helpers_reject_readonly_resources(
             "DirectX buffer helper 'buffer_consume' requires "
             "ConsumeStructuredBuffer, got AppendStructuredBuffer<uint>",
         ),
+        (
+            "StructuredBuffer<uint> values @register(t1);",
+            "uint value = buffer_increment_counter(values);",
+            "DirectX buffer helper 'buffer_increment_counter' requires "
+            "RWStructuredBuffer, got StructuredBuffer<uint>",
+        ),
+        (
+            "AppendStructuredBuffer<uint> values @register(u1);",
+            "uint value = buffer_decrement_counter(values);",
+            "DirectX buffer helper 'buffer_decrement_counter' requires "
+            "RWStructuredBuffer, got AppendStructuredBuffer<uint>",
+        ),
     ],
 )
 def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, match):
@@ -2333,6 +2505,18 @@ def test_directx_append_consume_buffers_reject_wrong_helpers(declaration, call, 
             "ConsumeStructuredBuffer<uint> values @register(u2);",
             "uint value = buffer_consume(values, 1u);",
             "DirectX buffer helper 'buffer_consume' requires " "1 argument(s), got 2",
+        ),
+        (
+            "RWStructuredBuffer<uint> values @register(u3);",
+            "uint value = buffer_increment_counter();",
+            "DirectX buffer helper 'buffer_increment_counter' requires "
+            "1 argument(s), got 0",
+        ),
+        (
+            "RWStructuredBuffer<uint> values @register(u3);",
+            "uint value = buffer_decrement_counter(values, 1u);",
+            "DirectX buffer helper 'buffer_decrement_counter' requires "
+            "1 argument(s), got 2",
         ),
     ],
 )
@@ -2783,6 +2967,34 @@ def test_structured_buffer_append_consume_lower_to_native_methods():
     assert "buffer_consume" not in generated
 
 
+def test_rwstructured_buffer_counter_helpers_lower_to_native_methods():
+    code = """
+    shader StructuredBufferCounterHelpersHLSL {
+        RWStructuredBuffer<uint> counters @ binding(3);
+        RWStructuredBuffer<uint> counterArrays[2] @ binding(4);
+
+        compute {
+            void main(uint which) {
+                uint nextIndex = buffer_increment_counter(counters);
+                uint oldIndex = buffer_decrement_counter(counterArrays[which]);
+                buffer_store(counterArrays[which], nextIndex, oldIndex);
+            }
+        }
+    }
+    """
+    ast = parse_code(tokenize_code(code))
+
+    generated = generate_code(ast)
+
+    assert "RWStructuredBuffer<uint> counters : register(u3);" in generated
+    assert "RWStructuredBuffer<uint> counterArrays[2] : register(u4);" in generated
+    assert "uint nextIndex = counters.IncrementCounter();" in generated
+    assert "uint oldIndex = counterArrays[which].DecrementCounter();" in generated
+    assert "counterArrays[which].Store(nextIndex, oldIndex);" in generated
+    assert "buffer_increment_counter" not in generated
+    assert "buffer_decrement_counter" not in generated
+
+
 def test_structured_buffer_append_accepts_matching_vector_element_shape():
     code = """
     shader StructuredBufferAppendVectorShapeHLSL {
@@ -3172,6 +3384,79 @@ def test_hlsl_implicit_sampler_inherits_global_texture_register_space():
     assert "defaultTex.Sample(defaultTexSampler, uv)" in generated_code
 
 
+def test_hlsl_nonuniform_resource_index_infers_integer_descriptor_indices():
+    code = """
+    shader NonUniformDescriptorArrayIndex {
+        Texture2D<float4> textures[4] @register(t0);
+        SamplerState samplers[4] @register(s0);
+
+        fragment {
+            vec4 main(
+                uint materialIndex @ TEXCOORD0,
+                uint samplerIndex @ TEXCOORD1,
+                vec2 uv @ TEXCOORD2
+            ) @ SV_Target {
+                let textureIndex = NonUniformResourceIndex(materialIndex);
+                let samplerSlot = NonUniformResourceIndex(samplerIndex);
+                return textures[textureIndex].Sample(samplers[samplerSlot], uv);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "Texture2D<float4> textures[4] : register(t0);" in generated_code
+    assert "SamplerState samplers[4] : register(s0);" in generated_code
+    assert (
+        "uint textureIndex = NonUniformResourceIndex(materialIndex);" in generated_code
+    )
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in generated_code
+    assert "textures[textureIndex].Sample(samplers[samplerSlot], uv)" in generated_code
+    assert "float textureIndex" not in generated_code
+    assert "float samplerSlot" not in generated_code
+
+
+def test_hlsl_nonuniform_resource_index_validates_arity_and_scalar_index_type():
+    missing_argument_code = """
+    shader MissingNonUniformResourceIndexArgument {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                uint index = NonUniformResourceIndex();
+                return vec4(float(index));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="NonUniformResourceIndex requires exactly 1 argument, got 0",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_argument_code), "fragment"
+        )
+
+    vector_index_code = """
+    shader VectorNonUniformResourceIndexArgument {
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ SV_Target {
+                uint index = NonUniformResourceIndex(uv);
+                return vec4(float(index));
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="NonUniformResourceIndex index argument.*scalar int or uint.*float2",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(vector_index_code), "fragment"
+        )
+
+
 def test_hlsl_implicit_shadow_sampler_split_inherits_global_texture_register_space():
     code = """
     shader ImplicitShadowSamplerSpaces {
@@ -3368,6 +3653,42 @@ def test_hlsl_struct_array_member_semantics_are_preserved():
     generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
 
     assert "float weights[4]: TEXCOORD0;" in generated
+
+
+def test_hlsl_fragment_entry_input_structs_get_missing_member_semantics():
+    code = """
+    shader FragmentInputDefaultSemantics {
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float lod;
+            vec3 normal @ TEXCOORD2;
+            float depth;
+        };
+
+        struct HelperInput {
+            float value;
+        };
+
+        float helper(HelperInput input) {
+            return input.value;
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return vec4(input.uv, input.lod + input.depth + helper(HelperInput(1.0)), 1.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "float2 uv: TEXCOORD0;" in generated
+    assert "float lod: TEXCOORD1;" in generated
+    assert "float3 normal: TEXCOORD2;" in generated
+    assert "float depth: TEXCOORD3;" in generated
+    assert "float value;" in generated
+    assert "float4 PSMain(FSInput input): SV_TARGET" in generated
 
 
 def test_hlsl_legacy_array_node_struct_member_semantics_are_preserved():
@@ -7942,6 +8263,40 @@ def test_directx_tessellation_control_validates_parameterless_patch_constant_hel
         )
 
 
+def test_directx_tessellation_control_rejects_direct_patch_constant_factor_return():
+    code = """
+    shader direct_patch_constant_tess_factor_return {
+        struct HSInput {
+            vec3 position @ POSITION;
+        };
+
+        struct HSOutput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            vec3 HSConst(InputPatch<HSInput, 3> patch) @ SV_TessFactor {
+                return vec3(1.0);
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="patchconstantfunc.*return a struct"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
 def test_directx_tessellation_control_validates_patch_constant_semantics():
     missing_outer_code = """
     shader missing_tess_factor_semantic {
@@ -8415,6 +8770,73 @@ def test_directx_tessellation_control_validates_outputcontrolpoints_inputpatch_c
     with pytest.raises(ValueError, match="outputcontrolpoints.*InputPatch"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(mismatched_code), "tessellation_control"
+        )
+
+
+@pytest.mark.parametrize(
+    ("maxtessfactor", "message"),
+    [
+        ("0.0", r"maxtessfactor.*range 1.0..64.0"),
+        ("65.0", r"maxtessfactor.*range 1.0..64.0"),
+        ("MAX_TESS", r"maxtessfactor.*numeric literal"),
+    ],
+)
+def test_directx_tessellation_control_validates_maxtessfactor_value(
+    maxtessfactor, message
+):
+    code = f"""
+    shader bad_max_tess_factor {{
+        tessellation_control {{
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @maxtessfactor({maxtessfactor})
+                @patchconstantfunc(HSConst) {{ }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_accepts_maximum_maxtessfactor_value():
+    valid_code = """
+    shader valid_max_tess_factor {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @maxtessfactor(64.0)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "tessellation_control"
+    )
+    assert "[maxtessfactor(64.0)]" in generated
+
+
+def test_directx_tessellation_rejects_maxtessfactor_outside_hull_stage():
+    code = """
+    shader bad_domain_max_tess_factor {
+        tessellation_evaluation {
+            void main(
+                OutputPatch<float4, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @maxtessfactor(8.0) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="maxtessfactor.*tessellation_control"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
         )
 
 
@@ -9223,6 +9645,241 @@ def test_compute_stage_uses_execution_config_numthreads():
     assert "[numthreads(8, 4, 2)]" in compute_code
 
 
+def test_compute_stage_emits_wave_size_attribute():
+    shader = """
+    shader ComputeWaveSize {
+        compute {
+            void main() @ WaveSize(32) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "[numthreads(1, 1, 1)]\n[WaveSize(32)]\nvoid CSMain" in generated
+
+
+@pytest.mark.parametrize(
+    ("attribute", "expected"),
+    [
+        ("WaveSize(16, 64)", "[WaveSize(16, 64)]"),
+        ("WaveSize(16, 64, 32)", "[WaveSize(16, 64, 32)]"),
+    ],
+)
+def test_compute_stage_emits_wave_size_range_attribute(attribute, expected):
+    shader = f"""
+    shader ComputeWaveSizeRange {{
+        compute {{
+            void main() @ {attribute} {{
+                int value = 1;
+            }}
+        }}
+    }}
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert f"[numthreads(1, 1, 1)]\n{expected}\nvoid CSMain" in generated
+
+
+def test_compute_wave_size_attribute_validates_arguments_and_stage():
+    missing_argument_code = """
+    shader BadWaveSizeMissingArgument {
+        compute {
+            void main() @ WaveSize { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*requires 1, 2, or 3 arguments",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_argument_code), "compute"
+        )
+
+    too_many_arguments_code = """
+    shader BadWaveSizeTooManyArguments {
+        compute {
+            void main() @ WaveSize(16, 32, 64, 128) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*requires 1, 2, or 3 arguments",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(too_many_arguments_code), "compute"
+        )
+
+    non_literal_code = """
+    shader BadWaveSizeNonLiteral {
+        compute {
+            void main() @ WaveSize(WAVE_SIZE) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*immediate integer",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(non_literal_code), "compute"
+        )
+
+    invalid_lane_count_code = """
+    shader BadWaveSizeLaneCount {
+        compute {
+            void main() @ WaveSize(12) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*4, 8, 16, 32, 64, or 128",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_lane_count_code), "compute"
+        )
+
+    invalid_minimum_code = """
+    shader BadWaveSizeMinimumLaneCount {
+        compute {
+            void main() @ WaveSize(12, 32) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*minimum.*4, 8, 16, 32, 64, or 128",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_minimum_code), "compute"
+        )
+
+    invalid_range_code = """
+    shader BadWaveSizeRange {
+        compute {
+            void main() @ WaveSize(64, 32) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*minimum lane count.*less than or equal",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_range_code), "compute"
+        )
+
+    invalid_preferred_lane_count_code = """
+    shader BadWaveSizePreferredLaneCount {
+        compute {
+            void main() @ WaveSize(16, 64, 12) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*preferred.*4, 8, 16, 32, 64, or 128",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_preferred_lane_count_code), "compute"
+        )
+
+    invalid_preferred_range_code = """
+    shader BadWaveSizePreferredRange {
+        compute {
+            void main() @ WaveSize(16, 32, 64) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*preferred lane count.*between minimum and maximum",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_preferred_range_code), "compute"
+        )
+
+    fragment_code = """
+    shader BadWaveSizeStage {
+        fragment {
+            vec4 main() @ SV_Target @ WaveSize(32) {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*compute",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(fragment_code), "fragment"
+        )
+
+
+def test_fragment_stage_emits_waveops_include_helper_lanes_attribute():
+    shader = """
+    shader FragmentWaveOpsHelperLanes {
+        fragment {
+            vec4 main(bool predicate @ TEXCOORD0)
+                @ SV_Target
+                @ WaveOpsIncludeHelperLanes {
+                return QuadAny(predicate) ? vec4(1.0) : vec4(0.0);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "[WaveOpsIncludeHelperLanes]\nfloat4 PSMain" in generated
+    assert "QuadAny(predicate)" in generated
+
+
+def test_waveops_include_helper_lanes_rejects_arguments_and_non_fragment_stages():
+    argument_code = """
+    shader BadWaveOpsHelperLanesArgument {
+        fragment {
+            vec4 main() @ SV_Target @ WaveOpsIncludeHelperLanes(true) {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveOpsIncludeHelperLanes.*does not accept argument",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(argument_code), "fragment"
+        )
+
+    compute_code = """
+    shader BadWaveOpsHelperLanesStage {
+        compute {
+            void main() @ WaveOpsIncludeHelperLanes { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveOpsIncludeHelperLanes.*fragment",
+    ):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(compute_code), "compute")
+
+
 def test_compute_stage_validates_system_value_parameter_types():
     float_group_index_code = """
     shader BadComputeGroupIndex {
@@ -9378,6 +10035,66 @@ def test_directx_mesh_dispatch_mesh_id_semantic_lowers_and_validates():
     assert "mesh_DispatchMeshID" not in generated
 
 
+def test_directx_mesh_view_id_semantic_lowers_and_validates():
+    wrong_type_code = """
+    shader BadMeshViewIDType {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                vec2 viewId @ gl_ViewID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_ViewID.*scalar uint"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(wrong_type_code), "mesh")
+
+    wrong_stage_code = """
+    shader BadTaskViewID {
+        task {
+            void main(uint viewId @ gl_ViewID) @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="task.*SV_ViewID.*mesh"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(wrong_stage_code), "task")
+
+    valid_code = """
+    shader MeshViewID {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint viewId @ gl_ViewID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(viewId), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "mesh"
+    )
+
+    assert "uint viewId : SV_ViewID" in generated
+    assert "gl_ViewID" not in generated
+
+
 def test_wave_and_rayquery_intrinsics_codegen():
     code = """
     shader WaveIntrinsicCoverage {
@@ -9402,6 +10119,7 @@ def test_wave_and_rayquery_intrinsics_codegen():
                 uint prefixProduct = WavePrefixProduct(value);
                 uvec4 matchMask = WaveMatch(value);
                 uint multiSum = WaveMultiPrefixSum(value, mask);
+                uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
                 uint multiProduct = WaveMultiPrefixProduct(value, mask);
                 uint multiAnd = WaveMultiPrefixBitAnd(value, mask);
                 uint multiOr = WaveMultiPrefixBitOr(value, mask);
@@ -9410,13 +10128,16 @@ def test_wave_and_rayquery_intrinsics_codegen():
                 uint quadY = QuadReadAcrossY(value);
                 uint quadDiagonal = QuadReadAcrossDiagonal(value);
                 uint quadLane = QuadReadLaneAt(value, lane);
+                bool quadAny = QuadAny(predicate);
+                bool quadAll = QuadAll(predicate);
                 return laneCount + laneIndex + sum + product + andValue + orValue
                     + xorValue + minValue + maxValue + laneValue + firstValue
                     + prefixSum + prefixProduct + matchMask.x + multiSum
-                    + multiProduct + multiAnd + multiOr + multiXor + quadX
-                    + quadY + quadDiagonal + quadLane + ballot.x
+                    + multiCount + multiProduct + multiAnd + multiOr + multiXor
+                    + quadX + quadY + quadDiagonal + quadLane + ballot.x
                     + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
-                    + (anyTrue ? 1u : 0u);
+                    + (anyTrue ? 1u : 0u) + (quadAny ? 1u : 0u)
+                    + (quadAll ? 1u : 0u);
             }
 
             void main() {
@@ -9451,6 +10172,7 @@ def test_wave_and_rayquery_intrinsics_codegen():
         "WavePrefixProduct(value)",
         "WaveMatch(value)",
         "WaveMultiPrefixSum(value, mask)",
+        "WaveMultiPrefixCountBits(predicate, mask)",
         "WaveMultiPrefixProduct(value, mask)",
         "WaveMultiPrefixBitAnd(value, mask)",
         "WaveMultiPrefixBitOr(value, mask)",
@@ -9459,6 +10181,8 @@ def test_wave_and_rayquery_intrinsics_codegen():
         "QuadReadAcrossY(value)",
         "QuadReadAcrossDiagonal(value)",
         "QuadReadLaneAt(value, lane)",
+        "QuadAny(predicate)",
+        "QuadAll(predicate)",
     ]:
         assert intrinsic in generated
     assert "rq.Proceed" in generated
@@ -9487,6 +10211,603 @@ def test_directx_wave_intrinsics_reject_wrong_arity():
         match="DirectX wave intrinsic 'WaveGetLaneIndex' requires 0 argument",
     ):
         generate_code(parse_code(tokenize_code(no_arg_code)))
+
+    quad_no_arg_code = code.replace("WaveReadLaneAt(value)", "QuadAny()")
+    with pytest.raises(
+        ValueError,
+        match="DirectX wave intrinsic 'QuadAny' requires 1 argument",
+    ):
+        generate_code(parse_code(tokenize_code(quad_no_arg_code)))
+
+
+def test_directx_wave_intrinsics_validate_argument_types():
+    bad_vote_predicate_code = """
+    shader BadWaveVotePredicate {
+        compute {
+            uint main(uint value) {
+                return WaveActiveCountBits(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveActiveCountBits.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_vote_predicate_code)))
+
+    bad_lane_index_code = """
+    shader BadWaveLaneIndex {
+        compute {
+            uint main(uint value, float lane) {
+                return WaveReadLaneAt(value, lane);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveReadLaneAt.*lane index.*scalar int or uint",
+    ):
+        generate_code(parse_code(tokenize_code(bad_lane_index_code)))
+
+    bad_quad_lane_index_code = """
+    shader BadQuadLaneIndexRange {
+        compute {
+            uint main(uint value) {
+                return QuadReadLaneAt(value, 4u);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="QuadReadLaneAt.*quad lane index.*0.*3",
+    ):
+        generate_code(parse_code(tokenize_code(bad_quad_lane_index_code)))
+
+    bad_quad_vote_predicate_code = """
+    shader BadQuadVotePredicate {
+        compute {
+            bool main(uint value) {
+                return QuadAny(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="QuadAny.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_quad_vote_predicate_code)))
+
+    bad_multi_prefix_mask_code = """
+    shader BadWaveMultiPrefixMask {
+        compute {
+            uint main(uint value, uint mask) {
+                return WaveMultiPrefixSum(value, mask);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveMultiPrefixSum.*partition mask.*uint4",
+    ):
+        generate_code(parse_code(tokenize_code(bad_multi_prefix_mask_code)))
+
+    bad_multi_prefix_count_predicate_code = """
+    shader BadWaveMultiPrefixCountBitsPredicate {
+        compute {
+            uint main(uint value, uvec4 mask) {
+                return WaveMultiPrefixCountBits(value, mask);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveMultiPrefixCountBits.*predicate.*scalar bool",
+    ):
+        generate_code(parse_code(tokenize_code(bad_multi_prefix_count_predicate_code)))
+
+    bad_bitwise_value_code = """
+    shader BadWaveBitwiseValue {
+        compute {
+            float main(float value) {
+                return WaveActiveBitAnd(value);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveActiveBitAnd.*value.*integer scalar or vector",
+    ):
+        generate_code(parse_code(tokenize_code(bad_bitwise_value_code)))
+
+    valid_code = """
+    shader ValidWaveTypeArguments {
+        compute {
+            uint main(bool predicate, uint value, uint lane, uvec4 mask) {
+                uint count = WaveActiveCountBits(predicate);
+                uint prefix = WavePrefixCountBits(true);
+                uint laneValue = WaveReadLaneAt(value, lane);
+                uint quadValue = QuadReadLaneAt(value, 3u);
+                bool quadAny = QuadAny(predicate);
+                bool quadAll = QuadAll(predicate);
+                uint multi = WaveMultiPrefixSum(value, mask);
+                uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
+                return count + prefix + laneValue + quadValue + multi + multiCount
+                    + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "WaveActiveCountBits(predicate)" in generated
+    assert "WavePrefixCountBits(true)" in generated
+    assert "WaveReadLaneAt(value, lane)" in generated
+    assert "QuadReadLaneAt(value, 3u)" in generated
+    assert "QuadAny(predicate)" in generated
+    assert "QuadAll(predicate)" in generated
+    assert "WaveMultiPrefixSum(value, mask)" in generated
+    assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
+
+
+def test_directx_wave_active_all_equal_preserves_input_shape():
+    code = """
+    shader WaveAllEqualShapes {
+        compute {
+            uint main(float value, vec2 pair, ivec3 lanes, bvec4 flags, mat2 matrix) {
+                let scalarEqual = WaveActiveAllEqual(value);
+                bvec2 pairEqual = WaveActiveAllEqual(pair);
+                let lanesEqual = WaveActiveAllEqual(lanes);
+                let flagsEqual = WaveActiveAllEqual(flags);
+                let matrixEqual = WaveActiveAllEqual(matrix);
+                return (scalarEqual ? 1u : 0u)
+                    + (pairEqual.x ? 1u : 0u)
+                    + (lanesEqual.y ? 1u : 0u)
+                    + (flagsEqual.z ? 1u : 0u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "bool scalarEqual = WaveActiveAllEqual(value);",
+        "bool2 pairEqual = WaveActiveAllEqual(pair);",
+        "bool3 lanesEqual = WaveActiveAllEqual(lanes);",
+        "bool4 flagsEqual = WaveActiveAllEqual(flags);",
+        "bool2x2 matrixEqual = WaveActiveAllEqual(matrix);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "bool wrong = WaveActiveAllEqual(pair);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool2 result context, got bool",
+        ),
+        (
+            "bvec2 wrong = WaveActiveAllEqual(value);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool result context, got bool2",
+        ),
+        (
+            "vec2 wrong = WaveActiveAllEqual(pair);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool2 result context, got float2",
+        ),
+        (
+            "bool wrong = WaveActiveAllEqual(values);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' value argument must be "
+            "basic scalar, vector, or matrix, got float[2]",
+        ),
+    ],
+)
+def test_directx_wave_active_all_equal_validates_shape_and_argument(body, match):
+    code = f"""
+    shader BadWaveAllEqualShape {{
+        compute {{
+            uint main(float value, vec2 pair) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_directx_wave_match_accepts_primitive_value_shapes():
+    code = """
+    shader WaveMatchPrimitiveShapes {
+        compute {
+            uint main(float value, uvec2 pair, bvec3 flags, mat2 matrix) {
+                uvec4 scalarMask = WaveMatch(value);
+                let pairMask = WaveMatch(pair);
+                let flagMask = WaveMatch(flags);
+                let matrixMask = WaveMatch(matrix);
+                return scalarMask.x + pairMask.y + flagMask.z + matrixMask.w;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint4 scalarMask = WaveMatch(value);",
+        "uint4 pairMask = WaveMatch(pair);",
+        "uint4 flagMask = WaveMatch(flags);",
+        "uint4 matrixMask = WaveMatch(matrix);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "uvec4 wrong = WaveMatch(values);",
+            "DirectX wave intrinsic 'WaveMatch' value argument must be "
+            "primitive scalar, vector, or matrix, got float[2]",
+        ),
+        (
+            "uvec4 wrong = WaveMatch(raw);",
+            "DirectX wave intrinsic 'WaveMatch' value argument must be "
+            "primitive scalar, vector, or matrix, got RWByteAddressBuffer",
+        ),
+    ],
+)
+def test_directx_wave_match_rejects_non_primitive_arguments(body, match):
+    code = f"""
+    shader BadWaveMatchArgument {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(float value) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_directx_wave_lane_reads_accept_numeric_scalar_vector_values():
+    code = """
+    shader WaveLaneReadNumericValues {
+        compute {
+            uint main(float value, int bits, uvec2 pair, uint lane) {
+                float laneValue = WaveReadLaneAt(value, lane);
+                let firstPair = WaveReadLaneFirst(pair);
+                let quadBits = QuadReadAcrossY(bits);
+                let quadPair = QuadReadLaneAt(pair, 1u);
+                return uint(laneValue) + firstPair.x + uint(quadBits) + quadPair.y;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "float laneValue = WaveReadLaneAt(value, lane);",
+        "uint2 firstPair = WaveReadLaneFirst(pair);",
+        "int quadBits = QuadReadAcrossY(bits);",
+        "uint2 quadPair = QuadReadLaneAt(pair, 1u);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "let wrong = WaveReadLaneAt(values, lane);",
+            "DirectX wave intrinsic 'WaveReadLaneAt' value argument must be "
+            "numeric scalar or vector, got float[2]",
+        ),
+        (
+            "let wrong = WaveReadLaneFirst(raw);",
+            "DirectX wave intrinsic 'WaveReadLaneFirst' value argument must be "
+            "numeric scalar or vector, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = QuadReadAcrossX(matrix);",
+            "DirectX wave intrinsic 'QuadReadAcrossX' value argument must be "
+            "numeric scalar or vector, got float2x2",
+        ),
+        (
+            "let wrong = QuadReadAcrossY(flags);",
+            "DirectX wave intrinsic 'QuadReadAcrossY' value argument must be "
+            "numeric scalar or vector, got bool2",
+        ),
+        (
+            "let wrong = QuadReadAcrossDiagonal(raw);",
+            "DirectX wave intrinsic 'QuadReadAcrossDiagonal' value argument must be "
+            "numeric scalar or vector, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = QuadReadLaneAt(values, 1u);",
+            "DirectX wave intrinsic 'QuadReadLaneAt' value argument must be "
+            "numeric scalar or vector, got float[2]",
+        ),
+    ],
+)
+def test_directx_wave_lane_reads_reject_non_numeric_values(body, match):
+    code = f"""
+    shader BadWaveLaneReadValue {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(uint lane, bvec2 flags, mat2 matrix) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_directx_wave_multi_prefix_accepts_vector_values_and_masks():
+    code = """
+    shader WaveMultiPrefixVectorValues {
+        compute {
+            uint main(uvec2 pair, ivec3 lanes, bool predicate, uvec4 mask) {
+                let sumPair = WaveMultiPrefixSum(pair, mask);
+                let productPair = WaveMultiPrefixProduct(pair, mask);
+                let andLanes = WaveMultiPrefixBitAnd(lanes, mask);
+                let xorLanes = WaveMultiPrefixBitXor(lanes, mask);
+                let count = WaveMultiPrefixCountBits(predicate, mask);
+                return sumPair.x + productPair.y + uint(andLanes.x)
+                    + uint(xorLanes.y) + count;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint2 sumPair = WaveMultiPrefixSum(pair, mask);",
+        "uint2 productPair = WaveMultiPrefixProduct(pair, mask);",
+        "int3 andLanes = WaveMultiPrefixBitAnd(lanes, mask);",
+        "int3 xorLanes = WaveMultiPrefixBitXor(lanes, mask);",
+        "uint count = WaveMultiPrefixCountBits(predicate, mask);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "let wrong = WaveMultiPrefixSum(flags, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' value argument must be "
+            "numeric scalar or vector, got bool2",
+        ),
+        (
+            "let wrong = WaveMultiPrefixProduct(matrix, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixProduct' value argument must be "
+            "numeric scalar or vector, got float2x2",
+        ),
+        (
+            "let wrong = WaveMultiPrefixBitAnd(bits, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixBitAnd' value argument must be "
+            "integer scalar or vector, got float",
+        ),
+        (
+            "let wrong = WaveMultiPrefixBitOr(values, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixBitOr' value argument must be "
+            "integer scalar or vector, got uint[2]",
+        ),
+        (
+            "let wrong = WaveMultiPrefixCountBits(value, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixCountBits' predicate argument "
+            "must be scalar bool, got uint",
+        ),
+        (
+            "let wrong = WaveMultiPrefixSum(value, raw);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' partition mask argument "
+            "must be uint4, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = WaveMultiPrefixSum(value, masks);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' partition mask argument "
+            "must be uint4, got uint4[2]",
+        ),
+    ],
+)
+def test_directx_wave_multi_prefix_rejects_invalid_values_and_masks(body, match):
+    code = f"""
+    shader BadWaveMultiPrefixArguments {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(uint value, float bits, bvec2 flags, mat2 matrix, uvec4 mask) {{
+                uint values[2];
+                uvec4 masks[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            """
+                uint wrong = WaveMultiPrefixSum(pair, mask);
+                return wrong;
+            """,
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' requires "
+            "uint2 result context, got uint",
+        ),
+        (
+            """
+                bool wrong = WaveMultiPrefixCountBits(predicate, mask);
+                return wrong ? 1u : 0u;
+            """,
+            "DirectX wave intrinsic 'WaveMultiPrefixCountBits' requires "
+            "uint result context, got bool",
+        ),
+    ],
+)
+def test_directx_wave_multi_prefix_validates_result_contexts(body, match):
+    code = f"""
+    shader BadWaveMultiPrefixResultContext {{
+        compute {{
+            uint main(uvec2 pair, bool predicate, uvec4 mask) {{
+                {body}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            """
+                uint wrong = WaveActiveBallot(predicate);
+                return wrong;
+            """,
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+        (
+            """
+                uvec4 wrong = WaveGetLaneIndex();
+                return wrong.x;
+            """,
+            "DirectX wave intrinsic 'WaveGetLaneIndex' requires "
+            "uint result context, got uint4",
+        ),
+        (
+            """
+                bool wrong = WaveActiveSum(value);
+                return wrong ? 1u : 0u;
+            """,
+            "DirectX wave intrinsic 'WaveActiveSum' requires "
+            "uint result context, got bool",
+        ),
+        (
+            """
+                float wrong = QuadReadAcrossX(pair);
+                return uint(wrong);
+            """,
+            "DirectX wave intrinsic 'QuadReadAcrossX' requires "
+            "float2 result context, got float",
+        ),
+        (
+            "return WaveActiveBallot(predicate);",
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+        (
+            "return take(WaveActiveBallot(predicate));",
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+    ],
+)
+def test_directx_wave_intrinsics_validate_result_contexts(body, match):
+    code = f"""
+    shader BadWaveResultContext {{
+        compute {{
+            uint take(uint value) {{
+                return value;
+            }}
+
+            uint main(uint value, bool predicate, uint lane, uvec4 mask, vec2 pair) {{
+                {body}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_directx_wave_intrinsics_infer_let_result_types():
+    code = """
+    shader WaveIntrinsicLetTypes {
+        compute {
+            uint main(uint value, int bits, bool predicate, uint lane, uvec4 mask, vec2 pair) {
+                let laneCount = WaveGetLaneCount();
+                let laneIndex = WaveGetLaneIndex();
+                let firstLane = WaveIsFirstLane();
+                let allTrue = WaveActiveAllTrue(predicate);
+                let anyTrue = WaveActiveAnyTrue(predicate);
+                let allEqual = WaveActiveAllEqual(value);
+                let count = WaveActiveCountBits(predicate);
+                let prefixCount = WavePrefixCountBits(predicate);
+                let ballot = WaveActiveBallot(predicate);
+                let matchMask = WaveMatch(value);
+                let reduced = WaveActiveSum(value);
+                let bitAnd = WaveActiveBitAnd(bits);
+                let laneValue = WaveReadLaneAt(value, lane);
+                let firstValue = WaveReadLaneFirst(value);
+                let prefixValue = WavePrefixSum(value);
+                let multiValue = WaveMultiPrefixSum(value, mask);
+                let multiCount = WaveMultiPrefixCountBits(predicate, mask);
+                let quadPair = QuadReadAcrossX(pair);
+                let quadAny = QuadAny(predicate);
+                let quadAll = QuadAll(predicate);
+
+                return laneCount + laneIndex + count + prefixCount + ballot.x
+                    + matchMask.x + reduced + uint(bitAnd) + laneValue
+                    + firstValue + prefixValue + multiValue + multiCount
+                    + uint(quadPair.x) + (firstLane ? 1u : 0u) + (allTrue ? 1u : 0u)
+                    + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u)
+                    + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint laneCount = WaveGetLaneCount();",
+        "uint laneIndex = WaveGetLaneIndex();",
+        "bool firstLane = WaveIsFirstLane();",
+        "bool allTrue = WaveActiveAllTrue(predicate);",
+        "bool anyTrue = WaveActiveAnyTrue(predicate);",
+        "bool allEqual = WaveActiveAllEqual(value);",
+        "uint count = WaveActiveCountBits(predicate);",
+        "uint prefixCount = WavePrefixCountBits(predicate);",
+        "uint4 ballot = WaveActiveBallot(predicate);",
+        "uint4 matchMask = WaveMatch(value);",
+        "uint reduced = WaveActiveSum(value);",
+        "int bitAnd = WaveActiveBitAnd(bits);",
+        "uint laneValue = WaveReadLaneAt(value, lane);",
+        "uint firstValue = WaveReadLaneFirst(value);",
+        "uint prefixValue = WavePrefixSum(value);",
+        "uint multiValue = WaveMultiPrefixSum(value, mask);",
+        "uint multiCount = WaveMultiPrefixCountBits(predicate, mask);",
+        "float2 quadPair = QuadReadAcrossX(pair);",
+        "bool quadAny = QuadAny(predicate);",
+        "bool quadAll = QuadAll(predicate);",
+    ]:
+        assert declaration in generated
 
 
 def test_directx_ray_query_methods_validate_trace_and_infer_results():
@@ -9857,6 +11178,177 @@ def test_directx_ray_query_validates_global_acceleration_structure_arguments():
         match="TraceRayInline acceleration structure.*RaytracingAccelerationStructure",
     ):
         HLSLCodeGen().generate_stage(crosstl.translator.parse(bad_code), "compute")
+
+
+def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
+    trace_ray_code = """
+    shader BadTraceRayInstanceMask {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 256, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay instance inclusion mask argument.*range 0 to 255.*256",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(trace_ray_code), "ray_generation"
+        )
+
+    ray_query_code = """
+    shader BadRayQueryInstanceMask {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0x100, ray);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RayQuery.TraceRayInline instance inclusion mask argument"
+            ".*range 0 to 255.*256"
+        ),
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(ray_query_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidRayInstanceMaskBounds {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "ray_generation"
+    )
+
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+
+def test_directx_ray_tracing_validates_literal_ray_flags():
+    unknown_flag_code = """
+    shader BadTraceRayUnknownFlag {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0x400, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay ray flags argument.*known RAY_FLAG bits.*1024",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(unknown_flag_code), "ray_generation"
+        )
+
+    mutually_exclusive_query_code = """
+    shader BadRayQueryMutuallyExclusiveFlags {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(
+                    accel,
+                    RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
+                    0xFF,
+                    ray
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RayQuery.TraceRayInline ray flags argument.*mutually exclusive"
+            ".*RAY_FLAG_SKIP_TRIANGLES.*RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES"
+        ),
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mutually_exclusive_query_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidRayFlags {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(
+                    scene,
+                    RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH
+                        | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    ray,
+                    payload
+                );
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "ray_generation"
+    )
+
+    assert (
+        "TraceRay(scene, "
+        "(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | "
+        "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER), 255, 0, 1, 0, ray, payload);"
+    ) in generated
 
 
 def test_else_if_statement():
@@ -14645,6 +16137,100 @@ def test_directx_rejects_invalid_image_atomic_format_and_type_context(shader, ma
         HLSLCodeGen().generate(ast)
 
 
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, -1, value);",
+            "DirectX image atomic operation 'imageAtomicCompSwap' requires uint "
+            "data argument for r32ui images: -1 has type int",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, value, 2.0);",
+            "DirectX image atomic operation 'imageAtomicCompSwap' requires uint "
+            "data argument for r32ui images: 2.0 has type float",
+        ),
+        (
+            "vec2 uv = vec2(0.0, 1.0); "
+            "uint oldValue = imageAtomicAdd(counters, uv, value);",
+            "DirectX resource operation 'imageAtomicAdd' requires an integer "
+            "coordinate argument: uv has type float2",
+        ),
+        (
+            "ivec3 voxel = ivec3(0, 1, 2); "
+            "uint oldValue = imageAtomicAdd(counters, voxel, value);",
+            "DirectX resource operation 'imageAtomicAdd' requires a 2D integer "
+            "coordinate for RWTexture2D<uint>: voxel has type int3",
+        ),
+        (
+            "uint oldValue = imageAtomicAdd(counters, pixel);",
+            "DirectX texture operation 'imageAtomicAdd' requires at least "
+            "3 argument(s), got 2",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, value);",
+            "DirectX texture operation 'imageAtomicCompSwap' requires at least "
+            "4 argument(s), got 3",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap("
+            "counters, pixel, value, value, value);",
+            "DirectX texture operation 'imageAtomicCompSwap' accepts at most "
+            "4 argument(s), got 5",
+        ),
+    ],
+)
+def test_directx_image_atomics_validate_operands_and_arity(body, match):
+    shader = f"""
+    shader InvalidImageAtomicOperands {{
+        uimage2D counters @r32ui;
+
+        compute {{
+            void main(ivec2 pixel @ TEXCOORD0) {{
+                uint value = 1u;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("declaration", "match"),
+    [
+        (
+            "uvec2 wrong = imageAtomicAdd(counters, pixel, value);",
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "result context for r32ui images: expected uint2",
+        ),
+        (
+            "bool wrong = imageAtomicAdd(counters, pixel, value);",
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "result context for r32ui images: expected bool",
+        ),
+    ],
+)
+def test_directx_image_atomics_reject_non_scalar_result_contexts(declaration, match):
+    shader = f"""
+    shader InvalidImageAtomicNonScalarResult {{
+        uimage2D counters @r32ui;
+
+        compute {{
+            void main(ivec2 pixel @ TEXCOORD0) {{
+                uint value = 1u;
+                {declaration}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_directx_explicit_vector_integer_image_formats():
     shader = """
     shader ExplicitVectorIntegerFormats {
@@ -16428,6 +18014,182 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
     assert "textureGather(" not in generated_code
 
 
+def test_directx_unsupported_dimension_texture_gather_offsets_emit_diagnostics_without_samplers():
+    shader = """
+    shader UnsupportedDimensionGatherOffsets {
+        sampler1D lineMap;
+        sampler3D volumeMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec3 volumeUv @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            int component @ TEXCOORD3;
+        };
+
+        vec4 gatherLine(
+            sampler1D tex,
+            sampler s,
+            float u,
+            ivec2 offset,
+            int component
+        ) {
+            return textureGatherOffset(tex, s, u, offset, component);
+        }
+
+        vec4 gatherVolume(
+            sampler3D tex,
+            sampler s,
+            vec3 volumeUv,
+            ivec2 offset,
+            int component
+        ) {
+            return textureGatherOffsets(
+                tex,
+                s,
+                volumeUv,
+                offset,
+                offset,
+                offset,
+                offset,
+                component
+            );
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherLine(
+                    lineMap,
+                    linearSampler,
+                    input.u,
+                    input.offset,
+                    input.component
+                ) + gatherVolume(
+                    volumeMap,
+                    linearSampler,
+                    input.volumeUv,
+                    input.offset,
+                    input.component
+                ) + textureGatherOffset(
+                    lineMap,
+                    input.u,
+                    input.offset,
+                    input.component
+                ) + textureGatherOffsets(
+                    volumeMap,
+                    input.volumeUv,
+                    input.offset,
+                    input.offset,
+                    input.offset,
+                    input.offset,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    offset_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGatherOffset offsets "
+        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    offsets_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGatherOffsets offsets "
+        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "Texture3D volumeMap : register(t1);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "SamplerState lineMapSampler" not in generated_code
+    assert "SamplerState volumeMapSampler" not in generated_code
+    assert (
+        "float4 gatherLine(Texture1D tex, SamplerState s, float u, int2 offset, int component)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, int2 offset, int component)"
+        in generated_code
+    )
+    assert generated_code.count(offset_diagnostic) == 2
+    assert generated_code.count(offsets_diagnostic) == 2
+    assert ".Gather" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+
+
+def test_directx_unsupported_dimension_texture_gather_compare_emits_diagnostics_without_samplers():
+    shader = """
+    shader UnsupportedDimensionGatherCompare {
+        sampler1D lineMap;
+        sampler3D volumeMap;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            vec3 volumeUv @ TEXCOORD2;
+            float depth;
+        };
+
+        vec4 gatherLine(sampler1D tex, sampler s, float u, float depth) {
+            return textureGatherCompare(tex, s, u, depth);
+        }
+
+        vec4 gatherVolume(sampler3D tex, sampler s, vec3 volumeUv, float depth) {
+            return textureGatherCompare(tex, s, volumeUv, depth);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 sampled = texture(colorMap, sharedSampler, input.uv);
+                return sampled
+                    + gatherLine(lineMap, sharedSampler, input.u, input.depth)
+                    + gatherVolume(volumeMap, sharedSampler, input.volumeUv, input.depth)
+                    + textureGatherCompare(lineMap, input.u, input.depth)
+                    + textureGatherCompare(volumeMap, input.volumeUv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported DirectX texture gather compare: textureGatherCompare "
+        "requires 2D, 2D-array, cube, or cube-array textures */ "
+        "float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "Texture3D volumeMap : register(t1);" in generated_code
+    assert "Texture2D colorMap : register(t2);" in generated_code
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState sharedSampler" not in generated_code
+    assert "lineMapSampler" not in generated_code
+    assert "volumeMapSampler" not in generated_code
+    assert (
+        "float4 gatherLine(Texture1D tex, SamplerState s, float u, float depth)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, float depth)"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 4
+    assert (
+        "float4 sampled = colorMap.Sample(sharedSampler, input.uv);" in generated_code
+    )
+    assert ".GatherCmp(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
 def test_directx_texture_sample_offset_variants_use_sample_offsets():
     shader = """
     shader TextureSampleOffsets {
@@ -16918,6 +18680,81 @@ def test_directx_projected_texture_variants_use_sample_projection():
     assert "textureProjLod(" not in generated_code
     assert "textureProjLodOffset(" not in generated_code
     assert "textureProjGrad(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+
+
+def test_directx_projected_1d_texture_variants_use_sample_projection():
+    shader = """
+    shader Projected1DTexture {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uq @ TEXCOORD0;
+            vec4 uxwq @ TEXCOORD1;
+            float lod;
+            float ddx;
+            float ddy;
+            int offset;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(lineMap, input.uq);
+                vec4 biased = textureProj(lineMap, linearSampler, input.uxwq, 0.5);
+                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, input.offset);
+                vec4 lodOffset = textureProjLodOffset(
+                    lineMap,
+                    linearSampler,
+                    input.uq,
+                    input.lod,
+                    input.offset
+                );
+                vec4 gradOffset = textureProjGradOffset(
+                    lineMap,
+                    linearSampler,
+                    input.uq,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                return projected + biased + offset + lodOffset + gradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "SamplerState lineMapSampler : register(s0);" in generated_code
+    assert "SamplerState linearSampler : register(s1);" in generated_code
+    assert (
+        "float4 projected = lineMap.Sample(lineMapSampler, input.uq.x / input.uq.y);"
+        in generated_code
+    )
+    assert (
+        "float4 biased = lineMap.SampleBias(linearSampler, input.uxwq.x / input.uxwq.w, 0.5);"
+        in generated_code
+    )
+    assert (
+        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, input.offset);"
+        in generated_code
+    )
+    assert (
+        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, input.offset);"
+        in generated_code
+    )
+    assert (
+        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, input.offset);"
+        in generated_code
+    )
+    assert "unsupported DirectX projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
 
 
@@ -18734,6 +20571,55 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
         )
+
+
+def test_directx_unsupported_projected_cube_array_diagnostic_keeps_sampler_role():
+    shader = """
+    shader UnsupportedProjectedCubeArraySamplerRole {
+        samplerCubeArray cubeArray;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureProj(cubeArray, sharedSampler, input.cubeLayer);
+                float ok = textureCompare(
+                    shadowMap,
+                    sharedSampler,
+                    input.uv,
+                    input.depth
+                );
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported DirectX projected texture: textureProj requires 1D, "
+        "2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "TextureCubeArray cubeArray : register(t0);" in generated_code
+    assert "Texture2D shadowMap : register(t1);" in generated_code
+    assert "SamplerComparisonState sharedSampler : register(s0);" in generated_code
+    assert "SamplerState sharedSampler" not in generated_code
+    assert diagnostic in generated_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in generated_code
+    )
+    assert ".Sample(sharedSampler" not in generated_code
+    assert "textureProj(" not in generated_code
 
 
 def test_directx_projected_cube_struct_sampler_member_role_conflict_is_reported():
@@ -25467,6 +27353,213 @@ def test_directx_storage_image_access_rejects_incompatible_helper_calls(shader, 
 
     with pytest.raises(ValueError, match=match):
         HLSLCodeGen().generate(ast)
+
+
+def test_directx_feedback_texture_helpers_lower_to_native_methods():
+    shader = """
+    shader FeedbackTextureWrites {
+        sampler2D pairedTexture @ register(t0, space10);
+        sampler2DArray pairedLayers @ register(t1, space10);
+        sampler pairedSampler @ register(s0, space10);
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin @ register(u0, space10);
+        feedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed @ register(u1, space10);
+
+        fragment {
+            void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {
+                vec2 ddxValue = vec2(0.25, 0.0);
+                vec2 ddyValue = vec2(0.0, 0.25);
+                vec3 uvLayer = vec3(uv, layer);
+                write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);
+                write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv, 0.5);
+                write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+                write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
+                write_sampler_feedback_level(feedbackUsed, pairedLayers, pairedSampler, uvLayer, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin : "
+        "register(u0, space10);" in generated_code
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed : "
+        "register(u1, space10);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedback(pairedTexture, pairedSampler, uv);"
+        in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackBias("
+        "pairedTexture, pairedSampler, uv, 0.5);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in generated_code
+    )
+    assert (
+        "feedbackUsed.WriteSamplerFeedbackLevel("
+        "pairedLayers, pairedSampler, uvLayer, 1.0);" in generated_code
+    )
+    assert "write_sampler_feedback" not in generated_code
+
+
+def test_directx_feedback_texture_grad_and_level_helpers_are_compute_compatible():
+    shader = """
+    shader FeedbackTextureComputeWrites {
+        sampler2D pairedTexture @ register(t0, space11);
+        sampler pairedSampler @ register(s0, space11);
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin @ register(u0, space11);
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddxValue = vec2(0.25, 0.0);
+                vec2 ddyValue = vec2(0.0, 0.25);
+                write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+                write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin : "
+        "register(u0, space11);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in generated_code
+    )
+    assert "write_sampler_feedback" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);",
+            "DirectX compute stage cannot call write_sampler_feedback; "
+            "WriteSamplerFeedback is only valid in fragment/pixel stages",
+        ),
+        (
+            "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv, 0.5);",
+            "DirectX compute stage cannot call write_sampler_feedback_bias; "
+            "WriteSamplerFeedbackBias is only valid in fragment/pixel stages",
+        ),
+    ],
+)
+def test_directx_feedback_texture_pixel_only_helpers_reject_compute_stage(body, match):
+    shader = f"""
+    shader InvalidComputeFeedbackTextureWrites {{
+        sampler2D pairedTexture;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        compute {{
+            void main() {{
+                vec2 uv = vec2(0.25, 0.75);
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_feedback_texture_pixel_only_helpers_reject_transitive_compute_call():
+    shader = """
+    shader InvalidTransitiveComputeFeedbackTextureWrite {
+        sampler2D pairedTexture;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        void recordFeedback(vec2 uv) {
+            write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);
+        }
+
+        compute {
+            void main() {
+                recordFeedback(vec2(0.25, 0.75));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX compute stage cannot call recordFeedback; "
+            "'recordFeedback' reaches WriteSamplerFeedback via "
+            "write_sampler_feedback, which is only valid in fragment/pixel stages"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "write_sampler_feedback(pairedTexture, pairedTexture, pairedSampler, uv);",
+            "requires FeedbackTexture2D or FeedbackTexture2DArray receiver",
+        ),
+        (
+            "write_sampler_feedback(feedbackMin, pairedLayers, pairedSampler, uv);",
+            "receiver FeedbackTexture2D requires paired Texture2D, got Texture2DArray",
+        ),
+        (
+            "write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uvLayer);",
+            "location argument must be float2",
+        ),
+        (
+            "write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxLayer, ddyLayer);",
+            "ddx argument must be float2",
+        ),
+        (
+            "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv);",
+            "requires 5 or 6 argument",
+        ),
+    ],
+)
+def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, match):
+    shader = f"""
+    shader InvalidFeedbackTextureWrites {{
+        sampler2D pairedTexture;
+        sampler2DArray pairedLayers;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        fragment {{
+            void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {{
+                vec3 uvLayer = vec3(uv, layer);
+                vec3 ddxLayer = vec3(0.25, 0.0, 0.0);
+                vec3 ddyLayer = vec3(0.0, 0.25, 0.0);
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 if __name__ == "__main__":

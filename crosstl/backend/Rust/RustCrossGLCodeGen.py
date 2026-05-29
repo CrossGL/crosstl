@@ -474,10 +474,14 @@ class RustToCrossGLConverter:
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
+        self.local_function_item_counter = 0
+        self.local_function_item_names = set()
+        self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
+        self.local_callable_scopes = []
 
     def get_indent(self):
         """Return whitespace for the current indentation level."""
@@ -541,10 +545,14 @@ class RustToCrossGLConverter:
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
+        self.local_function_item_counter = 0
+        self.local_function_item_names = set()
+        self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
+        self.local_callable_scopes = []
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
@@ -620,6 +628,57 @@ class RustToCrossGLConverter:
     def pop_name_alias_scope(self):
         if self.name_alias_scopes:
             self.name_alias_scopes.pop()
+
+    def push_local_callable_scope(self, entries=None):
+        scope = {}
+        if entries:
+            for name, alias in entries:
+                if name:
+                    scope[name] = alias or name
+        self.local_callable_scopes.append(scope)
+
+    def pop_local_callable_scope(self):
+        if self.local_callable_scopes:
+            self.local_callable_scopes.pop()
+
+    def add_local_callable(self, name, alias=None):
+        if not name:
+            return
+        if not self.local_callable_scopes:
+            self.push_local_callable_scope()
+        self.local_callable_scopes[-1][name] = alias or name
+
+    def lookup_local_callable_name(self, name):
+        if not isinstance(name, str):
+            return None
+        for scope in reversed(self.local_callable_scopes):
+            callable_name = scope.get(name)
+            if callable_name is not None:
+                return callable_name
+        return None
+
+    def get_local_function_item_helper_name(self, func):
+        key = id(func)
+        helper_name = self.local_function_item_helper_names.get(key)
+        if helper_name is None:
+            helper_name = self.next_local_function_item_name(func.name)
+            self.local_function_item_helper_names[key] = helper_name
+        return helper_name
+
+    def predeclare_local_function_items(self, body):
+        for stmt in body or []:
+            if isinstance(stmt, FunctionNode):
+                self.add_local_callable(
+                    stmt.name,
+                    self.get_local_function_item_helper_name(stmt),
+                )
+
+    def generate_scoped_function_body(self, body, indent=1, loop_contexts=None):
+        self.push_local_callable_scope()
+        try:
+            return self.generate_function_body(body, indent, loop_contexts)
+        finally:
+            self.pop_local_callable_scope()
 
     def resolve_name_alias(self, name):
         if not isinstance(name, str):
@@ -793,9 +852,20 @@ class RustToCrossGLConverter:
             for func in getattr(impl_block, "functions", []):
                 method_name = getattr(func, "name", None)
                 return_type = getattr(func, "return_type", None)
+                params = []
+                for param in getattr(func, "params", []):
+                    param_type = getattr(param, "vtype", None)
+                    if param_type:
+                        params.append((getattr(param, "name", None), param_type))
+
                 if method_name and return_type:
                     signature["methods"][method_name] = {
                         "return_type": return_type,
+                        "params": params,
+                        "generic_names": [
+                            self.generic_parameter_name(generic)
+                            for generic in getattr(func, "generics", []) or []
+                        ],
                     }
         return signatures_by_type
 
@@ -877,21 +947,100 @@ class RustToCrossGLConverter:
             return expression.struct_name
         if isinstance(expression, FunctionCallNode):
             return self.infer_function_call_return_type(expression)
+        if isinstance(expression, TernaryOpNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_value_type(expression.true_expr),
+                    self.infer_value_type(expression.false_expr),
+                ]
+            )
+        if isinstance(expression, IfNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_branch_body_value_type(expression.if_body),
+                    self.infer_branch_body_value_type(expression.else_body),
+                ]
+            )
+        if isinstance(expression, MatchNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_branch_body_value_type(arm.body)
+                    for arm in getattr(expression, "arms", [])
+                ]
+            )
+        if self.is_block_expression_node(expression):
+            return self.infer_block_expression_value_type(expression)
         if isinstance(
             expression, (str, VariableNode, MemberAccessNode, ArrayAccessNode)
         ):
             return self.lookup_value_type(self.generate_expression(expression))
         return None
 
+    def infer_branch_body_value_type(self, body):
+        if body is None:
+            return None
+        if isinstance(body, ReturnNode):
+            return self.infer_value_type(body.value)
+        if isinstance(body, list):
+            if not body:
+                return None
+            return self.infer_branch_body_value_type(body[-1])
+        return self.infer_value_type(body)
+
+    def infer_block_expression_value_type(self, expression):
+        block_node = self.get_block_expression_node(expression)
+        if block_node is None:
+            return None
+
+        block_expression = self.get_block_expression(block_node)
+        if block_expression is not None:
+            return self.infer_value_type(block_expression)
+
+        statements = getattr(block_node, "statements", []) or []
+        if not statements:
+            return None
+        return self.infer_branch_body_value_type(statements[-1])
+
+    def common_inferred_value_type(self, type_names):
+        if not type_names or any(not type_name for type_name in type_names):
+            return None
+
+        first_type = self.normalize_receiver_type(type_names[0])
+        if all(
+            self.normalize_receiver_type(type_name) == first_type
+            for type_name in type_names
+        ):
+            return first_type
+
+        first_resource_type = self.map_resource_receiver_type(first_type)
+        if not isinstance(
+            first_resource_type, str
+        ) or not first_resource_type.startswith(self.RESOURCE_TYPE_PREFIXES):
+            return None
+
+        for type_name in type_names[1:]:
+            resource_type = self.map_resource_receiver_type(type_name)
+            if resource_type != first_resource_type:
+                return None
+        return first_type
+
     def infer_function_call_return_type(self, expression):
         if isinstance(expression.name, MemberAccessNode):
-            return self.infer_impl_method_call_return_type(expression.name)
+            return self.infer_impl_method_call_return_type(expression)
+
+        raw_function_name = self.function_call_name(expression.name)
+        if raw_function_name is None:
+            return None
+        associated_return_type = self.infer_impl_associated_function_call_return_type(
+            raw_function_name,
+            expression.args,
+        )
+        if associated_return_type is not None:
+            return associated_return_type
 
         function_name, explicit_type_args = self.split_function_type_arguments(
-            self.function_call_name(expression.name)
+            raw_function_name
         )
-        if function_name is None:
-            return None
         signature = self.lookup_user_function_signature(function_name)
         if signature is not None:
             return self.infer_user_function_call_return_type(
@@ -901,16 +1050,115 @@ class RustToCrossGLConverter:
             )
         return self.lookup_user_function_return_type(function_name)
 
-    def infer_impl_method_call_return_type(self, member_access):
+    def infer_impl_associated_function_call_return_type(self, function_name, args):
+        match = self.lookup_impl_associated_function_match(function_name)
+        if match is None:
+            return None
+
+        return self.infer_impl_associated_function_return_type(match, args)
+
+    def infer_impl_method_call_return_type(self, expression):
+        member_access = expression.name
         method_name = getattr(member_access, "member", None)
         obj = self.generate_expression(member_access.object)
         match = self.lookup_impl_method_receiver_match(obj, method_name)
         if match is None:
             return None
 
+        return self.infer_impl_method_return_type(match, expression.args)
+
+    def infer_impl_method_return_type(self, match, arg_values):
+        method = match["method"]
         return_type = match["method"].get("return_type")
         return_type = self.normalize_receiver_type(return_type, match["receiver_type"])
-        substitutions = match.get("substitutions") or {}
+        substitutions = dict(match.get("substitutions") or {})
+        generic_names = list(match.get("generic_names") or [])
+        for generic_name in method.get("generic_names") or []:
+            if generic_name not in generic_names:
+                generic_names.append(generic_name)
+
+        conflicts = set()
+        for (_, param_type), arg in zip(
+            self.method_value_params(method),
+            arg_values,
+        ):
+            arg_type = self.infer_call_argument_type(arg)
+            if arg_type is None:
+                continue
+            param_type = self.normalize_receiver_type(
+                param_type,
+                match["receiver_type"],
+            )
+            self.match_generic_type_parameters(
+                param_type,
+                arg_type,
+                generic_names,
+                substitutions,
+                conflicts,
+            )
+
+        for generic_name in conflicts:
+            substitutions.pop(generic_name, None)
+        if substitutions:
+            return_type = self.apply_type_substitutions(return_type, substitutions)
+        return return_type
+
+    def method_value_params(self, method):
+        return [
+            (name, param_type)
+            for name, param_type in method.get("params", [])
+            if not self.is_self_parameter(name, param_type)
+        ]
+
+    def method_has_self_parameter(self, method):
+        return any(
+            self.is_self_parameter(name, param_type)
+            for name, param_type in method.get("params", [])
+        )
+
+    def is_self_parameter(self, name, param_type):
+        return name == "self"
+
+    def infer_impl_associated_function_return_type(self, match, arg_values):
+        method = match["method"]
+        return_type = method.get("return_type")
+        return_type = self.normalize_receiver_type(return_type, match["receiver_type"])
+        substitutions = dict(match.get("substitutions") or {})
+        generic_names = list(match.get("generic_names") or [])
+        method_generic_names = method.get("generic_names") or []
+        for generic_name in method.get("generic_names") or []:
+            if generic_name not in generic_names:
+                generic_names.append(generic_name)
+
+        conflicts = set()
+        for generic_name, type_arg in zip(
+            method_generic_names,
+            match.get("method_type_args") or [],
+        ):
+            self.bind_generic_type_substitution(
+                generic_name,
+                type_arg,
+                substitutions,
+                conflicts,
+            )
+
+        for (_, param_type), arg in zip(
+            self.method_value_params(method),
+            arg_values,
+        ):
+            arg_type = self.infer_call_argument_type(arg)
+            if arg_type is None:
+                continue
+            self.match_generic_type_parameters(
+                param_type,
+                arg_type,
+                generic_names,
+                substitutions,
+                conflicts,
+            )
+
+        for generic_name in conflicts:
+            substitutions.pop(generic_name, None)
         if substitutions:
             return_type = self.apply_type_substitutions(return_type, substitutions)
         return return_type
@@ -988,6 +1236,8 @@ class RustToCrossGLConverter:
         return return_type
 
     def infer_call_argument_type(self, arg):
+        if isinstance(arg, str):
+            return self.lookup_value_type(arg)
         inferred_type = self.infer_value_type(arg)
         if inferred_type is not None:
             return inferred_type
@@ -1149,6 +1399,8 @@ class RustToCrossGLConverter:
             current_type = self.lookup_expression_value_type(root)
         else:
             current_type = self.lookup_direct_value_type(root)
+            if current_type is None:
+                current_type = self.infer_generated_call_return_type(root)
 
         for _ in range(index_count):
             current_type = self.array_element_type(current_type)
@@ -1156,6 +1408,102 @@ class RustToCrossGLConverter:
                 return None
 
         return current_type
+
+    def infer_generated_call_return_type(self, expression):
+        parsed = self.parse_generated_call_expression(expression)
+        if parsed is None:
+            return None
+
+        function_name, args = parsed
+        return_type = self.infer_generated_impl_method_return_type(
+            function_name,
+            args,
+        )
+        if return_type is not None:
+            return return_type
+
+        return_type = self.infer_generated_impl_associated_function_return_type(
+            function_name,
+            args,
+        )
+        if return_type is not None:
+            return return_type
+
+        function_name, explicit_type_args = self.split_function_type_arguments(
+            function_name
+        )
+        signature = self.lookup_user_function_signature(function_name)
+        if signature is not None:
+            return self.infer_user_function_call_return_type(
+                signature,
+                args,
+                explicit_type_args,
+            )
+        return self.lookup_user_function_return_type(function_name)
+
+    def parse_generated_call_expression(self, expression):
+        if not isinstance(expression, str) or not expression.endswith(")"):
+            return None
+
+        open_index = self.find_matching_call_open(expression)
+        if open_index is None or open_index == 0:
+            return None
+
+        function_name = expression[:open_index].strip()
+        if not function_name:
+            return None
+
+        args_text = expression[open_index + 1 : -1]
+        args = self.split_generic_arguments(args_text)
+        return function_name, args
+
+    def find_matching_call_open(self, expression):
+        depth = 0
+        for index in range(len(expression) - 1, -1, -1):
+            char = expression[index]
+            if char == ")":
+                depth += 1
+            elif char == "(":
+                depth -= 1
+                if depth == 0:
+                    return index
+        return None
+
+    def infer_generated_impl_method_return_type(self, function_name, args):
+        if not args:
+            return None
+
+        for signature in self.impl_method_signatures.values():
+            for method_name, method in signature["methods"].items():
+                if function_name != f"{signature['call_prefix']}_{method_name}":
+                    continue
+
+                match = self.lookup_impl_method_receiver_match(args[0], method_name)
+                if match is None:
+                    return None
+                return self.infer_impl_method_return_type(match, args[1:])
+
+        return None
+
+    def infer_generated_impl_associated_function_return_type(self, function_name, args):
+        for signature in self.impl_method_signatures.values():
+            for method_name, method in signature["methods"].items():
+                if function_name != f"{signature['call_prefix']}_{method_name}":
+                    continue
+                if self.method_has_self_parameter(method):
+                    continue
+
+                match = {
+                    "receiver_type": signature["struct_name"],
+                    "call_prefix": signature["call_prefix"],
+                    "method_name": method_name,
+                    "generic_names": signature["generic_names"],
+                    "method": method,
+                    "substitutions": {},
+                }
+                return self.infer_impl_associated_function_return_type(match, args)
+
+        return None
 
     def split_member_expression(self, expression):
         if not isinstance(expression, str):
@@ -1433,6 +1781,7 @@ class RustToCrossGLConverter:
         self.current_closure_helpers = []
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         try:
             body_code = self.generate_function_body(func.body, indent=indent + 1)
             helper_code = "".join(self.current_closure_helpers)
@@ -1443,6 +1792,7 @@ class RustToCrossGLConverter:
         finally:
             self.current_function_return_type = previous_return_type
             self.current_closure_helpers = previous_helpers
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
 
         return code
@@ -1470,6 +1820,7 @@ class RustToCrossGLConverter:
         self.current_closure_helpers = []
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         self.push_name_alias_scope(name_aliases)
         self.local_binding_name_scopes.append(local_binding_names)
         try:
@@ -1480,6 +1831,7 @@ class RustToCrossGLConverter:
             self.current_closure_helpers = previous_helpers
             self.local_binding_name_scopes.pop()
             self.pop_name_alias_scope()
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
 
         code = helper_code
@@ -1497,13 +1849,20 @@ class RustToCrossGLConverter:
         scoped_aliases = self.local_aliasing_enabled()
         if scoped_aliases:
             self.push_name_alias_scope()
+        pushed_callable_scope = False
+        if not self.local_callable_scopes:
+            self.push_local_callable_scope()
+            pushed_callable_scope = True
 
         try:
+            self.predeclare_local_function_items(body)
             for stmt in body:
                 if isinstance(stmt, ConstNode):
                     code += self.generate_const_statement(stmt, indent)
                 elif isinstance(stmt, StaticNode):
                     code += self.generate_static_statement(stmt, indent)
+                elif isinstance(stmt, FunctionNode):
+                    code += self.generate_local_function_item(stmt)
                 elif isinstance(stmt, LetNode):
                     code += self.generate_let_statement(stmt, indent, loop_contexts)
                 elif isinstance(stmt, AssignmentNode):
@@ -1610,8 +1969,34 @@ class RustToCrossGLConverter:
         finally:
             if scoped_aliases:
                 self.pop_name_alias_scope()
+            if pushed_callable_scope:
+                self.pop_local_callable_scope()
 
         return code
+
+    def generate_local_function_item(self, func):
+        helper_name = self.get_local_function_item_helper_name(func)
+        self.add_local_callable(func.name, helper_name)
+        helper_func = FunctionNode(
+            func.return_type,
+            helper_name,
+            func.params,
+            func.body,
+            attributes=func.attributes,
+            visibility=func.visibility,
+            generics=func.generics,
+            where_clauses=func.where_clauses,
+            is_async=func.is_async,
+            is_unsafe=func.is_unsafe,
+            abi=func.abi,
+            is_const=func.is_const,
+        )
+        helper_code = self.generate_function(helper_func, 0)
+
+        if self.current_closure_helpers is not None:
+            self.current_closure_helpers.append(helper_code)
+            return ""
+        return helper_code
 
     def generate_const_statement(self, node, indent):
         indent_str = "    " * indent
@@ -1699,6 +2084,7 @@ class RustToCrossGLConverter:
             )
             if helper_name is not None:
                 target_name = self.declare_local_alias(stmt.name)
+                self.add_local_callable(stmt.name, target_name)
                 mutability = "mut " if stmt.is_mutable else ""
                 return f"{indent_str}let {mutability}{target_name} = {helper_name};\n"
 
@@ -1710,6 +2096,8 @@ class RustToCrossGLConverter:
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
             target_name = self.declare_local_alias(stmt.name)
+            if isinstance(stmt.value, ClosureNode):
+                self.add_local_callable(stmt.name, target_name)
             if stmt.vtype:
                 self.add_value_type(target_name, stmt.vtype)
                 type_str = self.format_typed_declarator(stmt.vtype, target_name)
@@ -1766,7 +2154,7 @@ class RustToCrossGLConverter:
         code += match_code
         code += f"{indent_str}}}\n"
         code += f"{indent_str}if (!{matched_flag}) {{\n"
-        code += self.generate_function_body(
+        code += self.generate_scoped_function_body(
             stmt.else_body,
             indent + 1,
             loop_contexts,
@@ -2092,6 +2480,9 @@ class RustToCrossGLConverter:
     def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -2128,6 +2519,9 @@ class RustToCrossGLConverter:
     def generate_if_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -2164,6 +2558,9 @@ class RustToCrossGLConverter:
     def generate_match_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -2474,7 +2871,7 @@ class RustToCrossGLConverter:
                 branch, indent, result_target, loop_contexts
             )
         if isinstance(branch, list):
-            return self.generate_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(branch, indent, loop_contexts)
         if branch is not None:
             return self.generate_expression_result(
                 branch, indent, result_target, loop_contexts
@@ -2537,44 +2934,50 @@ class RustToCrossGLConverter:
     ):
         block_node = self.get_block_expression_node(block_node)
         indent_str = "    " * indent
-        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
-        expression = self.get_block_expression(block_node)
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(
+                block_node.statements, indent, loop_contexts
+            )
+            expression = self.get_block_expression(block_node)
 
-        if isinstance(expression, LoopNode):
-            code += self.generate_loop(
-                expression,
-                indent,
-                result_target=result_target,
-                loop_contexts=loop_contexts,
-            )
-        elif isinstance(expression, IfNode):
-            code += self.generate_if_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif isinstance(expression, MatchNode):
-            code += self.generate_match_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif expression is not None:
-            code += self.generate_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif (
-            result_target is self.return_result_target
-            and not self.branch_guarantees_control_transfer(block_node)
-        ):
-            code += f"{indent_str}return;\n"
+            if isinstance(expression, LoopNode):
+                code += self.generate_loop(
+                    expression,
+                    indent,
+                    result_target=result_target,
+                    loop_contexts=loop_contexts,
+                )
+            elif isinstance(expression, IfNode):
+                code += self.generate_if_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif isinstance(expression, MatchNode):
+                code += self.generate_match_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif expression is not None:
+                code += self.generate_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif (
+                result_target is self.return_result_target
+                and not self.branch_guarantees_control_transfer(block_node)
+            ):
+                code += f"{indent_str}return;\n"
 
-        return code
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def generate_expression_result(
         self, expression, indent, result_target, loop_contexts=None
@@ -3052,6 +3455,7 @@ class RustToCrossGLConverter:
                 obj,
                 args,
                 expression.args,
+                self.infer_value_type(expression.name.object),
             )
             if method_call is not None:
                 return object_code + args_code, method_call
@@ -3073,6 +3477,12 @@ class RustToCrossGLConverter:
             )
             if constructor is not None:
                 return args_code, constructor
+            associated_call = self.format_associated_impl_function_call(
+                expression.name,
+                args,
+            )
+            if associated_call is not None:
+                return args_code, associated_call
             return args_code, f"{self.map_function(expression.name)}({', '.join(args)})"
 
         name_code, name = self.generate_try_expression(
@@ -3082,12 +3492,24 @@ class RustToCrossGLConverter:
         )
         return name_code + args_code, f"{name}({', '.join(args)})"
 
-    def format_method_call_parts(self, method_name, obj, args, arg_nodes):
+    def format_method_call_parts(
+        self,
+        method_name,
+        obj,
+        args,
+        arg_nodes,
+        receiver_type=None,
+    ):
         impl_call = self.format_user_impl_method_call(method_name, obj, args)
         if impl_call is not None:
             return impl_call
 
-        resource_call = self.format_resource_method_call(method_name, obj, args)
+        resource_call = self.format_resource_method_call(
+            method_name,
+            obj,
+            args,
+            receiver_type,
+        )
         if resource_call is not None:
             return resource_call
 
@@ -3146,10 +3568,10 @@ class RustToCrossGLConverter:
 
         return None
 
-    def format_resource_method_call(self, method_name, obj, args):
+    def format_resource_method_call(self, method_name, obj, args, receiver_type=None):
         if not self.is_resource_method_name(method_name):
             return None
-        if not self.is_resource_method_receiver(obj):
+        if not self.is_resource_method_receiver(obj, receiver_type):
             return None
 
         mapped = self.function_map.get(method_name)
@@ -3163,8 +3585,9 @@ class RustToCrossGLConverter:
             self.RESOURCE_METHOD_PREFIXES
         )
 
-    def is_resource_method_receiver(self, obj):
-        receiver_type = self.lookup_value_type(obj)
+    def is_resource_method_receiver(self, obj, receiver_type=None):
+        if receiver_type is None:
+            receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
             return False
 
@@ -3199,6 +3622,17 @@ class RustToCrossGLConverter:
         call_args = [obj] + args
         return f"{match['call_prefix']}_{method_name}({', '.join(call_args)})"
 
+    def format_associated_impl_function_call(self, function_name, args):
+        match = self.lookup_impl_associated_function_match(function_name)
+        if match is None:
+            return None
+
+        call = f"{match['call_prefix']}_{match['method_name']}({', '.join(args)})"
+        return_type = self.infer_impl_associated_function_return_type(match, args)
+        if return_type is not None:
+            self.add_value_type(call, return_type)
+        return call
+
     def lookup_impl_method_receiver_match(self, obj, method_name):
         receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
@@ -3207,6 +3641,8 @@ class RustToCrossGLConverter:
         for signature in self.impl_method_signatures.values():
             method = signature["methods"].get(method_name)
             if method is None:
+                continue
+            if not self.method_has_self_parameter(method):
                 continue
 
             substitutions = self.match_impl_receiver_type(
@@ -3220,11 +3656,106 @@ class RustToCrossGLConverter:
             return {
                 "receiver_type": receiver_type,
                 "call_prefix": signature["call_prefix"],
+                "generic_names": signature["generic_names"],
                 "method": method,
                 "substitutions": substitutions,
             }
 
         return None
+
+    def lookup_impl_associated_function_match(self, function_name):
+        parsed = self.parse_associated_function_path(function_name)
+        if parsed is None:
+            return None
+
+        type_name, method_name, method_type_args = parsed
+        for signature in self.impl_method_signatures.values():
+            method = signature["methods"].get(method_name)
+            if method is None:
+                continue
+            if self.method_has_self_parameter(method):
+                continue
+
+            receiver_type, substitutions = self.match_associated_impl_type(
+                signature["struct_name"],
+                type_name,
+                signature["generic_names"],
+            )
+            if receiver_type is None:
+                continue
+
+            return {
+                "receiver_type": receiver_type,
+                "call_prefix": signature["call_prefix"],
+                "method_name": method_name,
+                "method_type_args": method_type_args,
+                "generic_names": signature["generic_names"],
+                "method": method,
+                "substitutions": substitutions,
+            }
+
+        return None
+
+    def parse_associated_function_path(self, function_name):
+        if not isinstance(function_name, str) or "::" not in function_name:
+            return None
+
+        function_name = self.normalize_associated_type_path(function_name)
+        type_name, method_name = function_name.rsplit("::", 1)
+        method_name, method_type_args = self.split_function_type_arguments(method_name)
+        if not type_name or not method_name:
+            return None
+        return type_name, method_name, method_type_args
+
+    def normalize_associated_type_path(self, type_name):
+        if not isinstance(type_name, str):
+            return type_name
+        return type_name.replace("::<", "<")
+
+    def match_associated_impl_type(self, pattern_type, call_type, generic_names):
+        call_type = self.resolve_imported_module_path(call_type)
+        for pattern_candidate in self.generic_type_match_candidates(pattern_type):
+            pattern_generic = self.parse_generic_type(pattern_candidate)
+            for call_candidate in self.generic_type_match_candidates(call_type):
+                if self.impl_type_names_match(pattern_candidate, call_candidate):
+                    return call_candidate, {}
+
+                call_generic = self.parse_generic_type(call_candidate)
+                if pattern_generic is None:
+                    if call_generic is None:
+                        continue
+                    call_base, _ = call_generic
+                    if self.generic_type_bases_match(pattern_candidate, call_base):
+                        return pattern_candidate, {}
+                    continue
+
+                pattern_base, pattern_args = pattern_generic
+                if call_generic is None:
+                    if self.generic_type_bases_match(pattern_base, call_candidate):
+                        return pattern_candidate, {}
+                    continue
+
+                call_base, call_args = call_generic
+                if not self.generic_type_bases_match(pattern_base, call_base):
+                    continue
+                if len(pattern_args) != len(call_args):
+                    continue
+
+                substitutions = {}
+                conflicts = set()
+                for pattern_arg, call_arg in zip(pattern_args, call_args):
+                    self.match_generic_type_parameters(
+                        pattern_arg,
+                        call_arg,
+                        generic_names,
+                        substitutions,
+                        conflicts,
+                    )
+                if conflicts:
+                    continue
+                return call_candidate, substitutions
+
+        return None, {}
 
     def match_impl_receiver_type(self, pattern_type, receiver_type, generic_names):
         for pattern_candidate in self.generic_type_match_candidates(pattern_type):
@@ -3382,10 +3913,14 @@ class RustToCrossGLConverter:
         return "\n".join(rewritten) + ("\n" if code.endswith("\n") else "")
 
     def generate_try_block_body_code(self, block_node, indent=0):
-        code = self.generate_function_body(block_node.statements, indent=indent)
-        expression = self.get_block_expression(block_node)
-        code += self.generate_try_block_success_return(expression, indent)
-        return code
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(block_node.statements, indent=indent)
+            expression = self.get_block_expression(block_node)
+            code += self.generate_try_block_success_return(expression, indent)
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def generate_try_block_success_return(self, expression, indent):
         indent_str = "    " * indent
@@ -3556,7 +4091,9 @@ class RustToCrossGLConverter:
 
         code = condition_code
         code += f"{indent_str}if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
+        code += self.generate_scoped_function_body(
+            node.if_body, indent + 1, loop_contexts
+        )
         code += f"{indent_str}}}"
 
         if node.else_body:
@@ -3572,11 +4109,11 @@ class RustToCrossGLConverter:
             else:
                 code += " else {\n"
                 if isinstance(node.else_body, list):
-                    code += self.generate_function_body(
+                    code += self.generate_scoped_function_body(
                         node.else_body, indent + 1, loop_contexts
                     )
                 else:
-                    code += self.generate_function_body(
+                    code += self.generate_scoped_function_body(
                         [node.else_body], indent + 1, loop_contexts
                     )
                 code += f"{indent_str}}}"
@@ -3586,7 +4123,7 @@ class RustToCrossGLConverter:
 
     def generate_condition_chain_if_statement(self, node, indent, loop_contexts=None):
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.if_body,
                 success_indent,
                 loop_contexts,
@@ -3597,12 +4134,12 @@ class RustToCrossGLConverter:
 
             def failure(failure_indent):
                 if isinstance(node.else_body, list):
-                    return self.generate_function_body(
+                    return self.generate_scoped_function_body(
                         node.else_body,
                         failure_indent,
                         loop_contexts,
                     )
-                return self.generate_function_body(
+                return self.generate_scoped_function_body(
                     [node.else_body],
                     failure_indent,
                     loop_contexts,
@@ -3625,19 +4162,21 @@ class RustToCrossGLConverter:
         indent_str = "    " * indent
 
         code += f"{indent_str}if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
+        code += self.generate_scoped_function_body(
+            node.if_body, indent + 1, loop_contexts
+        )
         code += f"{indent_str}}}"
 
         if node.else_body is not None:
             code += " else {\n"
             if isinstance(node.else_body, list):
-                code += self.generate_function_body(
+                code += self.generate_scoped_function_body(
                     node.else_body,
                     indent + 1,
                     loop_contexts,
                 )
             else:
-                code += self.generate_function_body(
+                code += self.generate_scoped_function_body(
                     [node.else_body],
                     indent + 1,
                     loop_contexts,
@@ -3649,7 +4188,7 @@ class RustToCrossGLConverter:
 
     def generate_if_let_statement(self, node, indent, loop_contexts=None):
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.if_body,
                 success_indent,
                 loop_contexts,
@@ -3660,12 +4199,12 @@ class RustToCrossGLConverter:
 
             def failure(failure_indent):
                 if isinstance(node.else_body, list):
-                    return self.generate_function_body(
+                    return self.generate_scoped_function_body(
                         node.else_body,
                         failure_indent,
                         loop_contexts,
                     )
-                return self.generate_function_body(
+                return self.generate_scoped_function_body(
                     [node.else_body],
                     failure_indent,
                     loop_contexts,
@@ -3861,7 +4400,9 @@ class RustToCrossGLConverter:
             indent,
             loop_contexts,
         )
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -3923,7 +4464,7 @@ class RustToCrossGLConverter:
             index_name,
             indent + 1,
         )
-        code += self.generate_function_body(
+        code += self.generate_scoped_function_body(
             node.body,
             indent + 1,
             nested_contexts,
@@ -4218,13 +4759,17 @@ class RustToCrossGLConverter:
             code += f"{indent_str}    if (!{condition}) {{\n"
             code += f"{indent_str}        break;\n"
             code += f"{indent_str}    }}\n"
-            code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+            code += self.generate_scoped_function_body(
+                node.body, indent + 1, nested_contexts
+            )
             code += f"{indent_str}}}\n"
             return code
 
         condition = self.generate_expression(node.condition)
         code += f"{indent_str}while ({condition}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4238,7 +4783,7 @@ class RustToCrossGLConverter:
         code += f"{indent_str}while (true) {{\n"
 
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.body,
                 success_indent,
                 nested_contexts,
@@ -4275,7 +4820,9 @@ class RustToCrossGLConverter:
         code += f"{indent_str}    if (!{condition}) {{\n"
         code += f"{indent_str}        break;\n"
         code += f"{indent_str}    }}\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4289,7 +4836,7 @@ class RustToCrossGLConverter:
         code += f"{indent_str}while (true) {{\n"
 
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.body,
                 success_indent,
                 nested_contexts,
@@ -4320,7 +4867,9 @@ class RustToCrossGLConverter:
         # Convert Rust infinite loop to while(true)
         code = self.generate_labeled_control_declarations(loop_context, indent)
         code += f"{indent_str}while (true) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4330,7 +4879,7 @@ class RustToCrossGLConverter:
             return self.generate_match_if_chain(
                 node,
                 indent,
-                self.generate_function_body,
+                self.generate_scoped_function_body,
                 loop_contexts,
             )
 
@@ -4353,7 +4902,7 @@ class RustToCrossGLConverter:
 
         for arm in node.arms:
             code += self.generate_match_case_label(arm.pattern, indent + 1)
-            code += self.generate_function_body(
+            code += self.generate_scoped_function_body(
                 arm.body,
                 indent + 2,
                 arm_loop_contexts,
@@ -5979,7 +6528,7 @@ class RustToCrossGLConverter:
                 loop_contexts,
             )
         if isinstance(branch, list):
-            return self.generate_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(branch, indent, loop_contexts)
         if branch is not None:
             return self.generate_discarded_expression(
                 branch,
@@ -5992,15 +6541,21 @@ class RustToCrossGLConverter:
         self, block_node, indent, loop_contexts=None
     ):
         block_node = self.get_block_expression_node(block_node)
-        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
-        expression = self.get_block_expression(block_node)
-        if expression is not None:
-            code += self.generate_discarded_expression(
-                expression,
-                indent,
-                loop_contexts,
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(
+                block_node.statements, indent, loop_contexts
             )
-        return code
+            expression = self.get_block_expression(block_node)
+            if expression is not None:
+                code += self.generate_discarded_expression(
+                    expression,
+                    indent,
+                    loop_contexts,
+                )
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def expression_has_side_effects(self, expression):
         if isinstance(expression, FunctionCallNode):
@@ -6808,6 +7363,7 @@ class RustToCrossGLConverter:
                 obj,
                 args,
                 expression.args,
+                self.infer_value_type(expression.name.object),
             )
             if method_call is not None:
                 return obj_code + args_code, method_call
@@ -6823,6 +7379,12 @@ class RustToCrossGLConverter:
             )
             if constructor is not None:
                 return args_code, constructor
+            associated_call = self.format_associated_impl_function_call(
+                expression.name,
+                args,
+            )
+            if associated_call is not None:
+                return args_code, associated_call
             func_name = self.map_function(expression.name)
             return args_code, f"{func_name}({', '.join(args)})"
 
@@ -6856,6 +7418,12 @@ class RustToCrossGLConverter:
                 constructor = self.format_path_constructor_call(expr.name, expr.args)
                 if constructor is not None:
                     return constructor
+                associated_call = self.format_associated_impl_function_call(
+                    expr.name,
+                    [self.generate_expression(arg) for arg in expr.args],
+                )
+                if associated_call is not None:
+                    return associated_call
                 func_name = self.map_function(expr.name)
             else:
                 func_name = self.generate_expression(expr.name)
@@ -7356,6 +7924,22 @@ class RustToCrossGLConverter:
             ):
                 return name
 
+    def next_local_function_item_name(self, context_name=None):
+        context = self.sanitize_closure_helper_context(context_name)
+        while True:
+            if context:
+                name = f"_rust_local_{context}_{self.local_function_item_counter}"
+            else:
+                name = f"_rust_local_{self.local_function_item_counter}"
+            self.local_function_item_counter += 1
+            if (
+                name not in self.user_function_names
+                and name not in self.closure_helper_names
+                and name not in self.local_function_item_names
+            ):
+                self.local_function_item_names.add(name)
+                return name
+
     def sanitize_closure_helper_context(self, context_name):
         if not context_name:
             return ""
@@ -7385,6 +7969,7 @@ class RustToCrossGLConverter:
         self.current_function_return_type = closure.return_type
         self.closure_helper_generation_depth += 1
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         try:
             if pattern_params:
                 body = self.generate_closure_pattern_parameter_body(
@@ -7396,6 +7981,7 @@ class RustToCrossGLConverter:
             else:
                 body = self.generate_closure_body_code(closure.body, indent=2)
         finally:
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
             self.closure_helper_generation_depth -= 1
             self.current_function_return_type = previous_return_type
@@ -7411,15 +7997,25 @@ class RustToCrossGLConverter:
             self.prepare_closure_parameter(param) for param in closure.params
         ]
         params = ", ".join(info["declarator"] for info in parameter_infos)
-        body = self.generate_closure_body(
-            closure.body,
-            [
-                (info["subject"], info["pattern"])
-                for info in parameter_infos
-                if info["pattern"] is not None
-            ],
-            closure.return_type,
-        )
+        param_types = [
+            (info["subject"], param.param_type)
+            for info, param in zip(parameter_infos, closure.params)
+        ]
+        self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
+        try:
+            body = self.generate_closure_body(
+                closure.body,
+                [
+                    (info["subject"], info["pattern"])
+                    for info in parameter_infos
+                    if info["pattern"] is not None
+                ],
+                closure.return_type,
+            )
+        finally:
+            self.pop_local_callable_scope()
+            self.pop_value_type_scope()
         if not params:
             return f"lambda({body})"
         return f"lambda({params}, {body})"
@@ -7609,15 +8205,19 @@ class RustToCrossGLConverter:
     def generate_closure_body_code(self, body, indent=0):
         if self.is_block_expression_node(body):
             block_node = self.get_block_expression_node(body)
-            code = self.generate_function_body(block_node.statements, indent=indent)
-            expression = self.get_block_expression(block_node)
-            if expression is not None:
-                code += self.generate_expression_result(
-                    expression,
-                    indent=indent,
-                    result_target=self.return_result_target,
-                )
-            return code
+            self.push_local_callable_scope()
+            try:
+                code = self.generate_function_body(block_node.statements, indent=indent)
+                expression = self.get_block_expression(block_node)
+                if expression is not None:
+                    code += self.generate_expression_result(
+                        expression,
+                        indent=indent,
+                        result_target=self.return_result_target,
+                    )
+                return code
+            finally:
+                self.pop_local_callable_scope()
 
         return self.generate_expression_result(
             body,
@@ -7717,6 +8317,7 @@ class RustToCrossGLConverter:
 
         method_name = expr.name.member
         obj = self.generate_expression(expr.name.object)
+        receiver_type = self.infer_value_type(expr.name.object)
 
         if (
             method_name in {"map", "filter", "for_each", "any", "all"}
@@ -7749,7 +8350,13 @@ class RustToCrossGLConverter:
             )
 
         args = [self.generate_expression(arg) for arg in expr.args]
-        return self.format_method_call_parts(method_name, obj, args, expr.args)
+        return self.format_method_call_parts(
+            method_name,
+            obj,
+            args,
+            expr.args,
+            receiver_type,
+        )
 
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]
@@ -8087,6 +8694,10 @@ class RustToCrossGLConverter:
         stripped_func, type_args = self.split_function_type_arguments(rust_func)
         if type_args and self.lookup_user_function_signature(stripped_func) is not None:
             rust_func = stripped_func
+
+        local_callable = self.lookup_local_callable_name(stripped_func)
+        if local_callable is not None:
+            return local_callable
 
         rust_func = self.resolve_imported_module_path(rust_func)
         if self.is_user_defined_function(rust_func):

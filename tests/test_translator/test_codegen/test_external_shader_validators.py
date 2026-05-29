@@ -333,6 +333,162 @@ shader GLSLParameterImageAtomicValidator {
 """
 
 
+GLSL_ARRAY_ELEMENT_IMAGE_SPECIALIZATION_COMPUTE_SHADER = """
+shader GLSLArrayElementImageSpecializationValidator {
+    image2D counters @r32ui[2];
+
+    int queryElement(image2D image @r32ui) {
+        return imageSize(image).x;
+    }
+
+    int queryViaArray(image2D images[] @r32ui) {
+        return queryElement(images[0]);
+    }
+
+    compute {
+        void main() {
+            int directCount = queryElement(counters[0]);
+            int nestedCount = queryViaArray(counters);
+            imageStore(counters[1], ivec2(0, 0), uint(directCount + nestedCount));
+        }
+    }
+}
+"""
+
+
+GLSL_ADVANCED_IMAGE_ARRAY_SPECIALIZATION_COMPUTE_SHADER = """
+shader GLSLAdvancedImageArraySpecializationValidator {
+    image2DMS msImages @rgba16f[2];
+    uimage2DMS msCounters @r32ui[2];
+    imageCube cubeImages @rgba16f[2];
+    imageCubeArray cubeLayerImages @rgba16f[2];
+
+    vec4 touchMS(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+        vec4 oldValue = imageLoad(image, pixel, sampleIndex);
+        imageStore(image, pixel, sampleIndex, oldValue + value);
+        return oldValue;
+    }
+
+    uint bumpMS(uimage2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+        return imageAtomicAdd(image, pixel, sampleIndex, value);
+    }
+
+    vec4 touchCube(imageCube image @rgba16f, ivec3 coord, vec4 value) {
+        vec4 oldValue = imageLoad(image, coord);
+        imageStore(image, coord, oldValue + value);
+        return oldValue;
+    }
+
+    vec4 touchCubeLayer(imageCubeArray image @rgba16f, ivec3 coord, vec4 value) {
+        vec4 oldValue = imageLoad(image, coord);
+        imageStore(image, coord, oldValue + value);
+        return oldValue;
+    }
+
+    vec4 viaMS(image2DMS images[] @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+        return touchMS(images[1], pixel, sampleIndex, value);
+    }
+
+    uint viaCounter(uimage2DMS counters[] @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+        return bumpMS(counters[1], pixel, sampleIndex, value);
+    }
+
+    vec4 viaCube(imageCube images[] @rgba16f, ivec3 coord, vec4 value) {
+        return touchCube(images[1], coord, value);
+    }
+
+    vec4 viaCubeLayer(imageCubeArray images[] @rgba16f, ivec3 coord, vec4 value) {
+        return touchCubeLayer(images[1], coord, value);
+    }
+
+    compute {
+        void main() {
+            vec4 directMS = touchMS(msImages[0], ivec2(0, 1), 2, vec4(1.0));
+            vec4 nestedMS = viaMS(msImages, ivec2(2, 3), 0, directMS);
+            uint directCounter = bumpMS(msCounters[0], ivec2(1, 2), 3, 4u);
+            uint nestedCounter = viaCounter(msCounters, ivec2(3, 4), 1, directCounter);
+            vec4 directCube = touchCube(cubeImages[0], ivec3(0, 1, 2), nestedMS);
+            vec4 nestedCube = viaCube(cubeImages, ivec3(2, 3, 4), directCube);
+            vec4 directLayer = touchCubeLayer(cubeLayerImages[0], ivec3(1, 2, 3), nestedCube);
+            vec4 nestedLayer = viaCubeLayer(cubeLayerImages, ivec3(3, 4, 5), directLayer + vec4(float(nestedCounter)));
+        }
+    }
+}
+"""
+
+
+GLSL_STORAGE_IMAGE_ACCESS_COMPUTE_SHADER = """
+shader GLSLStorageImageAccessValidator {
+    image2D source @access(readonly);
+    image2D target @access(writeonly);
+    uimage2D counters @r32ui @access(readwrite);
+
+    float readPixel(image2D image @access(readonly), ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    void writePixel(image2D image @access(writeonly), ivec2 pixel, vec4 value) {
+        imageStore(image, pixel, value);
+    }
+
+    uint bump(uimage2D image @r32ui @access(readwrite), ivec2 pixel, uint value) {
+        uint oldValue = imageAtomicAdd(image, pixel, value);
+        imageStore(image, pixel, oldValue + 1u);
+        return oldValue;
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            float value = readPixel(source, pixel);
+            writePixel(target, pixel, vec4(value));
+            uint oldValue = bump(counters, pixel, 1u);
+            imageStore(counters, pixel, oldValue + 2u);
+        }
+    }
+}
+"""
+
+
+GLSL_BUFFER_BLOCK_ACCESS_COMPUTE_SHADER = """
+shader GLSLBufferBlockAccessValidator {
+    struct Counter {
+        uint value;
+    };
+    struct ReadonlyData {
+        uint value;
+    };
+    struct WriteonlyData {
+        uint value;
+    };
+    struct ReadwriteData {
+        uint value;
+        Counter nested;
+        Counter items[2];
+        uint values[4];
+    };
+
+    ReadonlyData readonlyData @glsl_buffer_block(std430) @readonly;
+    WriteonlyData writeonlyData @glsl_buffer_block(std430) @writeonly;
+    ReadwriteData readwriteData @glsl_buffer_block(std430) @access(readwrite);
+
+    compute {
+        void main() {
+            uint value = readonlyData.value;
+            writeonlyData.value = value;
+            uint oldValue = atomicAdd(readwriteData.value, 1u);
+            uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);
+            uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);
+            uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);
+            uint swapped = atomicCompSwap(readwriteData.values[1], uint(0), arrayOld);
+            readwriteData.value += oldValue;
+            readwriteData.values[2] = swapped;
+        }
+    }
+}
+"""
+
+
 GLSL_GEOMETRY_TESSELLATION_LAYOUT_SHADER = """
 shader GLSLGeometryTessellationLayoutValidator {
     geometry {
@@ -1725,6 +1881,39 @@ def test_generated_glsl_compute_synchronization_validates_with_glslangvalidator(
     _run_validator([glslang, "-S", "comp", str(shader_path)])
 
 
+def test_generated_glsl_wave_subgroups_validate_with_glslangvalidator(tmp_path):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "wave_subgroups.comp"
+    shader = """
+    shader ExternalValidatorWaveSubgroups {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                uint sumValue = WaveActiveSum(lane);
+                uint prefixValue = WavePrefixSum(sumValue);
+                bool first = WaveIsFirstLane();
+                bool anyLane = WaveActiveAnyTrue(prefixValue > 0u);
+                bool allLane = WaveActiveAllTrue(count > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane || allLane || first);
+                uint broadcast = WaveReadLaneAt(prefixValue, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast + ballot.x);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in code
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in code
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in code
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in code
+    assert "Wave" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
 def test_generated_glsl_geometry_tessellation_layouts_validate_with_glslangvalidator(
     tmp_path,
 ):
@@ -2293,6 +2482,113 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     assert "imageAtomicAdd(image, pixel, value)" not in code
     assert "imageAtomicAdd(counters, pixel, value)" in code
     assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_array_element_image_specialization_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "array_element_image_specialization.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            GLSL_ARRAY_ELEMENT_IMAGE_SPECIALIZATION_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
+    assert "int queryElement__glsl_image_counters_0()" in code
+    assert "return imageSize(counters[0]).x;" in code
+    assert "int queryElement__glsl_image_counters()" not in code
+    assert "return imageSize(counters).x;" not in code
+    assert "return queryElement__glsl_image_counters_0();" in code
+    assert "imageStore(counters[1], ivec2(0, 0), uvec4(uint(" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_advanced_image_array_specialization_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "advanced_image_array_specialization.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            GLSL_ADVANCED_IMAGE_ARRAY_SPECIALIZATION_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "layout(rgba16f, binding = 0) uniform image2DMS msImages[2];" in code
+    assert "layout(r32ui, binding = 2) uniform uimage2DMS msCounters[2];" in code
+    assert "layout(rgba16f, binding = 4) uniform imageCube cubeImages[2];" in code
+    assert (
+        "layout(rgba16f, binding = 6) uniform imageCubeArray cubeLayerImages[2];"
+        in code
+    )
+    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "imageAtomicAdd(msCounters[1], pixel, sampleIndex, value)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_storage_image_access_qualifiers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "storage_image_access.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_STORAGE_IMAGE_ACCESS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "layout(rgba32f, binding = 0) readonly uniform image2D source;" in code
+    assert "layout(rgba32f, binding = 1) writeonly uniform image2D target;" in code
+    assert "layout(r32ui, binding = 2) uniform uimage2D counters;" in code
+    assert "layout(r32ui, binding = 2) readwrite uniform uimage2D" not in code
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in code
+    assert "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)" in code
+    assert "uint bump(uimage2D image, ivec2 pixel, uint value)" in code
+    assert "uint oldValue = imageAtomicAdd(counters, pixel, value);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_buffer_block_access_qualifiers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "buffer_block_access.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_BUFFER_BLOCK_ACCESS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "layout(std430, binding = 0) readonly buffer ReadonlyData" in code
+    assert "layout(std430, binding = 1) writeonly buffer WriteonlyData" in code
+    assert "layout(std430, binding = 2) buffer ReadwriteData" in code
+    assert "readwrite buffer" not in code
+    assert "uint value = readonlyData.value;" in code
+    assert "writeonlyData.value = value;" in code
+    assert "uint oldValue = atomicAdd(readwriteData.value, 1u);" in code
+    assert "uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);" in code
+    assert "uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);" in code
+    assert "uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);" in code
+    assert (
+        "uint swapped = atomicCompSwap(readwriteData.values[1], uint(0), arrayOld);"
+        in code
+    )
+    assert "readwriteData.value += oldValue;" in code
+    assert "readwriteData.values[2] = swapped;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

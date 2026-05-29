@@ -16,6 +16,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,10 +62,29 @@ UNSUPPORTED_PATTERN = re.compile(
     r"unsupported|not support|does not support|notimplemented",
     re.IGNORECASE,
 )
+ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*$")
+SUPPORT_ENTRY_KEYS = {"status", "notes", "evidence"}
 
 
 class SupportMatrixError(Exception):
     """Raised when the support metadata is invalid."""
+
+
+def require_mapping(value, description):
+    if not isinstance(value, dict):
+        raise SupportMatrixError("{} must be an object".format(description))
+
+
+def require_list(value, description):
+    if not isinstance(value, list):
+        raise SupportMatrixError("{} must be a list".format(description))
+
+
+def validate_id(value, description):
+    if not isinstance(value, str) or not ID_PATTERN.fullmatch(value):
+        raise SupportMatrixError(
+            "{} must match {}".format(description, ID_PATTERN.pattern)
+        )
 
 
 def load_json(path):
@@ -188,10 +208,13 @@ def validate_backend_catalog(backends_data):
         )
 
     ids = set()
+    aliases = set()
+    extensions = set()
     for backend in backends:
         backend_id = backend.get("id")
         if not backend_id:
             raise SupportMatrixError("Every backend requires an 'id'")
+        validate_id(backend_id, "Backend id '{}'".format(backend_id))
         if backend_id in ids:
             raise SupportMatrixError("Duplicate backend id: {}".format(backend_id))
         ids.add(backend_id)
@@ -201,6 +224,32 @@ def validate_backend_catalog(backends_data):
                 raise SupportMatrixError(
                     "Backend '{}' is missing '{}'".format(backend_id, key)
                 )
+
+        if not isinstance(backend["name"], str) or not backend["name"].strip():
+            raise SupportMatrixError(
+                "Backend '{}' name must be a non-empty string".format(backend_id)
+            )
+        target_extension = backend.get("target_extension")
+        if not isinstance(target_extension, str) or not target_extension.startswith(
+            "."
+        ):
+            raise SupportMatrixError(
+                "Backend '{}' target_extension must start with '.'".format(backend_id)
+            )
+        if target_extension in extensions:
+            raise SupportMatrixError(
+                "Duplicate backend target extension: {}".format(target_extension)
+            )
+        extensions.add(target_extension)
+
+        require_list(
+            backend.get("aliases", []), "Backend '{}' aliases".format(backend_id)
+        )
+        for alias in backend.get("aliases", []):
+            validate_id(alias, "Backend '{}' alias '{}'".format(backend_id, alias))
+            if alias in aliases:
+                raise SupportMatrixError("Duplicate backend alias: {}".format(alias))
+            aliases.add(alias)
 
         if not path_exists(backend["translator_codegen"]):
             raise SupportMatrixError(
@@ -214,17 +263,34 @@ def validate_backend_catalog(backends_data):
                     backend_id, backend["native_backend"]
                 )
             )
+        require_list(backend.get("tests", []), "Backend '{}' tests".format(backend_id))
         for test_path in backend.get("tests", []):
+            if not isinstance(test_path, str):
+                raise SupportMatrixError(
+                    "Backend '{}' test paths must be strings".format(backend_id)
+                )
             if not path_exists(test_path):
                 raise SupportMatrixError(
                     "Backend '{}' test path does not exist: {}".format(
                         backend_id, test_path
                     )
                 )
+        require_list(backend.get("docs", []), "Backend '{}' docs".format(backend_id))
         for doc in backend.get("docs", []):
+            require_mapping(doc, "Backend '{}' docs entry".format(backend_id))
             if not doc.get("name") or not doc.get("url"):
                 raise SupportMatrixError(
                     "Backend '{}' has a docs entry missing name/url".format(backend_id)
+                )
+            if not isinstance(doc["name"], str) or not isinstance(doc["url"], str):
+                raise SupportMatrixError(
+                    "Backend '{}' docs name/url must be strings".format(backend_id)
+                )
+            if urllib.parse.urlparse(doc["url"]).scheme not in {"http", "https"}:
+                raise SupportMatrixError(
+                    "Backend '{}' docs URL must be http(s): {}".format(
+                        backend_id, doc["url"]
+                    )
                 )
     return ids
 
@@ -280,6 +346,13 @@ def validate_feature_catalog(features_data, backend_ids):
     if not isinstance(statuses, dict) or not statuses:
         raise SupportMatrixError("support/features.json must define 'statuses'")
 
+    missing_statuses = set(STATUS_CODES) - set(statuses)
+    if missing_statuses:
+        raise SupportMatrixError(
+            "features.json is missing status definition(s): {}".format(
+                ", ".join(sorted(missing_statuses))
+            )
+        )
     missing_status_codes = set(statuses) - set(STATUS_CODES)
     if missing_status_codes:
         raise SupportMatrixError(
@@ -299,6 +372,7 @@ def validate_feature_catalog(features_data, backend_ids):
         feature_id = feature.get("id")
         if not feature_id:
             raise SupportMatrixError("Every feature requires an 'id'")
+        validate_id(feature_id, "Feature id '{}'".format(feature_id))
         if feature_id in feature_ids:
             raise SupportMatrixError("Duplicate feature id: {}".format(feature_id))
         feature_ids.add(feature_id)
@@ -307,6 +381,12 @@ def validate_feature_catalog(features_data, backend_ids):
             if key not in feature:
                 raise SupportMatrixError(
                     "Feature '{}' is missing '{}'".format(feature_id, key)
+                )
+            if not isinstance(feature[key], str) or not feature[key].strip():
+                raise SupportMatrixError(
+                    "Feature '{}' '{}' must be a non-empty string".format(
+                        feature_id, key
+                    )
                 )
 
         support = feature.get("support", {})
@@ -329,11 +409,24 @@ def validate_feature_catalog(features_data, backend_ids):
                         feature_id, backend_id
                     )
                 )
+            unknown_keys = set(entry) - SUPPORT_ENTRY_KEYS
+            if unknown_keys:
+                raise SupportMatrixError(
+                    "Feature '{}' backend '{}' has unsupported support key(s): {}".format(
+                        feature_id, backend_id, ", ".join(sorted(unknown_keys))
+                    )
+                )
             status = entry.get("status")
             if status not in statuses:
                 raise SupportMatrixError(
                     "Feature '{}' backend '{}' has invalid status '{}'".format(
                         feature_id, backend_id, status
+                    )
+                )
+            if "notes" in entry and not isinstance(entry["notes"], str):
+                raise SupportMatrixError(
+                    "Feature '{}' backend '{}' notes must be a string".format(
+                        feature_id, backend_id
                     )
                 )
             if "evidence" in entry:
@@ -443,6 +536,89 @@ def build_matrix(backends_data, features_data):
         },
         "backlog": backlog,
     }
+
+
+def validate_matrix(matrix):
+    backends = matrix.get("backends", [])
+    features = matrix.get("features", [])
+    backend_ids = [backend.get("id") for backend in backends]
+    if len(backend_ids) != len(set(backend_ids)):
+        raise SupportMatrixError("Generated matrix contains duplicate backend ids")
+    missing_graphics = set(GRAPHICS_BACKEND_IDS) - set(backend_ids)
+    if missing_graphics:
+        raise SupportMatrixError(
+            "Generated matrix is missing graphics backend(s): {}".format(
+                ", ".join(sorted(missing_graphics))
+            )
+        )
+
+    if matrix.get("summary", {}).get("feature_count") != len(features):
+        raise SupportMatrixError("Generated matrix feature_count is inconsistent")
+    if matrix.get("summary", {}).get("backend_count") != len(backends):
+        raise SupportMatrixError("Generated matrix backend_count is inconsistent")
+
+    counts = {
+        backend_id: {status: 0 for status in STATUS_ORDER} for backend_id in backend_ids
+    }
+    expected_backlog = []
+    seen_features = set()
+    backend_id_set = set(backend_ids)
+    for feature in features:
+        feature_id = feature.get("id")
+        if feature_id in seen_features:
+            raise SupportMatrixError(
+                "Generated matrix contains duplicate feature id: {}".format(feature_id)
+            )
+        seen_features.add(feature_id)
+        support = feature.get("support", {})
+        support_backend_ids = set(support)
+        if support_backend_ids != backend_id_set:
+            missing = backend_id_set - support_backend_ids
+            extra = support_backend_ids - backend_id_set
+            details = []
+            if missing:
+                details.append("missing {}".format(", ".join(sorted(missing))))
+            if extra:
+                details.append("extra {}".format(", ".join(sorted(extra))))
+            raise SupportMatrixError(
+                "Generated matrix feature '{}' has inconsistent backend support: {}".format(
+                    feature_id, "; ".join(details)
+                )
+            )
+        for backend_id, entry in support.items():
+            status = entry.get("status")
+            if status not in STATUS_CODES:
+                raise SupportMatrixError(
+                    "Generated matrix feature '{}' backend '{}' has invalid status '{}'".format(
+                        feature_id, backend_id, status
+                    )
+                )
+            counts[backend_id][status] += 1
+            if status in BACKLOG_STATUSES:
+                expected_backlog.append(
+                    {
+                        "feature_id": feature_id,
+                        "feature": feature["name"],
+                        "category": feature["category"],
+                        "backend_id": backend_id,
+                        "backend": next(
+                            backend["name"]
+                            for backend in backends
+                            if backend["id"] == backend_id
+                        ),
+                        "status": status,
+                        "notes": entry.get("notes", ""),
+                    }
+                )
+
+    summary_counts = matrix.get("summary", {}).get("status_counts")
+    if summary_counts != counts:
+        raise SupportMatrixError("Generated matrix status_counts are inconsistent")
+    backlog = matrix.get("backlog", [])
+    if matrix.get("summary", {}).get("backlog_count") != len(backlog):
+        raise SupportMatrixError("Generated matrix backlog_count is inconsistent")
+    if sorted(backlog, key=stable_json) != sorted(expected_backlog, key=stable_json):
+        raise SupportMatrixError("Generated matrix backlog rows are inconsistent")
 
 
 def filtered_backlog(matrix, backend_ids=None, categories=None, statuses=None):
@@ -847,7 +1023,7 @@ def split_filter_values(values):
     return result
 
 
-def validate_audit_filters(matrix, backend_ids, categories):
+def validate_audit_filters(matrix, backend_ids, categories, statuses):
     known_backend_ids = {backend["id"] for backend in matrix["backends"]}
     unknown_backend_ids = set(backend_ids) - known_backend_ids
     if unknown_backend_ids:
@@ -866,6 +1042,12 @@ def validate_audit_filters(matrix, backend_ids, categories):
             )
         )
 
+    unknown_statuses = set(statuses) - set(STATUS_ORDER)
+    if unknown_statuses:
+        raise SupportMatrixError(
+            "Unknown status filter(s): {}".format(", ".join(sorted(unknown_statuses)))
+        )
+
 
 def audit(
     matrix, fail_on, backend_ids=None, categories=None, statuses=None, output=None
@@ -874,7 +1056,7 @@ def audit(
     backend_ids = split_filter_values(backend_ids)
     categories = split_filter_values(categories)
     statuses = split_filter_values(statuses)
-    validate_audit_filters(matrix, backend_ids, categories)
+    validate_audit_filters(matrix, backend_ids, categories, statuses)
 
     rows = filtered_backlog(
         matrix, backend_ids=backend_ids, categories=categories, statuses=statuses
@@ -1013,7 +1195,9 @@ def load_and_validate():
     backends_data = load_json(BACKENDS_PATH)
     features_data = load_json(FEATURES_PATH)
     validate_catalogs(backends_data, features_data)
-    return backends_data, features_data, build_matrix(backends_data, features_data)
+    matrix = build_matrix(backends_data, features_data)
+    validate_matrix(matrix)
+    return backends_data, features_data, matrix
 
 
 def parse_args(argv):
@@ -1048,9 +1232,11 @@ def parse_args(argv):
     audit_parser.add_argument(
         "--status",
         action="append",
-        choices=STATUS_ORDER,
         default=[],
-        help="Filter backlog by support status. Can be repeated.",
+        help=(
+            "Filter backlog by support status. Can be repeated; comma-separated "
+            "values are accepted."
+        ),
     )
     audit_parser.add_argument(
         "--output",

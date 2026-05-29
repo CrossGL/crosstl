@@ -15,6 +15,7 @@ from crosstl.translator.ast import (
     ShaderNode,
     StageNode,
     StructNode,
+    EnumNode,
     VariableNode,
     FunctionNode,
     AssignmentNode,
@@ -487,6 +488,34 @@ class TestVulkanSPIRVCodeGen:
         assert "OpTypeStruct" in spv_code
         assert "OpFunction" in spv_code
         assert "OpReturn" in spv_code
+        assert "OpFunctionEnd" in spv_code
+
+    def test_shader_generation_ignores_frontend_enum_declarations_in_structs(self):
+        source_code = """
+        shader EnumDeclarations {
+            enum Mode {
+                Read,
+                Write
+            }
+
+            struct Payload {
+                float value;
+            };
+
+            float passthrough(float value) {
+                return value;
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        assert any(isinstance(node, EnumNode) for node in ast.structs)
+
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpName" in spv_code
+        assert '"Payload"' in spv_code
+        assert "OpFunction" in spv_code
         assert "OpFunctionEnd" in spv_code
 
     def test_generic_vector_composite_types(self):
@@ -2042,7 +2071,13 @@ class TestVulkanSPIRVCodeGen:
             compute {
                 void main() {
                     float missingUnary = sin();
+                    vec2 missingAtan2 = atan2(vec2(1.0, 2.0));
                     float missingBinary = distance(vec2(0.0, 1.0));
+                    vec3 extraCross = cross(
+                        vec3(1.0, 0.0, 0.0),
+                        vec3(0.0, 1.0, 0.0),
+                        vec3(0.0, 0.0, 1.0)
+                    );
                     vec3 missingTernary = refract(vec3(0.0), vec3(1.0));
                 }
             }
@@ -2054,11 +2089,55 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "; WARNING: sin requires 1 operand" in spv_code
+        assert "; WARNING: atan2 requires 2 operands" in spv_code
         assert "; WARNING: distance requires 2 operands" in spv_code
+        assert "; WARNING: cross requires 2 operands" in spv_code
         assert "; WARNING: refract requires 3 operands" in spv_code
         assert " Sin " not in spv_code
+        assert " Atan2 " not in spv_code
         assert " Distance " not in spv_code
+        assert " Cross " not in spv_code
         assert " Refract " not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unknown_std450_fallback_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader UnknownStd450Builtins {
+            compute {
+                void main() {
+                    float scalar = notAStd450Function(vec2(1.0, 2.0));
+                    vec2 vector = missingVecCall(vec2(3.0, 4.0));
+                    int whole = missingIntegerCall(1);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'notAStd450Function'; using default value"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'missingVecCall'; using default value"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V backend cannot lower unknown function "
+            "'missingIntegerCall'; using default value"
+        ) in spv_code
+        assert " NotAStd450Function " not in spv_code
+        assert " MissingVecCall " not in spv_code
+        assert " MissingIntegerCall " not in spv_code
+        assert not re.search(
+            r"OpExtInst .* (NotAStd450Function|MissingVecCall|MissingIntegerCall)\b",
+            spv_code,
+        )
+        assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_malformed_min_max_clamp_mix_builtins_emit_diagnostics(self, tmp_path):
@@ -2168,6 +2247,7 @@ class TestVulkanSPIRVCodeGen:
                         vec3(1.0),
                         vec2(0.0, 1.0)
                     );
+                    vec3 reflectScalarNormal = reflect(vec3(1.0), 1.0);
                     ivec3 reflectInt = reflect(
                         ivec3(1, 2, 3),
                         ivec3(0, 1, 0)
@@ -2183,6 +2263,16 @@ class TestVulkanSPIRVCodeGen:
                         vec3(0.0, 1.0, 0.0),
                         vec2(0.5, 0.5)
                     );
+                    ivec3 refractInt = refract(
+                        ivec3(1, 2, 3),
+                        ivec3(0, 1, 0),
+                        0.5
+                    );
+
+                    mat2 ma = mat2(1.0);
+                    mat2 mb = mat2(1.0);
+                    mat2 reflectMatrix = reflect(ma, mb);
+                    mat2 refractMatrix = refract(ma, mb, 0.5);
                 }
             }
         }
@@ -2210,14 +2300,14 @@ class TestVulkanSPIRVCodeGen:
                 "; WARNING: reflect requires matching floating-point scalar "
                 "or vector operands"
             )
-            == 2
+            == 4
         )
         assert (
             spv_code.count(
                 "; WARNING: refract requires matching floating-point incident "
                 "and normal operands plus scalar eta"
             )
-            == 2
+            == 4
         )
         assert "OpDot" not in spv_code
         assert " Cross " not in spv_code
@@ -2239,6 +2329,7 @@ class TestVulkanSPIRVCodeGen:
                     dvec3 da = dvec3(1.0, 0.0, 0.0);
                     dvec3 db = dvec3(0.0, 1.0, 0.0);
                     dvec3 dc = cross(da, db);
+                    dvec3 dr = reflect(da, db);
                 }
             }
         }
@@ -2283,6 +2374,77 @@ class TestVulkanSPIRVCodeGen:
             r"Cross %\d+ %\d+",
             spv_code,
         )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            r"Reflect %\d+ %\d+",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_refract_eta_converts_to_result_component_type(self, tmp_path):
+        source_code = """
+        shader RefractEtaConversion {
+            compute {
+                void main() {
+                    dvec3 da = dvec3(1.0, 0.0, 0.0);
+                    dvec3 db = dvec3(0.0, 1.0, 0.0);
+                    dvec3 dt = refract(da, db, 0.5);
+
+                    vec3 fa = vec3(1.0, 0.0, 0.0);
+                    vec3 fb = vec3(0.0, 1.0, 0.0);
+                    double eta;
+                    vec3 ft = refract(fa, fb, eta);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 3",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec3_type is not None
+
+        double_eta_conversions = re.findall(
+            rf"(%\d+) = OpFConvert {re.escape(double_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert any(
+            re.search(
+                rf"OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+                rf"Refract %\d+ %\d+ {re.escape(conversion)}(?:\s|$)",
+                spv_code,
+            )
+            for conversion in double_eta_conversions
+        )
+
+        float_eta_conversions = re.findall(
+            rf"(%\d+) = OpFConvert {re.escape(float_type.group(1))} %\d+",
+            spv_code,
+        )
+        assert any(
+            re.search(
+                rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ "
+                rf"Refract %\d+ %\d+ {re.escape(conversion)}(?:\s|$)",
+                spv_code,
+            )
+            for conversion in float_eta_conversions
+        )
+
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -2293,11 +2455,20 @@ class TestVulkanSPIRVCodeGen:
                 void main() {
                     float lengthInt = length(ivec2(1, 2));
                     ivec3 normalizeInt = normalize(ivec3(1, 2, 3));
+                    mat2 ma = mat2(1.0);
+                    mat2 mb = mat2(1.0);
+                    float lengthMatrix = length(ma);
+                    mat2 normalizeMatrix = normalize(ma);
                     float distanceWidth = distance(
                         vec2(0.0, 1.0),
                         vec3(0.0, 1.0, 2.0)
                     );
                     float distanceInt = distance(ivec2(1, 2), ivec2(3, 4));
+                    float distanceScalarVector = distance(
+                        1.0,
+                        vec2(0.0, 1.0)
+                    );
+                    float distanceMatrix = distance(ma, mb);
                 }
             }
         }
@@ -2308,23 +2479,81 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert (
-            "; WARNING: length requires floating-point scalar or vector operand"
-            in spv_code
+            spv_code.count(
+                "; WARNING: length requires floating-point scalar or vector operand"
+            )
+            == 2
         )
         assert (
-            "; WARNING: normalize requires floating-point scalar or vector operand"
-            in spv_code
+            spv_code.count(
+                "; WARNING: normalize requires floating-point scalar or vector operand"
+            )
+            == 2
         )
         assert (
             spv_code.count(
                 "; WARNING: distance requires matching floating-point scalar "
                 "or vector operands"
             )
-            == 2
+            == 4
         )
         assert " Length " not in spv_code
         assert " Distance " not in spv_code
         assert " Normalize " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_scalar_metric_and_reflect_builtins_lower_valid_operand_shapes(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ValidScalarMetricAndReflectBuiltinShapes {
+            compute {
+                void main() {
+                    float fx;
+                    float fy;
+                    float lf = length(fx);
+                    float df = distance(fx, fy);
+                    float nf = normalize(fx);
+                    float rf = reflect(fx, fy);
+
+                    double dx;
+                    double dy;
+                    double ld = length(dx);
+                    double dd = distance(dx, dy);
+                    double nd = normalize(dx);
+                    double rd = reflect(dx, dy);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        for type_id in (float_type.group(1), double_type.group(1)):
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Length %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Distance %\d+ %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Normalize %\d+",
+                spv_code,
+            )
+            assert re.search(
+                rf"%\d+ = OpExtInst {re.escape(type_id)} %\d+ " r"Reflect %\d+ %\d+",
+                spv_code,
+            )
+
+        assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_metric_math_builtins_lower_valid_operand_shapes(self, tmp_path):
@@ -2482,6 +2711,41 @@ class TestVulkanSPIRVCodeGen:
             )
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_generic_std450_lowering_registers_result_value_type(self):
+        generator = VulkanSPIRVCodeGen()
+        float_type = generator.register_primitive_type("float")
+        vec2_type = generator.register_vector_type(float_type, 2)
+        vec3_type = generator.register_vector_type(float_type, 3)
+        zero = generator.register_constant(0.0, float_type)
+        vector2 = generator.composite_construct(vec2_type, [zero, zero])
+        vector3 = generator.composite_construct(vec3_type, [zero, zero, zero])
+
+        sin_result = generator.call_builtin_function("sin", [vector2])
+        atan2_result = generator.call_builtin_function("atan2", [vector2, vector2])
+        cross_result = generator.call_builtin_function("cross", [vector3, vector3])
+        code = "\n".join(generator.code_lines)
+
+        assert sin_result is not None
+        assert generator.value_types[sin_result.id] == vec2_type
+        assert re.search(
+            rf"%{sin_result.id} = OpExtInst %{vec2_type.id} %\d+ Sin %{vector2.id}",
+            code,
+        )
+        assert atan2_result is not None
+        assert generator.value_types[atan2_result.id] == vec2_type
+        assert re.search(
+            rf"%{atan2_result.id} = OpExtInst %{vec2_type.id} %\d+ "
+            rf"Atan2 %{vector2.id} %{vector2.id}",
+            code,
+        )
+        assert cross_result is not None
+        assert generator.value_types[cross_result.id] == vec3_type
+        assert re.search(
+            rf"%{cross_result.id} = OpExtInst %{vec3_type.id} %\d+ "
+            rf"Cross %{vector3.id} %{vector3.id}",
+            code,
+        )
 
     def test_vector_saturate_builtins_lower_to_vector_fclamp(self):
         source_code = """
@@ -3119,6 +3383,307 @@ class TestVulkanSPIRVCodeGen:
         assert " Pow " not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_fma_builtin_uses_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader FmaBuiltins {
+            compute {
+                void main() {
+                    float x;
+                    float y;
+                    float z;
+                    float sf = fma(x, y, z);
+                    vec3 vx = vec3(1.0, 2.0, 3.0);
+                    vec3 vy = vec3(2.0, 3.0, 4.0);
+                    vec3 vz = vec3(3.0, 4.0, 5.0);
+                    vec3 vv = fma(vx, vy, vz);
+                    vec3 vs = fma(vx, 2.0, 1.0);
+
+                    double dx;
+                    double dy;
+                    double dz;
+                    double ds = fma(dx, dy, dz);
+                    dvec2 dvx;
+                    dvec2 dvy;
+                    dvec2 dvz;
+                    dvec2 dvv = fma(dvx, dvy, dvz);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Fma",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec2_type.group(1))} %\d+ "
+            r"Fma %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_splats = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            r"(%\d+) \2 \2",
+            spv_code,
+        )
+        assert len(scalar_splats) >= 2
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ Fma %\d+ "
+            rf"{re.escape(scalar_splats[0][0])} "
+            rf"{re.escape(scalar_splats[1][0])}",
+            spv_code,
+        )
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_fma_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidFmaBuiltins {
+            compute {
+                void main() {
+                    int i;
+                    int j;
+                    int k;
+                    int intFma = fma(i, j, k);
+                    bool flag;
+                    bool boolFma = fma(flag, false, true);
+                    vec2 widthFma = fma(
+                        vec2(1.0, 2.0),
+                        vec3(2.0, 3.0, 4.0),
+                        vec2(3.0, 4.0)
+                    );
+                    float scalarVectorFma = fma(1.0, vec2(2.0, 3.0), 4.0);
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    mat2 c = mat2(3.0, 0.0, 0.0, 3.0);
+                    mat2 matrixFma = fma(a, b, c);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: fma requires compatible floating-point scalar "
+                "or vector operands"
+            )
+            == 5
+        )
+        assert " Fma " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_fma_builtin_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedFmaBuiltins {
+            compute {
+                void main() {
+                    float missingFma = fma(1.0, 2.0);
+                    float extraFma = fma(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: fma requires 3 operands") == 2
+        assert " Fma " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_faceforward_builtin_uses_typed_spirv_extinsts(self, tmp_path):
+        source_code = """
+        shader FaceForwardBuiltins {
+            compute {
+                void main() {
+                    float n;
+                    float incident;
+                    float reference;
+                    float sf = faceforward(n, incident, reference);
+                    vec3 vn = vec3(0.0, 1.0, 0.0);
+                    vec3 vi = vec3(0.0, -1.0, 0.0);
+                    vec3 vr = vec3(0.0, 1.0, 0.0);
+                    vec3 vv = faceforward(vn, vi, vr);
+                    vec3 vs = faceforward(vn, -1.0, 1.0);
+
+                    double dn;
+                    double di;
+                    double dr;
+                    double ds = faceforward(dn, di, dr);
+                    dvec2 dvn;
+                    dvec2 dvi;
+                    dvec2 dvr;
+                    dvec2 dvv = faceforward(dvn, dvi, dvr);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        double_type = re.search(r"(%\d+) = OpTypeFloat 64", spv_code)
+
+        assert float_type is not None
+        assert double_type is not None
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3",
+            spv_code,
+        )
+        dvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(double_type.group(1))} 2",
+            spv_code,
+        )
+        assert vec3_type is not None
+        assert dvec2_type is not None
+
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(float_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(double_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            len(
+                re.findall(
+                    rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ " r"FaceForward",
+                    spv_code,
+                )
+            )
+            == 2
+        )
+        assert re.search(
+            rf"%\d+ = OpExtInst {re.escape(dvec2_type.group(1))} %\d+ "
+            r"FaceForward %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        scalar_splats = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            r"(%\d+) \2 \2",
+            spv_code,
+        )
+        assert len(scalar_splats) >= 2
+        assert re.search(
+            rf"OpExtInst {re.escape(vec3_type.group(1))} %\d+ FaceForward "
+            rf"%\d+ {re.escape(scalar_splats[0][0])} "
+            rf"{re.escape(scalar_splats[1][0])}",
+            spv_code,
+        )
+        assert " Faceforward " not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_faceforward_operand_shapes_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidFaceForwardBuiltins {
+            compute {
+                void main() {
+                    int i;
+                    int j;
+                    int k;
+                    int intFace = faceforward(i, j, k);
+                    bool flag;
+                    bool boolFace = faceforward(flag, false, true);
+                    vec2 widthFace = faceforward(
+                        vec2(1.0, 2.0),
+                        vec3(2.0, 3.0, 4.0),
+                        vec2(3.0, 4.0)
+                    );
+                    float scalarVectorFace = faceforward(
+                        1.0,
+                        vec2(2.0, 3.0),
+                        4.0
+                    );
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    mat2 c = mat2(3.0, 0.0, 0.0, 3.0);
+                    mat2 matrixFace = faceforward(a, b, c);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count(
+                "; WARNING: faceforward requires compatible floating-point "
+                "scalar or vector operands"
+            )
+            == 5
+        )
+        assert " FaceForward " not in spv_code
+        assert " Faceforward " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_malformed_faceforward_builtin_emits_diagnostics(self, tmp_path):
+        source_code = """
+        shader MalformedFaceForwardBuiltins {
+            compute {
+                void main() {
+                    float missingFace = faceforward(1.0, 2.0);
+                    float extraFace = faceforward(1.0, 2.0, 3.0, 4.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("; WARNING: faceforward requires 3 operands") == 2
+        assert " FaceForward " not in spv_code
+        assert " Faceforward " not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_step_smoothstep_builtins_use_typed_spirv_extinsts(self, tmp_path):
         source_code = """
         shader StepSmoothstepBuiltins {
@@ -3515,7 +4080,42 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpCompositeExtract %\d+ %\d+ 2\b", spv_code)
         assert "WARNING" not in spv_code
 
-    def test_compute_synchronization_builtins_emit_spirv_barriers(self):
+    def test_compute_local_size_invalid_dimensions_warn_and_validate(self, tmp_path):
+        source_code = """
+        shader ComputeBuiltins {
+            compute {
+                void main() {
+                    uint sizeX = gl_WorkGroupSize.x;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.stages[ShaderStage.COMPUTE].execution_config = {
+            "local_size": (0, -2, "wide")
+        }
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        assert f"OpExecutionMode %{entry_match.group(1)} LocalSize 1 1 1" in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize x dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize y dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize z dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert spv_code.count("SPIR-V LocalSize") == 3
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_compute_synchronization_builtins_emit_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {
             compute {
@@ -3561,8 +4161,9 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers(self):
+    def test_compute_memory_barrier_variants_emit_scoped_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {
             compute {
@@ -3637,6 +4238,187 @@ class TestVulkanSPIRVCodeGen:
         assert "OpControlBarrier" not in spv_code
         assert "OpFunctionCall" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_non_workgroup_stage_synchronization_builtins_warn_and_validate(
+        self, tmp_path
+    ):
+        source_code = """
+        shader FragmentSynchronization {
+            fragment {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    allMemoryBarrier();
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        for function_name in [
+            "barrier",
+            "workgroupBarrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+        ]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model"
+            ) in spv_code
+
+        for function_name in [
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "allMemoryBarrier",
+            "memoryBarrier",
+        ]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model"
+            ) not in spv_code
+
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpMemoryBarrier") == 4
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_stage_synchronization_builtins_warn_and_validate(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationSynchronization {
+            tessellation_control {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    memoryBarrier();
+                }
+            }
+
+            tessellation_evaluation {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability Tessellation" in spv_code
+        assert "OpEntryPoint TessellationControl" in spv_code
+        assert "OpEntryPoint TessellationEvaluation" in spv_code
+
+        for function_name in [
+            "barrier",
+            "workgroupBarrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+        ]:
+            assert (
+                spv_code.count(
+                    f"; WARNING: synchronization builtin '{function_name}' "
+                    "requires a workgroup-capable execution model"
+                )
+                == 2
+            )
+
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpMemoryBarrier") == 6
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
+        self, tmp_path
+    ):
+        source_code = """
+        shader SharedSynchronization {
+            void syncHelper() {
+                barrier();
+                groupMemoryBarrier();
+            }
+
+            compute {
+                void main() {
+                    syncHelper();
+                }
+            }
+
+            fragment {
+                void main() {
+                    syncHelper();
+                    memoryBarrierBuffer();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        for function_name in ["barrier", "groupMemoryBarrier"]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model"
+            ) in spv_code
+        assert "current execution model: Fragment, GLCompute" in spv_code
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpMemoryBarrier") == 1
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_shared_helper_synchronization_allows_workgroup_callgraph(self, tmp_path):
+        source_code = """
+        shader SharedWorkgroupSynchronization {
+            void syncHelper() {
+                barrier();
+                groupMemoryBarrier();
+            }
+
+            compute {
+                void main() {
+                    syncHelper();
+                }
+            }
+
+            task {
+                void main() {
+                    syncHelper();
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "requires a workgroup-capable execution model" not in spv_code
+        assert "OpEntryPoint GLCompute" in spv_code
+        assert "OpEntryPoint TaskEXT" in spv_code
+        assert "OpCapability MeshShadingEXT" in spv_code
+        assert "OpControlBarrier" in spv_code
+        assert "OpMemoryBarrier" in spv_code
+        assert re.search(r"OpEmitMeshTasksEXT %\d+ %\d+ %\d+", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_user_defined_synchronization_names_are_not_lowered(self):
         source_code = """
@@ -4107,6 +4889,105 @@ class TestVulkanSPIRVCodeGen:
             in spv_code
         )
         assert "OpSetMeshOutputsEXT" not in spv_code
+
+    def test_mesh_stage_set_mesh_output_counts_rejects_non_scalar_counts(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshSPIRVBadCounts {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(uvec2(1u, 2u), true);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts count operands must be "
+            "scalar integer values"
+        ) in spv_code
+        assert "OpSetMeshOutputsEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_set_mesh_output_counts_rejects_negative_literal_counts(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshSPIRVNegativeCounts {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(-1, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts count operands must be "
+            "non-negative integer values"
+        ) in spv_code
+        assert "OpSetMeshOutputsEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_set_mesh_output_counts_rejects_declared_limit_overflow(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshSPIRVCountLimitOverflow {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(3, 2);
+                    SetVertex(2, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(1, uvec3(0u, 0u, 0u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts vertex count exceeds "
+            "declared max_vertices"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts primitive count exceeds "
+            "declared max_primitives"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "mesh primitive output limit"
+        ) in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputVertices 1" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputPrimitivesEXT 1" in spv_code
+        assert "OpSetMeshOutputsEXT" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_mesh_stage_set_vertex_and_primitive_emit_output_stores(self, tmp_path):
         source_code = """
@@ -5576,6 +6457,96 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mesh_output_helpers_reject_literal_indices_above_declared_limits(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputHighIndexSPIRV {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(1, 1);
+                    SetVertex(1, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(1, uvec3(0u, 0u, 0u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "mesh primitive output limit"
+        ) in spv_code
+        assert "OpSetMeshOutputsEXT" in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_mesh_stage_output_parameter_assignments_reject_indices_above_limits(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshOutputParameterHighIndexSPIRV {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[1],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(1)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(1, 1);
+                    verts[1].position = vec4(0.0, 0.0, 0.0, 1.0);
+                    tris[1] = uvec3(0u, 0u, 0u);
+                    prims[1].normal = vec3(0.0, 1.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh verts output literal index exceeds the "
+            "declared mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh tris output literal index exceeds the "
+            "declared mesh primitive output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh prims output literal index exceeds the "
+            "declared mesh primitive output limit"
+        ) in spv_code
+        assert "Unknown variable verts" not in spv_code
+        assert "Unknown variable tris" not in spv_code
+        assert "Unknown variable prims" not in spv_code
+        assert "_CrossGLMesh" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_task_stage_dispatch_mesh_emits_ext_terminator(self, tmp_path):
         source_code = """
         shader TaskSPIRV {
@@ -5694,6 +6665,73 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    @pytest.mark.parametrize(
+        ("helper_source", "payload_expression"),
+        [
+            (
+                """
+                TaskPayloadA makePayload(uint meshlet) {
+                    TaskPayloadA payload;
+                    payload.meshlet = meshlet;
+                    return payload;
+                }
+                """,
+                "makePayload(9u)",
+            ),
+            ("", "TaskPayloadA(9u)"),
+        ],
+    )
+    def test_task_stage_dispatch_mesh_typed_payload_expressions_select_targets(
+        self, tmp_path, helper_source, payload_expression
+    ):
+        source_code = """
+        shader TaskHelperPayloadSPIRV {
+            struct TaskPayloadA {
+                uint meshlet;
+            };
+
+            struct TaskPayloadB {
+                uint other;
+            };
+
+            task {
+                @taskPayloadSharedEXT TaskPayloadA payloadA;
+                @taskPayloadSharedEXT TaskPayloadB payloadB;
+
+                %s
+
+                void main() @numthreads(1, 1, 1) {
+                    DispatchMesh(2, 3, 4, %s);
+                    int afterDispatch = 1;
+                }
+            }
+        }
+        """ % (helper_source, payload_expression)
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint TaskEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        payload_a_match = re.search(r'OpName %(\d+) "payloadA"', spv_code)
+        payload_b_match = re.search(r'OpName %(\d+) "payloadB"', spv_code)
+        assert payload_a_match is not None
+        assert payload_b_match is not None
+        payload_a_id = payload_a_match.group(1)
+        payload_b_id = payload_b_match.group(1)
+        entry_operands = entry_match.group(2).split()
+        assert f"%{payload_a_id}" in entry_operands
+        assert f"%{payload_b_id}" not in entry_operands
+        assert re.search(rf"OpStore %{payload_a_id} %\d+", spv_code)
+        assert re.search(
+            rf"OpEmitMeshTasksEXT %\d+ %\d+ %\d+ %{payload_a_id}", spv_code
+        )
+        assert "payload target is ambiguous" not in spv_code
+        assert "payload argument requires taskPayloadSharedEXT storage" not in spv_code
+        assert "afterDispatch" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_task_stage_dispatch_mesh_payload_rejects_ambiguous_targets(self):
         source_code = """
         shader TaskAmbiguousPayloadSPIRV {
@@ -5766,6 +6804,52 @@ class TestVulkanSPIRVCodeGen:
             "WARNING: SPIR-V mesh DispatchMesh requires exactly 3 arguments" in spv_code
         )
         assert "OpEmitMeshTasksEXT" not in spv_code
+
+    def test_task_stage_dispatch_mesh_rejects_non_scalar_group_counts(self, tmp_path):
+        source_code = """
+        shader TaskSPIRVBadCounts {
+            task {
+                void main() {
+                    DispatchMesh(uvec2(1u, 2u), true, 1u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh group-count operands must be "
+            "scalar integer values"
+        ) in spv_code
+        assert "OpEmitMeshTasksEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_task_stage_dispatch_mesh_rejects_negative_literal_group_counts(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TaskSPIRVNegativeCounts {
+            task {
+                void main() {
+                    DispatchMesh(-1, 1, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert (
+            "WARNING: SPIR-V mesh DispatchMesh group-count operands must be "
+            "non-negative integer values"
+        ) in spv_code
+        assert "OpEmitMeshTasksEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_ray_query_proceed_and_intersection_t_emit_khr_instructions(self, tmp_path):
         bool_type = PrimitiveType("bool")
@@ -6654,11 +7738,12 @@ class TestVulkanSPIRVCodeGen:
         assert "OpRayQueryProceedKHR" not in spv_code
         assert "OpRayQueryGetIntersectionTKHR" not in spv_code
 
-    def test_integer_image_atomics_emit_spirv_atomic_operations(self):
+    def test_integer_image_atomics_emit_spirv_atomic_operations(self, tmp_path):
         source_code = """
         shader ImageAtomics {
             uimage2D counters @r32ui;
             iimage2D signedCounters @r32i;
+            uimage2DMS sampleCounters @r32ui;
 
             uint touchUnsigned(
                 uimage2D image @r32ui,
@@ -6696,11 +7781,24 @@ class TestVulkanSPIRVCodeGen:
                 return minValue + maxValue + swapped;
             }
 
+            uint touchSampled(
+                uimage2DMS image @r32ui,
+                ivec2 pixel,
+                uint sample,
+                uint value
+            ) {
+                uint added = imageAtomicAdd(image, pixel, sample, value);
+                uint swapped =
+                    imageAtomicCompSwap(image, pixel, sample, added, value);
+                return added + swapped;
+            }
+
             compute {
                 void main() {
                     ivec2 pixel = ivec2(1, 2);
                     uint a = touchUnsigned(counters, pixel, 3u, 4u);
                     int b = touchSigned(signedCounters, pixel, -3, 4);
+                    uint c = touchSampled(sampleCounters, pixel, 0u, 5u);
                 }
             }
         }
@@ -6711,7 +7809,7 @@ class TestVulkanSPIRVCodeGen:
         )
 
         assert "OpTypePointer Image" in spv_code
-        assert spv_code.count("OpImageTexelPointer") == 11
+        assert spv_code.count("OpImageTexelPointer") == 13
         for operation in (
             "OpAtomicIAdd",
             "OpAtomicUMin",
@@ -6727,6 +7825,7 @@ class TestVulkanSPIRVCodeGen:
             assert operation in spv_code
         assert "imageAtomic" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_vector_member_access_extracts_spirv_component(self):
         source_code = """
@@ -7548,6 +8647,621 @@ class TestVulkanSPIRVCodeGen:
         assert "StructuredBuffer" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_structured_buffer_resource_arrays_emit_member_load_store_accesses(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TypedResourceArrays {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            RWStructuredBuffer<Particle> particles[2] @set(5) @binding(1);
+            StructuredBuffer<float> weights[2] @set(5) @binding(3);
+
+            compute {
+                void main() {
+                    float w = weights[1].Load(0u);
+                    Particle p = particles[0].Load(1u);
+                    p.mass = p.mass + w;
+                    particles[1].Store(2u, p);
+                    particles[0][3u].mass = w;
+                    float direct = weights[0][4u];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_type = spirv_named_id(spv_code, "Particle")
+        particles_block = spirv_named_id(spv_code, "particlesBuffer")
+        weights_block = spirv_named_id(spv_code, "weightsBuffer")
+        particles_var = spirv_named_variable(
+            spv_code, "particles", storage_class="Uniform"
+        )
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+
+        particles_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(particles_block)} %\d+",
+            spv_code,
+        )
+        weights_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(weights_block)} %\d+",
+            spv_code,
+        )
+        assert particles_array is not None
+        assert weights_array is not None
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(particles_array.group(1))}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(weights_array.group(1))}\b",
+            spv_code,
+        )
+        assert f"OpMemberDecorate {particle_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {particle_type} 1 Offset 16" in spv_code
+        assert f"OpDecorate {particles_block} BufferBlock" in spv_code
+        assert f"OpDecorate {weights_block} BufferBlock" in spv_code
+        assert f"OpDecorate {particles_var} DescriptorSet 5" in spv_code
+        assert f"OpDecorate {particles_var} Binding 1" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 5" in spv_code
+        assert f"OpDecorate {weights_var} Binding 3" in spv_code
+
+        particle_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(particles_var)} ([^\n]+)",
+            spv_code,
+        )
+        weight_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} ([^\n]+)",
+            spv_code,
+        )
+        assert any(len(access.split()) == 1 for access in particle_descriptor_accesses)
+        assert any(len(access.split()) == 1 for access in weight_descriptor_accesses)
+
+        assert "OpLoad" in spv_code
+        assert "OpStore" in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_resource_array_methods_emit_invalid_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TypedResourceArrayDiagnostics {
+            StructuredBuffer<float> weights[2];
+            RWStructuredBuffer<float> outputs[2] @writeonly;
+
+            compute {
+                void main() {
+                    float missing = weights[0].Load();
+                    float extra = weights[0].Load(0u, 1u);
+                    weights[1].Store(0u, 1.0);
+                    float rejected = outputs[0].Load(1u);
+                    outputs[1].Store(2u);
+                    outputs[1].Store(3u, 1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: StructuredBuffer.Load requires an index operand" in spv_code
+        assert (
+            "WARNING: StructuredBuffer.Load accepts only an index operand" in spv_code
+        )
+        assert (
+            "WARNING: RWStructuredBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert "WARNING: StructuredBuffer.Load requires a readable buffer" in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.Store requires index and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWStructuredBuffer.Store accepts only index and value operands"
+            in spv_code
+        )
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffers_emit_scalar_load_store_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressBuffers {
+            ByteAddressBuffer rawData @set(1) @binding(3);
+            RWByteAddressBuffer outData @binding(4);
+
+            compute {
+                void main() {
+                    uint a = rawData.Load(0u);
+                    uint b = rawData.Load(4u);
+                    outData.Store(8u, a + b);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawDataBuffer")
+        out_block = spirv_named_id(spv_code, "outDataBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawData", storage_class="Uniform")
+        out_var = spirv_named_variable(spv_code, "outData", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {out_block} BufferBlock" in spv_code
+        assert f"OpMemberDecorate {raw_block} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {out_block} 0 Offset 0" in spv_code
+        assert re.search(r"OpDecorate %\d+ ArrayStride 4", spv_code)
+        assert f"OpDecorate {raw_var} DescriptorSet 1" in spv_code
+        assert f"OpDecorate {raw_var} Binding 3" in spv_code
+        assert f"OpDecorate {out_var} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {out_var} Binding 4" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(out_var)} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(rf"OpLoad {re.escape(uint_type.group(1))} %\d+", spv_code)
+        assert "OpUDiv" in spv_code
+        assert "OpStore" in spv_code
+        assert "ByteAddressBuffer" not in spv_code
+        assert "RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffers_emit_vector_load_store_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressVectors {
+            ByteAddressBuffer rawData @set(2) @binding(5);
+            RWByteAddressBuffer outData @binding(6);
+
+            compute {
+                void main() {
+                    uvec2 pair = rawData.Load2(0u);
+                    uvec3 triple = outData.Load3(8u);
+                    uvec4 quad = rawData.Load4(20u);
+                    outData.Store2(40u, pair);
+                    outData.Store3(48u, triple);
+                    outData.Store4(64u, quad);
+                    uvec2 helperPair = buffer_load2(rawData, 80u);
+                    buffer_store2(outData, 88u, helperPair);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        uvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 3\b",
+            spv_code,
+        )
+        uvec4_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4\b",
+            spv_code,
+        )
+        assert uvec2_type is not None
+        assert uvec3_type is not None
+        assert uvec4_type is not None
+
+        assert "OpUDiv" in spv_code
+        assert "OpIAdd" in spv_code
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec2_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec3_type.group(1))} "
+            r"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec4_type.group(1))} "
+            r"%\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeExtract {re.escape(uint_type.group(1))} %\d+ 3",
+            spv_code,
+        )
+        assert spv_code.count("OpLoad") >= 11
+        assert spv_code.count("OpStore") >= 9
+        assert "Load2" not in spv_code
+        assert "Load3" not in spv_code
+        assert "Load4" not in spv_code
+        assert "Store2" not in spv_code
+        assert "Store3" not in spv_code
+        assert "Store4" not in spv_code
+        assert "buffer_load2" not in spv_code
+        assert "buffer_store2" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffers_emit_interlocked_atomics(self, tmp_path):
+        source_code = """
+        shader ByteAddressAtomics {
+            RWByteAddressBuffer rawData @set(3) @binding(9);
+
+            compute {
+                void main() {
+                    uint oldAdd = 0u;
+                    uint oldOr = 0u;
+                    uint oldMin = 0u;
+                    uint oldMax = 0u;
+                    uint oldExchange = 0u;
+                    uint oldCompare = 0u;
+                    rawData.InterlockedAdd(0u, 1u, oldAdd);
+                    rawData.InterlockedAnd(4u, 3u);
+                    rawData.InterlockedOr(8u, oldAdd, oldOr);
+                    rawData.InterlockedXor(12u, 2u);
+                    rawData.InterlockedMin(16u, 5u, oldMin);
+                    rawData.InterlockedMax(20u, 6u, oldMax);
+                    rawData.InterlockedExchange(24u, 7u, oldExchange);
+                    rawData.InterlockedCompareExchange(
+                        28u, oldExchange, 9u, oldCompare
+                    );
+                    rawData.InterlockedCompareStore(32u, oldCompare, 11u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawDataBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawData", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {raw_var} DescriptorSet 3" in spv_code
+        assert f"OpDecorate {raw_var} Binding 9" in spv_code
+        assert "OpUDiv" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} %\d+ %\d+",
+            spv_code,
+        )
+        for opcode in (
+            "OpAtomicIAdd",
+            "OpAtomicAnd",
+            "OpAtomicOr",
+            "OpAtomicXor",
+            "OpAtomicUMin",
+            "OpAtomicUMax",
+            "OpAtomicExchange",
+        ):
+            assert opcode in spv_code
+        assert spv_code.count("OpAtomicCompareExchange") >= 2
+        assert "Interlocked" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_resource_arrays_emit_element_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressResourceArrays {
+            ByteAddressBuffer rawInputs[2] @set(4) @binding(0);
+            RWByteAddressBuffer rawOutputs[2] @set(4) @binding(2);
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    uint scalar = rawInputs[1].Load(0u);
+                    uvec2 pair = rawInputs[0].Load2(4u);
+                    rawOutputs[0].Store(12u, scalar);
+                    rawOutputs[1].Store2(16u, pair);
+                    rawOutputs[1].InterlockedAdd(24u, scalar, oldValue);
+                    rawOutputs[0].InterlockedCompareStore(28u, oldValue, 7u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawInputsBuffer")
+        out_block = spirv_named_id(spv_code, "rawOutputsBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawInputs", storage_class="Uniform")
+        out_var = spirv_named_variable(spv_code, "rawOutputs", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert uvec2_type is not None
+
+        raw_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(raw_block)} %\d+",
+            spv_code,
+        )
+        out_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(out_block)} %\d+",
+            spv_code,
+        )
+        assert raw_array is not None
+        assert out_array is not None
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(raw_array.group(1))}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(out_array.group(1))}\b",
+            spv_code,
+        )
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {out_block} BufferBlock" in spv_code
+        assert f"OpDecorate {raw_var} DescriptorSet 4" in spv_code
+        assert f"OpDecorate {raw_var} Binding 0" in spv_code
+        assert f"OpDecorate {out_var} DescriptorSet 4" in spv_code
+        assert f"OpDecorate {out_var} Binding 2" in spv_code
+
+        raw_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} ([^\n]+)",
+            spv_code,
+        )
+        out_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(out_var)} ([^\n]+)",
+            spv_code,
+        )
+        assert any(len(access.split()) == 1 for access in raw_descriptor_accesses)
+        assert any(len(access.split()) == 1 for access in out_descriptor_accesses)
+
+        assert "OpUDiv" in spv_code
+        assert "OpIAdd" in spv_code
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec2_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeExtract {re.escape(uint_type.group(1))} %\d+ 1",
+            spv_code,
+        )
+        assert "OpAtomicIAdd" in spv_code
+        assert "OpAtomicCompareExchange" in spv_code
+        assert "ByteAddressBuffer" not in spv_code
+        assert "RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_resource_array_methods_emit_invalid_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressResourceArrayDiagnostics {
+            ByteAddressBuffer rawInputs[2];
+            RWByteAddressBuffer rawOutputs[2];
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    rawInputs[0].Store(0u, oldValue);
+                    rawInputs[1].InterlockedAdd(4u, 1u, oldValue);
+                    rawOutputs[0].Store3(8u, uvec2(1u, 2u));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code
+        )
+        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomic" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressBuffers {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uint missingOffset = rawData.Load();
+                    uint floatOffset = rawData.Load(0.5);
+                    outData.Store(4u);
+                    outData.Store(8u, missingOffset, floatOffset);
+                    rawData.Store(12u, missingOffset);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: ByteAddressBuffer.Load requires a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires byte offset and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store accepts only byte offset and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_interlocked_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressAtomicDiagnostics {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    uvec2 vectorOld = uvec2(0u, 0u);
+                    rawData.InterlockedAdd(0u, 1u, oldValue);
+                    outData.InterlockedAdd(0u);
+                    outData.InterlockedAdd(0u, 1u, oldValue, oldValue);
+                    outData.InterlockedAdd(0.5, 1u, oldValue);
+                    outData.InterlockedOr(4u, 1.0, oldValue);
+                    outData.InterlockedXor(8u, 1u, oldValue + 1u);
+                    outData.InterlockedMax(12u, 1u, vectorOld);
+                    outData.InterlockedCompareExchange(16u, 1u, oldValue);
+                    outData.InterlockedCompareStore(20u, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires byte offset and "
+            "value operands"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd accepts only byte offset, "
+            "value, and optional original operands"
+        ) in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedOr value operand must be an "
+            "integer"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedXor original operand must be an "
+            "assignable scalar uint target"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedMax original operand must be "
+            "scalar uint"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedCompareExchange requires byte "
+            "offset, compare, value, and original operands"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedCompareStore requires byte "
+            "offset, compare, and value operands"
+        ) in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomic" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_vector_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressVectors {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uvec2 missingOffset = rawData.Load2();
+                    uvec3 extraOffset = rawData.Load3(0u, 4u);
+                    uvec4 floatOffset = rawData.Load4(0.5);
+                    outData.Store2(4u);
+                    outData.Store3(8u, uvec2(1u, 2u));
+                    outData.Store4(12u, vec4(1.0));
+                    rawData.Store2(16u, uvec2(1u, 2u));
+                    uvec2 helperMissing = buffer_load2(rawData);
+                    buffer_store3(outData, 20u, uvec2(1u, 2u));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: ByteAddressBuffer.Load2 requires a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer.Load3 accepts only a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store2 requires byte offset and value operands"
+            in spv_code
+        )
+        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store4 requires an integer vector value"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store2 requires a writable buffer" in spv_code
+        )
+        assert (
+            "WARNING: buffer_load2 requires buffer and byte offset operands" in spv_code
+        )
+        assert "WARNING: buffer_store3 requires a uvec3 value" in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffers_reject_duplicate_spirv_bindings(self):
         source_code = """
         shader StorageBuffers {
@@ -7617,6 +9331,322 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "OpAccessChain" not in spv_code
         assert "OpFunctionCall" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_append_consume_structured_buffers_emit_counter_sidecars(self, tmp_path):
+        source_code = """
+        shader AppendConsumeStorageBuffers {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appended @set(2) @binding(0);
+            ConsumeStructuredBuffer<Particle> consumed @set(2) @binding(2);
+            AppendStructuredBuffer<Particle> appendQueues[2] @set(2) @binding(4);
+
+            void helper(
+                AppendStructuredBuffer<Particle> outParticles,
+                ConsumeStructuredBuffer<Particle> inParticles,
+                Particle p
+            ) {
+                outParticles.Append(p);
+                Particle q = inParticles.Consume();
+                buffer_append(outParticles, q);
+            }
+
+            compute {
+                void main() {
+                    Particle p;
+                    p.weight = 1.0;
+                    appended.Append(p);
+                    buffer_append(appendQueues[1], p);
+                    Particle q = consumed.Consume();
+                    Particle r = buffer_consume(consumed);
+                    helper(appended, consumed, r);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        appended_var = spirv_named_variable(
+            spv_code, "appended", storage_class="Uniform"
+        )
+        appended_counter = spirv_named_variable(
+            spv_code, "appendedCounter", storage_class="Uniform"
+        )
+        consumed_var = spirv_named_variable(
+            spv_code, "consumed", storage_class="Uniform"
+        )
+        consumed_counter = spirv_named_variable(
+            spv_code, "consumedCounter", storage_class="Uniform"
+        )
+        append_queues_var = spirv_named_variable(
+            spv_code, "appendQueues", storage_class="Uniform"
+        )
+        append_queues_counter = spirv_named_variable(
+            spv_code, "appendQueuesCounter", storage_class="Uniform"
+        )
+
+        appended_block = spirv_named_id(spv_code, "appendedBuffer")
+        consumed_block = spirv_named_id(spv_code, "consumedBuffer")
+        append_queues_block = spirv_named_id(spv_code, "appendQueuesBuffer")
+        for block_name in (
+            "appendedCounterBuffer",
+            "consumedCounterBuffer",
+            "appendQueuesCounterBuffer",
+        ):
+            block = spirv_named_id(spv_code, block_name)
+            assert f"OpDecorate {block} BufferBlock" in spv_code
+            assert f"OpMemberDecorate {block} 0 Offset 0" in spv_code
+
+        assert f"OpMemberDecorate {appended_block} 0 NonReadable" in spv_code
+        assert f"OpMemberDecorate {consumed_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {append_queues_block} 0 NonReadable" in spv_code
+        assert f"OpDecorate {appended_var} DescriptorSet 2" in spv_code
+        assert f"OpDecorate {appended_var} Binding 0" in spv_code
+        assert f"OpDecorate {appended_counter} Binding 1" in spv_code
+        assert f"OpDecorate {consumed_var} Binding 2" in spv_code
+        assert f"OpDecorate {consumed_counter} Binding 3" in spv_code
+        assert f"OpDecorate {append_queues_var} Binding 4" in spv_code
+        assert f"OpDecorate {append_queues_counter} Binding 5" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(append_queues_counter)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("OpAtomicIAdd") >= 3
+        assert spv_code.count("OpAtomicISub") >= 2
+        assert spv_code.count("OpISub") >= 2
+        assert "AppendStructuredBuffer" not in spv_code
+        assert "ConsumeStructuredBuffer" not in spv_code
+        assert "buffer_append" not in spv_code
+        assert "buffer_consume" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_counter_methods_emit_sidecar_atomics(self, tmp_path):
+        source_code = """
+        shader StructuredBufferCounters {
+            RWStructuredBuffer<uint> counters[2] @set(3) @binding(0);
+            RWStructuredBuffer<uint> directCounters @set(3) @binding(3);
+
+            uint helper(RWStructuredBuffer<uint> queue) {
+                uint next = queue.IncrementCounter();
+                uint old = buffer_decrement_counter(queue);
+                return next + old;
+            }
+
+            compute {
+                void main() {
+                    uint slot = 1u;
+                    uint next = counters[slot].IncrementCounter();
+                    uint old = counters[slot].DecrementCounter();
+                    uint helperValue = helper(counters[slot]);
+                    uint direct = buffer_increment_counter(directCounters);
+                    counters[slot].Store(next, old + helperValue + direct);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="Uniform"
+        )
+        counters_counter = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="Uniform"
+        )
+        direct_var = spirv_named_variable(
+            spv_code, "directCounters", storage_class="Uniform"
+        )
+        direct_counter = spirv_named_variable(
+            spv_code, "directCountersCounter", storage_class="Uniform"
+        )
+
+        for block_name in ("countersCounterBuffer", "directCountersCounterBuffer"):
+            block = spirv_named_id(spv_code, block_name)
+            assert f"OpDecorate {block} BufferBlock" in spv_code
+            assert f"OpMemberDecorate {block} 0 Offset 0" in spv_code
+
+        assert f"OpDecorate {counters_var} DescriptorSet 3" in spv_code
+        assert f"OpDecorate {counters_var} Binding 0" in spv_code
+        assert f"OpDecorate {counters_counter} Binding 1" in spv_code
+        assert f"OpDecorate {direct_counter} Binding 2" in spv_code
+        assert f"OpDecorate {direct_var} Binding 3" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(counters_counter)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("OpAtomicIAdd") >= 3
+        assert spv_code.count("OpAtomicISub") >= 2
+        assert spv_code.count("OpISub") >= 2
+        assert "IncrementCounter" not in spv_code
+        assert "DecrementCounter" not in spv_code
+        assert "buffer_increment_counter" not in spv_code
+        assert "buffer_decrement_counter" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_counter_methods_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidStructuredBufferCounters {
+            StructuredBuffer<uint> readonlyValues;
+            AppendStructuredBuffer<uint> appendValues;
+            ConsumeStructuredBuffer<uint> consumeValues;
+            RWStructuredBuffer<uint> readOnlyCounters @readonly;
+            RWStructuredBuffer<uint> writeOnlyCounters @writeonly;
+            RWStructuredBuffer<uint> counters;
+
+            uint bump(RWStructuredBuffer<uint> data) {
+                return data.IncrementCounter();
+            }
+
+            compute {
+                void main() {
+                    uint a = readonlyValues.IncrementCounter();
+                    uint b = appendValues.DecrementCounter();
+                    uint c = consumeValues.IncrementCounter();
+                    uint d = readOnlyCounters.IncrementCounter();
+                    uint e = writeOnlyCounters.DecrementCounter();
+                    uint f = counters.IncrementCounter(1u);
+                    uint g = buffer_increment_counter(readonlyValues);
+                    uint h = buffer_decrement_counter(appendValues);
+                    uint i = buffer_increment_counter(counters, counters);
+                    uint j = bump(readOnlyCounters);
+                    uint k = bump(writeOnlyCounters);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter requires an "
+            "RWStructuredBuffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.DecrementCounter requires an "
+            "RWStructuredBuffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter requires a read-write "
+            "buffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.DecrementCounter requires a read-write "
+            "buffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter accepts no operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_increment_counter requires an RWStructuredBuffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_decrement_counter requires an RWStructuredBuffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_increment_counter accepts only a buffer operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: function call 'bump' requires read-write storage buffer "
+            "access for argument readOnlyCounters passed to parameter data: "
+            "got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'bump' requires read-write storage buffer "
+            "access for argument writeOnlyCounters passed to parameter data: "
+            "got writeonly"
+        ) in spv_code
+        assert "SPIR-V backend cannot lower unknown function" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+        assert "OpAtomicISub" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_append_consume_structured_buffers_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidAppendConsumeStorageBuffers {
+            AppendStructuredBuffer<float> appended @readonly;
+            AppendStructuredBuffer<float> writableAppend;
+            ConsumeStructuredBuffer<float> consumed @writeonly;
+            ConsumeStructuredBuffer<float> readableConsumed;
+            RWStructuredBuffer<float> values;
+
+            compute {
+                void main() {
+                    appended.Append();
+                    appended.Append(1.0, 2.0);
+                    consumed.Consume(1u);
+                    buffer_append(values, 1.0);
+                    float a = buffer_consume(values);
+                    appended.Append(1.0);
+                    float b = consumed.Consume();
+                    float c = readableConsumed.Load(0u);
+                    buffer_store(writableAppend, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: AppendStructuredBuffer.Append requires a value operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: AppendStructuredBuffer.Append accepts only a value operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: ConsumeStructuredBuffer.Consume accepts no operands" in spv_code
+        )
+        assert "WARNING: buffer_append requires an AppendStructuredBuffer" in spv_code
+        assert "WARNING: buffer_consume requires a ConsumeStructuredBuffer" in spv_code
+        assert (
+            "WARNING: AppendStructuredBuffer.Append requires a writable buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: ConsumeStructuredBuffer.Consume requires a readable buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: StructuredBuffer.Load requires a StructuredBuffer element"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_store requires an RWStructuredBuffer operand" in spv_code
+        )
+        assert "Unknown type AppendStructuredBuffer" not in spv_code
+        assert "Unknown type ConsumeStructuredBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+        assert "OpAtomicISub" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
@@ -8855,6 +10885,341 @@ class TestVulkanSPIRVCodeGen:
         )
         assert "WARNING" not in spv_code
 
+    def test_structured_buffer_array_parameters_inline_with_accesses(self, tmp_path):
+        source_code = """
+        shader StorageBufferArrayParameters {
+            RWStructuredBuffer<float> values[2] @set(7) @binding(0);
+            StructuredBuffer<float> weights[2] @set(7) @binding(2);
+            ByteAddressBuffer rawInputs[2] @set(7) @binding(4);
+            RWByteAddressBuffer rawOutputs[2] @set(7) @binding(6);
+
+            float readValue(StructuredBuffer<float> data[2], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            void writeValue(
+                RWStructuredBuffer<float> data[2],
+                uint slot,
+                uint index,
+                float value
+            ) {
+                data[slot].Store(index, value);
+            }
+
+            uint readRaw(ByteAddressBuffer data[2], uint slot, uint offset) {
+                return data[slot].Load(offset);
+            }
+
+            void writeRaw(
+                RWByteAddressBuffer data[2],
+                uint slot,
+                uint offset,
+                uint value
+            ) {
+                data[slot].Store(offset, value);
+            }
+
+            compute {
+                void main() {
+                    float w = readValue(weights, 1u, 0u);
+                    writeValue(values, 0u, 1u, w);
+                    uint raw = readRaw(rawInputs, 0u, 4u);
+                    writeRaw(rawOutputs, 1u, 8u, raw);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        raw_inputs_var = spirv_named_variable(
+            spv_code, "rawInputs", storage_class="Uniform"
+        )
+        raw_outputs_var = spirv_named_variable(
+            spv_code, "rawOutputs", storage_class="Uniform"
+        )
+
+        for variable in (values_var, weights_var, raw_inputs_var, raw_outputs_var):
+            descriptor_accesses = re.findall(
+                rf"OpAccessChain %\d+ {re.escape(variable)} ([^\n]+)",
+                spv_code,
+            )
+            assert any(len(access.split()) == 1 for access in descriptor_accesses)
+
+        assert f"OpDecorate {values_var} DescriptorSet 7" in spv_code
+        assert f"OpDecorate {values_var} Binding 0" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 7" in spv_code
+        assert f"OpDecorate {weights_var} Binding 2" in spv_code
+        assert f"OpDecorate {raw_inputs_var} DescriptorSet 7" in spv_code
+        assert f"OpDecorate {raw_inputs_var} Binding 4" in spv_code
+        assert f"OpDecorate {raw_outputs_var} DescriptorSet 7" in spv_code
+        assert f"OpDecorate {raw_outputs_var} Binding 6" in spv_code
+        assert "OpUDiv" in spv_code
+        assert spv_code.count("OpLoad") >= 4
+        assert spv_code.count("OpStore") >= 4
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "readRaw" not in spv_code
+        assert "writeRaw" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_array_parameter_access_contracts_emit_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageBufferArrayParameterDiagnostics {
+            StructuredBuffer<float> readOnlyValues[2];
+            RWStructuredBuffer<float> writeOnlyValues[2] @writeonly;
+
+            float readValue(StructuredBuffer<float> data[2], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            void writeValue(
+                RWStructuredBuffer<float> data[2],
+                uint slot,
+                uint index,
+                float value
+            ) {
+                data[slot].Store(index, value);
+            }
+
+            float updateValue(
+                RWStructuredBuffer<float> data[2],
+                uint slot,
+                uint index
+            ) {
+                float oldValue = data[slot].Load(index);
+                data[slot].Store(index, oldValue + 1.0);
+                return oldValue;
+            }
+
+            compute {
+                void main() {
+                    float rejectedRead = readValue(writeOnlyValues, 0u, 0u);
+                    writeValue(readOnlyValues, 1u, 0u, rejectedRead);
+                    float rejectedUpdate = updateValue(readOnlyValues, 0u, 1u);
+                    float rejectedWriteOnlyUpdate = updateValue(writeOnlyValues, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readValue' requires read-capable "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeValue' requires write-capable "
+            "storage buffer access for argument readOnlyValues passed to "
+            "parameter data: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateValue' requires read-write "
+            "storage buffer access for argument readOnlyValues passed to "
+            "parameter data: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateValue' requires read-write "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unsized_storage_buffer_array_parameters_inline_with_descriptor_indexing(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UnsizedStorageBufferArrayParameters {
+            RWStructuredBuffer<float> values[] @set(9) @binding(0);
+            StructuredBuffer<float> weights[] @set(9) @binding(1);
+            ByteAddressBuffer rawInputs[] @set(9) @binding(2);
+            RWByteAddressBuffer rawOutputs[] @set(9) @binding(3);
+
+            float readValue(StructuredBuffer<float> data[], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            void writeValue(
+                RWStructuredBuffer<float> data[],
+                uint slot,
+                uint index,
+                float value
+            ) {
+                data[slot].Store(index, value);
+            }
+
+            uint readRaw(ByteAddressBuffer data[], uint slot, uint offset) {
+                return data[slot].Load(offset);
+            }
+
+            void writeRaw(
+                RWByteAddressBuffer data[],
+                uint slot,
+                uint offset,
+                uint value
+            ) {
+                data[slot].Store(offset, value);
+            }
+
+            compute {
+                void main() {
+                    uint slot = 1u;
+                    float w = readValue(weights, slot, 0u);
+                    writeValue(values, slot, 1u, w);
+                    uint raw = readRaw(rawInputs, slot, 4u);
+                    writeRaw(rawOutputs, slot, 8u, raw);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Uniform")
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+        raw_inputs_var = spirv_named_variable(
+            spv_code, "rawInputs", storage_class="Uniform"
+        )
+        raw_outputs_var = spirv_named_variable(
+            spv_code, "rawOutputs", storage_class="Uniform"
+        )
+
+        for variable in (values_var, weights_var, raw_inputs_var, raw_outputs_var):
+            descriptor_accesses = re.findall(
+                rf"OpAccessChain %\d+ {re.escape(variable)} ([^\n]+)",
+                spv_code,
+            )
+            assert any(len(access.split()) == 1 for access in descriptor_accesses)
+
+        assert "OpCapability RuntimeDescriptorArray" in spv_code
+        assert 'OpExtension "SPV_EXT_descriptor_indexing"' in spv_code
+        assert spv_code.count("OpTypeRuntimeArray") >= 6
+        assert f"OpDecorate {values_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {values_var} Binding 0" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {weights_var} Binding 1" in spv_code
+        assert f"OpDecorate {raw_inputs_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {raw_inputs_var} Binding 2" in spv_code
+        assert f"OpDecorate {raw_outputs_var} DescriptorSet 9" in spv_code
+        assert f"OpDecorate {raw_outputs_var} Binding 3" in spv_code
+        assert "OpUDiv" in spv_code
+        assert spv_code.count("OpLoad") >= 4
+        assert spv_code.count("OpStore") >= 4
+        assert "readValue" not in spv_code
+        assert "writeValue" not in spv_code
+        assert "readRaw" not in spv_code
+        assert "writeRaw" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_unsized_storage_buffer_array_parameter_type_contracts_emit_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader UnsizedStorageBufferArrayParameterDiagnostics {
+            ByteAddressBuffer rawInputs[] @set(1) @binding(0);
+            StructuredBuffer<float> weights[] @set(1) @binding(1);
+            StructuredBuffer<uint> counters[] @set(1) @binding(2);
+            RWStructuredBuffer<float> writeOnlyValues[] @writeonly @set(1) @binding(3);
+            StructuredBuffer<float> scalarWeights @set(1) @binding(4);
+
+            float readValue(StructuredBuffer<float> data[], uint slot, uint index) {
+                return data[slot].Load(index);
+            }
+
+            uint readRaw(ByteAddressBuffer data[], uint slot, uint offset) {
+                return data[slot].Load(offset);
+            }
+
+            float readScalar(StructuredBuffer<float> data, uint index) {
+                return data.Load(index);
+            }
+
+            compute {
+                void main() {
+                    float wrongByteArray = readValue(rawInputs, 0u, 0u);
+                    float wrongElementArray = readValue(counters, 0u, 0u);
+                    uint wrongRawArray = readRaw(weights, 0u, 0u);
+                    float wrongArrayToScalar = readScalar(weights, 0u);
+                    float wrongScalarToArray = readValue(scalarWeights, 0u, 0u);
+                    float rejectedRead = readValue(writeOnlyValues, 0u, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument rawInputs "
+            "passed to parameter data: got ByteAddressBuffer[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument counters "
+            "passed to parameter data: got StructuredBuffer<uint>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readRaw' requires ByteAddressBuffer[] "
+            "storage buffer type for argument weights passed to parameter data: "
+            "got StructuredBuffer<float>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readScalar' requires StructuredBuffer<float> "
+            "storage buffer type for argument weights passed to parameter data: "
+            "got StructuredBuffer<float>[]"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires "
+            "StructuredBuffer<float>[] storage buffer type for argument scalarWeights "
+            "passed to parameter data: got StructuredBuffer<float>"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'readValue' requires read-capable "
+            "storage buffer access for argument writeOnlyValues passed to "
+            "parameter data: got writeonly"
+        ) in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_structured_buffer_helper_parameter_access_contracts_emit_diagnostics(self):
         source_code = """
         shader StorageBuffers {
@@ -9009,6 +11374,83 @@ class TestVulkanSPIRVCodeGen:
             "storage image access for argument counters passed to parameter image: "
             "got readonly"
         ) in spv_code
+
+    def test_storage_image_local_aliases_preserve_access_diagnostics(self, tmp_path):
+        source_code = """
+        shader StorageImageAliases {
+            image2D source @rgba32f @readonly;
+            image2D target @rgba32f @writeonly;
+            image2D sourceArray @rgba32f @readonly[2];
+            image2D targetArray @rgba32f @writeonly[2];
+            uimage2D counters @r32ui @readonly;
+
+            vec4 readPixel(image2D image @rgba32f, ivec2 pixel) {
+                return imageLoad(image, pixel);
+            }
+
+            void writePixel(image2D image @rgba32f, ivec2 pixel, vec4 value) {
+                imageStore(image, pixel, value);
+            }
+
+            uint addCounter(uimage2D image @r32ui, ivec2 pixel) {
+                return imageAtomicAdd(image, pixel, 1u);
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 valid = imageLoad(source, pixel);
+                    imageStore(target, pixel, valid);
+
+                    image2D writeAlias = target;
+                    image2D readAlias = source;
+                    let arrayWriteAlias = targetArray[1];
+                    let arrayReadAlias = sourceArray[0];
+                    uimage2D counterAlias = counters;
+
+                    vec4 rejectedLoad = imageLoad(writeAlias, pixel);
+                    vec4 rejectedArrayLoad = imageLoad(arrayWriteAlias, pixel);
+                    imageStore(readAlias, pixel, rejectedLoad);
+                    imageStore(arrayReadAlias, pixel, rejectedArrayLoad);
+                    uint rejectedAtomic = imageAtomicAdd(counterAlias, pixel, 1u);
+
+                    vec4 helperRead = readPixel(writeAlias, pixel);
+                    writePixel(readAlias, pixel, helperRead);
+                    uint helperAtomic = addCounter(counterAlias, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count("WARNING: imageLoad requires a readable storage image") == 2
+        )
+        assert (
+            spv_code.count("WARNING: imageStore requires a writable storage image") == 2
+        )
+        assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
+        assert (
+            "WARNING: function call 'readPixel' requires read-capable "
+            "storage image access for argument writeAlias passed to parameter image: "
+            "got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writePixel' requires write-capable "
+            "storage image access for argument readAlias passed to parameter image: "
+            "got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'addCounter' requires read-write "
+            "storage image access for argument counterAlias passed to parameter image: "
+            "got readonly"
+        ) in spv_code
+        assert "SPIR-V descriptor resource 'writeAlias'" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_storage_image_operations_reject_malformed_operand_shapes(self, tmp_path):
         source_code = """
@@ -9269,6 +11711,53 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_multisample_storage_image_load_store_emit_sample_operands(self, tmp_path):
+        source_code = """
+        shader MultisampleStorageImages {
+            image2DMS colorSamples @rgba16f;
+            uimage2DMS counters @r32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(1, 2);
+                    uint sample = 0u;
+                    vec4 color = imageLoad(colorSamples, pixel, sample);
+                    imageStore(colorSamples, pixel, sample, color);
+                    uint count = imageLoad(counters, pixel, sample);
+                    imageStore(counters, pixel, sample, count);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+
+        assert uint_type is not None
+        assert vec4_type is not None
+        assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 Rgba16f", spv_code)
+        assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 R32ui", spv_code)
+        assert spv_code.count("OpImageRead") == 2
+        assert spv_code.count("OpImageWrite") == 2
+        assert re.search(
+            rf"OpImageRead {uint_type.group(1)} %\d+ %\d+ Sample %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpImageRead {vec4_type.group(1)} %\d+ %\d+ Sample %\d+",
+            spv_code,
+        )
+        assert re.search(r"OpImageWrite %\d+ %\d+ %\d+ Sample %\d+", spv_code)
+        assert "imageLoad" not in spv_code
+        assert "imageStore" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_user_defined_texture_function_shadows_resource_builtin(self):
         source_code = """
         shader ShadowResourceName {
@@ -9444,7 +11933,7 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_texture_lod_and_grad_emit_explicit_lod_sampling(self):
+    def test_texture_lod_and_grad_emit_explicit_lod_sampling(self, tmp_path):
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -9506,6 +11995,7 @@ class TestVulkanSPIRVCodeGen:
         assert "textureGrad" not in spv_code
         assert "textureGradOffset" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_texture_offset_gather_and_fetch_emit_image_operations(self):
         source_code = """
@@ -11786,8 +14276,8 @@ class TestVulkanSPIRVCodeGen:
         assert "OpSelectionMerge" in spv_code
         assert "WARNING" not in spv_code
 
-    def test_match_guarded_arm_rejected_for_spirv_codegen(self):
-        invalid_code = """
+    def test_match_guarded_literal_arm_lowers_to_spirv_selection_chain(self):
+        source_code = """
         shader MatchSmoke {
             int helper(int mode) {
                 int value = 0;
@@ -11804,10 +14294,454 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        ast = Parser(Lexer(invalid_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
 
-        with pytest.raises(ValueError, match="Unsupported match arm for SPIR-V"):
-            VulkanSPIRVCodeGen().generate(ast)
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert "OpLogicalAnd" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_identifier_binding_guard_and_fallback_lowers_for_spirv_codegen(
+        self,
+    ):
+        source_code = """
+        shader MatchBindingSmoke {
+            int helper(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    candidate if candidate > 2 => {
+                        value = candidate;
+                    }
+                    _ => {
+                        value = 7;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "candidate")
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpStore") >= 4
+        assert "MatchNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_plain_struct_pattern_binds_spirv_fields(self):
+        source_code = """
+        shader MatchStructSmoke {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            int helper(Pair pair) {
+                int value = 0;
+                match pair {
+                    Pair { left, right } => {
+                        value = left + right;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "left")
+        assert spirv_named_ids(spv_code, "right")
+        assert spv_code.count("OpCompositeExtract") >= 2
+        assert "OpIAdd" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_nested_struct_pattern_guard_validates(self, tmp_path):
+        source_code = """
+        shader MatchNestedStructSmoke {
+            struct Inner {
+                int x;
+                int y;
+            };
+
+            struct Outer {
+                Inner inner;
+                int tag;
+            };
+
+            int read(Outer value) {
+                int result = 0;
+                match value {
+                    Outer { inner: Inner { x: 1, y }, tag } if tag > 0 => {
+                        result = y + tag;
+                    }
+                    _ => {
+                        result = -1;
+                    }
+                }
+                return result;
+            }
+
+            compute {
+                void main() {
+                    Inner inner = Inner(1, 3);
+                    Outer value = Outer(inner, 2);
+                    int selected = read(value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "y")
+        assert spirv_named_ids(spv_code, "tag")
+        assert spv_code.count("OpCompositeExtract") >= 4
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpLogicalAnd") >= 2
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_enum_path_pattern_lowers_to_spirv_integer_discriminants(self):
+        source_code = """
+        shader MatchEnumSmoke {
+            enum Mode {
+                Add,
+                Multiply = 4,
+                Divide
+            }
+
+            int helper(Mode mode) {
+                int value = Mode::Divide;
+                match mode {
+                    Mode::Add => {
+                        value = 1;
+                    }
+                    Mode::Multiply => {
+                        value = 2;
+                    }
+                    _ => {
+                        value = 3;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type_id = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code).group(1)
+        assert f"OpConstant {int_type_id} 0" in spv_code
+        assert f"OpConstant {int_type_id} 4" in spv_code
+        assert f"OpConstant {int_type_id} 5" in spv_code
+        assert spv_code.count("OpIEqual") >= 2
+        assert "Unknown type Mode" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_tuple_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchTuplePayloadEnumSmoke {
+            enum MaybeInt {
+                Value(int),
+                Pair(int, float),
+                Missing
+            }
+
+            int read(MaybeInt item) {
+                match item {
+                    MaybeInt::Value(value) => {
+                        return value;
+                    }
+                    MaybeInt::Pair(left, scale) => {
+                        return left;
+                    }
+                    MaybeInt::Missing => {
+                        return 0;
+                    }
+                }
+            }
+
+            MaybeInt make_value(int value) {
+                return MaybeInt::Value(value);
+            }
+
+            MaybeInt make_missing() {
+                return MaybeInt::Missing;
+            }
+
+            compute {
+                void main() {
+                    MaybeInt value = make_value(7);
+                    MaybeInt missing = make_missing();
+                    int selected = read(value) + read(missing);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"MaybeInt"' in spv_code
+        assert '"variant"' in spv_code
+        assert '"Value_0"' in spv_code
+        assert '"Pair_0"' in spv_code
+        assert '"Pair_1"' in spv_code
+        assert spirv_named_ids(spv_code, "value")
+        assert spirv_named_ids(spv_code, "left")
+        assert spirv_named_ids(spv_code, "scale")
+        assert spv_code.count("OpIEqual") >= 3
+        assert spv_code.count("OpCompositeExtract") >= 4
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_tuple_payload_enum_struct_pattern_guard_validates(self, tmp_path):
+        source_code = """
+        shader MatchNestedPayloadEnumSmoke {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            enum MaybePair {
+                Value(Pair),
+                Missing
+            }
+
+            int read(MaybePair item) {
+                match item {
+                    MaybePair::Value(Pair { left: 1, right }) if right > 2 => {
+                        return right;
+                    }
+                    MaybePair::Value(Pair { left, right }) => {
+                        return left + right;
+                    }
+                    MaybePair::Missing => {
+                        return 0;
+                    }
+                }
+            }
+
+            MaybePair make_value(Pair pair) {
+                return MaybePair::Value(pair);
+            }
+
+            compute {
+                void main() {
+                    Pair pair = Pair(1, 4);
+                    MaybePair value = make_value(pair);
+                    int selected = read(value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"MaybePair"' in spv_code
+        assert '"Value_0"' in spv_code
+        assert spirv_named_ids(spv_code, "right")
+        assert spirv_named_ids(spv_code, "left")
+        assert spv_code.count("OpCompositeExtract") >= 5
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpLogicalAnd") >= 2
+        assert "OpIAdd" in spv_code
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_struct_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchStructPayloadEnumSmoke {
+            enum LightingModel {
+                Phong {
+                    ambient: vec3,
+                    diffuse: vec3,
+                    shininess: float
+                },
+                Toon {
+                    base_color: vec3,
+                    levels: int
+                }
+            }
+
+            vec3 shade(LightingModel model) {
+                vec3 result = vec3(0.0);
+                match model {
+                    LightingModel::Phong { ambient, diffuse, shininess } => {
+                        result = ambient + diffuse * shininess;
+                    }
+                    LightingModel::Toon { base_color, .. } => {
+                        result = base_color;
+                    }
+                }
+                return result;
+            }
+
+            LightingModel make_phong(float shininess) {
+                return LightingModel::Phong {
+                    ambient: vec3(1.0),
+                    diffuse: vec3(0.5),
+                    shininess
+                };
+            }
+
+            compute {
+                void main() {
+                    LightingModel model = make_phong(8.0);
+                    vec3 selected = shade(model);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"LightingModel"' in spv_code
+        assert '"variant"' in spv_code
+        assert '"ambient"' in spv_code
+        assert '"base_color"' in spv_code
+        assert spirv_named_ids(spv_code, "ambient")
+        assert spirv_named_ids(spv_code, "diffuse")
+        assert spirv_named_ids(spv_code, "shininess")
+        assert spirv_named_ids(spv_code, "base_color")
+        assert spv_code.count("OpIEqual") >= 2
+        assert spv_code.count("OpCompositeExtract") >= 5
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_expression_initializer_stores_selected_spirv_value(self):
+        source_code = """
+        shader MatchExpressionSmoke {
+            int helper(int mode) {
+                int value = match mode {
+                    0 => 1,
+                    _ => 2
+                };
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert spv_code.count("OpStore") >= 2
+        assert "MatchNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_expression_return_emits_selected_spirv_value(self, tmp_path):
+        source_code = """
+        shader MatchReturnSmoke {
+            int choose(int mode) {
+                return match mode {
+                    0 => 11,
+                    1 => 22,
+                    _ => 33
+                };
+            }
+
+            compute {
+                void main() {
+                    int selected = choose(1);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpReturnValue" in spv_code
+        assert "Unknown expression type MatchNode" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_generic_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchPayloadSmoke {
+            generic<T> struct Option {
+                enum OptionType {
+                    Some(T),
+                    None
+                }
+                OptionType variant;
+            }
+
+            int helper(Option<int> item) {
+                match item {
+                    Option::Some(value) => {
+                        return value;
+                    }
+                    Option::None => {
+                        return 0;
+                    }
+                }
+            }
+
+            Option<int> make_some(int value) {
+                return Option::Some(value);
+            }
+
+            Option<int> make_none() {
+                return Option::None;
+            }
+
+            compute {
+                void main() {
+                    Option<int> some = make_some(7);
+                    Option<int> none = make_none();
+                    int selected = helper(some) + helper(none);
+                }
+            }
+
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"Option_int"' in spv_code
+        assert '"variant"' in spv_code
+        assert "OpIEqual" in spv_code
+        assert "OpCompositeExtract" in spv_code
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_resource_calls_in_loops_use_spirv_loop_control_and_indices(self):
         source_code = """
@@ -15383,11 +18317,12 @@ class TestVulkanSPIRVCodeGen:
         assert (
             len(
                 re.findall(
-                    r"\bOpImageSampleImplicitLod\b.*\bConstOffset\|Bias\b", spv_code
+                    r"\bOpImageSampleImplicitLod\b.*\bBias\|ConstOffset\b", spv_code
                 )
             )
             == 2
         )
+        assert "ConstOffset|Bias" not in spv_code
         assert "OpImageSampleExplicitLod" not in spv_code
         assert "OpFDiv" in spv_code
         for function_name in [

@@ -195,6 +195,7 @@ from .image_access_contracts import (
     is_texture_sampling_operation,
     is_texture_sample_offset_operation,
     is_two_component_image_format,
+    normalized_image_access,
     numeric_component_count_from_type,
     numeric_component_kind_from_type,
     numeric_expression_component_count,
@@ -414,6 +415,52 @@ class GLSLCodeGen:
         "CandidateTriangleVertexPositions",
         "CommittedTriangleVertexPositions",
     }
+    RAY_QUERY_METHOD_ARITIES = {
+        "Initialize": (4, 7),
+        "TraceRayInline": (4, 7),
+        "Proceed": (0,),
+        "Abort": (0,),
+        "Terminate": (0,),
+        "GenerateIntersection": (1,),
+        "ConfirmIntersection": (0,),
+        "RayTMin": (0,),
+        "RayFlags": (0,),
+        "WorldRayOrigin": (0,),
+        "WorldRayDirection": (0,),
+        "CandidateType": (0,),
+        "CommittedType": (0,),
+        "CandidatePrimitiveIndex": (0,),
+        "CommittedPrimitiveIndex": (0,),
+        "CandidateInstanceID": (0,),
+        "CommittedInstanceID": (0,),
+        "CandidateGeometryIndex": (0,),
+        "CommittedGeometryIndex": (0,),
+        "CandidateInstanceCustomIndex": (0,),
+        "CommittedInstanceCustomIndex": (0,),
+        "CandidateInstanceShaderBindingTableRecordOffset": (0,),
+        "CommittedInstanceShaderBindingTableRecordOffset": (0,),
+        "CandidateObjectRayOrigin": (0,),
+        "CandidateObjectRayDirection": (0,),
+        "CommittedObjectRayOrigin": (0,),
+        "CommittedObjectRayDirection": (0,),
+        "CandidateRayT": (0,),
+        "CommittedRayT": (0,),
+        "CandidateTriangleBarycentrics": (0,),
+        "CommittedTriangleBarycentrics": (0,),
+        "CandidateTriangleFrontFace": (0,),
+        "CommittedTriangleFrontFace": (0,),
+        "CandidateTriangleVertexPositions": (1,),
+        "CommittedTriangleVertexPositions": (1,),
+        "CandidateAABBOpaque": (0,),
+        "CandidateObjectToWorld": (0,),
+        "CommittedObjectToWorld": (0,),
+        "CandidateObjectToWorld3x4": (0,),
+        "CommittedObjectToWorld3x4": (0,),
+        "CandidateWorldToObject": (0,),
+        "CommittedWorldToObject": (0,),
+        "CandidateWorldToObject3x4": (0,),
+        "CommittedWorldToObject3x4": (0,),
+    }
     RAY_QUERY_RAY_DESC_FIELDS = (
         ("Origin", "origin", "rayOrigin", "RayOrigin"),
         ("TMin", "tMin", "Tmin", "tmin"),
@@ -429,6 +476,13 @@ class GLSLCodeGen:
         "xfb_offset",
         "xfb_stride",
     )
+    GLSL_BUFFER_BLOCK_MEMORY_LAYOUT_NAMES = {
+        "packed",
+        "scalar",
+        "shared",
+        "std140",
+        "std430",
+    }
     GLSL_BLEND_SUPPORT_LAYOUT_NAMES = {
         "blend_support_multiply",
         "blend_support_screen",
@@ -517,6 +571,143 @@ class GLSLCodeGen:
         "fwidth_fine": "fwidthFine",
         "fwidth_coarse": "fwidthCoarse",
     }
+    GLSL_WAVE_INTRINSIC_ARITIES = {
+        "WaveGetLaneCount": 0,
+        "WaveGetLaneIndex": 0,
+        "WaveIsFirstLane": 0,
+        "WaveActiveSum": 1,
+        "WaveActiveProduct": 1,
+        "WaveActiveBitAnd": 1,
+        "WaveActiveBitOr": 1,
+        "WaveActiveBitXor": 1,
+        "WaveActiveMin": 1,
+        "WaveActiveMax": 1,
+        "WaveActiveAllTrue": 1,
+        "WaveActiveAnyTrue": 1,
+        "WaveActiveAllEqual": 1,
+        "WaveActiveCountBits": 1,
+        "WaveActiveBallot": 1,
+        "WaveReadLaneAt": 2,
+        "WaveReadLaneFirst": 1,
+        "WavePrefixSum": 1,
+        "WavePrefixProduct": 1,
+        "WavePrefixCountBits": 1,
+        "QuadReadAcrossX": 1,
+        "QuadReadAcrossY": 1,
+        "QuadReadAcrossDiagonal": 1,
+        "QuadReadLaneAt": 2,
+        "WaveMatch": 1,
+        "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixProduct": 2,
+        "WaveMultiPrefixBitAnd": 2,
+        "WaveMultiPrefixBitOr": 2,
+        "WaveMultiPrefixBitXor": 2,
+    }
+    GLSL_WAVE_DIRECT_MAPPINGS = {
+        "WaveActiveSum": "subgroupAdd",
+        "WaveActiveProduct": "subgroupMul",
+        "WaveActiveBitAnd": "subgroupAnd",
+        "WaveActiveBitOr": "subgroupOr",
+        "WaveActiveBitXor": "subgroupXor",
+        "WaveActiveMin": "subgroupMin",
+        "WaveActiveMax": "subgroupMax",
+        "WaveActiveAllTrue": "subgroupAll",
+        "WaveActiveAnyTrue": "subgroupAny",
+        "WaveActiveAllEqual": "subgroupAllEqual",
+        "WaveActiveBallot": "subgroupBallot",
+        "WaveReadLaneAt": "subgroupBroadcast",
+        "WaveReadLaneFirst": "subgroupBroadcastFirst",
+        "WavePrefixSum": "subgroupExclusiveAdd",
+        "WavePrefixProduct": "subgroupExclusiveMul",
+        "QuadReadAcrossX": "subgroupQuadSwapHorizontal",
+        "QuadReadAcrossY": "subgroupQuadSwapVertical",
+        "QuadReadAcrossDiagonal": "subgroupQuadSwapDiagonal",
+        "QuadReadLaneAt": "subgroupQuadBroadcast",
+    }
+    GLSL_WAVE_EXTENSION_REQUIREMENTS = {
+        "WaveGetLaneCount": "#extension GL_KHR_shader_subgroup_basic : require",
+        "WaveGetLaneIndex": "#extension GL_KHR_shader_subgroup_basic : require",
+        "WaveIsFirstLane": "#extension GL_KHR_shader_subgroup_basic : require",
+        "WaveActiveAllTrue": "#extension GL_KHR_shader_subgroup_vote : require",
+        "WaveActiveAnyTrue": "#extension GL_KHR_shader_subgroup_vote : require",
+        "WaveActiveAllEqual": "#extension GL_KHR_shader_subgroup_vote : require",
+        "WaveActiveSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveBitAnd": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveBitOr": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveBitXor": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveMin": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveMax": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WavePrefixSum": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WavePrefixProduct": "#extension GL_KHR_shader_subgroup_arithmetic : require",
+        "WaveActiveBallot": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveActiveCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WavePrefixCountBits": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveReadLaneAt": "#extension GL_KHR_shader_subgroup_shuffle : require",
+        "WaveReadLaneFirst": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "QuadReadAcrossX": "#extension GL_KHR_shader_subgroup_quad : require",
+        "QuadReadAcrossY": "#extension GL_KHR_shader_subgroup_quad : require",
+        "QuadReadAcrossDiagonal": "#extension GL_KHR_shader_subgroup_quad : require",
+        "QuadReadLaneAt": "#extension GL_KHR_shader_subgroup_quad : require",
+    }
+    GLSL_WAVE_DIAGNOSTIC_OPERATIONS = {
+        "WaveMatch",
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    GLSL_WAVE_DIAGNOSTIC_REASONS = {
+        "WaveMatch": "has no GL_KHR_shader_subgroup equivalent",
+        "WaveMultiPrefixSum": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixProduct": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitAnd": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitOr": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+        "WaveMultiPrefixBitXor": (
+            "requires partition-mask prefix semantics with no "
+            "GL_KHR_shader_subgroup equivalent"
+        ),
+    }
+    GLSL_WAVE_NUMERIC_OPERATIONS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+    }
+    GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+    }
+    GLSL_WAVE_BOOLEAN_OPERATIONS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+    }
+    GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS = {
+        "WaveActiveAllEqual",
+    }
+    GLSL_WAVE_LANE_INDEX_ARGUMENTS = {
+        "WaveReadLaneAt": 1,
+        "QuadReadLaneAt": 1,
+    }
     GLSL_TESSELLATION_FACTOR_BUILTINS = {
         "gl_TessLevelOuter",
         "gl_TessLevelInner",
@@ -530,6 +721,16 @@ class GLSLCodeGen:
         "lines": "uvec2",
         "triangles": "uvec3",
     }
+    GLSL_MEMORY_ATOMIC_FUNCTIONS = {
+        "atomicAdd",
+        "atomicMin",
+        "atomicMax",
+        "atomicAnd",
+        "atomicOr",
+        "atomicXor",
+        "atomicExchange",
+        "atomicCompSwap",
+    }
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -542,12 +743,18 @@ class GLSLCodeGen:
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
         self.current_image_access_parameters = {}
+        self.structured_buffer_variable_accesses = {}
+        self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_names = set()
+        self.glsl_buffer_block_variable_types = {}
+        self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = {}
         self.function_parameter_names = {}
         self.function_parameter_types = {}
         self.function_parameter_infos = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.function_structured_buffer_access_requirements = {}
         self.function_definitions = {}
         self.glsl_resource_function_specializations = {}
         self.glsl_resource_function_call_names = {}
@@ -602,6 +809,7 @@ class GLSLCodeGen:
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
+        self.glsl_buffer_block_read_validation_suppression = 0
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -1079,6 +1287,35 @@ class GLSLCodeGen:
             lines.append("#extension GL_EXT_ray_query : require")
         if self.uses_ray_tracing_position_fetch(ast, target_stage):
             lines.append("#extension GL_EXT_ray_tracing_position_fetch : require")
+        lines.extend(self.glsl_wave_extension_lines(ast, target_stage))
+        return lines
+
+    def glsl_wave_operations(self, ast, target_stage=None):
+        operations = set()
+        for root in self.ray_query_search_roots(ast, target_stage):
+            for node in self.walk_ast(root):
+                if isinstance(node, WaveOpNode):
+                    operations.add(node.operation)
+                elif isinstance(node, FunctionCallNode):
+                    operation = self.function_call_name(node)
+                    if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                        operations.add(operation)
+        return operations
+
+    def glsl_wave_extension_lines(self, ast, target_stage=None):
+        operations = self.glsl_wave_operations(ast, target_stage)
+        lines = []
+        if any(
+            operation in self.GLSL_WAVE_EXTENSION_REQUIREMENTS
+            for operation in operations
+        ):
+            lines.append("#extension GL_KHR_shader_subgroup_basic : require")
+        for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
+            if operation not in operations:
+                continue
+            line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
+            if line and line not in lines:
+                lines.append(line)
         return lines
 
     def uses_ray_extension_type(self, ast, target_stage=None):
@@ -1091,8 +1328,6 @@ class GLSLCodeGen:
     def uses_ray_query(self, ast, target_stage=None):
         for root in self.ray_query_search_roots(ast, target_stage):
             for node in self.walk_ast(root):
-                if isinstance(node, RayQueryOpNode):
-                    return True
                 if any(
                     self.is_ray_query_type(type_node)
                     for type_node in self.ray_extension_type_nodes(node)
@@ -1101,19 +1336,30 @@ class GLSLCodeGen:
         return False
 
     def uses_ray_tracing_position_fetch(self, ast, target_stage=None):
+        global_query_receivers = self.ray_query_declared_receiver_names(
+            getattr(ast, "global_variables", []) or []
+        )
         for root in self.ray_query_search_roots(ast, target_stage):
+            query_receivers = (
+                global_query_receivers | self.ray_query_declared_receiver_names(root)
+            )
             for node in self.walk_ast(root):
                 if isinstance(node, RayQueryOpNode) and (
                     node.operation in self.RAY_QUERY_POSITION_FETCH_METHODS
                 ):
-                    return True
+                    if self.ray_query_receiver_name(node.query_expr) in query_receivers:
+                        return True
                 if isinstance(node, FunctionCallNode):
                     func_expr = getattr(node, "function", getattr(node, "name", None))
                     if (
                         isinstance(func_expr, MemberAccessNode)
                         and func_expr.member in self.RAY_QUERY_POSITION_FETCH_METHODS
                     ):
-                        return True
+                        if (
+                            self.ray_query_receiver_name(func_expr.object)
+                            in query_receivers
+                        ):
+                            return True
                     if (
                         self.function_call_name(node)
                         == "rayQueryGetIntersectionTriangleVertexPositionsEXT"
@@ -1140,6 +1386,26 @@ class GLSLCodeGen:
             getattr(node, "param_type", None),
             getattr(node, "return_type", None),
         )
+
+    def ray_query_declared_receiver_names(self, root):
+        roots = root if isinstance(root, (list, tuple)) else [root]
+        names = set()
+        for search_root in roots:
+            for node in self.walk_ast(search_root):
+                if any(
+                    self.is_ray_query_type(type_node)
+                    for type_node in self.ray_extension_type_nodes(node)
+                ):
+                    name = getattr(node, "name", None)
+                    if isinstance(name, str):
+                        names.add(name)
+        return names
+
+    def ray_query_receiver_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.ray_query_receiver_name(expr.array)
+        name = getattr(expr, "name", None)
+        return name if isinstance(name, str) else None
 
     def ray_query_search_roots(self, ast, target_stage=None):
         target_stage = normalize_stage_name(target_stage)
@@ -1181,6 +1447,11 @@ class GLSLCodeGen:
         self.current_image_format_parameters = {}
         self.image_variable_accesses = {}
         self.current_image_access_parameters = {}
+        self.structured_buffer_variable_accesses = {}
+        self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_names = set()
+        self.glsl_buffer_block_variable_types = {}
+        self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -1209,6 +1480,9 @@ class GLSLCodeGen:
                 self.expression_name,
             )
         )
+        self.function_structured_buffer_access_requirements = (
+            self.collect_function_structured_buffer_access_requirements(functions)
+        )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
@@ -1234,6 +1508,7 @@ class GLSLCodeGen:
         self.local_variable_types = {}
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_structured_buffer_access_parameters = {}
         self.structured_buffer_instance_members = {}
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
@@ -1243,6 +1518,9 @@ class GLSLCodeGen:
             + collect_stage_local_structs(ast, target_stage),
             "struct",
         )
+        self.structs_by_name = {
+            node.name: node for node in structs if isinstance(node, StructNode)
+        }
         self.struct_member_types = collect_struct_member_types(
             structs, self.type_name_string
         )
@@ -1416,9 +1694,6 @@ class GLSLCodeGen:
                 global_vars + stage_local_interface_vars
             )
         )
-        self.structs_by_name = {
-            node.name: node for node in structs if isinstance(node, StructNode)
-        }
         self.glsl_interface_block_structs_by_name = {
             node.name: node
             for node in structs
@@ -1577,6 +1852,7 @@ class GLSLCodeGen:
                 var_name = f"var{index}"
 
             if self.is_glsl_buffer_block_variable(node, vtype):
+                self.record_glsl_buffer_block_variable(var_name, node, vtype)
                 if self.is_shader_record_buffer_block(node):
                     if self.explicit_resource_binding_index(node) is not None:
                         raise ValueError(
@@ -1625,9 +1901,11 @@ class GLSLCodeGen:
 
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
+                self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
                 continue
             if self.is_structured_buffer_type(vtype):
+                self.record_structured_buffer_access_metadata(var_name, vtype, node)
                 binding_namespace = "buffer binding"
                 explicit_binding = self.explicit_resource_binding_index(node)
                 resource_binding = (
@@ -1649,7 +1927,7 @@ class GLSLCodeGen:
                     var_name,
                 )
                 code += self.structured_buffer_block_declaration(
-                    vtype, var_name, resource_binding, array_size
+                    vtype, var_name, resource_binding, array_size, node
                 )
                 self.advance_resource_binding(
                     resource_binding_cursors,
@@ -2126,16 +2404,29 @@ class GLSLCodeGen:
 
     def glsl_resource_binding_info(self, arg, aliases):
         arg_name = self.expression_name(arg)
-        if arg_name in aliases:
-            return aliases[arg_name]
+        is_array_access = isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        )
+        alias_binding = aliases.get(arg_name)
+        if alias_binding is not None and not is_array_access:
+            return alias_binding
 
         resource_type = self.texture_argument_resource_type(arg)
+        if not self.is_storage_image_type(resource_type) and alias_binding is not None:
+            resource_type = alias_binding.get("type")
         if not self.is_storage_image_type(resource_type):
             return None
 
         expression = self.glsl_resource_argument_expression(arg, aliases)
         if expression is None:
             return None
+
+        if alias_binding is not None:
+            return {
+                **alias_binding,
+                "expression": expression,
+                "type": resource_type,
+            }
 
         return {
             "expression": expression,
@@ -2145,13 +2436,6 @@ class GLSLCodeGen:
         }
 
     def glsl_resource_argument_expression(self, arg, aliases):
-        arg_name = self.expression_name(arg)
-        if arg_name in aliases:
-            return aliases[arg_name]["expression"]
-        if isinstance(arg, str):
-            return arg
-        if hasattr(arg, "name") and isinstance(arg.name, str):
-            return arg.name
         if isinstance(arg, ArrayAccessNode) or (
             hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
         ):
@@ -2161,6 +2445,13 @@ class GLSLCodeGen:
             if array_code is None:
                 return None
             return f"{array_code}[{self.generate_expression(index_expr)}]"
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]["expression"]
+        if isinstance(arg, str):
+            return arg
+        if hasattr(arg, "name") and isinstance(arg.name, str):
+            return arg.name
         return None
 
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
@@ -2184,6 +2475,13 @@ class GLSLCodeGen:
             param_name = getattr(param, "name", None)
             if not param_name:
                 continue
+            self.validate_storage_image_parameter_contract(
+                func_name,
+                param,
+                arg,
+                index,
+                self.storage_image_binding_contract(binding),
+            )
             required_access = access_requirements.get(param_name)
             if required_access is not None and not image_access_satisfies_requirement(
                 required_access,
@@ -2559,32 +2857,53 @@ class GLSLCodeGen:
         return parts
 
     def generate_geometry_stage_layout(self, func, stage_layout_qualifiers=None):
-        input_primitive = self.glsl_single_stage_attribute_argument(
+        input_bare_names = {
+            "points",
+            "lines",
+            "lines_adjacency",
+            "triangles",
+            "triangles_adjacency",
+        }
+        output_bare_names = {"points", "line_strip", "triangle_strip"}
+        if self.glsl_stage_has_attribute(
             func, "inputtopology", stage_layout_qualifiers, "in"
-        )
-        if input_primitive is None:
-            input_primitive = self.glsl_stage_bare_attribute(
-                func,
-                {
-                    "points",
-                    "lines",
-                    "lines_adjacency",
-                    "triangles",
-                    "triangles_adjacency",
-                },
-                stage_layout_qualifiers,
-                "in",
-            )
-        output_primitive = self.glsl_single_stage_attribute_argument(
+        ) or self.glsl_stage_has_bare_attribute(
+            func,
+            input_bare_names - {"points"},
+            stage_layout_qualifiers,
+            "in",
+        ):
+            input_bare_names.remove("points")
+        if self.glsl_stage_has_attribute(
             func, "outputtopology", stage_layout_qualifiers, "out"
+        ) or self.glsl_stage_has_bare_attribute(
+            func,
+            output_bare_names - {"points"},
+            stage_layout_qualifiers,
+            "out",
+        ):
+            output_bare_names.remove("points")
+
+        input_primitive = self.glsl_stage_consistent_layout_value(
+            "geometry",
+            "input topology",
+            func,
+            explicit_attribute_name="inputtopology",
+            bare_names=input_bare_names,
+            value_mapper=self.glsl_geometry_input_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if output_primitive is None:
-            output_primitive = self.glsl_stage_bare_attribute(
-                func,
-                {"points", "line_strip", "triangle_strip"},
-                stage_layout_qualifiers,
-                "out",
-            )
+        output_primitive = self.glsl_stage_consistent_layout_value(
+            "geometry",
+            "output topology",
+            func,
+            explicit_attribute_name="outputtopology",
+            bare_names=output_bare_names,
+            value_mapper=self.glsl_geometry_output_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="out",
+        )
         max_vertices = self.glsl_stage_positive_int_layout_argument(
             "geometry", func, "max_vertices", stage_layout_qualifiers, "out"
         )
@@ -2604,7 +2923,7 @@ class GLSLCodeGen:
         code = ""
         input_layout = []
         if input_primitive:
-            input_layout.append(self.glsl_geometry_input_topology(input_primitive))
+            input_layout.append(input_primitive)
         if invocations is not None:
             input_layout.append(f"invocations = {invocations}")
         if input_layout:
@@ -2612,7 +2931,7 @@ class GLSLCodeGen:
 
         output_layout = []
         if output_primitive:
-            output_layout.append(self.glsl_geometry_output_topology(output_primitive))
+            output_layout.append(output_primitive)
         if max_vertices is not None:
             output_layout.append(f"max_vertices = {max_vertices}")
         if output_layout:
@@ -2701,37 +3020,43 @@ class GLSLCodeGen:
         self, func, stage_layout_qualifiers=None
     ):
         layout_parts = []
-        mapped_domain = None
-        domain = self.glsl_single_stage_attribute_argument(
-            func, "domain", stage_layout_qualifiers, "in"
+        mapped_domain = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "domain",
+            func,
+            explicit_attribute_name="domain",
+            bare_names={"triangles", "quads", "isolines"},
+            value_mapper=self.glsl_tessellation_domain,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if domain is None:
-            domain = self.glsl_stage_bare_attribute(
-                func, {"triangles", "quads", "isolines"}, stage_layout_qualifiers, "in"
-            )
-        if domain:
-            mapped_domain = self.glsl_tessellation_domain(domain)
+        if mapped_domain:
             layout_parts.append(mapped_domain)
 
-        partitioning = self.glsl_single_stage_attribute_argument(
-            func, "partitioning", stage_layout_qualifiers, "in"
+        partitioning = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "partitioning",
+            func,
+            explicit_attribute_name="partitioning",
+            bare_names={
+                "equal_spacing",
+                "fractional_even_spacing",
+                "fractional_odd_spacing",
+            },
+            value_mapper=self.glsl_tessellation_partitioning,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
-        if partitioning is None:
-            partitioning = self.glsl_stage_bare_attribute(
-                func,
-                {
-                    "equal_spacing",
-                    "fractional_even_spacing",
-                    "fractional_odd_spacing",
-                },
-                stage_layout_qualifiers,
-                "in",
-            )
         if partitioning:
-            layout_parts.append(self.glsl_tessellation_partitioning(partitioning))
+            layout_parts.append(partitioning)
 
-        winding = self.glsl_stage_bare_attribute(
-            func, {"cw", "ccw"}, stage_layout_qualifiers, "in"
+        winding = self.glsl_stage_consistent_layout_value(
+            "tessellation",
+            "winding",
+            func,
+            bare_names={"cw", "ccw"},
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="in",
         )
         output_topology = self.glsl_single_stage_attribute_argument(
             func, "outputtopology", stage_layout_qualifiers
@@ -2766,31 +3091,23 @@ class GLSLCodeGen:
             func, stage_layout_qualifiers
         )
 
-        max_vertices = self.glsl_stage_positive_int_layout_argument(
-            "mesh", func, "max_vertices", stage_layout_qualifiers, "out"
+        max_vertices = self.glsl_stage_consistent_positive_int_layout_argument(
+            "mesh",
+            func,
+            ("max_vertices", "maxvertexcount"),
+            stage_layout_qualifiers,
+            "out",
+            layout_name="max_vertices",
         )
-        if max_vertices is None:
-            max_vertices = self.glsl_stage_positive_int_layout_argument(
-                "mesh",
-                func,
-                "maxvertexcount",
-                stage_layout_qualifiers,
-                "out",
-                layout_name="max_vertices",
-            )
 
-        max_primitives = self.glsl_stage_positive_int_layout_argument(
-            "mesh", func, "max_primitives", stage_layout_qualifiers, "out"
+        max_primitives = self.glsl_stage_consistent_positive_int_layout_argument(
+            "mesh",
+            func,
+            ("max_primitives", "maxprimitivecount"),
+            stage_layout_qualifiers,
+            "out",
+            layout_name="max_primitives",
         )
-        if max_primitives is None:
-            max_primitives = self.glsl_stage_positive_int_layout_argument(
-                "mesh",
-                func,
-                "maxprimitivecount",
-                stage_layout_qualifiers,
-                "out",
-                layout_name="max_primitives",
-            )
 
         layout_parts = []
         if output_primitive:
@@ -2805,16 +3122,16 @@ class GLSLCodeGen:
         return f"layout({', '.join(layout_parts)}) out;\n"
 
     def glsl_mesh_stage_output_topology_name(self, func, stage_layout_qualifiers=None):
-        output_primitive = self.glsl_stage_bare_attribute(
-            func, {"points", "lines", "triangles"}, stage_layout_qualifiers, "out"
+        return self.glsl_stage_consistent_layout_value(
+            "mesh",
+            "output topology",
+            func,
+            explicit_attribute_name="outputtopology",
+            bare_names={"points", "lines", "triangles"},
+            value_mapper=self.glsl_mesh_output_topology,
+            stage_layout_qualifiers=stage_layout_qualifiers,
+            direction="out",
         )
-        if output_primitive is None:
-            output_primitive = self.glsl_single_stage_attribute_argument(
-                func, "outputtopology", stage_layout_qualifiers, "out"
-            )
-        if output_primitive is None:
-            return None
-        return self.glsl_mesh_output_topology(output_primitive)
 
     def glsl_stage_bare_attribute(
         self, func, names, stage_layout_qualifiers=None, direction=None
@@ -2822,13 +3139,156 @@ class GLSLCodeGen:
         names = set(names)
         for attr in getattr(func, "attributes", []) or []:
             attr_name = self.glsl_stage_control_attribute_name(attr)
-            if attr_name in names and not getattr(attr, "arguments", []):
+            if attr_name in names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
                 return attr_name
         for attr in self.glsl_stage_layout_entries(stage_layout_qualifiers, direction):
             attr_name = self.glsl_stage_control_attribute_name(attr)
-            if attr_name in names and not getattr(attr, "arguments", []):
+            if attr_name in names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
                 return attr_name
         return None
+
+    def glsl_stage_consistent_layout_value(
+        self,
+        stage_name,
+        layout_name,
+        func,
+        explicit_attribute_name=None,
+        bare_names=None,
+        value_mapper=None,
+        stage_layout_qualifiers=None,
+        direction=None,
+    ):
+        bare_names = set(bare_names or ())
+        choices = []
+        for attr in self.glsl_stage_control_attributes(
+            func, stage_layout_qualifiers, direction
+        ):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if explicit_attribute_name is not None and (
+                attr_name == explicit_attribute_name
+            ):
+                arguments = getattr(attr, "arguments", []) or []
+                if len(arguments) != 1:
+                    raise ValueError(
+                        "GLSL stage attribute "
+                        f"{explicit_attribute_name} requires exactly one argument"
+                    )
+                value = self.attribute_value_to_string(arguments[0])
+                source = f"{attr_name} {value}"
+            elif attr_name in bare_names:
+                if getattr(attr, "arguments", []):
+                    raise ValueError(
+                        f"GLSL stage attribute {attr_name} does not accept arguments"
+                    )
+                value = attr_name
+                source = attr_name
+            else:
+                continue
+
+            mapped_value = value_mapper(value) if value_mapper else value
+            choices.append((source, mapped_value))
+
+        if not choices:
+            return None
+
+        first_source, first_mapped = choices[0]
+        for source, mapped_value in choices[1:]:
+            if mapped_value != first_mapped:
+                raise ValueError(
+                    f"Conflicting GLSL {stage_name} {layout_name} layout "
+                    f"{first_source} with {source}"
+                )
+        return first_mapped
+
+    def glsl_stage_consistent_positive_int_layout_argument(
+        self,
+        stage_name,
+        func,
+        attribute_names,
+        stage_layout_qualifiers=None,
+        direction=None,
+        layout_name=None,
+    ):
+        layout_name = layout_name or attribute_names[0]
+        choices = []
+        for attribute_name in attribute_names:
+            arguments = self.glsl_stage_attribute_arguments(
+                func, attribute_name, stage_layout_qualifiers, direction
+            )
+            if not arguments:
+                continue
+            if len(arguments) != 1:
+                raise ValueError(
+                    f"GLSL stage attribute {attribute_name} requires exactly one argument"
+                )
+
+            argument = arguments[0]
+            literal = self.literal_int_value(argument, self.literal_int_constants)
+            source = self.glsl_attribute_argument_source(argument)
+            if (
+                not isinstance(literal, int)
+                or isinstance(literal, bool)
+                or literal <= 0
+            ):
+                raise ValueError(
+                    f"GLSL {stage_name} {layout_name} layout requires a positive "
+                    f"integer constant, got {source}"
+                )
+            choices.append(
+                (
+                    f"{attribute_name} {source}",
+                    literal,
+                    self.generate_expression(argument),
+                )
+            )
+
+        if not choices:
+            return None
+
+        first_source, first_literal, first_expression = choices[0]
+        for source, literal, _expression in choices[1:]:
+            if literal != first_literal:
+                raise ValueError(
+                    f"Conflicting GLSL {stage_name} {layout_name} layout "
+                    f"{first_source} with {source}"
+                )
+        return first_expression
+
+    def glsl_stage_control_attributes(
+        self, func, stage_layout_qualifiers=None, direction=None
+    ):
+        yield from getattr(func, "attributes", []) or []
+        yield from self.glsl_stage_layout_entries(stage_layout_qualifiers, direction)
+
+    def glsl_stage_has_attribute(
+        self, func, attribute_name, stage_layout_qualifiers=None, direction=None
+    ):
+        return any(
+            True
+            for _ in self.glsl_stage_attributes(
+                func, attribute_name, stage_layout_qualifiers, direction
+            )
+        )
+
+    def glsl_stage_has_bare_attribute(
+        self, func, names, stage_layout_qualifiers=None, direction=None
+    ):
+        names = set(names)
+        for attr in self.glsl_stage_control_attributes(
+            func, stage_layout_qualifiers, direction
+        ):
+            attr_name = self.glsl_stage_control_attribute_name(attr)
+            if attr_name in names and not getattr(attr, "arguments", []):
+                return True
+        return False
 
     def glsl_single_stage_attribute_argument(
         self, func, attribute_name, stage_layout_qualifiers=None, direction=None
@@ -3264,7 +3724,11 @@ class GLSLCodeGen:
         if mapping is None:
             generated_args = [self.generate_expression(arg) for arg in args]
             return f"{query_expr}.{operation}({', '.join(generated_args)})"
+        if not self.can_lower_ray_query_receiver(operation, query):
+            generated_args = [self.generate_expression(arg) for arg in args]
+            return f"{query_expr}.{operation}({', '.join(generated_args)})"
 
+        self.validate_ray_query_intrinsic_arguments(operation, args)
         function_name, committed = mapping
         call_args = [query_expr]
         if committed is not None:
@@ -3273,6 +3737,41 @@ class GLSLCodeGen:
         args = [self.generate_expression(arg) for arg in args]
         call_args.extend(args)
         return f"{function_name}({', '.join(call_args)})"
+
+    def can_lower_ray_query_receiver(self, operation, query):
+        receiver_type = self.expression_result_type(query)
+        if self.is_ray_query_type(receiver_type):
+            return True
+        if receiver_type is None:
+            return False
+        raise ValueError(
+            f"GLSL ray query {operation} requires a RayQuery receiver, "
+            f"got {self.type_name_string(receiver_type)}"
+        )
+
+    def validate_ray_query_intrinsic_arguments(self, operation, args):
+        allowed_arities = self.RAY_QUERY_METHOD_ARITIES.get(operation)
+        if allowed_arities is None:
+            return
+        actual_arity = len(args)
+        if actual_arity in allowed_arities:
+            return
+        if operation in self.RAY_QUERY_POSITION_FETCH_METHODS:
+            raise ValueError(
+                f"GLSL ray query {operation} requires exactly one "
+                f"output-array argument, got {actual_arity}"
+            )
+        raise ValueError(
+            f"GLSL ray query {operation} expects "
+            f"{self.ray_query_arity_label(allowed_arities)}, got {actual_arity}"
+        )
+
+    def ray_query_arity_label(self, allowed_arities):
+        if len(allowed_arities) == 1:
+            arity = allowed_arities[0]
+            plural = "" if arity == 1 else "s"
+            return f"{arity} argument{plural}"
+        return f"{' or '.join(str(arity) for arity in allowed_arities)} arguments"
 
     def ray_query_initialize_arguments(self, operation, args):
         if operation not in {"Initialize", "TraceRayInline"} or len(args) != 4:
@@ -3365,6 +3864,99 @@ class GLSLCodeGen:
             f"GLSL tessellation outputtopology cannot be lowered: {topology}"
         )
 
+    def structured_buffer_operation_access_requirement(self, func_name):
+        if func_name == "buffer_load":
+            return "read"
+        if func_name in {"buffer_store", "buffer_append"}:
+            return "write"
+        if func_name == "buffer_consume":
+            return "read_write"
+        return None
+
+    def merge_access_requirement(self, current, incoming):
+        if incoming is None:
+            return current
+        if current is None or current == incoming:
+            return incoming
+        return "read_write"
+
+    def collect_function_structured_buffer_access_requirements(self, functions):
+        functions = list(functions)
+        requirements = {
+            getattr(func, "name", None): {}
+            for func in functions
+            if getattr(func, "name", None)
+        }
+        parameter_names = {
+            func_name: list(names)
+            for func_name, names in self.function_parameter_names.items()
+        }
+        parameter_sets = {
+            func_name: set(names) for func_name, names in parameter_names.items()
+        }
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            parameter_set = parameter_sets.get(func_name, set())
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                operation = self.function_call_name(node)
+                required_access = self.structured_buffer_operation_access_requirement(
+                    operation
+                )
+                if required_access is None:
+                    continue
+                args = getattr(node, "arguments", getattr(node, "args", []))
+                if not args:
+                    continue
+                target_name = self.expression_name(args[0])
+                if target_name not in parameter_set:
+                    continue
+                current = requirements[func_name].get(target_name)
+                requirements[func_name][target_name] = self.merge_access_requirement(
+                    current, required_access
+                )
+
+        changed = True
+        while changed:
+            changed = False
+            for func in functions:
+                func_name = getattr(func, "name", None)
+                if not func_name:
+                    continue
+                parameter_set = parameter_sets.get(func_name, set())
+                if not parameter_set:
+                    continue
+                for node in self.walk_ast(getattr(func, "body", [])):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callee_name = self.function_call_name(node)
+                    callee_requirements = requirements.get(callee_name)
+                    if not callee_requirements:
+                        continue
+                    callee_parameters = parameter_names.get(callee_name, [])
+                    args = getattr(node, "arguments", getattr(node, "args", []))
+                    for callee_param, required_access in callee_requirements.items():
+                        try:
+                            index = callee_parameters.index(callee_param)
+                        except ValueError:
+                            continue
+                        if index >= len(args):
+                            continue
+                        target_name = self.expression_name(args[index])
+                        if target_name not in parameter_set:
+                            continue
+                        current = requirements[func_name].get(target_name)
+                        merged = self.merge_access_requirement(current, required_access)
+                        if merged != current:
+                            requirements[func_name][target_name] = merged
+                            changed = True
+
+        return {name: reqs for name, reqs in requirements.items() if reqs}
+
     def generate_function(
         self,
         func,
@@ -3403,12 +3995,16 @@ class GLSLCodeGen:
         previous_structured_buffer_counter_parameters = (
             self.current_structured_buffer_counter_parameters
         )
+        previous_structured_buffer_access_parameters = (
+            self.current_structured_buffer_access_parameters
+        )
         self.local_variable_types = {}
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
+        self.current_structured_buffer_access_parameters = {}
         for alias_name, binding in resource_aliases.items():
             self.local_variable_types[alias_name] = binding.get("type")
         for index, p in enumerate(param_list):
@@ -3423,11 +4019,16 @@ class GLSLCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            self.validate_resource_access_metadata_operands(p)
+            self.record_structured_buffer_access_metadata(
+                p.name, raw_param_type, p, parameter=True
+            )
 
             if index in unsupported_buffer_array_indices:
                 continue
 
             if self.is_sampler_type(raw_param_type):
+                self.explicit_resource_binding_index(p)
                 sampler_parameters.add(p.name)
                 continue
 
@@ -3662,6 +4263,9 @@ class GLSLCodeGen:
         )
         self.current_structured_buffer_counter_parameters = (
             previous_structured_buffer_counter_parameters
+        )
+        self.current_structured_buffer_access_parameters = (
+            previous_structured_buffer_access_parameters
         )
 
         code += "}\n\n"
@@ -5235,6 +5839,8 @@ class GLSLCodeGen:
 
     def glsl_variable_layout_prefix(self, node):
         layout_parts = []
+        seen_layout_parts = {}
+        node_name = self.resource_node_name(node, "<unnamed>")
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
@@ -5249,6 +5855,13 @@ class GLSLCodeGen:
                 arguments = getattr(attr, "arguments", []) or []
                 if arguments:
                     continue
+                previous = seen_layout_parts.get(normalized)
+                if previous is not None:
+                    raise ValueError(
+                        "Duplicate OpenGL layout metadata for "
+                        f"'{node_name}': {normalized}"
+                    )
+                seen_layout_parts[normalized] = normalized
                 layout_parts.append(normalized)
                 continue
             if normalized not in self.GLSL_LAYOUT_ATTRIBUTE_NAMES:
@@ -5256,9 +5869,22 @@ class GLSLCodeGen:
             arguments = getattr(attr, "arguments", []) or []
             if len(arguments) != 1:
                 continue
-            layout_parts.append(
+            layout_part = (
                 f"{normalized} = {self.attribute_value_to_string(arguments[0])}"
             )
+            previous = seen_layout_parts.get(normalized)
+            if previous == layout_part:
+                raise ValueError(
+                    "Duplicate OpenGL layout metadata for "
+                    f"'{node_name}': {layout_part}"
+                )
+            if previous is not None:
+                raise ValueError(
+                    "Conflicting OpenGL layout metadata for "
+                    f"'{node_name}': {previous} differs from {layout_part}"
+                )
+            seen_layout_parts[normalized] = layout_part
+            layout_parts.append(layout_part)
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) "
@@ -5364,6 +5990,12 @@ class GLSLCodeGen:
             "bvec4",
         }
 
+    def is_matrix_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        return self.map_type(vtype).startswith(("mat", "dmat"))
+
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("dvec"):
@@ -5433,10 +6065,18 @@ class GLSLCodeGen:
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            name = getattr(expr, "name", None)
+            return self.local_variable_types.get(
+                name
+            ) or self.glsl_buffer_block_variable_types.get(name)
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
         if isinstance(expr, BinaryOpNode):
+            operator = self.map_operator(
+                getattr(expr, "op", getattr(expr, "operator", None))
+            )
+            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
+                return "bool"
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
             if self.is_vector_value_type(left_type):
@@ -5500,10 +6140,28 @@ class GLSLCodeGen:
             ) or infer_struct_constructor_type(self, expr)
         if isinstance(expr, MatchNode):
             return infer_match_expression_result_type(self, expr)
+        if isinstance(expr, WaveOpNode):
+            if expr.operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+                return "uint"
+            if expr.operation in {
+                "WaveIsFirstLane",
+                "WaveActiveAllTrue",
+                "WaveActiveAnyTrue",
+                "WaveActiveAllEqual",
+            }:
+                return "bool"
+            if expr.operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+                return "uint"
+            if expr.operation in {"WaveActiveBallot", "WaveMatch"}:
+                return "uvec4"
+            if expr.arguments:
+                return self.expression_result_type(expr.arguments[0])
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.glsl_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -5537,7 +6195,10 @@ class GLSLCodeGen:
             if literal_type:
                 return literal_type
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            return self.local_variable_types.get(getattr(expr, "name", None))
+            name = getattr(expr, "name", None)
+            return self.local_variable_types.get(
+                name
+            ) or self.glsl_buffer_block_variable_types.get(name)
         return None
 
     def validate_dispatch_mesh_count_argument(self, arg, index):
@@ -6083,6 +6744,8 @@ class GLSLCodeGen:
     def generate_assignment(self, node, is_main=False):
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        self.validate_glsl_buffer_block_assignment_target(left_node, op)
         expected_type = self.glsl_tessellation_factor_assignment_expected_type(
             left_node
         )
@@ -6092,9 +6755,8 @@ class GLSLCodeGen:
             )
         else:
             expected_type = self.expression_result_type(left_node)
-        left = self.generate_expression(left_node)
+        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         right = self.generate_expression_with_expected(right_node, expected_type)
-        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -6372,12 +7034,22 @@ class GLSLCodeGen:
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
-            operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
+            if op in {"++", "--"} or expr.op in {
+                "PRE_INCREMENT",
+                "PRE_DECREMENT",
+                "POST_INCREMENT",
+                "POST_DECREMENT",
+            }:
+                self.validate_glsl_buffer_block_member_access(
+                    expr.operand, "read_write"
+                )
+                operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
+            else:
+                operand = self.generate_expression(expr.operand)
             return f"({op}{operand})"
         elif isinstance(expr, WaveOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            return self.generate_glsl_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             args = [self.generate_expression(arg) for arg in expr.arguments]
             return self.map_ray_tracing_intrinsic(expr.operation, args)
@@ -6463,6 +7135,11 @@ class GLSLCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
 
+            if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
+                return self.generate_glsl_wave_operation(original_func_name, expr.args)
+
+            self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -6512,6 +7189,12 @@ class GLSLCodeGen:
                 )
                 return f"{constructor}({args})"
 
+            self.validate_function_structured_buffer_access_arguments(
+                func_name, expr.args
+            )
+            self.validate_function_image_parameter_contract_arguments(
+                func_name, expr.args
+            )
             self.validate_function_image_access_arguments(func_name, expr.args)
             resource_specialization = self.glsl_resource_function_call_specialization(
                 func_name,
@@ -6537,6 +7220,8 @@ class GLSLCodeGen:
             flattened_member = self.flattened_stage_member_name(expr)
             if flattened_member is not None:
                 return flattened_member
+            if not self.glsl_buffer_block_read_validation_suppression:
+                self.validate_glsl_buffer_block_member_access(expr, "read")
             obj = self.generate_expression_with_expected(expr.object, None)
             return f"{obj}.{expr.member}"
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
@@ -6553,6 +7238,178 @@ class GLSLCodeGen:
         if func_name == "workgroupBarrier":
             return "barrier()"
         return None
+
+    def generate_glsl_wave_op_expression(self, node):
+        return self.generate_glsl_wave_operation(node.operation, node.arguments)
+
+    def generate_glsl_wave_operation(self, operation, arguments):
+        expected_arity = self.GLSL_WAVE_INTRINSIC_ARITIES.get(operation)
+        if expected_arity is None:
+            return self.glsl_wave_diagnostic_expression(
+                operation, "is not recognized by the OpenGL backend"
+            )
+
+        actual_arity = len(arguments)
+        if actual_arity != expected_arity:
+            return self.glsl_wave_diagnostic_expression(
+                operation, f"expects {expected_arity} arguments, got {actual_arity}"
+            )
+
+        if operation in self.GLSL_WAVE_DIAGNOSTIC_OPERATIONS:
+            return self.glsl_wave_diagnostic_expression(
+                operation,
+                self.GLSL_WAVE_DIAGNOSTIC_REASONS.get(
+                    operation, "has no GL_KHR_shader_subgroup equivalent"
+                ),
+            )
+
+        type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
+        if type_diagnostic is not None:
+            return type_diagnostic
+
+        if operation == "WaveGetLaneCount":
+            return "gl_SubgroupSize"
+        if operation == "WaveGetLaneIndex":
+            return "gl_SubgroupInvocationID"
+        if operation == "WaveIsFirstLane":
+            return "subgroupElect()"
+
+        if operation == "WaveActiveCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"subgroupBallotBitCount(subgroupBallot({predicate}))"
+        if operation == "WavePrefixCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"subgroupBallotExclusiveBitCount(subgroupBallot({predicate}))"
+
+        mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
+        if mapped is None:
+            return self.glsl_wave_diagnostic_expression(
+                operation, "is not recognized by the OpenGL backend"
+            )
+
+        args = ", ".join(self.generate_expression(arg) for arg in arguments)
+        return f"{mapped}({args})"
+
+    def glsl_wave_result_type(self, operation, arguments):
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return "uint"
+        if operation in {
+            "WaveIsFirstLane",
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveAllEqual",
+        }:
+            return "bool"
+        if operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+            return "uint"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uvec4"
+        if arguments:
+            return self.expression_result_type(arguments[0])
+        return None
+
+    def glsl_wave_type_diagnostic(self, operation, args):
+        if operation in self.GLSL_WAVE_NUMERIC_OPERATIONS:
+            return self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "a numeric scalar or vector",
+                "value",
+                {"float", "double", "int", "uint"},
+            )
+        if operation in self.GLSL_WAVE_INTEGER_OR_BOOLEAN_OPERATIONS:
+            return self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "an integer or boolean scalar or vector",
+                "value",
+                {"int", "uint", "bool"},
+            )
+        if operation in self.GLSL_WAVE_BOOLEAN_OPERATIONS:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a boolean scalar",
+                "value",
+                {"bool"},
+                allow_vectors=False,
+            )
+        if operation in self.GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a scalar or vector",
+                "value",
+                {"float", "double", "int", "uint", "bool"},
+                allow_vectors=True,
+            )
+        index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
+        if index_argument is not None:
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[index_argument],
+                "a scalar integer",
+                "lane",
+                {"int", "uint"},
+                allow_vectors=False,
+            )
+        return None
+
+    def glsl_wave_validate_argument_kind(
+        self, operation, arg, requirement, argument_label, allowed_kinds
+    ):
+        return self.glsl_wave_validate_argument_type(
+            operation,
+            arg,
+            requirement,
+            argument_label,
+            allowed_kinds,
+            allow_vectors=True,
+        )
+
+    def glsl_wave_validate_argument_type(
+        self,
+        operation,
+        arg,
+        requirement,
+        argument_label,
+        allowed_kinds,
+        allow_vectors,
+    ):
+        result_type = self.expression_result_type(arg)
+        if result_type is None:
+            return None
+        mapped_type = self.map_type(result_type)
+        component_kind = self.vector_component_type(mapped_type)
+        if component_kind is not None:
+            if allow_vectors and component_kind in allowed_kinds:
+                return None
+        elif mapped_type in allowed_kinds:
+            return None
+
+        return self.glsl_wave_diagnostic_expression(
+            operation,
+            (
+                f"requires {requirement} {argument_label} argument: "
+                f"{expression_debug_name(arg)} has type {mapped_type}"
+            ),
+        )
+
+    def glsl_wave_diagnostic_expression(self, operation, reason):
+        return (
+            f"/* GLSL wave intrinsic diagnostic: {operation} {reason} */ "
+            f"{self.glsl_wave_default_value(operation)}"
+        )
+
+    def glsl_wave_default_value(self, operation):
+        expected_type = self.current_expression_expected_type
+        if expected_type:
+            return self.zero_value_expression(expected_type)
+        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "false"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uvec4(0u)"
+        return "0u"
 
     def generate_interpolation_call(self, func_name, args):
         expected_args = self.GLSL_INTERPOLATION_FUNCTIONS.get(func_name)
@@ -6642,13 +7499,17 @@ class GLSLCodeGen:
     def ray_query_member_function_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
             return None
+        if func_expr.member not in self.RAY_QUERY_METHOD_MAP:
+            return None
         return self.map_ray_query_intrinsic(func_expr.member, func_expr.object, args)
 
     def generate_buffer_call(self, func_name, args):
         if func_name == "buffer_load" and len(args) >= 2:
+            self.validate_structured_buffer_access_argument(func_name, args)
             index = self.generate_expression(args[1])
             return f"{self.structured_buffer_access_expression(args[0], index)}"
         if func_name == "buffer_store" and len(args) >= 3:
+            self.validate_structured_buffer_access_argument(func_name, args)
             index = self.generate_expression(args[1])
             value = self.generate_expression(args[2])
             array_access = self.structured_buffer_array_parameter_access(args[0])
@@ -6663,6 +7524,7 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_append" and len(args) >= 2:
+            self.validate_structured_buffer_access_argument(func_name, args)
             value = self.generate_expression(args[1])
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
@@ -6675,6 +7537,7 @@ class GLSLCodeGen:
                 f"{self.structured_buffer_access_expression(args[0], index)} = {value}"
             )
         if func_name == "buffer_consume" and args:
+            self.validate_structured_buffer_access_argument(func_name, args)
             counter = self.structured_buffer_counter_reference(args[0])
             if counter is None:
                 return (
@@ -7067,6 +7930,161 @@ class GLSLCodeGen:
                 f"storage image access for {texture_name}: got {access_name}"
             )
 
+    def validate_structured_buffer_access_argument(self, func_name, args):
+        required_access = self.structured_buffer_operation_access_requirement(func_name)
+        if required_access is None or not args:
+            return
+        access = self.structured_buffer_resource_access(args[0])
+        if image_access_satisfies_requirement(required_access, access):
+            return
+        buffer_name = expression_debug_name(args[0])
+        required_label = image_access_requirement_label(required_access)
+        actual_label = image_access_diagnostic_name(access)
+        raise ValueError(
+            f"OpenGL buffer operation '{func_name}' requires {required_label} "
+            f"SSBO access for {buffer_name}: got {actual_label}"
+        )
+
+    def glsl_buffer_block_access_metadata(self, node):
+        choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, choices)
+        if not choices:
+            return None
+        return choices[0][1]
+
+    def record_glsl_buffer_block_variable(self, name, node, vtype=None):
+        if not name:
+            return
+        block_type = str(
+            self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
+        )
+        self.glsl_buffer_block_variable_names.add(name)
+        self.glsl_buffer_block_variable_types[name] = block_type
+        access = self.glsl_buffer_block_access_metadata(node)
+        if access is None or access == "read_write":
+            return
+        self.glsl_buffer_block_variable_accesses[name] = access
+
+    def glsl_buffer_block_member_base_name(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            return self.glsl_buffer_block_member_base_name(expr.object)
+        if isinstance(expr, ArrayAccessNode) or (
+            hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__)
+        ):
+            return self.glsl_buffer_block_member_base_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        return self.expression_name(expr)
+
+    def is_glsl_buffer_block_member_expression(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            return True
+        if isinstance(expr, ArrayAccessNode) or (
+            hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__)
+        ):
+            return self.is_glsl_buffer_block_member_expression(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        return False
+
+    def is_glsl_buffer_block_member_reference(self, expr):
+        if not self.is_glsl_buffer_block_member_expression(expr):
+            return False
+        base_name = self.glsl_buffer_block_member_base_name(expr)
+        return bool(base_name and base_name in self.glsl_buffer_block_variable_names)
+
+    def glsl_buffer_block_member_access(self, expr):
+        if not self.is_glsl_buffer_block_member_expression(expr):
+            return None
+        base_name = self.glsl_buffer_block_member_base_name(expr)
+        if not base_name:
+            return None
+        return self.glsl_buffer_block_variable_accesses.get(base_name)
+
+    def validate_glsl_buffer_block_member_access(self, expr, required_access):
+        access = self.glsl_buffer_block_member_access(expr)
+        if image_access_satisfies_requirement(required_access, access):
+            return
+        member_name = expression_debug_name(expr)
+        required_label = image_access_requirement_label(required_access)
+        actual_label = image_access_diagnostic_name(access)
+        raise ValueError(
+            f"OpenGL buffer block member access for {member_name} requires "
+            f"{required_label} buffer block access: got {actual_label}"
+        )
+
+    def validate_glsl_buffer_block_assignment_target(self, target, operator):
+        if operator == "=":
+            self.validate_glsl_buffer_block_member_access(target, "write")
+            return
+        self.validate_glsl_buffer_block_member_access(target, "read_write")
+
+    def validate_glsl_buffer_block_atomic_call(self, func_name, args):
+        if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
+            return
+        target = args[0]
+        self.validate_glsl_buffer_block_member_access(target, "read_write")
+        if not self.is_glsl_buffer_block_member_reference(target):
+            return
+        target_type = self.expression_result_type(target)
+        if target_type is None:
+            return
+        mapped_type = self.map_type(target_type)
+        if mapped_type not in {"int", "uint"}:
+            target_name = expression_debug_name(target)
+            raise ValueError(
+                f"OpenGL buffer block atomic '{func_name}' requires a scalar "
+                f"int or uint buffer block member for {target_name}: got "
+                f"{mapped_type}"
+            )
+        self.validate_glsl_buffer_block_atomic_value_arguments(
+            func_name,
+            args,
+            target,
+            mapped_type,
+        )
+
+    def validate_glsl_buffer_block_atomic_value_arguments(
+        self, func_name, args, target, target_type
+    ):
+        target_name = expression_debug_name(target)
+        for value_arg, label in self.glsl_buffer_block_atomic_value_arguments(
+            func_name, args
+        ):
+            value_type = self.glsl_buffer_block_atomic_argument_type(value_arg)
+            if value_type is None or value_type == target_type:
+                continue
+            raise ValueError(
+                f"OpenGL buffer block atomic '{func_name}' requires {target_type} "
+                f"{label} argument for {target_name}: "
+                f"{expression_debug_name(value_arg)} has type {value_type}"
+            )
+
+    def glsl_buffer_block_atomic_value_arguments(self, func_name, args):
+        if func_name == "atomicCompSwap":
+            for index, label in ((1, "compare"), (2, "value")):
+                if len(args) > index:
+                    yield args[index], label
+            return
+        if len(args) > 1:
+            yield args[1], "value"
+
+    def glsl_buffer_block_atomic_argument_type(self, expr):
+        scalar_kind = self.scalar_expression_kind(expr)
+        if scalar_kind is not None:
+            return scalar_kind
+        result_type = self.expression_result_type(expr)
+        if result_type is None:
+            return None
+        return self.map_type(result_type)
+
+    def generate_glsl_buffer_block_mutation_target(self, expr):
+        self.glsl_buffer_block_read_validation_suppression += 1
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.glsl_buffer_block_read_validation_suppression -= 1
+
     def image_atomic_value_arguments(self, func_name, args):
         image_type = self.texture_argument_resource_type(args[0])
         has_sample = self.is_multisample_storage_image_type(image_type)
@@ -7148,6 +8166,121 @@ class GLSLCodeGen:
             return
         raise ValueError(image_atomic_format_error("OpenGL", func_name, image_format))
 
+    def storage_image_effective_format(self, image_type, explicit_format=None):
+        if explicit_format is not None:
+            return explicit_format
+        image_type = self.resource_base_type(image_type)
+        if not self.is_storage_image_type(image_type):
+            return None
+        return self.image_format_qualifier(image_type)
+
+    def storage_image_parameter_contract(self, param):
+        raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if not self.is_storage_image_type(raw_type):
+            return None
+
+        base_type = self.resource_base_type(raw_type)
+        expected_type = self.resource_base_type(
+            self.map_resource_type_with_format(base_type, param)
+        )
+        explicit_format = self.explicit_glsl_image_format(param)
+        access_choices = self.resource_access_metadata_choices(param)
+        self.validate_resource_access_metadata_consistency(param, access_choices)
+        return {
+            "type": expected_type,
+            "format": explicit_format,
+            "access": access_choices[0][1] if access_choices else None,
+        }
+
+    def storage_image_argument_contract(self, arg):
+        actual_type = self.texture_argument_resource_type(arg)
+        if not self.is_storage_image_type(actual_type):
+            return None
+        explicit_format = self.image_resource_format(arg)
+        return {
+            "type": self.resource_base_type(actual_type),
+            "format": self.storage_image_effective_format(actual_type, explicit_format),
+            "access": self.image_resource_access(arg),
+        }
+
+    def storage_image_binding_contract(self, binding):
+        if binding is None:
+            return None
+        actual_type = binding.get("type")
+        if not self.is_storage_image_type(actual_type):
+            return None
+        explicit_format = binding.get("format")
+        return {
+            "type": self.resource_base_type(actual_type),
+            "format": self.storage_image_effective_format(actual_type, explicit_format),
+            "access": binding.get("access"),
+        }
+
+    def validate_storage_image_parameter_contract(
+        self,
+        func_name,
+        param,
+        arg,
+        index,
+        actual,
+    ):
+        expected = self.storage_image_parameter_contract(param)
+        if expected is None or actual is None:
+            return
+
+        param_name = getattr(param, "name", None) or f"arg{index}"
+        actual_name = expression_debug_name(arg)
+        expected_format = expected.get("format")
+        if expected_format is not None and actual.get("format") != expected_format:
+            actual_format = actual.get("format") or "<unspecified>"
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires "
+                f"{expected_format} storage image format for argument "
+                f"{actual_name} passed to parameter {param_name}: got "
+                f"{actual_format}"
+            )
+
+        expected_type = expected.get("type")
+        if expected_type is not None and actual.get("type") != expected_type:
+            actual_type = actual.get("type") or "<unknown>"
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires "
+                f"{expected_type} storage image for argument {actual_name} "
+                f"passed to parameter {param_name}: got {actual_type}"
+            )
+
+        expected_access = expected.get("access")
+        actual_access = actual.get("access")
+        if expected_access is not None and not image_access_satisfies_requirement(
+            expected_access,
+            actual_access,
+        ):
+            required_label = image_access_requirement_label(expected_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires "
+                f"{required_label} storage image access for argument "
+                f"{actual_name} passed to parameter {param_name}: got "
+                f"{actual_label}"
+            )
+
+    def validate_function_image_parameter_contract_arguments(self, func_name, args):
+        callee = self.function_definitions.get(func_name)
+        if callee is None:
+            return
+
+        params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
+        for index, param in enumerate(params):
+            if index >= len(args):
+                break
+            self.validate_storage_image_parameter_contract(
+                func_name,
+                param,
+                args[index],
+                index,
+                self.storage_image_argument_contract(args[index]),
+            )
+
     def validate_function_image_access_arguments(self, func_name, args):
         callee_requirements = self.function_image_access_requirements.get(func_name)
         if not callee_requirements:
@@ -7167,6 +8300,29 @@ class GLSLCodeGen:
                 f"OpenGL function call '{func_name}' requires {required_label} "
                 f"storage image access for argument {actual_name} passed to "
                 f"parameter {param_name}: got {actual_label}"
+            )
+
+    def validate_function_structured_buffer_access_arguments(self, func_name, args):
+        callee_requirements = self.function_structured_buffer_access_requirements.get(
+            func_name
+        )
+        if not callee_requirements:
+            return
+        param_names = self.function_parameter_names.get(func_name, [])
+        for index, param_name in enumerate(param_names):
+            required_access = callee_requirements.get(param_name)
+            if required_access is None or index >= len(args):
+                continue
+            actual_access = self.structured_buffer_resource_access(args[index])
+            if image_access_satisfies_requirement(required_access, actual_access):
+                continue
+            actual_name = expression_debug_name(args[index])
+            required_label = image_access_requirement_label(required_access)
+            actual_label = image_access_diagnostic_name(actual_access)
+            raise ValueError(
+                f"OpenGL function call '{func_name}' requires {required_label} "
+                f"SSBO access for argument {actual_name} passed to parameter "
+                f"{param_name}: got {actual_label}"
             )
 
     def is_integer_coordinate_type(self, vtype):
@@ -8778,6 +9934,15 @@ class GLSLCodeGen:
             and texture_name not in self.texture_variable_types
         )
 
+    def structured_buffer_resource_access(self, buffer_arg):
+        buffer_name = self.expression_name(buffer_arg)
+        if not buffer_name:
+            return None
+        return self.current_structured_buffer_access_parameters.get(
+            buffer_name,
+            self.structured_buffer_variable_accesses.get(buffer_name),
+        )
+
     def image_atomic_zero_value(self, texture_type, image_format):
         component_kind = image_format_component_kind(image_format)
         if component_kind is None:
@@ -9039,6 +10204,15 @@ class GLSLCodeGen:
         )
 
     def validate_image_store_value_type(self, texture_type, image_format, value_arg):
+        value_type = self.expression_result_type(value_arg)
+        if self.is_matrix_value_type(value_type):
+            format_label = image_format or self.resource_base_type(texture_type)
+            mapped_type = self.map_type(self.type_name_string(value_type))
+            raise ValueError(
+                "OpenGL image store operation 'imageStore' requires scalar or "
+                f"vector value for {format_label} images: "
+                f"{expression_debug_name(value_arg)} has type {mapped_type}"
+            )
         self.validate_image_store_value_shape(texture_type, image_format, value_arg)
         expected_kind = self.image_store_expected_value_type(texture_type, image_format)
         value_kind = image_store_value_kind_mismatch(
@@ -9058,6 +10232,14 @@ class GLSLCodeGen:
         )
 
     def validate_image_load_result_type(self, texture_type, image_format):
+        if self.is_matrix_value_type(self.current_expression_expected_type):
+            format_label = image_format or self.resource_base_type(texture_type)
+            expected_type = self.map_type(self.current_expression_expected_type)
+            raise ValueError(
+                "OpenGL image load operation 'imageLoad' requires scalar or "
+                f"vector result context for {format_label} images: "
+                f"got {expected_type}"
+            )
         expected_kind = self.expected_component_kind()
         component_kind = self.image_load_component_kind(texture_type, image_format)
         format_label = image_format or self.resource_base_type(texture_type)
@@ -9827,26 +11009,79 @@ class GLSLCodeGen:
             literal = int(value)
         return literal if literal is not None and literal > 0 else None
 
+    def structured_buffer_access_metadata(self, node):
+        choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, choices)
+        if not choices:
+            return None
+        return choices[0][1]
+
+    def structured_buffer_effective_access(self, vtype, node=None):
+        type_name = self.structured_buffer_type_name(vtype)
+        explicit_access = self.structured_buffer_access_metadata(node)
+
+        if type_name == "StructuredBuffer":
+            if explicit_access in {"write", "read_write"}:
+                access_name = image_access_diagnostic_name(explicit_access)
+                node_name = self.resource_node_name(node, "<unnamed>")
+                raise ValueError(
+                    "OpenGL StructuredBuffer resource "
+                    f"'{node_name}' cannot use {access_name} access metadata"
+                )
+            return "read"
+
+        return explicit_access
+
+    def structured_buffer_memory_qualifiers(self, vtype, node=None):
+        effective_access = self.structured_buffer_effective_access(vtype, node)
+        qualifiers = set()
+        for qualifier in self.resource_memory_qualifiers(node).split():
+            qualifiers.add(qualifier)
+        if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
+            qualifiers.add("readonly")
+        elif effective_access == "read":
+            qualifiers.add("readonly")
+        elif effective_access == "write":
+            qualifiers.add("writeonly")
+
+        if "globallycoherent" in qualifiers:
+            qualifiers.add("coherent")
+
+        order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
+        return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+
+    def record_structured_buffer_access_metadata(
+        self, name, vtype, node=None, parameter=False
+    ):
+        if not name or not self.is_structured_buffer_type(vtype):
+            return
+        access = self.structured_buffer_effective_access(vtype, node)
+        if access is None or access == "read_write":
+            return
+        target = (
+            self.current_structured_buffer_access_parameters
+            if parameter
+            else self.structured_buffer_variable_accesses
+        )
+        target[name] = access
+
     def structured_buffer_block_declaration(
-        self, vtype, name, binding, array_size=None
+        self, vtype, name, binding, array_size=None, node=None
     ):
         element_type = self.structured_buffer_element_type(vtype)
-        readonly = (
-            "readonly "
-            if self.structured_buffer_type_name(vtype) == "StructuredBuffer"
-            else ""
-        )
+        memory_qualifiers = self.structured_buffer_memory_qualifiers(vtype, node)
+        qualifier_prefix = f"{memory_qualifiers} " if memory_qualifiers else ""
         if array_size is not None:
             instance_member = "data"
             self.structured_buffer_instance_members[name] = instance_member
             array_suffix = f"[{array_size}]" if array_size else "[]"
             return (
-                f"layout(std430, binding = {binding}) {readonly}buffer "
+                f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
                 f"{name}Buffer {{ {element_type} {instance_member}[]; }} "
                 f"{name}{array_suffix};\n"
             )
         return (
-            f"layout(std430, binding = {binding}) {readonly}buffer "
+            f"layout(std430, binding = {binding}) {qualifier_prefix}buffer "
             f"{name}Buffer {{ {element_type} {name}[]; }};\n"
         )
 
@@ -9893,8 +11128,35 @@ class GLSLCodeGen:
             ]
             layout_parts = [part for part in layout_parts if part]
             if layout_parts:
+                self.validate_glsl_buffer_block_layout_parts(node, layout_parts)
                 return ", ".join(layout_parts)
         return "std430"
+
+    def validate_glsl_buffer_block_layout_parts(self, node, layout_parts):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        seen = {}
+        memory_layouts = []
+        for layout_part in layout_parts:
+            normalized = self.normalized_glsl_buffer_block_layout_part(layout_part)
+            if normalized in seen:
+                raise ValueError(
+                    "Duplicate OpenGL buffer block layout metadata for "
+                    f"'{node_name}': {layout_part}"
+                )
+            seen[normalized] = layout_part
+            if normalized in self.GLSL_BUFFER_BLOCK_MEMORY_LAYOUT_NAMES:
+                memory_layouts.append(layout_part)
+
+        if len(memory_layouts) > 1:
+            first_layout = memory_layouts[0]
+            conflicting_layout = memory_layouts[1]
+            raise ValueError(
+                "Conflicting OpenGL buffer block memory layout metadata for "
+                f"'{node_name}': {first_layout} differs from {conflicting_layout}"
+            )
+
+    def normalized_glsl_buffer_block_layout_part(self, layout_part):
+        return str(layout_part).strip().lower().replace("_", "")
 
     def is_shader_record_buffer_block(self, node):
         layout_parts = {
@@ -10043,6 +11305,7 @@ class GLSLCodeGen:
         return vtype, None, "", resource_count
 
     def resource_declaration_identity(self, node):
+        self.validate_resource_access_metadata_operands(node)
         vtype, _, array_suffix, resource_count = self.resource_declaration_shape(node)
         if self.is_glsl_buffer_block_variable(node, vtype):
             return (
@@ -10325,13 +11588,113 @@ class GLSLCodeGen:
 
         return self.map_image_base_type_with_format(vtype_str, node)
 
+    def invalid_glsl_image_format_message(self, node, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Invalid OpenGL image format metadata for "
+            f"'{node_name}': format {source} is not a supported storage image format"
+        )
+
+    def glsl_image_format_choice_description(self, attr_name, source):
+        if attr_name == "format":
+            source = source if source is not None else "<missing>"
+            return f"format {source}"
+        return f"@{attr_name}"
+
+    def duplicate_glsl_image_format_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        description = self.glsl_image_format_choice_description(attr_name, source)
+        return (
+            "Duplicate OpenGL image format metadata for "
+            f"'{node_name}': {description}"
+        )
+
+    def conflicting_glsl_image_format_message(
+        self, node, previous_attr, previous_source, attr_name, source
+    ):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        previous = self.glsl_image_format_choice_description(
+            previous_attr, previous_source
+        )
+        current = self.glsl_image_format_choice_description(attr_name, source)
+        return (
+            "Conflicting OpenGL image format metadata for "
+            f"'{node_name}': {previous} differs from {current}"
+        )
+
+    def explicit_glsl_image_format(self, node):
+        if node is None or not hasattr(node, "attributes"):
+            return None
+        supported_formats = supported_image_formats()
+        choices = []
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in supported_formats:
+                choices.append((attr_name, attr_name, attr_name))
+                continue
+            if attr_name != "format":
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            source = self.attribute_value_to_string(arguments[0]) if arguments else None
+            if source is None:
+                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+            format_name = str(source).lower()
+            if format_name not in supported_formats:
+                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+            choices.append((attr_name, source, format_name))
+
+        if not choices:
+            return None
+
+        seen_by_attribute = {}
+        for attr_name, source, format_name in choices:
+            previous = seen_by_attribute.get(attr_name)
+            if previous is not None:
+                previous_source, previous_format = previous
+                if format_name == previous_format:
+                    raise ValueError(
+                        self.duplicate_glsl_image_format_message(
+                            node, attr_name, source
+                        )
+                    )
+                raise ValueError(
+                    self.conflicting_glsl_image_format_message(
+                        node, attr_name, previous_source, attr_name, source
+                    )
+                )
+            seen_by_attribute[attr_name] = (source, format_name)
+
+        first_attr, first_source, first_format = choices[0]
+        for attr_name, source, format_name in choices[1:]:
+            if format_name == first_format:
+                continue
+            raise ValueError(
+                self.conflicting_glsl_image_format_message(
+                    node, first_attr, first_source, attr_name, source
+                )
+            )
+        return first_format
+
+    def validate_glsl_image_format_target(self, node, vtype, explicit_format):
+        if explicit_format is None or self.is_storage_image_type(vtype):
+            return
+        node_name = self.resource_node_name(node, "<unnamed>")
+        type_name = self.type_name_string(self.resource_base_type(vtype))
+        raise ValueError(
+            "OpenGL image format metadata for "
+            f"'{node_name}' applies only to storage image resources, "
+            f"got {type_name}"
+        )
+
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
-        explicit_format = (
-            explicit_image_format(node, self.attribute_value_to_string)
-            if node is not None
-            else None
-        )
+        explicit_format = self.explicit_glsl_image_format(node)
+        self.validate_glsl_image_format_target(node, base_type, explicit_format)
         if explicit_format in {
             "r8",
             "r8_snorm",
@@ -10670,24 +12033,169 @@ class GLSLCodeGen:
                 return int(raw_value[len(prefix) :])
         return None
 
-    def explicit_resource_binding_index(self, node):
-        if not hasattr(node, "attributes"):
+    def invalid_resource_binding_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        if attr_name == "register":
+            requirement = "must use b/s/t/u register syntax or an integer binding"
+        else:
+            requirement = "must resolve to a concrete integer binding"
+        return (
+            "Invalid OpenGL resource binding metadata for "
+            f"'{node_name}': {attr_name} {source} {requirement}"
+        )
+
+    def unsupported_resource_space_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Unsupported OpenGL resource binding metadata for "
+            f"'{node_name}': {attr_name} {source} is not supported by OpenGL GLSL"
+        )
+
+    def resource_register_prefix(self, source):
+        if source is None:
             return None
+        raw_source = str(source).strip().lower()
+        if len(raw_source) >= 2 and raw_source[0] in {"b", "s", "t", "u"}:
+            suffix = raw_source[1:]
+            if suffix.isdigit():
+                return raw_source[0]
+        return None
+
+    def expected_resource_register_prefix(self, node):
+        if (
+            hasattr(node, "members")
+            and not hasattr(node, "var_type")
+            and not hasattr(node, "param_type")
+        ):
+            return "b", "uniform buffer binding"
+
+        vtype = self.resource_node_type(node)
+
+        if self.is_glsl_buffer_block_variable(node, vtype):
+            return "u", "buffer binding"
+
+        if self.is_structured_buffer_type(vtype):
+            if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
+                return "t", "buffer binding"
+            return "u", "buffer binding"
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        if self.is_opaque_resource_type(mapped_type):
+            if self.is_storage_image_type(vtype):
+                return "u", "image binding"
+            return "t", "texture binding"
+
+        if mapped_type == "sampler":
+            return "s", "sampler binding"
+
+        return None, None
+
+    def validate_resource_register_prefix(self, node, source):
+        actual_prefix = self.resource_register_prefix(source)
+        if actual_prefix is None:
+            return
+
+        expected_prefix, namespace = self.expected_resource_register_prefix(node)
+        if expected_prefix is None or actual_prefix == expected_prefix:
+            return
+
+        node_name = self.resource_node_name(node, "<unnamed>")
+        raise ValueError(
+            "Incompatible OpenGL resource register metadata for "
+            f"'{node_name}': register {source} uses {actual_prefix}-register, "
+            f"expected {expected_prefix}-register for {namespace}"
+        )
+
+    def invalid_resource_access_message(self, node, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Invalid OpenGL resource access metadata for "
+            f"'{node_name}': access({source}) must be readonly, writeonly, "
+            "or readwrite"
+        )
+
+    def explicit_resource_binding_choices(self, node):
+        choices = []
+        if not hasattr(node, "attributes"):
+            return choices
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
-            arguments = getattr(attr, "arguments", []) or []
-            if not attr_name or not arguments:
+            if not attr_name:
                 continue
             attr_name = str(attr_name).lower()
+            arguments = getattr(attr, "arguments", []) or []
+            source = self.attribute_value_to_string(arguments[0]) if arguments else None
+            if attr_name in {"set", "space"}:
+                raise ValueError(
+                    self.unsupported_resource_space_message(node, attr_name, source)
+                )
+            if not arguments:
+                continue
             if attr_name in {"binding", "buffer", "sampler", "texture"}:
                 binding = self.binding_index_value(arguments[0])
             elif attr_name == "register":
                 binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+                self.validate_resource_register_prefix(node, source)
             else:
-                binding = None
-            if binding is not None:
-                return binding
-        return None
+                continue
+            if binding is None:
+                raise ValueError(
+                    self.invalid_resource_binding_message(node, attr_name, source)
+                )
+            choices.append((attr_name, source, binding))
+        return choices
+
+    def explicit_resource_binding_choice_description(self, attr_name, source, binding):
+        if attr_name == "binding":
+            source = source if source is not None else binding
+            return f"binding {source}"
+        source = source if source is not None else binding
+        return f"{attr_name} {source} binding {binding}"
+
+    def explicit_resource_binding_index(self, node):
+        choices = self.explicit_resource_binding_choices(node)
+        if not choices:
+            return None
+
+        node_name = self.resource_node_name(node, "<unnamed>")
+        seen_by_attribute = {}
+        for attr_name, source, binding in choices:
+            description = self.explicit_resource_binding_choice_description(
+                attr_name, source, binding
+            )
+            previous = seen_by_attribute.get(attr_name)
+            if previous is not None:
+                previous_description, previous_binding = previous
+                if binding == previous_binding:
+                    raise ValueError(
+                        "Duplicate OpenGL resource binding metadata for "
+                        f"'{node_name}': {description}"
+                    )
+                raise ValueError(
+                    "Conflicting OpenGL resource binding metadata for "
+                    f"'{node_name}': {previous_description} differs from "
+                    f"{description}"
+                )
+            seen_by_attribute[attr_name] = (description, binding)
+
+        first_name, first_source, first_binding = choices[0]
+        first_description = self.explicit_resource_binding_choice_description(
+            first_name, first_source, first_binding
+        )
+        for attr_name, source, binding in choices[1:]:
+            if binding != first_binding:
+                current_description = self.explicit_resource_binding_choice_description(
+                    attr_name, source, binding
+                )
+                raise ValueError(
+                    "Conflicting OpenGL resource binding metadata for "
+                    f"'{node_name}': {first_description} differs from "
+                    f"{current_description}"
+                )
+        return first_binding
 
     def semantic_from_node(self, node):
         semantic = getattr(node, "semantic", None)
@@ -10790,7 +12298,8 @@ class GLSLCodeGen:
         return None
 
     def image_format_qualifier(self, vtype, node=None):
-        explicit_format = explicit_image_format(node, self.attribute_value_to_string)
+        explicit_format = self.explicit_glsl_image_format(node)
+        self.validate_glsl_image_format_target(node, vtype, explicit_format)
         if explicit_format:
             return explicit_format
         if vtype in {
@@ -10841,6 +12350,8 @@ class GLSLCodeGen:
             "writeonly",
         }
         qualifiers = set()
+        access_choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, access_choices)
 
         for qualifier in getattr(node, "qualifiers", []) or []:
             qualifier = str(qualifier).lower()
@@ -10855,11 +12366,76 @@ class GLSLCodeGen:
             if attr_name in supported:
                 qualifiers.add(attr_name)
 
+        for _, access in access_choices:
+            if access == "read":
+                qualifiers.add("readonly")
+            elif access == "write":
+                qualifiers.add("writeonly")
+
         if "globallycoherent" in qualifiers:
             qualifiers.add("coherent")
 
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
         return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+
+    def resource_access_metadata_choices(self, node):
+        choices = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            source = str(qualifier).lower()
+            access = normalized_image_access(source)
+            if access is not None:
+                choices.append((source, access))
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                source = (
+                    self.attribute_value_to_string(arguments[0])
+                    if len(arguments) == 1
+                    else None
+                )
+                if len(arguments) != 1:
+                    raise ValueError(self.invalid_resource_access_message(node, source))
+                source = self.attribute_value_to_string(arguments[0])
+                access = normalized_image_access(source)
+                if access is None:
+                    raise ValueError(self.invalid_resource_access_message(node, source))
+                choices.append((f"access({source})", access))
+                continue
+
+            access = normalized_image_access(attr_name)
+            if access is not None:
+                choices.append((attr_name, access))
+        return choices
+
+    def validate_resource_access_metadata_operands(self, node):
+        self.resource_access_metadata_choices(node)
+
+    def validate_resource_access_metadata_consistency(self, node, choices):
+        if not choices:
+            return
+        first_source, first_access = choices[0]
+        node_name = self.resource_node_name(node, "<unnamed>")
+        seen_sources = {first_source}
+        for source, access in choices[1:]:
+            if source in seen_sources:
+                raise ValueError(
+                    "Duplicate OpenGL resource access metadata for "
+                    f"'{node_name}': {self.resource_access_metadata_label(source)}"
+                )
+            seen_sources.add(source)
+            if access != first_access:
+                raise ValueError(
+                    "Conflicting OpenGL resource access metadata for "
+                    f"'{node_name}': {first_source} differs from {source}"
+                )
+
+    def resource_access_metadata_label(self, source):
+        return f"@{source}"
 
     def map_operator(self, op):
         op_map = {

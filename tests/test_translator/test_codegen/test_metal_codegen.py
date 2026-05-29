@@ -156,6 +156,527 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "threadgroup_barrier(" not in generated_code
 
 
+def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
+    shader = """
+    shader MetalWaveIntrinsics {
+        compute {
+            void main() {
+                uint value = 1u;
+                uint sumValue = WaveActiveSum(value);
+                uint productValue = WaveActiveProduct(value + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                uint andValue = WaveActiveBitAnd(maxValue);
+                uint orValue = WaveActiveBitOr(andValue);
+                uint xorValue = WaveActiveBitXor(orValue);
+                uint prefixSum = WavePrefixSum(xorValue);
+                uint prefixProduct = WavePrefixProduct(value + 1u);
+                bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uvec4 matchMask = WaveMatch(value);
+                uint count = WaveActiveCountBits(allLane);
+                uint prefixCount = WavePrefixCountBits(anyLane);
+                uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+                uint quadX = QuadReadAcrossX(firstValue);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
+                bool quadAny = QuadAny(anyLane);
+                bool quadAll = QuadAll(allLane);
+                uint lane = WaveGetLaneIndex();
+                uint laneCount = WaveGetLaneCount();
+                uint multi = WaveMultiPrefixSum(value, ballot);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint4 __crossgl_metal_wave_ballot(bool predicate)" in generated_code
+    assert "uint4 __crossgl_metal_wave_match(T value, uint laneCount)" in generated_code
+    assert (
+        "bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane)"
+        in generated_code
+    )
+    assert (
+        "T __crossgl_metal_wave_multi_prefix_sum(T value, uint4 mask, "
+        "uint laneIndex, uint laneCount)" in generated_code
+    )
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert "uint sumValue = simd_sum(value);" in generated_code
+    assert "uint productValue = simd_product(value + 1u);" in generated_code
+    assert "uint minValue = simd_min(sumValue);" in generated_code
+    assert "uint maxValue = simd_max(productValue);" in generated_code
+    assert "uint andValue = simd_and(maxValue);" in generated_code
+    assert "uint orValue = simd_or(andValue);" in generated_code
+    assert "uint xorValue = simd_xor(orValue);" in generated_code
+    assert "uint prefixSum = simd_prefix_exclusive_sum(xorValue);" in generated_code
+    assert (
+        "uint prefixProduct = simd_prefix_exclusive_product(value + 1u);"
+        in generated_code
+    )
+    assert "bool anyLane = simd_any(prefixSum > 0u);" in generated_code
+    assert "bool allLane = simd_all(prefixProduct > 0u);" in generated_code
+    assert "uint4 ballot = __crossgl_metal_wave_ballot(anyLane);" in generated_code
+    assert (
+        "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert (
+        "uint count = uint(popcount(simd_vote::vote_t(simd_ballot(allLane))));"
+        in generated_code
+    )
+    assert (
+        "uint prefixCount = simd_prefix_exclusive_sum((anyLane) ? 1u : 0u);"
+        in generated_code
+    )
+    assert "uint broadcast = simd_broadcast(prefixSum, ushort(0u));" in (generated_code)
+    assert "uint firstValue = simd_broadcast_first(broadcast);" in generated_code
+    assert "uint quadX = quad_shuffle_xor(firstValue, ushort(1));" in generated_code
+    assert "uint quadY = quad_shuffle_xor(quadX, ushort(2));" in generated_code
+    assert "uint quadDiagonal = quad_shuffle_xor(quadY, ushort(3));" in (generated_code)
+    assert "uint quadLane = quad_broadcast(quadDiagonal, ushort(0u));" in (
+        generated_code
+    )
+    assert "bool quadAny = quad_any(anyLane);" in generated_code
+    assert "bool quadAll = quad_all(allLane);" in generated_code
+    assert "uint lane = crossglWaveLaneIndex;" in generated_code
+    assert "uint laneCount = crossglWaveLaneCount;" in generated_code
+    assert (
+        "uint multi = __crossgl_metal_wave_multi_prefix_sum(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert "unsupported Metal wave intrinsic: WaveMultiPrefixSum" not in generated_code
+    assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
+    assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
+    assert "WaveActiveSum(value)" not in generated_code
+    assert "WaveActiveBallot(anyLane)" not in generated_code
+    assert "WaveMatch(value)" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
+def test_metal_wave_lane_builtins_use_compute_stage_parameters():
+    generated_shader = """
+    shader MetalGeneratedWaveLaneBuiltins {
+        compute {
+            void main() {
+                uint crossglWaveLaneIndex = 99u;
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(generated_shader)))
+
+    assert "uint crossglWaveLaneIndex_1 [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneIndex = 99u;" in generated_code
+    assert "uint lane = crossglWaveLaneIndex_1;" in generated_code
+    assert "uint count = crossglWaveLaneCount;" in generated_code
+
+    explicit_shader = """
+    shader MetalExplicitWaveLaneBuiltins {
+        compute {
+            void main(uint simdLane @ thread_index_in_simdgroup,
+                      uint simdCount @ threads_per_simdgroup) {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(explicit_shader)))
+
+    assert "uint simdLane [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint simdCount [[threads_per_simdgroup]]" in generated_code
+    assert "uint lane = simdLane;" in generated_code
+    assert "uint count = simdCount;" in generated_code
+    assert "crossglWaveLaneIndex" not in generated_code
+    assert "crossglWaveLaneCount" not in generated_code
+
+
+def test_metal_wave_lane_builtins_thread_through_compute_helpers():
+    shader = """
+    shader MetalWaveLaneHelperForwarding {
+        uint helperLane(uint seed) {
+            uint crossglWaveLaneIndex = seed;
+            return crossglWaveLaneIndex + WaveGetLaneIndex();
+        }
+
+        uint helperBoth(uint seed) {
+            return helperLane(seed) + WaveGetLaneCount();
+        }
+
+        compute {
+            void main() {
+                uint combined = helperBoth(2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint helperLane(uint seed, uint crossglWaveLaneIndex_1)" in generated_code
+    assert "return crossglWaveLaneIndex + crossglWaveLaneIndex_1;" in generated_code
+    assert (
+        "uint helperBoth(uint seed, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert "return helperLane(seed, crossglWaveLaneIndex) + crossglWaveLaneCount;" in (
+        generated_code
+    )
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint combined = helperBoth(2u, crossglWaveLaneIndex, crossglWaveLaneCount);"
+        in (generated_code)
+    )
+    assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
+    assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
+
+
+def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts():
+    shader = """
+    shader MetalWaveLaneHelperDiagnostics {
+        uint helperLane() {
+            return WaveGetLaneIndex();
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint lane = helperLane();
+                return vec4(float(lane), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint helperLane(uint crossglWaveLaneIndex)" in generated_code
+    assert "return crossglWaveLaneIndex;" in generated_code
+    assert (
+        "uint lane = 0u /* unsupported Metal wave helper call: function "
+        "'helperLane' requires compute-stage thread_index_in_simdgroup value */;"
+        in generated_code
+    )
+    assert "[[thread_index_in_simdgroup]]" not in generated_code
+
+
+def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts():
+    compute_shader = """
+    shader MetalWaveMatchHelperForwarding {
+        uvec4 helperMatch(uint seed) {
+            return WaveMatch(seed);
+        }
+
+        compute {
+            void main() {
+                uint value = 3u;
+                uvec4 direct = WaveMatch(value);
+                uvec4 helper = helperMatch(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(compute_shader)))
+
+    assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in generated_code
+    assert (
+        "return __crossgl_metal_wave_match(seed, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in (generated_code)
+    )
+    assert "uint4 helper = helperMatch(value, crossglWaveLaneCount);" in generated_code
+    assert "unsupported Metal wave intrinsic: WaveMatch" not in generated_code
+
+    fragment_shader = """
+    shader MetalWaveMatchFragmentDiagnostics {
+        uvec4 helperMatch(uint seed) {
+            return WaveMatch(seed);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uvec4 mask = helperMatch(1u);
+                return vec4(float(mask.x), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+
+    assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in generated_code
+    assert (
+        "uint4 mask = uint4(0) /* unsupported Metal wave helper call: function "
+        "'helperMatch' requires compute-stage threads_per_simdgroup value */;"
+        in generated_code
+    )
+    assert "[[threads_per_simdgroup]]" not in generated_code
+
+
+def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_contexts():
+    compute_shader = """
+    shader MetalWaveMultiPrefixHelperForwarding {
+        uint helperMulti(uint seed, uvec4 mask) {
+            return WaveMultiPrefixSum(seed, mask);
+        }
+
+        uint helperCount(bool predicate, uvec4 mask) {
+            return WaveMultiPrefixCountBits(predicate, mask);
+        }
+
+        uint helperBits(uint seed, uvec4 mask) {
+            return WaveMultiPrefixBitXor(seed, mask);
+        }
+
+        uvec2 helperVector(uvec2 seed, uvec4 mask) {
+            return WaveMultiPrefixBitOr(seed, mask);
+        }
+
+        compute {
+            void main() {
+                uint value = 3u;
+                uvec2 lanes = uvec2(value, value + 1u);
+                uvec4 mask = WaveMatch(value);
+                uint directSum = WaveMultiPrefixSum(value, mask);
+                uint directCount = WaveMultiPrefixCountBits(value > 0u, mask);
+                uint directBits = WaveMultiPrefixBitXor(value, mask);
+                uvec2 vectorSum = WaveMultiPrefixSum(lanes, mask);
+                uvec2 vectorBits = WaveMultiPrefixBitAnd(lanes, mask);
+                uint viaHelper =
+                    helperMulti(value, mask) +
+                    helperCount(value > 0u, mask) +
+                    helperBits(value, mask) +
+                    helperVector(lanes, mask).x +
+                    vectorSum.y +
+                    vectorBits.x;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(compute_shader)))
+
+    assert (
+        "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint helperCount(bool predicate, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint helperBits(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint2 helperVector(uint2 seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_sum(seed, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_count_bits(predicate, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_bit_xor(seed, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_bit_or(seed, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint directSum = __crossgl_metal_wave_multi_prefix_sum(value, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "uint directCount = __crossgl_metal_wave_multi_prefix_count_bits("
+        "value > 0u, mask, crossglWaveLaneIndex, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert (
+        "uint directBits = __crossgl_metal_wave_multi_prefix_bit_xor(value, "
+        "mask, crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "uint2 vectorSum = __crossgl_metal_wave_multi_prefix_sum(lanes, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "uint2 vectorBits = __crossgl_metal_wave_multi_prefix_bit_and(lanes, "
+        "mask, crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "helperMulti(value, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert (
+        "helperCount(value > 0u, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert (
+        "helperBits(value, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert (
+        "helperVector(lanes, mask, crossglWaveLaneIndex, crossglWaveLaneCount).x"
+        in generated_code
+    )
+    assert "unsupported Metal wave intrinsic: WaveMultiPrefix" not in generated_code
+
+    fragment_shader = """
+    shader MetalWaveMultiPrefixFragmentDiagnostics {
+        uint helperMulti(uint seed, uvec4 mask) {
+            return WaveMultiPrefixSum(seed, mask);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                uint prefix = helperMulti(1u, mask);
+                uint direct = WaveMultiPrefixSum(prefix, mask);
+                return vec4(float(prefix + direct), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+
+    assert (
+        "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint prefix = 0u /* unsupported Metal wave helper call: function "
+        "'helperMulti' requires compute-stage thread_index_in_simdgroup and "
+        "threads_per_simdgroup value */;" in generated_code
+    )
+    assert (
+        "uint direct = /* unsupported Metal wave intrinsic: WaveMultiPrefixSum "
+        "requires compute-stage thread_index_in_simdgroup and "
+        "threads_per_simdgroup values */ 0u;" in generated_code
+    )
+    assert "[[thread_index_in_simdgroup]]" not in generated_code
+    assert "[[threads_per_simdgroup]]" not in generated_code
+
+
+def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
+    shader = """
+    shader InvalidMetalWaveIntrinsics {
+        compute {
+            void main() {
+                uint value = 1u;
+                uvec2 lanes = uvec2(1u, 2u);
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                mat2 matrixValue = mat2(1.0);
+                uint missing = WaveActiveSum();
+                bool badAnyValue = WaveActiveAnyTrue(value);
+                uvec4 badBallotVector =
+                    WaveActiveBallot(lanes == uvec2(1u, 2u));
+                uvec4 badMatchBool = WaveMatch(badAnyValue);
+                uvec4 badMatchVector = WaveMatch(lanes);
+                uint badMultiBool = WaveMultiPrefixSum(badAnyValue, mask);
+                mat2 badMultiMatrix = WaveMultiPrefixSum(matrixValue, mask);
+                uint badMultiMask = WaveMultiPrefixSum(value, value);
+                uint badMultiCount = WaveMultiPrefixCountBits(value, mask);
+                uint badMultiBit = WaveMultiPrefixBitAnd(badAnyValue, mask);
+                uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
+                uint badQuad = QuadReadLaneAt(value, 4u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint missing = /* unsupported Metal wave intrinsic: WaveActiveSum "
+        "expects 1 arguments, got 0 */ 0u;" in generated_code
+    )
+    assert (
+        "bool badAnyValue = /* unsupported Metal wave intrinsic: "
+        "WaveActiveAnyTrue predicate argument must be scalar bool, got uint */ "
+        "false;" in generated_code
+    )
+    assert (
+        "uint4 badBallotVector = /* unsupported Metal wave intrinsic: "
+        "WaveActiveBallot predicate argument must be scalar bool, got bool2 */ "
+        "uint4(0);" in generated_code
+    )
+    assert (
+        "uint4 badMatchBool = /* unsupported Metal wave intrinsic: "
+        "WaveMatch value argument must be numeric scalar, got bool */ uint4(0);"
+        in generated_code
+    )
+    assert (
+        "uint4 badMatchVector = /* unsupported Metal wave intrinsic: "
+        "WaveMatch value argument must be numeric scalar, got uint2 */ uint4(0);"
+        in generated_code
+    )
+    assert (
+        "uint badMultiBool = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got bool */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "float2x2 badMultiMatrix = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got float2x2 */ "
+        "float2x2(0);" in generated_code
+    )
+    assert (
+        "uint badMultiMask = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum mask argument must be uint4, got uint */ 0u;"
+        in generated_code
+    )
+    assert (
+        "uint badMultiCount = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixCountBits predicate argument must be scalar bool, got uint */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "uint badMultiBit = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixBitAnd value argument must be integer scalar or vector, got bool */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "uint badLane = /* unsupported Metal wave intrinsic: WaveReadLaneAt "
+        "lane index must be scalar int or uint, got float2 */ 0u;" in generated_code
+    )
+    assert (
+        "uint badQuad = /* unsupported Metal wave intrinsic: QuadReadLaneAt "
+        "quad lane index must be in the range 0 to 3, got 4 */ 0u;" in generated_code
+    )
+    assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveAnyTrue(value)" not in generated_code
+    assert "WaveMatch(badAnyValue)" not in generated_code
+    assert "WaveMultiPrefixSum(badAnyValue, mask)" not in generated_code
+    assert "WaveMultiPrefixSum(matrixValue, mask)" not in generated_code
+    assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
 def test_metal_shared_local_variables_use_threadgroup_address_space():
     shader = """
     shader SharedLocalStorage {
@@ -2327,6 +2848,95 @@ def test_metal_unsigned_integer_literal_suffix_codegen():
     assert "7, u" not in generated_code
 
 
+def test_metal_global_function_constants_emit_msl_attributes_and_default_diagnostics():
+    code = """
+    shader FunctionConstantCodegen {
+        bool useFast @function_constant(0) = true;
+        int mode @constant_id(1) = 2;
+        float scale @function_constant(2) = 0.5;
+        uint flags @function_constant(3);
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                float value = useFast ? scale : 0.0;
+                return vec4(value + float(mode) + float(flags), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert (
+        "/* unsupported Metal function constant default: 'useFast' initializers "
+        "are not allowed by MSL */"
+    ) in generated_code
+    assert "constant bool useFast [[function_constant(0)]];" in generated_code
+    assert "constant int mode [[function_constant(1)]];" in generated_code
+    assert "constant float scale [[function_constant(2)]];" in generated_code
+    assert "constant uint flags [[function_constant(3)]];" in generated_code
+    assert (
+        "constant bool useFast [[function_constant(0)]] = true;" not in generated_code
+    )
+    assert "constant int mode [[function_constant(1)]] = 2;" not in generated_code
+    assert "constant float scale [[function_constant(2)]] = 0.5;" not in generated_code
+    assert "function constant default: 'flags'" not in generated_code
+    assert "bool useFast;" not in generated_code
+    assert "int mode;" not in generated_code
+    assert "float scale;" not in generated_code
+    assert "float value = useFast ? scale : 0.0;" in generated_code
+
+
+def test_metal_global_function_constants_reject_duplicate_ids():
+    code = """
+    shader DuplicateFunctionConstants {
+        bool useFast @function_constant(0) = true;
+        int mode @constant_id(0) = 2;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return useFast ? vec4(float(mode)) : vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate Metal function constant id 0",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected_error"),
+    [
+        ("bool useFast @function_constant = true;", "requires an integer id"),
+        ("bool useFast @function_constant(mode) = true;", "requires an integer id"),
+        ("sampler2D tex @function_constant(0);", "cannot use type 'sampler2D'"),
+    ],
+)
+def test_metal_global_function_constants_validate_declarations(
+    declaration, expected_error
+):
+    code = f"""
+    shader InvalidFunctionConstant {{
+        {declaration}
+
+        fragment {{
+            vec4 main() @gl_FragColor {{
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_metal_resource_binding_attributes_are_not_parameter_semantics():
     code = """
     shader BindingAttributes {
@@ -4017,6 +4627,67 @@ def test_metal_trace_ray_full_signature_lowers_to_intersector_query():
     assert "TraceRay" not in generated
 
 
+@pytest.mark.parametrize(
+    ("parameter_decl", "parameter_name", "resource_kind"),
+    [
+        (
+            "accelerationStructureEXT& topLevelAS @device @binding(0)",
+            "topLevelAS",
+            "acceleration_structure",
+        ),
+        (
+            "accelerationStructureEXT* topLevelAS @device @binding(0)",
+            "topLevelAS",
+            "acceleration_structure",
+        ),
+        (
+            "visible_function_table<CallableData>& callables @device @binding(1)",
+            "callables",
+            "visible_function_table",
+        ),
+        (
+            "visible_function_table<CallableData>* callables @device @binding(1)",
+            "callables",
+            "visible_function_table",
+        ),
+        (
+            "intersection_function_table<instancing>& intersectionFunctions @device @binding(2)",
+            "intersectionFunctions",
+            "intersection_function_table",
+        ),
+        (
+            "intersection_function_table<instancing>* intersectionFunctions @device @binding(2)",
+            "intersectionFunctions",
+            "intersection_function_table",
+        ),
+    ],
+)
+def test_metal_ray_resource_parameters_reject_pointer_or_reference_spelling(
+    parameter_decl, parameter_name, resource_kind
+):
+    code = f"""
+    shader rt {{
+        struct CallableData {{
+            vec4 color;
+        }};
+
+        ray_generation {{
+            void main({parameter_decl}) {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Metal ray tracing resource parameter '{parameter_name}'.*"
+            rf"{resource_kind}.*must be passed by value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_trace_ray_rejects_non_acceleration_structure_argument():
     code = """
     shader rt {
@@ -4827,6 +5498,71 @@ def test_metal_trace_ray_uses_primitive_acceleration_structure_shape():
         "__crossgl_ray_0, primitiveAS, intersectionFunctions);"
     ) in generated
     assert "primitiveAS, 0xff" not in generated
+
+
+def test_metal_trace_ray_infers_local_acceleration_structure_aliases():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+        primitive_acceleration_structure primitiveAS @binding(2);
+        intersection_function_table<triangle_data> primitiveIntersectionFunctions
+            @binding(3);
+
+        ray_generation {
+            void main() {
+                let instanceAlias = topLevelAS;
+                let chainedAlias = instanceAlias;
+                TraceRay(
+                    chainedAlias,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+
+                let primitiveAlias = primitiveAS;
+                TraceRay(
+                    primitiveAlias,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "instance_acceleration_structure instanceAlias = topLevelAS;" in generated
+    assert "instance_acceleration_structure chainedAlias = instanceAlias;" in generated
+    assert "primitive_acceleration_structure primitiveAlias = primitiveAS;" in generated
+    assert (
+        ".intersect(__crossgl_ray_0, chainedAlias, 255, intersectionFunctions);"
+        in generated
+    )
+    assert (
+        ".intersect(__crossgl_ray_3, primitiveAlias, primitiveIntersectionFunctions);"
+        in generated
+    )
+    assert "float instanceAlias = topLevelAS;" not in generated
+    assert (
+        "unsupported Metal ray tracing intrinsic: TraceRay acceleration structure"
+        not in generated
+    )
 
 
 def test_metal_acceleration_structure_globals_thread_through_helpers():
@@ -6555,6 +7291,185 @@ def test_metal_mesh_payload_dispatch_generated_name_avoids_local_collision():
     assert "const object_data MeshPayload& payload [[payload]]" in generated
 
 
+def test_metal_mesh_payload_semantic_on_helper_is_rejected():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        mesh {
+            void issue(MeshPayload payload @mesh_payload) {
+                SetMeshOutputCounts(1, 1);
+            }
+
+            void main(MeshPayload payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal mesh payload parameters are only supported on object, task, "
+            "amplification, or mesh stage entry points.*issue.*payload"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_mesh_payload_parameter_accepts_explicit_object_data_address_space():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        object {
+            void main(Payload& payload @object_data @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(Payload& payload @object_data @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "object_data Payload& payload [[payload]]" in generated
+    assert "const object_data Payload& payload [[payload]]" in generated
+    assert "DispatchMesh" not in generated
+
+
+@pytest.mark.parametrize(
+    ("stage_block", "expected_stage", "expected_address_space"),
+    [
+        (
+            """
+            object {
+                void main(device Payload& payload @payload)
+                    @max_total_threads_per_threadgroup(32)
+                {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+            """,
+            "object",
+            "device",
+        ),
+        (
+            """
+            task {
+                void main(Payload& payload @ray_data @payload)
+                    @numthreads(1, 1, 1)
+                {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+            """,
+            "task",
+            "ray_data",
+        ),
+        (
+            """
+            mesh {
+                void main(thread Payload& payload @mesh_payload)
+                    @numthreads(1, 1, 1)
+                    @max_vertices(1)
+                    @max_primitives(1)
+                    @outputtopology(point)
+                {
+                    SetMeshOutputCounts(1, 1);
+                }
+            }
+            """,
+            "mesh",
+            "thread",
+        ),
+    ],
+)
+def test_metal_mesh_payload_parameter_rejects_non_object_data_address_space(
+    stage_block, expected_stage, expected_address_space
+):
+    code = f"""
+    shader meshpipe {{
+        struct Payload {{
+            vec4 color;
+        }};
+
+        {stage_block}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Metal mesh payload parameter 'payload' on "
+            f"{expected_stage} stage uses {expected_address_space} address space; "
+            "mesh payload parameters require object_data"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_metal_mesh_payload_dispatch_multiple_argument_types_are_rejected():
+    code = """
+    shader meshpipe {
+        struct PayloadA {
+            uint meshlet;
+        };
+
+        struct PayloadB {
+            uint meshlet;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                groupshared PayloadA first;
+                groupshared PayloadB second;
+                DispatchMesh(1, 1, 1, first);
+                DispatchMesh(1, 1, 1, second);
+            }
+        }
+
+        mesh {
+            void main(PayloadA payload @mesh_payload)
+                @numthreads(1, 1, 1)
+                @max_vertices(1)
+                @max_primitives(1)
+                @outputtopology(point)
+            {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Metal DispatchMesh payload arguments must use one type.*PayloadA.*PayloadB",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_metal_mesh_payload_dispatch_type_mismatch_is_rejected():
     code = """
     shader meshpipe {
@@ -6600,6 +7515,10 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
             uint meshlet;
         };
 
+        struct PayloadBlock {
+            MeshPayload active;
+        };
+
         MeshPayload makePayload() {
             MeshPayload payload;
             payload.meshlet = 1u;
@@ -6607,13 +7526,20 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
         }
 
         task {
-            void main() @numthreads(1, 1, 1) {
+            void main(
+                device MeshPayload* devicePayloads @buffer(0),
+                constant MeshPayload* constantPayloads @buffer(1),
+                device PayloadBlock* deviceBlocks @buffer(2)
+            ) @numthreads(1, 1, 1) {
                 MeshPayload threadPayload;
                 groupshared MeshPayload payloads[2];
                 payloads[0].meshlet = 2u;
                 threadgroup MeshPayload* alias = &payloads[0];
                 DispatchMesh(1, 1, 1, makePayload());
                 DispatchMesh(1, 1, 1, threadPayload);
+                DispatchMesh(1, 1, 1, devicePayloads[0]);
+                DispatchMesh(1, 1, 1, constantPayloads[0]);
+                DispatchMesh(1, 1, 1, deviceBlocks[0].active);
                 DispatchMesh(1, 1, 1, alias);
                 DispatchMesh(1, 1, 1, payloads);
                 DispatchMesh(1, 1, 1, alias[0]);
@@ -6636,6 +7562,9 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert "object_data MeshPayload& _crossglMeshPayload [[payload]]" in generated
+    assert "device MeshPayload* devicePayloads [[buffer(0)]]" in generated
+    assert "constant MeshPayload* constantPayloads [[buffer(1)]]" in generated
+    assert "device PayloadBlock* deviceBlocks [[buffer(2)]]" in generated
     assert (
         "/* unsupported Metal mesh payload dispatch: payload argument must be a "
         "threadgroup lvalue */"
@@ -6644,6 +7573,21 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
         "/* unsupported Metal mesh payload dispatch: payload argument "
         "'threadPayload' uses thread address space; DispatchMesh payload requires "
         "a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'devicePayloads[0]' uses device address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'constantPayloads[0]' uses constant address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
+    ) in generated
+    assert (
+        "/* unsupported Metal mesh payload dispatch: payload argument "
+        "'deviceBlocks[0].active' uses device address space; DispatchMesh payload "
+        "requires a threadgroup lvalue */"
     ) in generated
     assert (
         "/* unsupported Metal mesh payload dispatch: payload argument 'alias' "
@@ -6657,11 +7601,14 @@ def test_metal_mesh_payload_dispatch_rejects_invalid_sources():
     ) in generated
     assert "_crossglMeshPayload = makePayload();" not in generated
     assert "_crossglMeshPayload = threadPayload;" not in generated
+    assert "_crossglMeshPayload = devicePayloads[0];" not in generated
+    assert "_crossglMeshPayload = constantPayloads[0];" not in generated
+    assert "_crossglMeshPayload = deviceBlocks[0].active;" not in generated
     assert "_crossglMeshPayload = alias;" not in generated
     assert "_crossglMeshPayload = payloads;" not in generated
     assert "_crossglMeshPayload = alias[0];" in generated
     assert "_crossglMeshPayload = payloads[0];" in generated
-    assert generated.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 6
+    assert generated.count("_crossglMeshGrid.set_threadgroups_per_grid(") == 9
     assert "DispatchMesh(" not in generated
 
 
@@ -7104,6 +8051,173 @@ def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
         )
 
 
+def test_metal_mesh_output_helper_calls_validate_order_and_literal_bounds():
+    write_before_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetVertex(0, position);
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(write_before_count_code)), "mesh"
+        )
+
+    declared_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetMeshOutputCounts(3, 1);
+                SetVertex(3, position);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*declared output count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(declared_bound_code)), "mesh"
+        )
+
+    active_count_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                vec3 position = vec3(0.0, 0.0, 0.0);
+                SetMeshOutputCounts(2, 1);
+                SetVertex(2, position);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetVertex.*numVertices"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(active_count_bound_code)), "mesh"
+        )
+
+    primitive_active_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(2)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetPrimitive(1, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetPrimitive.*numPrimitives"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(primitive_active_count_code)), "mesh"
+        )
+
+
+def test_metal_mesh_set_index_validates_flattened_bounds():
+    write_before_count_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetIndex(0, 0);
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*after SetMeshOutputCounts"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(write_before_count_code)), "mesh"
+        )
+
+    declared_flattened_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(3, 0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*declared flattened index count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(declared_flattened_bound_code)), "mesh"
+        )
+
+    active_flattened_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(6)
+                @max_primitives(2)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(3, 0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*numPrimitives"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(active_flattened_bound_code)), "mesh"
+        )
+
+    vector_span_bound_code = """
+    shader meshpipe {
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(3)
+                @max_primitives(1)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+                SetIndex(1, uvec3(0u, 1u, 2u));
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SetIndex.*declared flattened index count"):
+        MetalCodeGen().generate_stage(
+            parse_code(tokenize_code(vector_span_bound_code)), "mesh"
+        )
+
+
 def test_metal_mesh_set_output_counts_validates_literal_bounds():
     code = """
     shader meshpipe {
@@ -7503,6 +8617,46 @@ def test_metal_object_stage_dispatch_mesh_accepts_vector_grid():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_object_stage_dispatch_mesh_rejects_malformed_grid_arguments():
+    scalar_code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(2);
+            }
+        }
+    }
+    """
+    scalar_generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(scalar_code)), "object"
+    )
+
+    assert (
+        "unsupported Metal mesh dispatch: DispatchMesh grid argument "
+        "must be a uint3-compatible vector"
+    ) in scalar_generated
+    assert "set_threadgroups_per_grid(2)" not in scalar_generated
+
+    vector_component_code = """
+    shader meshpipe {
+        object {
+            void main() @max_total_threads_per_threadgroup(32) {
+                DispatchMesh(uvec3(2, 3, 4), 1, 1);
+            }
+        }
+    }
+    """
+    vector_component_generated = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(vector_component_code)), "object"
+    )
+
+    assert (
+        "unsupported Metal mesh dispatch: DispatchMesh grid component "
+        "argument 1 must be a scalar integer"
+    ) in vector_component_generated
+    assert "set_threadgroups_per_grid(uint3(uint3" not in vector_component_generated
+
+
 def test_metal_rejects_unsupported_geometry_and_tessellation_stages():
     geometry_code = """
     shader geometry_stage {
@@ -7789,6 +8943,88 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     assert "atomic_exchange_explicit(counters[index]" not in generated
 
 
+def test_metal_scoped_atomic_calls_strip_memory_scope_argument():
+    code = """
+    shader MetalScopedAtomicValidation {
+        bool claim(
+            threadgroup atomic_uint counters[4],
+            thread uint expectedValues[4],
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_strong_explicit(
+                counters[index],
+                expectedValues[index],
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed,
+                memory_scope_device
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_uint* deviceCounters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_uint counters[4];
+                uint expectedValues[4];
+                expectedValues[index] = 0u;
+                atomic_store_explicit(
+                    counters[index],
+                    0u,
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint loaded = atomic_load_explicit(
+                    counters[index],
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint exchanged = atomic_exchange_explicit(
+                    deviceCounters[index],
+                    loaded + oldValue,
+                    memory_order_relaxed,
+                    memory_scope_device
+                );
+                bool claimed = claim(counters, expectedValues, index, exchanged);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "memory_scope_" not in generated
+    assert (
+        "return atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expectedValues[index], desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in generated
+    assert (
+        "atomic_store_explicit(&counters[index], 0u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint loaded = atomic_load_explicit(&counters[index], memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint exchanged = atomic_exchange_explicit(&deviceCounters[index], loaded + oldValue, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_compare_exchange_strong_explicit" not in generated
+
+
 def test_metal_atomic_pointer_targets_cover_signed_and_bool_operations():
     code = """
     shader MetalAtomicPointerValidation {
@@ -7948,6 +9184,210 @@ def test_metal_threadgroup_atomic_pointer_aliases_preserve_address_space():
     ) in generated
     assert "atomic_store_explicit(alias, rejected, memory_order_relaxed);" in generated
     assert "bumpDevice(alias + 2" not in generated
+
+
+def test_metal_threadgroup_atomic_ternary_pointer_aliases_preserve_address_space():
+    code = """
+    shader MetalThreadgroupAtomicTernaryAliasValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(uint index @gl_LocalInvocationIndex) {
+                shared atomic_int scratchA[64];
+                shared atomic_int scratchB[64];
+                bool useA = index == 0u;
+                atomic_int* alias = useA ? scratchA + index : scratchB + index;
+                int oldValue = bumpThreadgroup(alias, 1);
+                atomic_store_explicit(alias, oldValue, memory_order_relaxed);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "threadgroup atomic_int* alias = useA ? scratchA + index : scratchB + index;"
+        in generated
+    )
+    assert "thread atomic_int* alias = useA" not in generated
+    assert "int oldValue = bumpThreadgroup(alias, 1);" in generated
+    assert "atomic_store_explicit(alias, oldValue, memory_order_relaxed);" in generated
+    assert "unsupported Metal address-space" not in generated
+
+
+def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
+    code = """
+    shader MetalMixedAddressSpaceTernaryAliasValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_int* counters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_int scratch[64];
+                bool useShared = index == 0u;
+                atomic_int* alias = useShared ? scratch + index : counters + index;
+                int rejected = bumpThreadgroup(alias, 1);
+                int directRejected = bumpThreadgroup(
+                    useShared ? scratch + index : counters + index,
+                    rejected
+                );
+                atomic_store_explicit(counters + index, rejected, memory_order_relaxed);
+                atomic_store_explicit(
+                    counters + index,
+                    directRejected,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratch' (threadgroup) and 'counters' (device) use different address "
+        "spaces; using uninitialized thread alias */"
+    ) in generated
+    assert "thread atomic_int* alias;" in generated
+    assert "thread atomic_int* alias = useShared" not in generated
+    assert (
+        "int rejected = 0 /* unsupported Metal address-space call: argument "
+        "'alias' uses thread address space but parameter 'counters' of "
+        "'bumpThreadgroup' requires threadgroup */;"
+    ) in generated
+    assert (
+        "int directRejected = 0 /* unsupported Metal address-space call: "
+        "argument '<expr>' mixes branches 'scratch' (threadgroup) and "
+        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
+        "requires threadgroup */;"
+    ) in generated
+    assert "bumpThreadgroup(useShared ? scratch" not in generated
+
+
+def test_metal_mixed_address_space_pointer_assignment_emits_diagnostic():
+    code = """
+    shader MetalPointerAssignmentAddressSpaceValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_int* counters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_int scratchA[64];
+                shared atomic_int scratchB[64];
+                bool useA = index == 0u;
+                atomic_int* alias = scratchA + index;
+                alias = useA ? scratchA + index : scratchB + index;
+                int first = bumpThreadgroup(alias, 1);
+                bool useShared = first == 0;
+                alias = useShared ? scratchA + index : counters + index;
+                alias = counters + index;
+                int second = bumpThreadgroup(alias, first);
+                atomic_store_explicit(alias, second, memory_order_relaxed);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_int* alias = scratchA + index;" in generated
+    assert "alias = useA ? scratchA + index : scratchB + index;" in generated
+    assert "int first = bumpThreadgroup(alias, 1);" in generated
+    assert (
+        "/* unsupported Metal address-space assignment: value branches "
+        "'scratchA' (threadgroup) and 'counters' (device) use different "
+        "address spaces; assignment to 'alias' requires threadgroup */"
+    ) in generated
+    assert (
+        "/* unsupported Metal address-space assignment: value 'counters' uses "
+        "device address space but target 'alias' uses threadgroup */"
+    ) in generated
+    assert "alias = useShared ? scratchA + index : counters + index;" not in generated
+    assert "alias = counters + index;" not in generated
+    assert "int second = bumpThreadgroup(alias, first);" in generated
+    assert "atomic_store_explicit(alias, second, memory_order_relaxed);" in generated
+
+
+def test_metal_mixed_address_space_ternary_reference_alias_emits_diagnostic():
+    code = """
+    shader MetalMixedAddressSpaceTernaryReferenceAliasValidation {
+        struct Payload {
+            float value;
+        };
+
+        void useThreadgroup(threadgroup Payload& payload, float delta) {
+            payload.value = payload.value + delta;
+        }
+
+        compute {
+            void main(
+                device Payload* payloads @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                threadgroup Payload scratchA[64];
+                threadgroup Payload scratchB[64];
+                bool useA = index == 0u;
+                Payload& alias = useA ? scratchA[index] : scratchB[index];
+                useThreadgroup(alias, 1.0);
+
+                bool useShared = alias.value == 0.0;
+                Payload& mixedAlias = useShared ? scratchA[index] : payloads[index];
+                useThreadgroup(mixedAlias, 2.0);
+                useThreadgroup(
+                    useShared ? scratchA[index] : payloads[index],
+                    3.0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];"
+        in generated
+    )
+    assert "useThreadgroup(alias, 1.0);" in generated
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
+        "spaces; using uninitialized thread value */"
+    ) in generated
+    assert "thread Payload mixedAlias;" in generated
+    assert "thread Payload& mixedAlias = useShared" not in generated
+    assert (
+        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
+        "thread address space but parameter 'payload' of 'useThreadgroup' "
+        "requires threadgroup */"
+    ) in generated
+    assert (
+        "/* unsupported Metal address-space call: argument '<expr>' mixes "
+        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
+        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
+    ) in generated
+    assert "useThreadgroup(mixedAlias, 2.0);" not in generated
+    assert "useThreadgroup(useShared ? scratchA" not in generated
 
 
 def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
@@ -9324,6 +10764,9 @@ def test_metal_vector_type_conversions():
         assert "float2x2 mat2Field" in generated_code
         assert "float3x3 mat3Field" in generated_code
         assert "float4x4 mat4Field" in generated_code
+        assert "output.mat2Field = float2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
+        assert "output.mat3Field = float3x3(1.0);" in generated_code
+        assert "output.mat4Field = float4x4(1.0);" in generated_code
     except SyntaxError as e:
         pytest.fail(f"Metal vector type conversion failed: {e}")
 
@@ -12756,6 +14199,24 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
             return imageAtomicAdd(pack.counters[index], pixel, value);
         }
 
+        vec2 readPairAlias(ImagePack pack, int index, ivec2 pixel) {
+            let pairsAlias = pack.pairs;
+            let chainedPairsAlias = pairsAlias;
+            return imageLoad(chainedPairsAlias[index], pixel);
+        }
+
+        void writePairAlias(ImagePack pack, int index, ivec2 pixel, vec2 value) {
+            let targetsAlias = pack.targets;
+            let chainedTargetsAlias = targetsAlias;
+            imageStore(chainedTargetsAlias[index], pixel, value);
+        }
+
+        uint addCounterAlias(ImagePack pack, int index, ivec2 pixel, uint value) {
+            let countersAlias = pack.counters;
+            let counterAlias = countersAlias[index];
+            return imageAtomicAdd(counterAlias, pixel, value);
+        }
+
         compute {
             void main() {
                 ImagePack pack;
@@ -12763,6 +14224,9 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
                 vec2 pair = readPair(pack, 0, pixel);
                 writePair(pack, 1, pixel, pair);
                 uint oldValue = addCounter(pack, 0, pixel, 1u);
+                vec2 aliasPair = readPairAlias(pack, 1, pixel);
+                writePairAlias(pack, 0, pixel, aliasPair);
+                uint aliasOldValue = addCounterAlias(pack, 1, pixel, oldValue);
             }
         }
     }
@@ -12786,6 +14250,44 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
     assert (
         "return pack.counters[index].atomic_fetch_add(uint2(pixel), value).x;"
         in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::read>, 2> pairsAlias = pack.pairs;"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::read>, 2> chainedPairsAlias = pairsAlias;"
+        in generated_code
+    )
+    assert "return chainedPairsAlias[index].read(uint2(pixel)).xy;" in generated_code
+    assert (
+        "array<texture2d<float, access::write>, 2> targetsAlias = pack.targets;"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::write>, 2> chainedTargetsAlias = targetsAlias;"
+        in generated_code
+    )
+    assert (
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<uint, access::read_write>, 2> countersAlias = pack.counters;"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> counterAlias = countersAlias[index];"
+        in generated_code
+    )
+    assert "return counterAlias.atomic_fetch_add(uint2(pixel), value).x;" in (
+        generated_code
+    )
+    assert "texture2d<float, access::read> pairsAlias = pack.pairs;" not in (
+        generated_code
+    )
+    assert "texture2d<float, access::write> targetsAlias = pack.targets;" not in (
+        generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
@@ -22298,6 +23800,320 @@ def test_metal_implicit_sampler_for_texture_parameter():
     assert "sampleColor(colorMap, input.uv)" in generated_code
 
 
+def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata():
+    shader = """
+    shader TextureLocalAliases {
+        sampler2D colorMap;
+        sampler colorMapSampler;
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+        sampler linearSampler;
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                let alias = colorMap;
+                let sampleState = linearSampler;
+                vec4 implicitSample = texture(alias, input.uv);
+                vec4 explicitSample = texture(alias, sampleState, input.uv);
+                let layerAlias = textures[input.layer];
+                vec4 arraySample = texture(layerAlias, input.uv);
+                return implicitSample + explicitSample + arraySample;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "texture2d<float> alias = colorMap;" in generated_code
+    assert "sampler sampleState = linearSampler;" in generated_code
+    assert "sampler colorMapSampler [[sampler(0)]]" in generated_code
+    assert "array<sampler, 4> texturesSampler [[sampler(1)]]" in generated_code
+    assert "alias.sample(colorMapSampler, input.uv)" in generated_code
+    assert "alias.sample(sampleState, input.uv)" in generated_code
+    assert "texture2d<float> layerAlias = textures[input.layer];" in generated_code
+    assert "layerAlias.sample(texturesSampler[input.layer], input.uv)" in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            samplerCube alias = colorMap;
+            vec4 value = texture(alias, colorMapSampler, vec3(0.0, 0.0, 1.0));
+            """,
+            "Metal local resource alias 'alias' declares samplerCube but initializer has texture2d<float>",
+        ),
+        (
+            """
+            uimage2D alias = source;
+            uint value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares uimage2D but initializer has texture2d<float, access::read>",
+        ),
+        (
+            """
+            image2D alias @rgba32f @readonly = target;
+            vec4 value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares access::read but initializer has access::write",
+        ),
+        (
+            """
+            image2D alias @rg16f @readonly = source;
+            vec2 value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares format rg16f but initializer has rgba32f",
+        ),
+    ],
+)
+def test_metal_explicit_resource_local_aliases_reject_incompatible_metadata(
+    statement, match
+):
+    shader = f"""
+    shader ExplicitResourceLocalAliasCompatibility {{
+        sampler2D colorMap;
+        sampler colorMapSampler;
+        image2D source @rgba32f @readonly;
+        image2D target @rgba32f @writeonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_metal_resource_array_local_aliases_preserve_element_metadata():
+    texture_shader = """
+    shader TextureArrayLocalAliases {
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        vec4 sampleParam(sampler2D paramTextures[4], sampler paramTexturesSampler[4], int layer, vec2 uv) {
+            let paramAlias = paramTextures;
+            let chainedAlias = paramAlias;
+            return texture(chainedAlias[layer], uv);
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                let texAlias = textures;
+                return texture(texAlias[input.layer], input.uv)
+                    + sampleParam(textures, texturesSampler, input.layer, input.uv);
+            }
+        }
+    }
+    """
+
+    image_shader = """
+    shader ImageArrayLocalAliases {
+        image2D images @rgba32f[4];
+
+        void copyParam(image2D paramImages[4] @rgba32f) {
+            let paramAlias = paramImages;
+            let chainedAlias = paramAlias;
+            vec4 paramValue = imageLoad(chainedAlias[1], ivec2(1, 1));
+            imageStore(paramAlias[0], ivec2(1, 1), paramValue);
+        }
+
+        compute {
+            void main() {
+                let imageAlias = images;
+                vec4 value = imageLoad(imageAlias[1], ivec2(0, 0));
+                copyParam(images);
+                imageStore(imageAlias[0], ivec2(0, 0), value);
+            }
+        }
+    }
+    """
+
+    fragment_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(texture_shader), "fragment"
+    )
+    compute_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(image_shader), "compute"
+    )
+
+    assert "array<texture2d<float>, 4> texAlias = textures;" in fragment_code
+    assert "array<sampler, 4> texturesSampler [[sampler(0)]]" in fragment_code
+    assert "texAlias[input.layer].sample(texturesSampler[input.layer], input.uv)" in (
+        fragment_code
+    )
+    assert "array<texture2d<float>, 4> paramAlias = paramTextures;" in fragment_code
+    assert "array<texture2d<float>, 4> chainedAlias = paramAlias;" in fragment_code
+    assert "chainedAlias[layer].sample(paramTexturesSampler[layer], uv)" in (
+        fragment_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> imageAlias = images;"
+        in compute_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> paramAlias = paramImages;"
+        in compute_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> chainedAlias = paramAlias;"
+        in compute_code
+    )
+    assert "float4 value = imageAlias[1].read(uint2(int2(0, 0)));" in compute_code
+    assert "float4 paramValue = chainedAlias[1].read(uint2(int2(1, 1)));" in (
+        compute_code
+    )
+    assert "paramAlias[0].write(paramValue, uint2(int2(1, 1)));" in compute_code
+    assert "imageAlias[0].write(value, uint2(int2(0, 0)));" in compute_code
+    assert "texture2d<float> texAlias = textures;" not in fragment_code
+    assert "texture2d<float, access::read_write> imageAlias = images;" not in (
+        compute_code
+    )
+
+
+def test_metal_sampler_array_local_aliases_preserve_element_metadata():
+    shader = """
+    shader SamplerArrayLocalAliases {
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        struct TexturePack {
+            sampler2D textures[4];
+            sampler samplers[4];
+        };
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        vec4 sampleParam(
+            sampler2D paramTextures[4],
+            sampler paramSamplers[4],
+            int layer,
+            vec2 uv
+        ) {
+            let paramSamplerAlias = paramSamplers;
+            let chainedSamplerAlias = paramSamplerAlias;
+            return texture(paramTextures[layer], chainedSamplerAlias[layer], uv);
+        }
+
+        vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+            let packSamplerAlias = pack.samplers;
+            let chainedPackSamplerAlias = packSamplerAlias;
+            return texture(pack.textures[layer], chainedPackSamplerAlias[layer], uv);
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                TexturePack pack;
+                let samplerAlias = samplers;
+                let chainedAlias = samplerAlias;
+                return texture(
+                    textures[input.layer],
+                    chainedAlias[input.layer],
+                    input.uv
+                ) + sampleParam(textures, samplers, input.layer, input.uv)
+                    + samplePack(pack, input.layer, input.uv);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<sampler, 4> samplers [[sampler(0)]]" in generated_code
+    assert "array<sampler, 4> samplers;" in generated_code
+    assert "array<sampler, 4> samplerAlias = samplers;" in generated_code
+    assert "array<sampler, 4> chainedAlias = samplerAlias;" in generated_code
+    assert (
+        "textures[input.layer].sample(chainedAlias[input.layer], input.uv)"
+        in generated_code
+    )
+    assert "array<sampler, 4> paramSamplerAlias = paramSamplers;" in generated_code
+    assert (
+        "array<sampler, 4> chainedSamplerAlias = paramSamplerAlias;" in generated_code
+    )
+    assert (
+        "paramTextures[layer].sample(chainedSamplerAlias[layer], uv)" in generated_code
+    )
+    assert "array<sampler, 4> packSamplerAlias = pack.samplers;" in generated_code
+    assert (
+        "array<sampler, 4> chainedPackSamplerAlias = packSamplerAlias;"
+        in generated_code
+    )
+    assert (
+        "pack.textures[layer].sample(chainedPackSamplerAlias[layer], uv)"
+        in generated_code
+    )
+    assert "sampler samplerAlias = samplers;" not in generated_code
+    assert "sampler paramSamplerAlias = paramSamplers;" not in generated_code
+    assert "sampler packSamplerAlias = pack.samplers;" not in generated_code
+
+
+def test_metal_struct_member_resource_array_local_aliases_preserve_sampler_metadata():
+    shader = """
+    shader StructMemberTextureArrayLocalAliases {
+        struct TexturePack {
+            sampler2D textures[4];
+            sampler texturesSampler[4];
+        };
+
+        vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+            let texAlias = pack.textures;
+            let chainedAlias = texAlias;
+            return texture(chainedAlias[layer], uv);
+        }
+
+        vec4 sampleLayer(TexturePack pack, int layer, vec2 uv) {
+            let layerAlias = pack.textures[layer];
+            return texture(layerAlias, uv);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                TexturePack pack;
+                return samplePack(pack, 2, vec2(0.5, 0.25)) +
+                    sampleLayer(pack, 1, vec2(0.25, 0.75));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texture2d<float>, 4> textures;" in generated_code
+    assert "array<sampler, 4> texturesSampler;" in generated_code
+    assert "array<texture2d<float>, 4> texAlias = pack.textures;" in generated_code
+    assert "array<texture2d<float>, 4> chainedAlias = texAlias;" in generated_code
+    assert "chainedAlias[layer].sample(pack.texturesSampler[layer], uv)" in (
+        generated_code
+    )
+    assert "texture2d<float> layerAlias = pack.textures[layer];" in generated_code
+    assert "layerAlias.sample(pack.texturesSampler[layer], uv)" in generated_code
+    assert "texture2d<float> texAlias = pack.textures;" not in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+
+
 def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
     shader = """
     shader ImplicitSamplerArrayElements {
@@ -23560,14 +25376,23 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         vec4 touch(image2DMS image @rgba16f, uimage2DMS counterImage @r32ui, ivec2 pixel, int sampleIndex, vec4 value, uint count) {
             vec4 oldColor = imageLoad(image, pixel, sampleIndex);
             uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            let counterAlias = counterImage;
+            vec4 aliasedColor = imageLoad(chainedImageAlias, pixel, sampleIndex);
+            uint aliasedCount = imageLoad(counterAlias, pixel, sampleIndex);
             imageStore(image, pixel, sampleIndex, oldColor + value);
             imageStore(counterImage, pixel, sampleIndex, oldCount + count);
             uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
-            return oldColor + vec4(float(oldCount + atomicOld));
+            imageStore(chainedImageAlias, pixel, sampleIndex, aliasedColor + value);
+            uint aliasAtomicOld = imageAtomicAdd(counterAlias, pixel, sampleIndex, count);
+            return oldColor + aliasedColor + vec4(float(oldCount + atomicOld + aliasedCount + aliasAtomicOld));
         }
 
         vec4 touchLayer(image2DMSArray image @rgba16f, ivec3 pixelLayer, int sampleIndex) {
-            return imageLoad(image, pixelLayer, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            return imageLoad(chainedImageAlias, pixelLayer, sampleIndex);
         }
 
         fragment {
@@ -23602,8 +25427,36 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         "uint oldCount = counterImage.read(uint2(pixel), uint(sampleIndex)).x;"
         in generated_code
     )
+    assert "texture2d_ms<float, access::read> imageAlias = image;" in generated_code
     assert (
-        "return image.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        "texture2d_ms<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms<uint, access::read> counterAlias = counterImage;"
+        in generated_code
+    )
+    assert (
+        "float4 aliasedColor = chainedImageAlias.read(uint2(pixel), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint aliasedCount = counterAlias.read(uint2(pixel), uint(sampleIndex)).x;"
+        in generated_code
+    )
+    assert (
+        "uint aliasAtomicOld = /* unsupported Metal multisample image atomic: imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> imageAlias = image;" in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "return chainedImageAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
         in generated_code
     )
     assert (
@@ -23640,10 +25493,17 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         ) {
             vec4 oldColor = imageLoad(image, pixelLayer, sampleIndex);
             uint oldCount = imageLoad(counterImage, pixelLayer, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            let counterAlias = counterImage;
+            vec4 aliasedColor = imageLoad(chainedImageAlias, pixelLayer, sampleIndex);
+            uint aliasedCount = imageLoad(counterAlias, pixelLayer, sampleIndex);
             imageStore(image, pixelLayer, sampleIndex, oldColor + value);
             imageStore(counterImage, pixelLayer, sampleIndex, oldCount + count);
             uint atomicOld = imageAtomicAdd(counterImage, pixelLayer, sampleIndex, count);
-            return oldColor + vec4(float(oldCount + atomicOld));
+            imageStore(chainedImageAlias, pixelLayer, sampleIndex, aliasedColor + value);
+            uint aliasAtomicOld = imageAtomicAdd(counterAlias, pixelLayer, sampleIndex, count);
+            return oldColor + aliasedColor + vec4(float(oldCount + atomicOld + aliasedCount + aliasAtomicOld));
         }
 
         fragment {
@@ -23678,6 +25538,25 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         "uint oldCount = counterImage.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
         in generated_code
     )
+    assert (
+        "texture2d_ms_array<float, access::read> imageAlias = image;" in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms_array<uint, access::read> counterAlias = counterImage;"
+        in generated_code
+    )
+    assert (
+        "float4 aliasedColor = chainedImageAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint aliasedCount = counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
+        in generated_code
+    )
     diagnostic_prefix = "un" + "supported Metal multisample image"
     assert (
         f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<float, access::read>"
@@ -23692,10 +25571,109 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         f"{diagnostic_prefix} atomic: imageAtomicAdd on "
         "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
     )
+    assert (
+        "uint aliasAtomicOld = /* "
+        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
+        "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
+    )
     assert "texture2d_ms_array<float, access::read_write>" not in generated_code
     assert "texture2d_ms_array<uint, access::read_write>" not in generated_code
     assert ".write(" not in generated_code
     assert "atomic_fetch_add" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("resources", "helper", "call", "match"),
+    [
+        (
+            "image2D regular @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(regular, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument regular has texture2d<float, access::read_write>",
+        ),
+        (
+            "image2DMS ms @rgba16f;",
+            """
+            vec4 readRegular(image2D image @rgba16f, ivec2 pixel) {
+                return imageLoad(image, pixel);
+            }
+            """,
+            "vec4 value = readRegular(ms, ivec2(0));",
+            "resource parameter image of type texture2d<float, access::read_write>: "
+            "argument ms has texture2d_ms<float, access::read>",
+        ),
+        (
+            "image2DMSArray msArray @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(msArray, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument msArray has texture2d_ms_array<float, access::read>",
+        ),
+        (
+            "uimage2DMS counter @r32ui;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(counter, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument counter has texture2d_ms<uint, access::read>",
+        ),
+        (
+            "image2DMS ms @rgba16f;",
+            """
+            vec4 readMsArray(image2DMS images[2] @rgba16f, int index, ivec2 pixel, int sampleIndex) {
+                return imageLoad(images[index], pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMsArray(ms, 0, ivec2(0), 1);",
+            "resource parameter images of type array<texture2d_ms<float, access::read>, 2>: "
+            "argument ms has texture2d_ms<float, access::read>",
+        ),
+        (
+            "image2DMS images[2] @rgba16f;",
+            """
+            vec4 readMs(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                return imageLoad(image, pixel, sampleIndex);
+            }
+            """,
+            "vec4 value = readMs(images, ivec2(0), 1);",
+            "resource parameter image of type texture2d_ms<float, access::read>: "
+            "argument images has array<texture2d_ms<float, access::read>, 2>",
+        ),
+    ],
+)
+def test_metal_multisample_storage_image_helper_calls_reject_incompatible_resources(
+    resources, helper, call, match
+):
+    shader = f"""
+    shader MetalMultisampleStorageImageHelperCompatibility {{
+        {resources}
+
+        {helper}
+
+        compute {{
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
 
 
 def test_metal_storage_image_access_attributes_select_texture_access():
@@ -23866,6 +25844,132 @@ def test_metal_storage_image_access_rejects_invalid_operations(shader, match):
 
     with pytest.raises(ValueError, match=match):
         MetalCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            image2D alias = target;
+            float value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "requires read-capable storage image access for alias: got access::write",
+        ),
+        (
+            """
+            image2D alias = source;
+            imageStore(alias, ivec2(0, 0), vec4(1.0));
+            """,
+            "requires write-capable storage image access for alias: got access::read",
+        ),
+        (
+            """
+            uimage2D alias = readCounter;
+            uint value = imageAtomicAdd(alias, ivec2(0, 0), 1u);
+            """,
+            "requires read_write storage image access for alias: got access::read",
+        ),
+    ],
+)
+def test_metal_storage_image_local_aliases_preserve_access_for_validation(
+    statement, match
+):
+    shader = f"""
+    shader StorageImageLocalAliasAccess {{
+        image2D source @readonly;
+        image2D target @writeonly;
+        uimage2D readCounter @r32ui @readonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            let alias = target;
+            float value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "requires read-capable storage image access for alias: got access::write",
+        ),
+        (
+            """
+            let alias = source;
+            imageStore(alias, ivec2(0, 0), vec4(1.0));
+            """,
+            "requires write-capable storage image access for alias: got access::read",
+        ),
+        (
+            """
+            let alias = readCounter;
+            uint value = imageAtomicAdd(alias, ivec2(0, 0), 1u);
+            """,
+            "requires read_write storage image access for alias: got access::read",
+        ),
+    ],
+)
+def test_metal_storage_image_inferred_local_aliases_preserve_access_for_validation(
+    statement, match
+):
+    shader = f"""
+    shader StorageImageInferredLocalAliasAccess {{
+        image2D source @readonly;
+        image2D target @writeonly;
+        uimage2D readCounter @r32ui @readonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_storage_image_inferred_local_aliases_preserve_access_for_lowering():
+    shader = """
+    shader StorageImageInferredLocalAliasLowering {
+        image2D source @rgba32f @readonly;
+        image2D target @rgba32f @writeonly;
+
+        compute {
+            void main() {
+                let readAlias = source;
+                vec4 value = imageLoad(readAlias, ivec2(0, 0));
+                let writeAlias = target;
+                imageStore(writeAlias, ivec2(0, 0), value);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = MetalCodeGen().generate(ast)
+
+    assert "texture2d<float, access::read> readAlias = source;" in generated_code
+    assert "float4 value = readAlias.read(uint2(int2(0, 0)));" in generated_code
+    assert "texture2d<float, access::write> writeAlias = target;" in generated_code
+    assert "writeAlias.write(value, uint2(int2(0, 0)));" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
 
 
 def test_metal_storage_image_access_allows_compatible_helper_calls():

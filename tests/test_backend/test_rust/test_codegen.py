@@ -3951,6 +3951,431 @@ def test_gpu_resource_method_calls_convert_on_generic_impl_method_returned_recei
     assert ".buffer_store" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_chained_self_impl_method_members():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn clone_holder(&self) -> Self {
+            return self;
+        }
+    }
+
+    fn chained_self_impl_member_resource_methods(
+        holder: Holder<ColorTexture>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        return holder.clone_holder().resource.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_clone_holder(Holder<T> self)" in result
+    assert (
+        "return texture(Holder_clone_holder(holder).resource, sampler_state, uv);"
+        in result
+    )
+    assert ".sample_sampler" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_method_generic_impl_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(&self, value: T) -> T {
+            return value;
+        }
+    }
+
+    fn method_generic_impl_returned_resource_methods(
+        provider: Provider,
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = provider.pick(tex);
+        let local_values = provider.pick(values);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct_base = provider.pick(tex).sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + direct_base;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(Provider self, T value)" in result
+    assert "let local_tex = Provider_pick(provider, tex);" in result
+    assert "let local_values = Provider_pick(provider, values);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert (
+        "direct_base = texture(Provider_pick(provider, tex), sampler_state, uv);"
+        in result
+    )
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_indexed_impl_return_arrays():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resources: T[2],
+    }
+
+    impl<T> Holder<T> {
+        fn get_resources(&self) -> T[2] {
+            return self.resources;
+        }
+    }
+
+    fn indexed_impl_returned_resource_methods(
+        holder: Holder<ColorTexture>,
+        values_holder: Holder<RwBuffer<i32>>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = holder.get_resources()[index];
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct = holder.get_resources()[index].sample_sampler(sampler_state, uv);
+        let value = values_holder.get_resources()[index].buffer_load(index);
+        values_holder.get_resources()[index].buffer_store(index, value);
+        return base + direct;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T[2] Holder_get_resources(Holder<T> self)" in result
+    assert "let local_tex = Holder_get_resources(holder)[index];" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert (
+        "direct = texture(Holder_get_resources(holder)[index], sampler_state, uv);"
+        in result
+    )
+    assert (
+        "value = buffer_load(Holder_get_resources(values_holder)[index], index);"
+        in result
+    )
+    assert (
+        "buffer_store(Holder_get_resources(values_holder)[index], index, value);"
+        in result
+    )
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_associated_constructor_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn new(resource: T) -> Self {
+            return Holder { resource: resource };
+        }
+    }
+
+    fn associated_constructor_resource_methods(
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let holder = Holder::new(tex);
+        let base = holder.resource.sample_sampler(sampler_state, uv);
+        let direct = Holder::new(tex).resource.sample_sampler(sampler_state, uv);
+        let value = Holder::new(values).resource.buffer_load(index);
+        return base + direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_new(T resource)" in result
+    assert "let holder = Holder_new(tex);" in result
+    assert "base = texture(holder.resource, sampler_state, uv);" in result
+    assert "direct = texture(Holder_new(tex).resource, sampler_state, uv);" in result
+    assert "value = buffer_load(Holder_new(values).resource, index);" in result
+    assert "Holder::new" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_explicit_associated_constructor_types():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Holder<T> {
+        resource: T,
+    }
+
+    impl<T> Holder<T> {
+        fn new(resource: T) -> Self {
+            return Holder { resource: resource };
+        }
+    }
+
+    fn explicit_associated_constructor_resource_methods(
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let direct = Holder::<ColorTexture>::new(make_texture()).resource.sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let value = Holder::<RwBuffer<i32>>::new(make_values()).resource.buffer_load(index);
+        return direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "Holder<T> Holder_new(T resource)" in result
+    assert (
+        "direct = texture(Holder_new(make_texture()).resource, sampler_state, uv);"
+        in result
+    )
+    assert "value = buffer_load(Holder_new(make_values()).resource, index);" in result
+    assert "Holder::<ColorTexture>::new" not in result
+    assert "Holder::<RwBuffer<i32>>::new" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_static_method_generic_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(value: T) -> T {
+            return value;
+        }
+    }
+
+    fn static_method_generic_resource_methods(
+        tex: ColorTexture,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let local_tex = Provider::pick(tex);
+        let local_values = Provider::pick(values);
+        let base = local_tex.sample_sampler(sampler_state, uv);
+        let direct = Provider::pick(tex).sample_sampler(sampler_state, uv);
+        let value = local_values.buffer_load(index);
+        local_values.buffer_store(index, value);
+        return base + direct;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(T value)" in result
+    assert "let local_tex = Provider_pick(tex);" in result
+    assert "let local_values = Provider_pick(values);" in result
+    assert "base = texture(local_tex, sampler_state, uv);" in result
+    assert "direct = texture(Provider_pick(tex), sampler_state, uv);" in result
+    assert "value = buffer_load(local_values, index);" in result
+    assert "buffer_store(local_values, index, value);" in result
+    assert "Provider::pick" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_explicit_static_method_generic_returns():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    struct Provider {
+    }
+
+    impl Provider {
+        fn pick<T>(value: T) -> T {
+            return value;
+        }
+    }
+
+    fn explicit_static_method_generic_resource_methods(
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let direct = Provider::pick::<ColorTexture>(make_texture()).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let value = Provider::pick::<RwBuffer<i32>>(make_values()).buffer_load(index);
+        return direct + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_pick(T value)" in result
+    assert (
+        "direct = texture(Provider_pick(make_texture()), sampler_state, uv);" in result
+    )
+    assert "value = buffer_load(Provider_pick(make_values()), index);" in result
+    assert "Provider::pick<ColorTexture>" not in result
+    assert "Provider::pick<RwBuffer<i32>>" not in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
+def test_gpu_resource_method_calls_convert_on_branch_expression_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type Values = RwBuffer<i32>;
+
+    fn branch_expression_resource_methods(
+        flag: bool,
+        mode: u32,
+        left: ColorTexture,
+        right: ColorTexture,
+        values_left: Values,
+        values_right: Values,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let selected = if flag { left } else { right };
+        let local_base = selected.sample_sampler(sampler_state, uv);
+        let direct_base = (if flag { left } else { right }).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let block_selected = { if flag { left } else { right } };
+        let block_base = block_selected.sample_sampler(sampler_state, uv);
+        let direct_block_base = ({ if flag { left } else { right } }).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let matched = match mode {
+            0 => { left },
+            _ => { right },
+        };
+        let match_base = matched.sample_sampler(sampler_state, uv);
+        let direct_match_base = (match mode {
+            0 => left,
+            _ => right,
+        }).sample_sampler(sampler_state, uv);
+        let value = (if flag { values_left } else { values_right }).buffer_load(index);
+        let selected_values = match mode {
+            0 => values_left,
+            _ => values_right,
+        };
+        selected_values.buffer_store(index, value);
+        return local_base + direct_base + block_base + direct_block_base
+            + match_base + direct_match_base
+            + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let local_base = texture(selected, sampler_state, uv);" in result
+    assert (
+        "let direct_base = texture((flag ? left : right), sampler_state, uv);" in result
+    )
+    assert "let block_base = texture(block_selected, sampler_state, uv);" in result
+    assert (
+        "let direct_block_base = texture((flag ? left : right), sampler_state, uv);"
+        in result
+    )
+    assert "let match_base = texture(matched, sampler_state, uv);" in result
+    assert (
+        "let direct_match_base = texture(_rust_expr_value_0, sampler_state, uv);"
+        in result
+    )
+    assert (
+        "let value = buffer_load((flag ? values_left : values_right), index);" in result
+    )
+    assert "buffer_store(selected_values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_mixed_branch_resource_method_receivers_stay_unlowered():
+    code = """
+    fn mixed_branch_resource_methods(
+        flag: bool,
+        tex: Texture2D<f32>,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        let receiver = if flag { tex } else { values };
+        return receiver.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let receiver = (flag ? tex : values);" in result
+    assert "return receiver.sample_sampler(sampler_state, uv);" in result
+    assert "texture(receiver" not in result
+
+
+def test_unresolved_method_generic_impl_returns_stay_unlowered():
+    code = """
+    struct Provider {
+    }
+
+    impl Provider {
+        fn default_value<T>(&self) -> T {
+            return make_default();
+        }
+    }
+
+    fn unresolved_method_generic_impl_returned_resource(
+        provider: Provider,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        let local_tex = provider.default_value();
+        return local_tex.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "T Provider_default_value(Provider self)" in result
+    assert "let local_tex = Provider_default_value(provider);" in result
+    assert "return local_tex.sample_sampler(sampler_state, uv);" in result
+    assert "texture(local_tex" not in result
+
+
 def test_unresolved_generic_impl_method_returned_receivers_stay_unlowered():
     code = """
     struct Holder<T> {
@@ -5892,6 +6317,203 @@ def test_typed_noncapturing_closures_emit_helpers():
         crosstl.translator.parse(result)
     except Exception as e:
         pytest.fail(f"Typed noncapturing closure helper conversion failed: {e}")
+
+
+def test_typed_inline_closure_resource_parameters_convert_helpers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type Values = RwBuffer<i32>;
+
+    fn closure_resource_parameters(
+        tex: ColorTexture,
+        values: Values,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let apply_sample = |resource: ColorTexture| -> Vec4<f32> {
+            resource.sample_sampler(sampler_state, uv)
+        };
+        let apply_load = |buffer: Values| -> i32 {
+            buffer.buffer_load(index)
+        };
+        let base = apply_sample(tex);
+        let value = apply_load(values);
+        return base + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "let apply_sample = lambda(ColorTexture resource, "
+        "{ return texture(resource, sampler_state, uv); });"
+    ) in result
+    assert (
+        "let apply_load = lambda(Values buffer, "
+        "{ return buffer_load(buffer, index); });"
+    ) in result
+    assert "let base = apply_sample(tex);" in result
+    assert "let value = apply_load(values);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+
+
+def test_local_closure_names_shadow_resource_builtin_function_names():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn closure_named_like_builtin(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        fallback: Vec4<f32>,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let sample = |resource: ColorTexture| -> Vec4<f32> {
+            fallback
+        };
+        let sample_lod = |resource: ColorTexture, level: f32| -> Vec4<f32> {
+            fallback + Vec4::<f32>::new(level, 0.0, 0.0, 0.0)
+        };
+        let local_sample = sample(tex);
+        let local_lod = sample_lod(tex, lod);
+        let real_sample = tex.sample(uv);
+        return local_sample + local_lod + real_sample;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let local_sample = sample(tex);" in result
+    assert "let local_lod = sample_lod(tex, lod);" in result
+    assert "let real_sample = texture(tex, uv);" in result
+    assert "let local_sample = texture(tex);" not in result
+    assert "let local_lod = textureLod(tex, lod);" not in result
+
+
+def test_block_local_closure_names_do_not_shadow_resource_builtins_after_block():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn block_local_callable_shadowing(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        fallback: Vec4<f32>,
+        flag: bool,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let block_value = {
+            let sample = |resource: ColorTexture| -> Vec4<f32> {
+                fallback
+            };
+            sample(tex)
+        };
+        if flag {
+            let sample_lod = |resource: ColorTexture, level: f32| -> Vec4<f32> {
+                fallback + Vec4::<f32>::new(level, 0.0, 0.0, 0.0)
+            };
+            let branch_value = sample_lod(tex, lod);
+        }
+        let builtin_value = sample(tex, uv);
+        let builtin_lod = sample_lod(tex, lod);
+        return block_value + builtin_value + builtin_lod;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "block_value = sample(tex);" in result
+    assert "let branch_value = sample_lod(tex, lod);" in result
+    assert "let builtin_value = texture(tex, uv);" in result
+    assert "let builtin_lod = textureLod(tex, lod);" in result
+    assert "let builtin_value = sample(tex, uv);" not in result
+    assert "let builtin_lod = sample_lod(tex, lod);" not in result
+
+
+def test_block_local_function_items_shadow_resource_builtins_only_in_scope():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn block_local_function_item_shadowing(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        flag: bool,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let block_value = {
+            fn sample(resource: ColorTexture) -> Vec4<f32> {
+                return Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);
+            }
+            sample(tex)
+        };
+        if flag {
+            fn sample_lod(resource: ColorTexture, level: f32) -> Vec4<f32> {
+                return Vec4::<f32>::new(level, 0.0, 0.0, 0.0);
+            }
+            let branch_value = sample_lod(tex, lod);
+        }
+        let builtin_value = sample(tex, uv);
+        let builtin_lod = sample_lod(tex, lod);
+        return block_value + builtin_value + builtin_lod;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 _rust_local_sample_" in result
+    assert "vec4 _rust_local_sample_lod_" in result
+    assert "return vec4(1.0, 0.0, 0.0, 1.0);" in result
+    assert "return vec4(level, 0.0, 0.0, 0.0);" in result
+    assert "block_value = _rust_local_sample_" in result
+    assert "let branch_value = _rust_local_sample_lod_" in result
+    assert "let builtin_value = texture(tex, uv);" in result
+    assert "let builtin_lod = textureLod(tex, lod);" in result
+    assert "let builtin_value = _rust_local_sample_" not in result
+    assert "let builtin_lod = _rust_local_sample_lod_" not in result
+
+
+def test_forward_local_function_items_shadow_resource_builtins_in_scope():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn forward_local_function_item_shadowing(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        flag: bool,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let block_value = {
+            let before = sample(tex);
+            fn sample(resource: ColorTexture) -> Vec4<f32> {
+                return Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);
+            }
+            let after = sample(tex);
+            before + after
+        };
+        if flag {
+            let branch_value = sample_lod(tex, lod);
+            fn sample_lod(resource: ColorTexture, level: f32) -> Vec4<f32> {
+                return Vec4::<f32>::new(level, 0.0, 0.0, 0.0);
+            }
+        }
+        let builtin_value = sample(tex, uv);
+        let builtin_lod = sample_lod(tex, lod);
+        return block_value + builtin_value + builtin_lod;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 _rust_local_sample_" in result
+    assert "vec4 _rust_local_sample_lod_" in result
+    assert "let before = _rust_local_sample_" in result
+    assert "let after = _rust_local_sample_" in result
+    assert "let branch_value = _rust_local_sample_lod_" in result
+    assert "let builtin_value = texture(tex, uv);" in result
+    assert "let builtin_lod = textureLod(tex, lod);" in result
+    assert "let before = texture(tex);" not in result
+    assert "let builtin_value = _rust_local_sample_" not in result
+    assert "let builtin_lod = _rust_local_sample_lod_" not in result
 
 
 def test_typed_pattern_closures_emit_helpers():

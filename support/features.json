@@ -1928,10 +1928,13 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Unguarded literal/wildcard match arms lower to condition chains; guarded arms and richer pattern payloads are rejected.",
+          "notes": "Lowers literal/wildcard condition chains, guarded literal arms, guarded identifier bindings, enum identifier patterns, final struct destructuring arms, and qualified non-generic payload enum destructuring patterns. Generic enum wrappers, unqualified constructor patterns, incompatible struct patterns, and range-style patterns remain diagnostic-only.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_lowers_to_mojo_condition_chain",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_literal_arm_lowers_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_lowers_guarded_bindings_and_enum_identifier_patterns",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_lowers_payload_enum_destructuring_patterns",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_struct_destructuring_patterns_compile_with_mojo"
           ]
         },
         "rust": {
@@ -1995,16 +1998,17 @@
         "hip": {"status": "partial"},
         "mojo": {
           "status": "partial",
-          "notes": "Mojo codegen validates several unsupported enum, parameter/return semantic, buffer access/member-method, image-atomic, and match shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "Mojo codegen validates unsupported payload enum shapes, payload constructor arity, parameter/return semantic, buffer access/member-method, image-atomic, and unsupported match pattern shapes with deterministic errors; broader stage/resource validation remains incomplete.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enums_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_invalid_shapes_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_constructor_arity_is_validated_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_guarded_arm_is_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen"
           ]
         },
         "rust": {"status": "partial"},

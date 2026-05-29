@@ -77,6 +77,7 @@ class HipParser:
         "HIPBLOCKDIM": "blockDim",
         "HIPGRIDDIM": "gridDim",
     }
+    MEMBER_NAME_TOKENS = {"IDENTIFIER", "WARPSIZE"}
     FUNCTION_NAME_TOKENS = {"IDENTIFIER", *ATOMIC_FUNCTION_TOKENS}
     LAMBDA_SPECIFIER_TOKENS = {
         "__DEVICE__",
@@ -630,6 +631,7 @@ class HipParser:
         if self.match("IDENTIFIER"):
             name = self.current_token.value
             self.advance()
+            self.type_aliases.add(name)
 
         members = []
         if self.match("LBRACE"):
@@ -655,6 +657,7 @@ class HipParser:
         self.consume("CLASS")
 
         name = self.consume("IDENTIFIER").value
+        self.type_aliases.add(name)
 
         members = []
         if self.match("LBRACE"):
@@ -1395,11 +1398,11 @@ class HipParser:
                 expr = self.append_template_suffix(expr)
             elif self.match("DOT"):
                 self.consume("DOT")
-                member = self.consume("IDENTIFIER").value
+                member = self.parse_member_name()
                 expr = MemberAccessNode(expr, member, False)
             elif self.match("ARROW"):
                 self.consume("ARROW")
-                member = self.consume("IDENTIFIER").value
+                member = self.parse_member_name()
                 expr = MemberAccessNode(expr, member, True)
             elif self.match("LPAREN"):
                 self.consume("LPAREN")
@@ -1419,6 +1422,13 @@ class HipParser:
                 break
 
         return expr
+
+    def parse_member_name(self):
+        if self.match(*self.MEMBER_NAME_TOKENS):
+            member = self.current_token.value
+            self.advance()
+            return member
+        self.error("Expected member name")
 
     def is_sizeof_type_operand(self):
         saved_pos = self.pos
@@ -2318,6 +2328,7 @@ class HipParser:
             or has_qualified_suffix
             or type_value == "auto"
             or type_value in self.type_aliases
+            or self.is_hip_opaque_handle_type(type_value)
         )
         while (
             can_have_pointer_suffix
@@ -2333,6 +2344,13 @@ class HipParser:
             index = self.skip_postfix_type_qualifiers_at_pos(index)
 
         return self.skip_array_suffix_at_pos(index)
+
+    def is_hip_opaque_handle_type(self, type_name):
+        return (
+            isinstance(type_name, str)
+            and type_name.startswith("hip")
+            and type_name.endswith("_t")
+        )
 
     def skip_postfix_type_qualifiers_at_pos(self, index):
         while (

@@ -367,6 +367,7 @@ WAVE_OPS_HLSL = textwrap.dedent("""
         uint prefixCount = WavePrefixCountBits(predicate);
         uint4 matchMask = WaveMatch(value);
         uint multiSum = WaveMultiPrefixSum(value, ballot);
+        uint multiCount = WaveMultiPrefixCountBits(predicate, ballot);
         uint multiProduct = WaveMultiPrefixProduct(value, ballot);
         uint multiAnd = WaveMultiPrefixBitAnd(value, ballot);
         uint multiOr = WaveMultiPrefixBitOr(value, ballot);
@@ -375,12 +376,15 @@ WAVE_OPS_HLSL = textwrap.dedent("""
         uint quadY = QuadReadAcrossY(value);
         uint quadDiag = QuadReadAcrossDiagonal(value);
         uint quadLane = QuadReadLaneAt(value, 2u);
+        bool quadAny = QuadAny(predicate);
+        bool quadAll = QuadAll(predicate);
         return lane + laneCount + sum + product + minimum + maximum + laneValue
             + firstValue + prefixSum + prefixProduct + matchMask.x + multiSum
-            + multiProduct + multiAnd + multiOr + multiXor + quadX + quadY
-            + quadDiag + quadLane + ballot.x + countBits + prefixCount
-            + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
-            + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u);
+            + multiCount + multiProduct + multiAnd + multiOr + multiXor
+            + quadX + quadY + quadDiag + quadLane + ballot.x + countBits
+            + prefixCount + (first ? 1u : 0u) + (allTrue ? 1u : 0u)
+            + (anyTrue ? 1u : 0u) + (allEqual ? 1u : 0u)
+            + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
     }
     """).strip()
 
@@ -701,6 +705,36 @@ def test_codegen_mesh_dispatch_mesh_id_semantic_roundtrip():
     assert "gl_LocalInvocationIndex" not in hlsl
 
 
+def test_codegen_mesh_view_id_semantic_roundtrip():
+    code = textwrap.dedent("""
+        struct VertexOut {
+            float4 position : SV_Position;
+        };
+
+        [shader("mesh")]
+        [numthreads(32, 1, 1)]
+        [outputtopology("triangle")]
+        void MSMain(
+            uint viewId : SV_ViewID,
+            out vertices VertexOut verts[3],
+            out indices uint3 tris[1]
+        ) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = float4(float(viewId), 0.0, 0.0, 1.0);
+            tris[0] = uint3(0, 1, 2);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "uint viewId @ gl_ViewID" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "uint viewId : SV_ViewID" in hlsl
+    assert "gl_ViewID" not in hlsl
+
+
 def test_codegen_raytracing_stage():
     output = generate_crossgl(RAYTRACING_HLSL)
     assert "ray_generation" in output.lower()
@@ -768,6 +802,34 @@ def test_codegen_extra_attributes_emitted():
     assert "@ allow_uav_condition" in lowered
 
 
+def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [WaveOpsIncludeHelperLanes]
+        float4 main(bool predicate : TEXCOORD0) : SV_Target0 {
+            return QuadAny(predicate) ? 1.0.xxxx : 0.0.xxxx;
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ WaveOpsIncludeHelperLanes" in output
+    assert "QuadAny(predicate)" in output
+
+
+def test_codegen_wave_size_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [WaveSize(32)]
+        [numthreads(8, 1, 1)]
+        void main(uint3 tid : SV_DispatchThreadID) {
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ WaveSize(32)" in output
+    assert "@ numthreads(8, 1, 1)" in output
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output
@@ -828,6 +890,7 @@ def test_codegen_wave_ops_passthrough():
         "WavePrefixCountBits(predicate)",
         "WaveMatch(value)",
         "WaveMultiPrefixSum(value, ballot)",
+        "WaveMultiPrefixCountBits(predicate, ballot)",
         "WaveMultiPrefixProduct(value, ballot)",
         "WaveMultiPrefixBitAnd(value, ballot)",
         "WaveMultiPrefixBitOr(value, ballot)",
@@ -836,6 +899,8 @@ def test_codegen_wave_ops_passthrough():
         "QuadReadAcrossY(value)",
         "QuadReadAcrossDiagonal(value)",
         "QuadReadLaneAt(value, 2)",
+        "QuadAny(predicate)",
+        "QuadAll(predicate)",
     ]:
         assert intrinsic in output
     assert "uvec4 ballot = WaveActiveBallot(predicate);" in output
@@ -2316,6 +2381,308 @@ def test_codegen_resource_array_spaces_roundtrip_for_srv_uav_and_typed_buffers()
     assert "atomicAdd(counters" not in hlsl
 
 
+def test_codegen_nonuniform_resource_index_descriptor_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Texture2D<float4> textures[4] : register(t0, space1);
+        SamplerState samplers[4] : register(s0, space1);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            uint materialIndex : TEXCOORD1,
+            uint samplerIndex : TEXCOORD2
+        ) : SV_Target0 {
+            uint textureIndex = NonUniformResourceIndex(materialIndex);
+            uint samplerSlot = NonUniformResourceIndex(samplerIndex);
+            return textures[textureIndex].Sample(samplers[samplerSlot], uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2D textures[4];" in crossgl
+    assert "sampler samplers[4];" in crossgl
+    assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in crossgl
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in crossgl
+    assert "texture(textures[textureIndex], samplers[samplerSlot], uv)" in crossgl
+    assert ".Sample(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D textures[4] : register(t0, space1);" in hlsl
+    assert "SamplerState samplers[4] : register(s0, space1);" in hlsl
+    assert "uint textureIndex = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint samplerSlot = NonUniformResourceIndex(samplerIndex);" in hlsl
+    assert "textures[textureIndex].Sample(samplers[samplerSlot], uv)" in hlsl
+    assert "float textureIndex" not in hlsl
+    assert "float samplerSlot" not in hlsl
+
+
+def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Texture2D<float4> textures[][4] : register(t0, space2);
+        SamplerState samplers[] : register(s0, space2);
+
+        float4 main(
+            float2 uv : TEXCOORD0,
+            uint materialIndex : TEXCOORD1,
+            uint tileIndex : TEXCOORD2
+        ) : SV_Target0 {
+            uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);
+            uint nonUniformTile = NonUniformResourceIndex(tileIndex);
+            return textures[nonUniformMaterial][nonUniformTile].Sample(
+                samplers[nonUniformMaterial],
+                uv
+            );
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2D textures[][4];" in crossgl
+    assert "sampler samplers[];" in crossgl
+    assert (
+        "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
+    )
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
+    assert (
+        "texture(textures[nonUniformMaterial][nonUniformTile], "
+        "samplers[nonUniformMaterial], uv)" in crossgl
+    )
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D textures[][4] : register(t0, space2);" in hlsl
+    assert "SamplerState samplers[] : register(s0, space2);" in hlsl
+    assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
+    assert (
+        "textures[nonUniformMaterial][nonUniformTile].Sample("
+        "samplers[nonUniformMaterial], uv)" in hlsl
+    )
+    assert "float nonUniformMaterial" not in hlsl
+    assert "float nonUniformTile" not in hlsl
+
+
+def test_codegen_feedback_texture_arrays_preserve_feedback_kind_and_uav_registers():
+    code = textwrap.dedent("""
+        Texture2D<float4> pairedTextures[2] : register(t0, space9);
+        SamplerState linearSampler : register(s0, space9);
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : register(u0, space9);
+        FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : register(u2, space9);
+
+        void main(float2 uv : TEXCOORD0, uint materialIndex : TEXCOORD1) {
+            uint slot = NonUniformResourceIndex(materialIndex);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(t0, space9)" in crossgl
+    assert "sampler2D pairedTextures[2];" in crossgl
+    assert "@ register(u0, space9)" in crossgl
+    assert "feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2];" in crossgl
+    assert "@ register(u2, space9)" in crossgl
+    assert (
+        "feedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[];"
+        in crossgl
+    )
+    assert "uint slot = NonUniformResourceIndex(materialIndex);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Texture2D pairedTextures[2] : register(t0, space9);" in hlsl
+    assert "SamplerState linearSampler : register(s0, space9);" in hlsl
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : "
+        "register(u0, space9);" in hlsl
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : "
+        "register(u2, space9);" in hlsl
+    )
+    assert "uint slot = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "feedbackTexture2D" not in hlsl
+    assert "feedbackTexture2DArray" not in hlsl
+
+
+def test_codegen_feedback_texture_write_methods_roundtrip_to_canonical_helpers():
+    code = textwrap.dedent("""
+        Texture2D<float4> pairedTexture : register(t0, space10);
+        Texture2DArray<float4> pairedLayers : register(t1, space10);
+        SamplerState pairedSampler : register(s0, space10);
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : register(u0, space10);
+        FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : register(u2, space10);
+
+        float4 main(float2 uv : TEXCOORD0, float layer : TEXCOORD1, uint feedbackIndex : TEXCOORD2) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(feedbackIndex);
+            float2 ddxValue = float2(0.25, 0.0);
+            float2 ddyValue = float2(0.0, 0.25);
+            float3 uvLayer = float3(uv, layer);
+            feedbackMin[slot].WriteSamplerFeedback(pairedTexture, pairedSampler, uv);
+            feedbackMin[slot].WriteSamplerFeedbackBias(pairedTexture, pairedSampler, uv, 0.5);
+            feedbackMin[slot].WriteSamplerFeedbackGrad(pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+            feedbackMin[slot].WriteSamplerFeedbackLevel(pairedTexture, pairedSampler, uv, 2.0);
+            feedbackUsed[slot].WriteSamplerFeedbackLevel(pairedLayers, pairedSampler, uvLayer, 1.0);
+            return pairedTexture.Sample(pairedSampler, uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "write_sampler_feedback(feedbackMin[slot], pairedTexture, pairedSampler, uv);"
+        in crossgl
+    )
+    assert (
+        "write_sampler_feedback_bias("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, 0.5);" in crossgl
+    )
+    assert (
+        "write_sampler_feedback_grad("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, ddxValue, ddyValue);"
+        in crossgl
+    )
+    assert (
+        "write_sampler_feedback_level("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, 2.0);" in crossgl
+    )
+    assert (
+        "write_sampler_feedback_level("
+        "feedbackUsed[slot], pairedLayers, pairedSampler, uvLayer, 1.0);" in crossgl
+    )
+    assert ".WriteSamplerFeedback" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : "
+        "register(u0, space10);" in hlsl
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : "
+        "register(u2, space10);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedback(pairedTexture, pairedSampler, uv);"
+        in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackBias("
+        "pairedTexture, pairedSampler, uv, 0.5);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in hlsl
+    )
+    assert (
+        "feedbackUsed[slot].WriteSamplerFeedbackLevel("
+        "pairedLayers, pairedSampler, uvLayer, 1.0);" in hlsl
+    )
+    assert "write_sampler_feedback" not in hlsl
+
+
+def test_codegen_nonuniform_resource_index_typed_and_raw_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        StructuredBuffer<float4> positions[4] : register(t0, space3);
+        RWStructuredBuffer<float4> outPositions[4] : register(u0, space3);
+        ByteAddressBuffer rawBuffers[4] : register(t4, space3);
+        RWByteAddressBuffer rwRawBuffers[4] : register(u4, space3);
+
+        float4 main(
+            uint materialIndex : TEXCOORD0,
+            uint outputIndex : TEXCOORD1
+        ) : SV_Target0 {
+            uint src = NonUniformResourceIndex(materialIndex);
+            uint dst = NonUniformResourceIndex(outputIndex);
+            float4 value = positions[src][0];
+            outPositions[dst][0] = value;
+            uint raw = rawBuffers[src].Load(0);
+            rwRawBuffers[dst].Store(0, raw);
+            return value + float4(raw & 1u, 0, 0, 0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "StructuredBuffer<float4> positions[4];" in crossgl
+    assert "RWStructuredBuffer<float4> outPositions[4];" in crossgl
+    assert "ByteAddressBuffer rawBuffers[4];" in crossgl
+    assert "RWByteAddressBuffer rwRawBuffers[4];" in crossgl
+    assert "uint src = NonUniformResourceIndex(materialIndex);" in crossgl
+    assert "uint dst = NonUniformResourceIndex(outputIndex);" in crossgl
+    assert "vec4 value = positions[src][0];" in crossgl
+    assert "outPositions[dst][0] = value;" in crossgl
+    assert "uint raw = buffer_load(rawBuffers[src], 0);" in crossgl
+    assert "buffer_store(rwRawBuffers[dst], 0, raw);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "StructuredBuffer<float4> positions[4] : register(t0, space3);" in hlsl
+    assert "RWStructuredBuffer<float4> outPositions[4] : register(u0, space3);" in hlsl
+    assert "ByteAddressBuffer rawBuffers[4] : register(t4, space3);" in hlsl
+    assert "RWByteAddressBuffer rwRawBuffers[4] : register(u4, space3);" in hlsl
+    assert "uint src = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint dst = NonUniformResourceIndex(outputIndex);" in hlsl
+    assert "float4 value = positions[src][0];" in hlsl
+    assert "outPositions[dst][0] = value;" in hlsl
+    assert "uint raw = rawBuffers[src].Load(0);" in hlsl
+    assert "rwRawBuffers[dst].Store(0, raw);" in hlsl
+    assert "float src" not in hlsl
+    assert "float dst" not in hlsl
+    assert "buffer_load(" not in hlsl
+    assert "buffer_store(" not in hlsl
+
+
+def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Buffer<float4> coefficients[][2] : register(t0, space4);
+        RWBuffer<uint> counters[] : register(u0, space4);
+
+        float4 main(
+            uint materialIndex : TEXCOORD0,
+            uint tileIndex : TEXCOORD1
+        ) : SV_Target0 {
+            uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);
+            uint nonUniformTile = NonUniformResourceIndex(tileIndex);
+            float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];
+            uint oldValue;
+            InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);
+            return value + float4(oldValue, 0, 0, 0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "Buffer<float4> coefficients[][2];" in crossgl
+    assert "RWBuffer<uint> counters[];" in crossgl
+    assert (
+        "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
+    )
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
+    assert (
+        "vec4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in crossgl
+    )
+    assert "oldValue = atomicAdd(counters[nonUniformMaterial][0], 1u);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Buffer<float4> coefficients[][2] : register(t0, space4);" in hlsl
+    assert "RWBuffer<uint> counters[] : register(u0, space4);" in hlsl
+    assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
+    assert "float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in (
+        hlsl
+    )
+    assert "InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);" in hlsl
+    assert "float nonUniformMaterial" not in hlsl
+    assert "float nonUniformTile" not in hlsl
+    assert "atomicAdd(" not in hlsl
+
+
 def test_codegen_append_consume_structured_buffers_roundtrip():
     code = textwrap.dedent("""
         AppendStructuredBuffer<int> appendValues : register(u1);
@@ -2346,6 +2713,183 @@ def test_codegen_append_consume_structured_buffers_roundtrip():
     assert "int consumed = consumeValues.Consume();" in hlsl
     assert "buffer_append(" not in hlsl
     assert "buffer_consume(" not in hlsl
+
+
+def test_codegen_append_consume_structured_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        AppendStructuredBuffer<int> appendValues[4] : register(u0, space5);
+        ConsumeStructuredBuffer<int> consumeValues[4] : register(u4, space5);
+
+        void main(uint queueIndex : TEXCOORD0, uint value : TEXCOORD1) {
+            uint slot = NonUniformResourceIndex(queueIndex);
+            appendValues[slot].Append(int(value));
+            int consumed = consumeValues[slot].Consume();
+            appendValues[slot].Append(consumed + 1);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space5)" in crossgl
+    assert "AppendStructuredBuffer<int> appendValues[4];" in crossgl
+    assert "@ register(u4, space5)" in crossgl
+    assert "ConsumeStructuredBuffer<int> consumeValues[4];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "buffer_append(appendValues[slot], int(value));" in crossgl
+    assert "int consumed = buffer_consume(consumeValues[slot]);" in crossgl
+    assert "buffer_append(appendValues[slot], consumed + 1);" in crossgl
+    assert ".Append(" not in crossgl
+    assert ".Consume(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "AppendStructuredBuffer<int> appendValues[4] : register(u0, space5);" in hlsl
+    assert (
+        "ConsumeStructuredBuffer<int> consumeValues[4] : register(u4, space5);" in hlsl
+    )
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "appendValues[slot].Append(int(value));" in hlsl
+    assert "int consumed = consumeValues[slot].Consume();" in hlsl
+    assert "appendValues[slot].Append((consumed + 1));" in hlsl
+    assert "float slot" not in hlsl
+    assert "buffer_append(" not in hlsl
+    assert "buffer_consume(" not in hlsl
+
+
+def test_codegen_append_consume_multidimensional_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        AppendStructuredBuffer<uint> appendQueues[][2] : register(u0, space6);
+        ConsumeStructuredBuffer<uint> consumeQueues[] : register(u8, space6);
+
+        uint main(uint queueIndex : TEXCOORD0, uint laneIndex : TEXCOORD1) : SV_Target0 {
+            uint queue = NonUniformResourceIndex(queueIndex);
+            uint lane = NonUniformResourceIndex(laneIndex);
+            uint consumed = consumeQueues[queue].Consume();
+            appendQueues[queue][lane].Append(consumed + lane);
+            return consumed;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space6)" in crossgl
+    assert "AppendStructuredBuffer<uint> appendQueues[][2];" in crossgl
+    assert "@ register(u8, space6)" in crossgl
+    assert "ConsumeStructuredBuffer<uint> consumeQueues[];" in crossgl
+    assert "uint queue = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "uint lane = NonUniformResourceIndex(laneIndex);" in crossgl
+    assert "uint consumed = buffer_consume(consumeQueues[queue]);" in crossgl
+    assert "buffer_append(appendQueues[queue][lane], consumed + lane);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "AppendStructuredBuffer<uint> appendQueues[][2] : register(u0, space6);" in hlsl
+    )
+    assert "ConsumeStructuredBuffer<uint> consumeQueues[] : register(u8, space6);" in (
+        hlsl
+    )
+    assert "uint queue = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "uint lane = NonUniformResourceIndex(laneIndex);" in hlsl
+    assert "uint consumed = consumeQueues[queue].Consume();" in hlsl
+    assert "appendQueues[queue][lane].Append((consumed + lane));" in hlsl
+    assert "float queue" not in hlsl
+    assert "float lane" not in hlsl
+    assert "buffer_append(" not in hlsl
+    assert "buffer_consume(" not in hlsl
+
+
+def test_codegen_rwstructured_buffer_counter_methods_roundtrip():
+    code = textwrap.dedent("""
+        RWStructuredBuffer<uint> counters[2] : register(u0, space7);
+
+        uint main(uint queueIndex : TEXCOORD0) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(queueIndex);
+            uint nextIndex = counters[slot].IncrementCounter();
+            uint oldIndex = counters[slot].DecrementCounter();
+            counters[slot][nextIndex] = oldIndex;
+            return nextIndex + oldIndex;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space7)" in crossgl
+    assert "RWStructuredBuffer<uint> counters[2];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "uint nextIndex = buffer_increment_counter(counters[slot]);" in crossgl
+    assert "uint oldIndex = buffer_decrement_counter(counters[slot]);" in crossgl
+    assert "counters[slot][nextIndex] = oldIndex;" in crossgl
+    assert ".IncrementCounter(" not in crossgl
+    assert ".DecrementCounter(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "RWStructuredBuffer<uint> counters[2] : register(u0, space7);" in hlsl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "uint nextIndex = counters[slot].IncrementCounter();" in hlsl
+    assert "uint oldIndex = counters[slot].DecrementCounter();" in hlsl
+    assert "counters[slot][nextIndex] = oldIndex;" in hlsl
+    assert "float nextIndex" not in hlsl
+    assert "float oldIndex" not in hlsl
+    assert "buffer_increment_counter(" not in hlsl
+    assert "buffer_decrement_counter(" not in hlsl
+
+
+def test_codegen_buffer_get_dimensions_array_receivers_roundtrip():
+    code = textwrap.dedent("""
+        StructuredBuffer<float4> sourceBuffers[3] : register(t0, space8);
+        RWStructuredBuffer<uint> outputBuffers[3] : register(u0, space8);
+        ByteAddressBuffer rawInputs[3] : register(t3, space8);
+        RWByteAddressBuffer rawOutputs[3] : register(u3, space8);
+
+        uint main(uint bufferIndex : TEXCOORD0) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(bufferIndex);
+            uint sourceCount;
+            uint sourceStride;
+            uint outputCount;
+            uint outputStride;
+            uint rawInputBytes;
+            uint rawOutputBytes;
+            sourceBuffers[slot].GetDimensions(sourceCount, sourceStride);
+            outputBuffers[slot].GetDimensions(outputCount, outputStride);
+            rawInputs[slot].GetDimensions(rawInputBytes);
+            rawOutputs[slot].GetDimensions(rawOutputBytes);
+            return sourceCount + sourceStride + outputCount + outputStride
+                + rawInputBytes + rawOutputBytes;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "StructuredBuffer<float4> sourceBuffers[3];" in crossgl
+    assert "RWStructuredBuffer<uint> outputBuffers[3];" in crossgl
+    assert "ByteAddressBuffer rawInputs[3];" in crossgl
+    assert "RWByteAddressBuffer rawOutputs[3];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(bufferIndex);" in crossgl
+    assert (
+        "buffer_dimensions(sourceBuffers[slot], sourceCount, sourceStride);" in crossgl
+    )
+    assert (
+        "buffer_dimensions(outputBuffers[slot], outputCount, outputStride);" in crossgl
+    )
+    assert "buffer_dimensions(rawInputs[slot], rawInputBytes);" in crossgl
+    assert "buffer_dimensions(rawOutputs[slot], rawOutputBytes);" in crossgl
+    assert ".GetDimensions(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "StructuredBuffer<float4> sourceBuffers[3] : register(t0, space8);" in hlsl
+    assert "RWStructuredBuffer<uint> outputBuffers[3] : register(u0, space8);" in hlsl
+    assert "ByteAddressBuffer rawInputs[3] : register(t3, space8);" in hlsl
+    assert "RWByteAddressBuffer rawOutputs[3] : register(u3, space8);" in hlsl
+    assert "uint slot = NonUniformResourceIndex(bufferIndex);" in hlsl
+    assert "sourceBuffers[slot].GetDimensions(sourceCount, sourceStride);" in hlsl
+    assert "outputBuffers[slot].GetDimensions(outputCount, outputStride);" in hlsl
+    assert "rawInputs[slot].GetDimensions(rawInputBytes);" in hlsl
+    assert "rawOutputs[slot].GetDimensions(rawOutputBytes);" in hlsl
+    assert "float slot" not in hlsl
+    assert "buffer_dimensions(" not in hlsl
 
 
 def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():

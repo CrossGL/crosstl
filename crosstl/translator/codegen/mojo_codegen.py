@@ -25,6 +25,7 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     IfNode,
     IdentifierPatternNode,
     LiteralPatternNode,
@@ -52,6 +53,20 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
+from .enum_utils import (
+    build_generic_enum_specialization,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_parameter_names,
+    enum_constant_name,
+    enum_struct_fields,
+    enum_variant_constructor_name,
+    enum_variant_payload_fields,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
+    type_node_contains_generic_parameter,
+)
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -867,13 +882,25 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_return_resource_aliases = {}
+        self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_variant_names = {}
+        self.enum_unit_variant_constructors = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -911,12 +938,15 @@ class MojoCodeGen:
         self.required_saturate_helpers = set()
         self.current_return_type = None
         self.current_shader = None
+        self.expression_identifier_replacements = {}
         self.do_while_contexts = []
         self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
         self.match_expression_counter = 0
+        self.match_subject_counter = 0
         self.dimension_query_counter = 0
         self.expression_prelude_stack = []
         self.type_mapping = {
@@ -947,6 +977,7 @@ class MojoCodeGen:
             "min16float": "Float16",
             "bool": "Bool",
             "string": "String",
+            "str": "String",
             "char": "String",
             **{
                 name: f"SIMD[{dtype}, {storage_width}]"
@@ -1056,13 +1087,25 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_return_resource_aliases = {}
+        self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_variant_names = {}
+        self.enum_unit_variant_constructors = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -1099,15 +1142,17 @@ class MojoCodeGen:
         self.required_fract_helpers = set()
         self.required_saturate_helpers = set()
         self.current_return_type = None
+        self.expression_identifier_replacements = {}
         self.do_while_contexts = []
         self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
         self.match_expression_counter = 0
+        self.match_subject_counter = 0
         self.dimension_query_counter = 0
         self.expression_prelude_stack = []
-        self.collect_function_return_types(ast)
 
         header = "# Generated Mojo Shader Code\n"
         header += "from math import *\n"
@@ -1116,11 +1161,18 @@ class MojoCodeGen:
         code = ""
 
         structs = getattr(ast, "structs", [])
+        self.prepare_generic_enum_metadata(ast, structs)
+        self.collect_function_return_types(ast)
         for node in structs:
             if isinstance(node, EnumNode):
                 code += self.generate_enum(node)
-                continue
+        code += self.generate_generic_payload_enum_constants()
+        code += self.generate_generic_payload_enum_structs()
+        code += self.generate_generic_payload_enum_constructors()
+        for node in structs:
             if isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
                 code += self.generate_struct(node)
 
         global_vars = getattr(ast, "global_variables", [])
@@ -1181,6 +1233,8 @@ class MojoCodeGen:
             code += "# Constant Buffers\n"
             code += self.generate_cbuffers(ast)
 
+        self.collect_function_return_types(ast)
+
         functions = getattr(ast, "functions", [])
         for func in functions:
             # Handle both old and new AST function structures
@@ -1203,12 +1257,19 @@ class MojoCodeGen:
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
+            emitted_stage_local_variables = set()
+            emitted_stage_local_structs = set(self.struct_types)
             emitted_local_functions = set()
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
                     stage_name = self.stage_type_name(stage_type)
                     self.validate_stage_type(stage_name)
                     code += f"# {stage_name.title()} Shader\n"
+                    code += self.generate_stage_local_declarations(
+                        stage,
+                        emitted_stage_local_variables,
+                        emitted_stage_local_structs,
+                    )
                     for func in getattr(stage, "local_functions", []):
                         if id(func) in emitted_local_functions:
                             continue
@@ -1234,6 +1295,88 @@ class MojoCodeGen:
                 f"supported compile-smoke stages are {supported}"
             )
 
+    def generate_stage_local_declarations(
+        self,
+        stage,
+        emitted_stage_local_variables,
+        emitted_stage_local_structs,
+    ):
+        code = ""
+        for node in getattr(stage, "local_structs", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_struct(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_cbuffers", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_resource_metadata_comment(
+                    node, getattr(node, "name", None), kind="cbuffer"
+                )
+                code += self.generate_struct(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_variables", []) or []:
+            code += self.generate_stage_local_variable_declaration(
+                node, emitted_stage_local_variables
+            )
+        return code
+
+    def generate_stage_local_variable_declaration(
+        self, node, emitted_stage_local_variables
+    ):
+        if isinstance(node, ArrayNode):
+            variable_type = self.array_type_name(
+                node.element_type, get_array_size_from_node(node)
+            )
+            self.register_variable_type(node.name, variable_type)
+            key = (node.name, variable_type)
+            if key in emitted_stage_local_variables:
+                return ""
+            emitted_stage_local_variables.add(key)
+            return self.generate_array_declaration(node)
+
+        variable_type = self.variable_declared_type(node) or "float"
+        self.register_variable_type(getattr(node, "name", None), variable_type)
+        self.register_resource_access_metadata(node, variable_type)
+        key = (getattr(node, "name", None), variable_type)
+        if key in emitted_stage_local_variables:
+            return ""
+        emitted_stage_local_variables.add(key)
+
+        if getattr(node, "initial_value", None) is not None:
+            self.validate_expression_target_shape(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            init_expr = self.generate_expression(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            return (
+                f"{self.generate_resource_metadata_comment(node, variable_type)}"
+                f"var {node.name}: {self.map_type(variable_type)} = {init_expr}\n"
+            )
+
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        if self.is_array_type_name(variable_type):
+            return (
+                f"{resource_comment}var {node.name} = "
+                f"{self.array_initial_value_for_type(variable_type)}\n"
+            )
+        if self.is_struct_type_name(variable_type):
+            return f"{resource_comment}var {node.name} = {self.zero_value_for_type(variable_type)}\n"
+        if self.is_resource_type_name(variable_type):
+            mapped_type = self.map_type(variable_type)
+            return (
+                f"{resource_comment}var {node.name}: {mapped_type} = "
+                f"{self.zero_value_for_type(variable_type)}\n"
+            )
+        return f"var {node.name}: {self.map_type(variable_type)}\n"
+
     def collect_function_return_types(self, ast):
         functions = list(getattr(ast, "functions", []))
         stages = getattr(ast, "stages", {})
@@ -1246,6 +1389,15 @@ class MojoCodeGen:
 
         for func in functions:
             self.register_function_return_type(func)
+
+        for _ in range(max(1, len(functions))):
+            changed = False
+            for func in functions:
+                changed = (
+                    self.register_function_return_resource_aliases(func) or changed
+                )
+            if not changed:
+                break
 
     def register_function_return_type(self, func):
         if not hasattr(func, "name"):
@@ -1261,6 +1413,457 @@ class MojoCodeGen:
             for param in getattr(func, "parameters", getattr(func, "params", []))
         ]
 
+    def register_function_return_resource_aliases(self, func):
+        if not hasattr(func, "name"):
+            return False
+
+        return_type = self.function_return_types.get(func.name)
+        if not self.function_return_resource_aliasable_type(return_type):
+            return False
+
+        params = getattr(func, "parameters", getattr(func, "params", []))
+        param_indices = {
+            getattr(param, "name", None): index
+            for index, param in enumerate(params)
+            if getattr(param, "name", None)
+        }
+        aliases = []
+        static_aliases = []
+        field_aliases = []
+        for return_node in self.return_nodes(getattr(func, "body", [])):
+            value = getattr(return_node, "value", None)
+            for index in self.return_resource_alias_param_indices(
+                value, param_indices, target_type=return_type
+            ):
+                if index not in aliases:
+                    aliases.append(index)
+            for ref in self.return_resource_alias_field_paths(
+                value, param_indices, target_type=return_type
+            ):
+                if ref not in field_aliases:
+                    field_aliases.append(ref)
+            for candidate in self.return_resource_static_alias_candidates(
+                value, param_indices, target_type=return_type
+            ):
+                if candidate not in static_aliases:
+                    static_aliases.append(candidate)
+        if (
+            aliases == self.function_return_resource_aliases.get(func.name)
+            and static_aliases
+            == self.function_return_resource_static_aliases.get(func.name)
+            and field_aliases
+            == self.function_return_resource_field_aliases.get(func.name)
+        ):
+            return False
+        if aliases:
+            self.function_return_resource_aliases[func.name] = aliases
+        else:
+            self.function_return_resource_aliases.pop(func.name, None)
+        if field_aliases:
+            self.function_return_resource_field_aliases[func.name] = field_aliases
+        else:
+            self.function_return_resource_field_aliases.pop(func.name, None)
+        if static_aliases:
+            self.function_return_resource_static_aliases[func.name] = static_aliases
+        else:
+            self.function_return_resource_static_aliases.pop(func.name, None)
+        return True
+
+    def return_nodes(self, body):
+        nodes = []
+        for stmt in self.body_statements(body):
+            self.collect_return_nodes(stmt, nodes)
+        return nodes
+
+    def collect_return_nodes(self, node, nodes):
+        if node is None:
+            return
+        if isinstance(node, ReturnNode):
+            nodes.append(node)
+            return
+        for child in self.node_children(node):
+            self.collect_return_nodes(child, nodes)
+
+    def function_return_resource_aliasable_type(self, return_type):
+        return self.resource_access_aliasable_type(return_type)
+
+    def return_resource_alias_param_indices(
+        self, expr, param_indices, target_type=None
+    ):
+        if isinstance(expr, list):
+            return []
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [param_indices[root_name]]
+
+        if isinstance(expr, TernaryOpNode):
+            indices = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for index in self.return_resource_alias_param_indices(
+                    branch, param_indices, target_type=target_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, MatchNode):
+            indices = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arm_expr, param_indices, target_type=target_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_param_indices_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        return []
+
+    def return_resource_alias_param_indices_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            indices = []
+            for arg, (_field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arg, param_indices, target_type=field_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return []
+
+        indices = []
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            for index in self.return_resource_alias_param_indices(
+                expr.args[alias_index], param_indices
+            ):
+                if index not in indices:
+                    indices.append(index)
+        return indices
+
+    def return_resource_alias_field_paths(self, expr, param_indices, target_type=None):
+        if isinstance(expr, list):
+            return []
+
+        target_type = self.type_name(target_type)
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [
+                (path, param_indices[root_name], path)
+                for path in self.resource_aliasable_field_paths_for_type(target_type)
+            ]
+
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths(
+                    branch, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths(
+                    arm_expr, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_field_paths_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        return []
+
+    def return_resource_alias_field_paths_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        refs = []
+
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            for arg, (field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for (
+                    return_path,
+                    alias_index,
+                    arg_path,
+                ) in self.return_resource_alias_field_paths(
+                    arg, param_indices, target_type=field_type
+                ):
+                    path = f"{field_name}.{return_path}" if return_path else field_name
+                    ref = (path, alias_index, arg_path)
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        struct_refs = self.return_struct_constructor_resource_field_alias_paths(
+            expr, param_indices, target_type
+        )
+        if struct_refs:
+            return struct_refs
+
+        callee_refs = self.function_return_resource_field_aliases.get(func_name) or []
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, callee_arg_path in callee_refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            for (
+                current_index,
+                current_arg_path,
+            ) in self.return_resource_alias_field_paths_for_relative_path(
+                expr.args[alias_index],
+                param_indices,
+                callee_arg_path,
+                arg_type,
+            ):
+                ref = (return_path, current_index, current_arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_struct_constructor_resource_field_alias_paths(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type = target_base if target_base in self.struct_types else func_name
+        if struct_type not in self.struct_types or func_name != struct_type:
+            return []
+
+        refs = []
+        field_items = list(self.struct_types.get(struct_type, {}).items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            for (
+                return_path,
+                alias_index,
+                arg_path,
+            ) in self.return_resource_alias_field_paths(
+                arg, param_indices, target_type=field_type
+            ):
+                path = f"{field_name}.{return_path}" if return_path else field_name
+                ref = (path, alias_index, arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_resource_alias_field_paths_for_relative_path(
+        self, expr, param_indices, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return [
+                (alias_index, arg_path)
+                for return_path, alias_index, arg_path in (
+                    self.return_resource_alias_field_paths(
+                        expr, param_indices, target_type=target_type
+                    )
+                )
+                if not return_path
+            ]
+
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    branch, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    arm_expr, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [(param_indices[root_name], relative_path)]
+
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.function_call_name(expr)
+            target_base, _ = self.resource_base_type_and_count(
+                self.type_name(target_type)
+            )
+            struct_type = target_base if target_base in self.struct_types else func_name
+            if struct_type in self.struct_types and func_name == struct_type:
+                first, _, rest = relative_path.partition(".")
+                field_items = list(self.struct_types.get(struct_type, {}).items())
+                for arg, (field_name, field_type) in zip(expr.args, field_items):
+                    if field_name == first:
+                        return self.return_resource_alias_field_paths_for_relative_path(
+                            arg, param_indices, rest, field_type
+                        )
+
+            refs = []
+            callee_refs = self.function_return_resource_field_aliases.get(func_name)
+            parameter_types = self.function_parameter_types.get(func_name, [])
+            for return_path, alias_index, callee_arg_path in callee_refs or []:
+                if alias_index >= len(expr.args):
+                    continue
+
+                if relative_path == return_path:
+                    next_relative_path = callee_arg_path
+                elif return_path and relative_path.startswith(f"{return_path}."):
+                    remaining_path = relative_path[len(return_path) + 1 :]
+                    next_relative_path = (
+                        f"{callee_arg_path}.{remaining_path}"
+                        if callee_arg_path
+                        else remaining_path
+                    )
+                elif not return_path:
+                    next_relative_path = relative_path
+                else:
+                    continue
+
+                arg_type = (
+                    parameter_types[alias_index]
+                    if alias_index < len(parameter_types)
+                    else None
+                )
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    expr.args[alias_index],
+                    param_indices,
+                    next_relative_path,
+                    arg_type,
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            if refs:
+                return refs
+
+        return []
+
+    def return_resource_static_alias_candidates(
+        self, expr, param_indices, target_type=None
+    ):
+        if isinstance(expr, list):
+            return []
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return []
+
+        if isinstance(expr, TernaryOpNode):
+            candidates = []
+            for branch in (expr.true_expr, expr.false_expr):
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        branch, param_indices, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, MatchNode):
+            candidates = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        arm_expr, param_indices, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_static_alias_candidates_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        candidates = []
+        access, resource_name = self.direct_resource_access_qualifier(expr)
+        if access is not None and resource_name is not None:
+            candidates.append((access, resource_name))
+        if root_name is not None:
+            candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def return_resource_static_alias_candidates_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            candidates = []
+            for arg, (_field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        arg, param_indices, target_type=field_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        candidates = list(
+            self.function_return_resource_static_aliases.get(func_name, [])
+        )
+        alias_indices = self.function_return_resource_aliases.get(func_name) or []
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            alias_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            candidates.extend(
+                self.return_resource_static_alias_candidates(
+                    expr.args[alias_index], param_indices, target_type=alias_type
+                )
+            )
+        return self.unique_resource_access_qualifiers(candidates)
+
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.function_return_types
 
@@ -1270,6 +1873,219 @@ class MojoCodeGen:
         if hasattr(param, "vtype"):
             return param.vtype
         return "float"
+
+    def prepare_generic_enum_metadata(self, ast, structs):
+        self.generic_parameter_names = collect_generic_parameter_names(ast)
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            structs
+        )
+        for node in structs:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in self.generic_enum_struct_definitions
+            ):
+                self.register_struct_type_metadata(node)
+        self.reject_parameterized_generic_enum_specializations(ast)
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+
+        for name, definition in self.generic_enum_struct_definitions.items():
+            self.enum_variant_names[name] = [
+                variant.name
+                for variant in getattr(definition["enum"], "variants", []) or []
+            ]
+            for variant_name in self.enum_variant_names[name]:
+                alias_name = self.enum_variant_alias_name(name, variant_name)
+                self.register_enum_variant_metadata(
+                    name,
+                    variant_name,
+                    alias_name,
+                    None,
+                )
+
+        for specialization in self.generic_enum_specializations.values():
+            struct_name = specialization["struct_name"]
+            self.struct_types[struct_name] = {"variant": "int"}
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                self.struct_types[struct_name][field_name] = self.type_name(field_type)
+
+    def reject_parameterized_generic_enum_specializations(self, ast):
+        if not self.generic_enum_struct_definitions:
+            return
+        visited = set()
+
+        def visit(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    visit(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            if not hasattr(value, "__dict__"):
+                return
+            name = getattr(value, "name", None)
+            generic_args = getattr(value, "generic_args", None)
+            if name in self.generic_enum_struct_definitions and generic_args:
+                if any(
+                    type_node_contains_generic_parameter(
+                        arg, self.generic_parameter_names
+                    )
+                    for arg in generic_args
+                ):
+                    raise ValueError(
+                        "Mojo generic payload enum specializations must be concrete"
+                    )
+            for child in vars(value).values():
+                visit(child)
+
+        visit(ast)
+
+    def maybe_register_generic_enum_type(self, type_value, specializations):
+        type_text = self.type_name(type_value)
+        base_name, generic_args = generic_type_parts(type_text)
+        definition = self.generic_enum_struct_definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if self.generic_type_contains_parameter(type_text):
+            return None
+        specialization = build_generic_enum_specialization(type_text, definition)
+        specializations[type_text] = specialization
+        return specialization
+
+    def generic_enum_specialization_for_type(self, type_value, expected_base=None):
+        if type_value is None:
+            return None
+        type_text = self.type_name(type_value)
+        base_name, generic_args = generic_type_parts(type_text)
+        if expected_base is not None and base_name != expected_base:
+            return None
+        definition = self.generic_enum_struct_definitions.get(base_name)
+        if definition is None:
+            return None
+        if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if self.generic_type_contains_parameter(type_text):
+            return None
+        specialization = self.generic_enum_specializations.get(type_text)
+        if specialization is None:
+            specialization = build_generic_enum_specialization(type_text, definition)
+            self.generic_enum_specializations[type_text] = specialization
+        return specialization
+
+    def generic_type_contains_parameter(self, type_text):
+        base_name, generic_args = generic_type_parts(type_text)
+        if base_name in self.generic_parameter_names and not generic_args:
+            return True
+        return any(self.generic_type_contains_parameter(arg) for arg in generic_args)
+
+    def generic_enum_mapped_type(self, type_value):
+        specialization = self.generic_enum_specialization_for_type(type_value)
+        if specialization is None:
+            return None
+        struct_name = specialization["struct_name"]
+        if struct_name not in self.struct_types:
+            self.struct_types[struct_name] = {"variant": "int"}
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                self.struct_types[struct_name][field_name] = self.type_name(field_type)
+        return struct_name
+
+    def generate_generic_payload_enum_constants(self):
+        code = ""
+        for name, definition in sorted(self.generic_enum_struct_definitions.items()):
+            next_value = 0
+            for variant in getattr(definition["enum"], "variants", []) or []:
+                value = getattr(variant, "value", None)
+                if value is None:
+                    value_text = str(next_value)
+                    next_value += 1
+                else:
+                    value_text = self.generate_expression(value)
+                    literal_value = self.literal_int_value(value)
+                    next_value = literal_value + 1 if literal_value is not None else 0
+                code += (
+                    f"alias {enum_constant_name(name, variant.name)} = {value_text}\n"
+                )
+        return code + ("\n" if code else "")
+
+    def generate_generic_payload_enum_structs(self):
+        code = ""
+        for specialization in self.generic_enum_specializations.values():
+            struct_name = specialization["struct_name"]
+            code += f"@value\nstruct {struct_name}:\n"
+            code += "    var variant: Int32\n"
+            for field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            ):
+                code += f"    var {field_name}: {self.map_type(field_type)}\n"
+            code += "\n"
+        return code
+
+    def generate_generic_payload_enum_constructors(self):
+        code = ""
+        for specialization in self.generic_enum_specializations.values():
+            all_fields = generic_enum_specialized_fields(self, specialization)
+            all_field_names = {field_name for field_name, _field_type in all_fields}
+            definition = specialization["definition"]
+            for variant in getattr(definition["enum"], "variants", []) or []:
+                variant_fields = generic_enum_specialized_variant_fields(
+                    self,
+                    specialization,
+                    variant.name,
+                )
+                if variant_fields is None:
+                    continue
+                constructor_name = enum_variant_constructor_name(
+                    specialization["struct_name"], variant.name
+                )
+                params = ", ".join(
+                    f"payload{index}: {self.map_type(field_type)}"
+                    for index, (_field_name, field_type) in enumerate(variant_fields)
+                )
+                code += (
+                    f"fn {constructor_name}({params}) -> "
+                    f"{specialization['struct_name']}:\n"
+                )
+                rendered_fields = {
+                    "variant": self.enum_variant_alias_name(
+                        definition["name"], variant.name
+                    )
+                }
+                active_fields = {field_name for field_name, _ in variant_fields}
+                for field_name, field_type in all_fields:
+                    if field_name in active_fields:
+                        continue
+                    rendered_fields[field_name] = self.zero_value_for_type(field_type)
+                for index, (field_name, _field_type) in enumerate(variant_fields):
+                    if field_name in all_field_names:
+                        rendered_fields[field_name] = f"payload{index}"
+                field_args = [
+                    f"{field_name}={rendered_fields[field_name]}"
+                    for field_name in self.struct_types[specialization["struct_name"]]
+                ]
+                code += (
+                    f"    return {specialization['struct_name']}"
+                    f"({', '.join(field_args)})\n\n"
+                )
+        return code
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -1768,6 +2584,57 @@ class MojoCodeGen:
         if access:
             self.resource_access_qualifiers[name] = access
 
+    def register_resource_access_alias_metadata(self, name, type_name, initializer):
+        if not name or initializer is None:
+            return
+        type_name = self.type_name(type_name)
+        if not self.resource_access_aliasable_type(type_name):
+            return
+
+        candidates = self.resource_access_qualifier_candidates(
+            initializer, target_type=type_name
+        )
+        if candidates:
+            self.resource_access_qualifier_aliases[name] = candidates
+        else:
+            self.resource_access_qualifier_aliases.pop(name, None)
+
+        self.clear_resource_access_path_aliases(name)
+        for path, path_candidates in self.resource_access_field_alias_candidates(
+            initializer, target_type=type_name
+        ).items():
+            if not path:
+                continue
+            self.resource_access_path_qualifier_aliases[f"{name}.{path}"] = (
+                path_candidates
+            )
+
+    def clear_resource_access_path_aliases(self, name):
+        prefix = f"{name}."
+        for path in list(self.resource_access_path_qualifier_aliases):
+            if path == name or path.startswith(prefix):
+                self.resource_access_path_qualifier_aliases.pop(path, None)
+
+    def register_resource_assignment_alias_metadata(self, target, value, operator):
+        if self.map_operator(operator) != "=":
+            return
+
+        name = self.direct_assignment_target_name(target)
+        if name is None:
+            return
+
+        type_name = self.expression_result_type(target) or self.variable_types.get(name)
+        self.register_resource_access_alias_metadata(name, type_name, value)
+
+    def direct_assignment_target_name(self, target):
+        if isinstance(target, str):
+            return target
+        if isinstance(target, VariableNode) and hasattr(target, "name"):
+            return target.name
+        if hasattr(target, "__class__") and "Identifier" in str(target.__class__):
+            return getattr(target, "name", None)
+        return None
+
     def register_struct_resource_access_metadata(
         self, struct_name, member_name, member, member_type
     ):
@@ -1790,6 +2657,13 @@ class MojoCodeGen:
             return self.resource_access_root_name(expr.object)
         name = getattr(expr, "name", None)
         if name is not None:
+            if not isinstance(name, str):
+                return None
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                match = re.match(r"\s*([A-Za-z_]\w*)", replacement)
+                if match is not None:
+                    return match.group(1)
             return name
         return None
 
@@ -1803,8 +2677,34 @@ class MojoCodeGen:
             return expr.member
         name = getattr(expr, "name", None)
         if name is not None:
+            if not isinstance(name, str):
+                return None
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                return replacement.strip()
             return name
         return None
+
+    def resource_access_source_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_source_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_source_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        if isinstance(expr, str):
+            return expr
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def resource_access_diagnostic_name(self, expr, resource_name):
+        source_name = self.resource_access_source_path_name(expr)
+        if resource_name and source_name != resource_name:
+            return resource_name
+        return source_name or resource_name
 
     def struct_field_resource_access(self, expr):
         if isinstance(expr, ArrayAccessNode):
@@ -1815,11 +2715,11 @@ class MojoCodeGen:
                 expr.member
             )
             if access is not None:
-                return access, self.resource_access_path_name(expr)
+                return access, self.resource_access_source_path_name(expr)
             return self.struct_field_resource_access(expr.object)
         return None
 
-    def resource_access_qualifier(self, expr):
+    def direct_resource_access_qualifier(self, expr):
         root_name = self.resource_access_root_name(expr)
         if root_name is not None:
             access = self.resource_access_qualifiers.get(root_name)
@@ -1831,25 +2731,415 @@ class MojoCodeGen:
             return field_access
         return None, root_name
 
-    def validate_resource_read_access(self, expr, operation):
-        access, resource_name = self.resource_access_qualifier(expr)
-        if resource_name is None:
-            return
-        if access == "writeonly":
-            raise ValueError(
-                f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{resource_name}' is writeonly"
+    def resource_access_qualifier_candidates(self, expr, target_type=None):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_qualifier_candidates(expr.array)
+
+        if isinstance(expr, TernaryOpNode):
+            candidates = []
+            candidates.extend(
+                self.resource_access_qualifier_candidates(
+                    expr.true_expr, target_type=target_type
+                )
+            )
+            candidates.extend(
+                self.resource_access_qualifier_candidates(
+                    expr.false_expr, target_type=target_type
+                )
+            )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, MatchNode):
+            candidates = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                candidates.extend(
+                    self.resource_access_qualifier_candidates(
+                        arm_expr, target_type=target_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        path_name = self.resource_access_path_name(expr)
+        if path_name is not None:
+            candidates = self.resource_access_path_qualifier_aliases.get(path_name)
+            if candidates:
+                return list(candidates)
+
+        if isinstance(expr, FunctionCallNode):
+            candidates = self.function_return_resource_alias_candidates(expr)
+            if candidates:
+                return candidates
+            candidates = self.generic_enum_resource_alias_candidates(expr, target_type)
+            if candidates:
+                return candidates
+
+        candidates = []
+        access, resource_name = self.direct_resource_access_qualifier(expr)
+        if access is not None and resource_name is not None:
+            candidates.append((access, resource_name))
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name is not None:
+            candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def generic_enum_resource_alias_candidates(self, expr, target_type):
+        if target_type is None:
+            return []
+
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return []
+
+        candidates = []
+        for arg, (_field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            candidates.extend(self.resource_access_qualifier_candidates(arg))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def resource_access_aliasable_type(self, type_name):
+        return self._resource_access_aliasable_type(self.type_name(type_name), set())
+
+    def _resource_access_aliasable_type(self, type_name, seen):
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+
+        if base_type in seen:
+            return False
+
+        if base_type in self.struct_types:
+            next_seen = {*seen, base_type}
+            return any(
+                self._resource_access_aliasable_type(field_type, next_seen)
+                for field_type in self.struct_types.get(base_type, {}).values()
             )
 
-    def validate_resource_write_access(self, expr, operation):
-        access, resource_name = self.resource_access_qualifier(expr)
-        if resource_name is None:
-            return
-        if access == "readonly":
-            raise ValueError(
-                f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{resource_name}' is readonly"
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None:
+            return False
+
+        next_seen = {*seen, type_name}
+        return any(
+            self._resource_access_aliasable_type(field_type, next_seen)
+            for _field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
             )
+        )
+
+    def resource_aliasable_field_paths_for_type(self, type_name, seen=None):
+        if seen is None:
+            seen = set()
+
+        type_name = self.type_name(type_name)
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.mojo_resource_kind(base_type) is not None:
+            return [""]
+
+        if base_type in seen:
+            return []
+
+        if base_type in self.struct_types:
+            paths = []
+            next_seen = {*seen, base_type}
+            for field_name, field_type in self.struct_types.get(base_type, {}).items():
+                for subpath in self.resource_aliasable_field_paths_for_type(
+                    field_type, next_seen
+                ):
+                    paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+            return paths
+
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None or type_name in seen:
+            return []
+
+        paths = []
+        next_seen = {*seen, type_name}
+        for field_name, field_type in generic_enum_specialized_fields(
+            self, specialization
+        ):
+            for subpath in self.resource_aliasable_field_paths_for_type(
+                field_type, next_seen
+            ):
+                paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+        return paths
+
+    def resource_access_field_alias_candidates(self, expr, target_type=None):
+        target_type = self.type_name(target_type)
+        if not target_type or not self.resource_access_aliasable_type(target_type):
+            return {}
+
+        field_aliases = self.resource_access_path_aliases_for_expression(expr)
+        if field_aliases:
+            return field_aliases
+
+        if isinstance(expr, TernaryOpNode):
+            return self.merge_resource_field_alias_maps(
+                self.resource_access_field_alias_candidates(
+                    expr.true_expr, target_type=target_type
+                ),
+                self.resource_access_field_alias_candidates(
+                    expr.false_expr, target_type=target_type
+                ),
+            )
+
+        if isinstance(expr, MatchNode):
+            merged = {}
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                merged = self.merge_resource_field_alias_maps(
+                    merged,
+                    self.resource_access_field_alias_candidates(
+                        arm_expr, target_type=target_type
+                    ),
+                )
+            return merged
+
+        if isinstance(expr, FunctionCallNode):
+            aliases = self.generic_enum_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            aliases = self.struct_constructor_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            return self.function_return_resource_field_alias_candidates(
+                expr, target_type
+            )
+
+        candidates = self.resource_access_qualifier_candidates(
+            expr, target_type=target_type
+        )
+        return {"": candidates} if candidates else {}
+
+    def resource_access_path_aliases_for_expression(self, expr):
+        path_name = self.resource_access_path_name(expr)
+        if not path_name:
+            return {}
+
+        aliases = {}
+        exact = self.resource_access_path_qualifier_aliases.get(path_name)
+        if exact:
+            aliases[""] = list(exact)
+
+        prefix = f"{path_name}."
+        for (
+            alias_path,
+            candidates,
+        ) in self.resource_access_path_qualifier_aliases.items():
+            if alias_path.startswith(prefix):
+                aliases[alias_path[len(prefix) :]] = list(candidates)
+        return aliases
+
+    def merge_resource_field_alias_maps(self, *maps):
+        merged = {}
+        for alias_map in maps:
+            for path, candidates in alias_map.items():
+                current = merged.setdefault(path, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
+    def resource_access_alias_state(self):
+        return (
+            {
+                name: list(candidates)
+                for name, candidates in self.resource_access_qualifier_aliases.items()
+            },
+            {
+                path: list(candidates)
+                for path, candidates in (
+                    self.resource_access_path_qualifier_aliases.items()
+                )
+            },
+        )
+
+    def restore_resource_access_alias_state(self, state):
+        qualifier_aliases, path_aliases = state
+        self.resource_access_qualifier_aliases = {
+            name: list(candidates) for name, candidates in qualifier_aliases.items()
+        }
+        self.resource_access_path_qualifier_aliases = {
+            path: list(candidates) for path, candidates in path_aliases.items()
+        }
+
+    def merge_resource_access_alias_states(self, *states):
+        qualifier_maps = [state[0] for state in states]
+        path_maps = [state[1] for state in states]
+        return (
+            self.merge_resource_access_candidate_maps(*qualifier_maps),
+            self.merge_resource_access_candidate_maps(*path_maps),
+        )
+
+    def merge_resource_access_candidate_maps(self, *maps):
+        merged = {}
+        for candidate_map in maps:
+            for name, candidates in candidate_map.items():
+                current = merged.setdefault(name, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
+    def generic_enum_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return {}
+
+        aliases = {}
+        for arg, (field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def struct_constructor_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type = target_base if target_base in self.struct_types else func_name
+        if struct_type not in self.struct_types or func_name != struct_type:
+            return {}
+
+        aliases = {}
+        field_items = list(self.struct_types.get(struct_type, {}).items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def function_return_resource_field_alias_candidates(self, expr, target_type=None):
+        func_name = self.function_call_name(expr)
+        refs = self.function_return_resource_field_aliases.get(func_name) or []
+        if not refs:
+            return {}
+
+        aliases = {}
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, arg_path in refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            candidates = self.resource_access_candidates_for_relative_path(
+                expr.args[alias_index], arg_path, arg_type
+            )
+            if candidates:
+                aliases.setdefault(return_path, [])
+                for candidate in candidates:
+                    if candidate not in aliases[return_path]:
+                        aliases[return_path].append(candidate)
+        return aliases
+
+    def resource_access_candidates_for_relative_path(
+        self, expr, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return self.resource_access_qualifier_candidates(
+                expr, target_type=target_type
+            )
+
+        path_name = self.resource_access_path_name(expr)
+        if path_name:
+            exact_path = f"{path_name}.{relative_path}"
+            candidates = self.resource_access_path_qualifier_aliases.get(exact_path)
+            if candidates:
+                return list(candidates)
+
+        field_aliases = self.resource_access_field_alias_candidates(
+            expr, target_type=target_type
+        )
+        return list(field_aliases.get(relative_path, []))
+
+    def function_return_resource_alias_candidates(self, expr):
+        func_name = self.function_call_name(expr)
+        candidates = list(
+            self.function_return_resource_static_aliases.get(func_name, [])
+        )
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return self.unique_resource_access_qualifiers(candidates)
+
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            candidates.extend(
+                self.resource_access_qualifier_candidates(expr.args[alias_index])
+            )
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def unique_resource_access_qualifiers(self, candidates):
+        unique = []
+        seen = set()
+        for access, resource_name in candidates:
+            key = (access, resource_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((access, resource_name))
+        return unique
+
+    def resource_access_qualifier(self, expr):
+        candidates = self.resource_access_qualifier_candidates(expr)
+        if candidates:
+            return candidates[0]
+        return self.direct_resource_access_qualifier(expr)
+
+    def expression_has_resource_type(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return True
+        base_type, _ = self.resource_base_type_and_count(expr_type)
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+        access, _ = self.direct_resource_access_qualifier(expr)
+        return access is not None
+
+    def validate_resource_read_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "writeonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{diagnostic_name}' is writeonly"
+                )
+
+    def validate_resource_write_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "readonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{diagnostic_name}' is readonly"
+                )
 
     def validate_resource_read_write_access(self, expr, operation):
         self.validate_resource_read_access(expr, operation)
@@ -2167,7 +3457,16 @@ class MojoCodeGen:
         )
 
     def generate_enum(self, node):
-        """Lower a unit/numeric CrossGL enum to Mojo type and value aliases."""
+        """Lower a CrossGL enum to Mojo aliases or a tagged payload struct."""
+        self.enum_variant_names[node.name] = [
+            variant.name for variant in getattr(node, "variants", []) or []
+        ]
+        if any(
+            getattr(variant, "data", None) or getattr(variant, "fields", None)
+            for variant in getattr(node, "variants", []) or []
+        ):
+            return self.generate_payload_enum(node)
+
         enum_type = self.map_enum_underlying_type(
             getattr(node, "underlying_type", None)
         )
@@ -2194,10 +3493,12 @@ class MojoCodeGen:
                 value_text = self.generate_enum_value_expression(value, local_aliases)
                 resolved_value = self.evaluate_enum_integer_value(value, local_values)
 
-            self.enum_variant_aliases[f"{node.name}::{variant.name}"] = alias_name
-            self.enum_variant_aliases[f"{node.name}.{variant.name}"] = alias_name
-            self.enum_variant_values[f"{node.name}::{variant.name}"] = resolved_value
-            self.enum_variant_values[f"{node.name}.{variant.name}"] = resolved_value
+            self.register_enum_variant_metadata(
+                node.name,
+                variant.name,
+                alias_name,
+                resolved_value,
+            )
             local_aliases[variant.name] = alias_name
             local_values[variant.name] = resolved_value
             code += f"alias {alias_name} = {value_text}\n"
@@ -2210,6 +3511,111 @@ class MojoCodeGen:
             )
 
         return code + "\n"
+
+    def generate_payload_enum(self, node):
+        fields = enum_struct_fields(node)
+        if fields is None:
+            raise ValueError(
+                "Unsupported enum payload for Mojo codegen; payload fields must "
+                f"have stable names and compatible types: {node.name}"
+            )
+
+        self.enum_types[node.name] = node.name
+        self.struct_types[node.name] = {"variant": "int"}
+        for field_name, field_type in fields:
+            self.struct_types[node.name][field_name] = self.type_name(field_type)
+
+        code = f"@value\nstruct {node.name}:\n"
+        code += "    var variant: Int32\n"
+        for field_name, field_type in fields:
+            code += f"    var {field_name}: {self.map_type(field_type)}\n"
+        code += "\n"
+
+        code += self.generate_payload_enum_constants(node)
+        code += self.generate_payload_enum_constructors(node, fields)
+        return code
+
+    def generate_payload_enum_constants(self, node):
+        code = ""
+        next_value = 0
+        local_aliases = {}
+        local_values = {}
+        for variant in getattr(node, "variants", []) or []:
+            alias_name = self.enum_variant_alias_name(node.name, variant.name)
+            value = getattr(variant, "value", None)
+            if value is None:
+                value_text = str(next_value)
+                resolved_value = next_value
+            else:
+                value_text = self.generate_enum_value_expression(value, local_aliases)
+                resolved_value = self.evaluate_enum_integer_value(value, local_values)
+
+            self.register_enum_variant_metadata(
+                node.name,
+                variant.name,
+                alias_name,
+                resolved_value,
+            )
+            local_aliases[variant.name] = alias_name
+            local_values[variant.name] = resolved_value
+            code += f"alias {alias_name} = {value_text}\n"
+
+            literal_value = resolved_value
+            if literal_value is None:
+                literal_value = self.literal_int_value(value_text)
+            next_value = (
+                literal_value + 1 if literal_value is not None else next_value + 1
+            )
+        return code + "\n"
+
+    def register_enum_variant_metadata(
+        self, enum_name, variant_name, alias_name, resolved_value
+    ):
+        for path in self.enum_variant_paths(enum_name, variant_name):
+            self.enum_variant_aliases[path] = alias_name
+            self.enum_variant_values[path] = resolved_value
+            self.enum_variant_result_types[path] = enum_name
+
+    def enum_variant_paths(self, enum_name, variant_name):
+        return (f"{enum_name}::{variant_name}", f"{enum_name}.{variant_name}")
+
+    def generate_payload_enum_constructors(self, node, fields):
+        code = ""
+        all_field_names = {field_name for field_name, _ in fields}
+        for variant in getattr(node, "variants", []) or []:
+            variant_fields = enum_variant_payload_fields(variant) or []
+            constructor_name = (
+                f"{self.enum_variant_alias_name(node.name, variant.name)}_make"
+            )
+            for path in self.enum_variant_paths(node.name, variant.name):
+                self.enum_variant_constructors[path] = constructor_name
+                self.enum_variant_constructor_fields[path] = variant_fields
+                if not variant_fields:
+                    self.enum_unit_variant_constructors[path] = constructor_name
+
+            params = ", ".join(
+                f"payload{index}: {self.map_type(field_type)}"
+                for index, (_field_name, field_type) in enumerate(variant_fields)
+            )
+            code += f"fn {constructor_name}({params}) -> {node.name}:\n"
+            rendered_fields = {
+                "variant": self.enum_variant_alias_name(node.name, variant.name)
+            }
+            active_fields = {field_name for field_name, _ in variant_fields}
+            for field_name, field_type in fields:
+                if field_name in active_fields:
+                    continue
+                rendered_fields[field_name] = self.zero_value_for_type(field_type)
+            for index, (field_name, _field_type) in enumerate(variant_fields):
+                if field_name not in all_field_names:
+                    continue
+                rendered_fields[field_name] = f"payload{index}"
+            field_args = [
+                f"{field_name}={rendered_fields[field_name]}"
+                for field_name in self.struct_types[node.name]
+            ]
+            code += f"    return {node.name}({', '.join(field_args)})\n\n"
+        return code
 
     def generate_enum_value_expression(self, value, local_aliases):
         previous_aliases = self.current_enum_value_aliases
@@ -2306,65 +3712,119 @@ class MojoCodeGen:
     def enum_variant_alias_name(self, enum_name, variant_name):
         return f"{enum_name}_{variant_name}"
 
-    def map_enum_variant_reference(self, name):
+    def map_enum_variant_reference(self, name, target_type=None):
         if not isinstance(name, str):
             return name
+        constructor = self.enum_unit_variant_constructors.get(name)
+        if constructor is not None:
+            return f"{constructor}()"
+        generic_constructor = self.generic_enum_unit_variant_constructor(
+            name, target_type
+        )
+        if generic_constructor is not None:
+            return f"{generic_constructor}()"
         if name in self.current_enum_value_aliases:
             return self.current_enum_value_aliases[name]
         return self.enum_variant_aliases.get(name, name)
 
+    def generic_enum_unit_variant_constructor(self, name, target_type):
+        variant_fields = self.generic_enum_variant_fields_for_type(name, target_type)
+        if variant_fields != []:
+            return None
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            name, target_type
+        )
+        if specialization is None:
+            return None
+        return enum_variant_constructor_name(
+            specialization["struct_name"], variant_name
+        )
+
+    def generic_enum_variant_specialization(self, variant_path, subject_type):
+        if "::" in str(variant_path):
+            enum_name, variant_name = str(variant_path).split("::", 1)
+        elif "." in str(variant_path):
+            enum_name, variant_name = str(variant_path).split(".", 1)
+        else:
+            return None, None
+
+        specialization = self.generic_enum_specialization_for_type(
+            subject_type,
+            expected_base=enum_name,
+        )
+        return specialization, variant_name
+
+    def generic_enum_variant_fields_for_type(self, variant_path, subject_type):
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            variant_path, subject_type
+        )
+        if specialization is None:
+            return None
+        return generic_enum_specialized_variant_fields(
+            self,
+            specialization,
+            variant_name,
+        )
+
+    def struct_member_declared_type(self, member):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            return self.array_type_name(element_type, get_array_size_from_node(member))
+        if hasattr(member, "member_type"):
+            return self.convert_type_node_to_string(member.member_type)
+        if hasattr(member, "vtype"):
+            return member.vtype
+        return "float"
+
+    def register_struct_type_metadata(self, node):
+        struct_name = getattr(node, "name", None)
+        if not struct_name:
+            return
+        self.struct_types[struct_name] = {}
+        self.struct_member_semantics[struct_name] = {}
+
+        for member in getattr(node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_member_declared_type(member)
+            self.struct_types[struct_name][member_name] = member_type
+            self.register_struct_resource_access_metadata(
+                struct_name, member_name, member, member_type
+            )
+            semantic = self.node_semantic(member)
+            if semantic:
+                self.struct_member_semantics[struct_name][member_name] = semantic
+                self.validate_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
-        self.struct_types[node.name] = {}
-        self.struct_member_semantics[node.name] = {}
+        self.register_struct_type_metadata(node)
 
         members = getattr(node, "members", [])
         for member in members:
-            if isinstance(member, ArrayNode):
-                element_type = getattr(
-                    member, "element_type", getattr(member, "vtype", "float")
-                )
-                size = get_array_size_from_node(member)
-                member_type = self.array_type_name(element_type, size)
-                self.struct_types[node.name][member.name] = member_type
-                self.register_struct_resource_access_metadata(
-                    node.name, member.name, member, member_type
-                )
-                semantic = self.node_semantic(member)
-                semantic_comment = ""
-                if semantic:
-                    self.struct_member_semantics[node.name][member.name] = semantic
-                    self.validate_builtin_semantic_type(
-                        semantic, member_type, "struct member semantic"
-                    )
-                    semantic_comment = f"  # {self.map_semantic(semantic)}"
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_types[node.name][member_name]
+            semantic = self.struct_member_semantics.get(node.name, {}).get(member_name)
+            semantic_comment = f"  # {self.map_semantic(semantic)}" if semantic else ""
+            if self.is_array_type_name(member_type):
+                element_type, size = self.parse_array_type_name(member_type)
                 code += (
-                    f"    var {member.name}: "
+                    f"    var {member_name}: "
                     f"{self.array_storage_type(element_type, size)}"
                     f"{semantic_comment}\n"
                 )
             else:
-                if hasattr(member, "member_type"):
-                    member_type = self.convert_type_node_to_string(member.member_type)
-                elif hasattr(member, "vtype"):
-                    member_type = member.vtype
-                else:
-                    member_type = "float"
-
-                self.struct_types[node.name][member.name] = member_type
-                self.register_struct_resource_access_metadata(
-                    node.name, member.name, member, member_type
+                code += (
+                    f"    var {member_name}: "
+                    f"{self.map_type(member_type)}{semantic_comment}\n"
                 )
-
-                semantic = self.node_semantic(member)
-                semantic_comment = ""
-                if semantic:
-                    self.struct_member_semantics[node.name][member.name] = semantic
-                    self.validate_builtin_semantic_type(
-                        semantic, member_type, "struct member semantic"
-                    )
-                    semantic_comment = f"  # {self.map_semantic(semantic)}"
-                code += f"    var {member.name}: {self.map_type(member_type)}{semantic_comment}\n"
 
         code += "\n"
         return code
@@ -2386,6 +3846,14 @@ class MojoCodeGen:
         "    " * indent
         previous_variable_types = self.variable_types.copy()
         previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
+        previous_resource_access_qualifier_aliases = {
+            name: list(candidates)
+            for name, candidates in self.resource_access_qualifier_aliases.items()
+        }
+        previous_resource_access_path_qualifier_aliases = {
+            path: list(candidates)
+            for path, candidates in self.resource_access_path_qualifier_aliases.items()
+        }
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
@@ -2467,6 +3935,12 @@ class MojoCodeGen:
         code += "\n"
         self.variable_types = previous_variable_types
         self.resource_access_qualifiers = previous_resource_access_qualifiers
+        self.resource_access_qualifier_aliases = (
+            previous_resource_access_qualifier_aliases
+        )
+        self.resource_access_path_qualifier_aliases = (
+            previous_resource_access_path_qualifier_aliases
+        )
         self.current_return_type = previous_return_type
         return code
 
@@ -2593,6 +4067,7 @@ class MojoCodeGen:
             node.right, indent, left_type, "assignment target"
         )
         op = self.map_operator(node.operator)
+        self.register_resource_assignment_alias_metadata(node.left, node.right, op)
         return f"{prelude}{indent_str}{left} {op} {right}\n"
 
     def generate_get_dimensions_statement(self, stmt, indent):
@@ -2966,11 +4441,17 @@ class MojoCodeGen:
                         )
 
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                effective_type = var_type or self.expression_result_type(
+                    stmt.initial_value
+                )
                 self.register_variable_type(
                     stmt.name,
-                    var_type or self.expression_result_type(stmt.initial_value),
+                    effective_type,
                 )
                 self.register_resource_access_metadata(stmt, var_type)
+                self.register_resource_access_alias_metadata(
+                    stmt.name, effective_type, stmt.initial_value
+                )
                 increment_init = self.generate_increment_initializer_declaration(
                     stmt,
                     stmt.initial_value,
@@ -3047,6 +4528,7 @@ class MojoCodeGen:
                 )
                 return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
+            self.record_loop_exit_alias_state()
             context = self.active_do_while_context()
             if context:
                 break_flag = context["break_flag"]
@@ -3057,8 +4539,8 @@ class MojoCodeGen:
                 return f"{indent_str}break\n"
             context = self.active_for_context()
             if context:
-                update = context["update"]
-                return f"{indent_str}{update}\n{indent_str}continue\n"
+                update = self.generate_for_update_statement(context["update"], indent)
+                return f"{update}{indent_str}continue\n"
             return f"{indent_str}continue\n"
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_node(stmt, indent)
@@ -3066,6 +4548,15 @@ class MojoCodeGen:
             # ArrayAccessNode should not appear as a statement by itself - it's likely a misclassified array declaration
             # Try to handle it gracefully
             return f"{indent_str}# Unhandled ArrayAccessNode: {stmt}\n"
+        elif isinstance(stmt, ExpressionStatementNode):
+            expr = getattr(stmt, "expression", None)
+            if isinstance(expr, AssignmentNode):
+                return self.generate_assignment_statement(expr, indent)
+
+            prelude, expr_result = self.generate_expression_with_prelude(expr, indent)
+            if expr_result.strip():
+                return f"{prelude}{indent_str}{expr_result}\n"
+            return f"{indent_str}# Unhandled statement: {type(stmt).__name__}\n"
         else:
             # Handle expressions that may be used as statements
             prelude, expr_result = self.generate_expression_with_prelude(stmt, indent)
@@ -3158,30 +4649,47 @@ class MojoCodeGen:
 
     def generate_match(self, node, indent):
         indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
+        subject_expr = getattr(node, "expression", "")
+        subject_type = self.expression_result_type(subject_expr)
+        expression = self.generate_expression(subject_expr)
         arms = getattr(node, "arms", []) or []
-        self.validate_match_arms(arms)
+        self.validate_match_arms(arms, subject_type)
         code = ""
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            code += (
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
         emitted_condition = False
-        wildcard_body = None
 
-        for arm in arms:
+        for arm_index, arm in enumerate(arms):
             pattern = getattr(arm, "pattern", None)
+            guard = getattr(arm, "guard", None)
             body = getattr(arm, "body", [])
-            if isinstance(pattern, WildcardPatternNode):
-                wildcard_body = body
+            replacements = self.match_arm_identifier_replacements(
+                pattern, expression, guard, subject_type
+            )
+            if self.is_unconditional_final_match_arm(
+                arms, arm_index, pattern, guard, subject_type
+            ):
+                if emitted_condition:
+                    code += f"{indent_str}else:\n"
+                    code += self.generate_match_arm_body(body, indent + 1, replacements)
+                else:
+                    code += self.generate_match_arm_body(body, indent, replacements)
                 continue
 
             keyword = "if" if not emitted_condition else "elif"
-            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+            condition = self.match_arm_condition(
+                pattern, expression, guard, replacements, subject_type
+            )
             code += f"{indent_str}{keyword} {condition}:\n"
-            code += self.generate_switch_case_body(body, indent + 1)
+            code += self.generate_match_arm_body(body, indent + 1, replacements)
             emitted_condition = True
 
-        if wildcard_body is not None:
-            code += f"{indent_str}else:\n"
-            code += self.generate_switch_case_body(wildcard_body, indent + 1)
-        elif not emitted_condition:
+        if not code and not emitted_condition:
             code += f"{indent_str}pass\n"
 
         return code
@@ -3190,6 +4698,18 @@ class MojoCodeGen:
         name = f"__cgl_match_value_{self.match_expression_counter}"
         self.match_expression_counter += 1
         return name
+
+    def next_match_subject_temp_name(self):
+        name = f"__cgl_match_subject_{self.match_subject_counter}"
+        self.match_subject_counter += 1
+        return name
+
+    def match_subject_needs_temp(self, subject_expr):
+        if isinstance(subject_expr, (str, VariableNode, IdentifierNode)):
+            return False
+        if isinstance(subject_expr, MemberAccessNode):
+            return self.match_subject_needs_temp(subject_expr.object)
+        return True
 
     def match_arm_error(self, reason=None):
         detail = reason or "only unguarded literal and wildcard patterns are supported"
@@ -3255,7 +4775,9 @@ class MojoCodeGen:
 
     def generate_match_value_expression(self, node, target_type, context):
         arms = getattr(node, "arms", []) or []
-        self.validate_match_expression_arms(arms)
+        subject_expr = getattr(node, "expression", "")
+        subject_type = self.expression_result_type(subject_expr)
+        self.validate_match_expression_arms(arms, subject_type)
         match_type = self.type_name(target_type or self.expression_result_type(node))
         if match_type is None:
             raise self.match_expression_error("target type is required")
@@ -3267,22 +4789,51 @@ class MojoCodeGen:
         indent_str = "    " * indent
         branch_indent = indent + 1
         temp_name = self.next_match_expression_temp_name()
-        expression = self.generate_expression(getattr(node, "expression", ""))
-        lines = [
+        expression = self.generate_expression(subject_expr)
+        lines = []
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            lines.append(
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
+        lines.append(
             f"{indent_str}var {temp_name}: {self.map_type(match_type)} = "
             f"{self.zero_value_for_type(match_type)}\n"
-        ]
+        )
 
         emitted_condition = False
-        wildcard_arm = None
         for arm_index, arm in enumerate(arms, start=1):
             pattern = getattr(arm, "pattern", None)
-            if isinstance(pattern, WildcardPatternNode):
-                wildcard_arm = (arm_index, arm)
+            guard = getattr(arm, "guard", None)
+            replacements = self.match_arm_identifier_replacements(
+                pattern, expression, guard, subject_type
+            )
+            if self.is_unconditional_final_match_arm(
+                arms, arm_index - 1, pattern, guard, subject_type
+            ):
+                if emitted_condition:
+                    lines.append(f"{indent_str}else:\n")
+                    assignment_indent = branch_indent
+                else:
+                    assignment_indent = indent
+                lines.append(
+                    self.generate_match_value_arm_assignment(
+                        arm,
+                        match_type,
+                        f"{context} match arm {arm_index}",
+                        temp_name,
+                        assignment_indent,
+                        replacements,
+                    )
+                )
                 continue
 
             keyword = "if" if not emitted_condition else "elif"
-            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+            condition = self.match_arm_condition(
+                pattern, expression, guard, replacements, subject_type
+            )
             lines.append(f"{indent_str}{keyword} {condition}:\n")
             lines.append(
                 self.generate_match_value_arm_assignment(
@@ -3291,65 +4842,393 @@ class MojoCodeGen:
                     f"{context} match arm {arm_index}",
                     temp_name,
                     branch_indent,
+                    replacements,
                 )
             )
             emitted_condition = True
-
-        if wildcard_arm is not None:
-            arm_index, arm = wildcard_arm
-            lines.append(f"{indent_str}else:\n")
-            lines.append(
-                self.generate_match_value_arm_assignment(
-                    arm,
-                    match_type,
-                    f"{context} match arm {arm_index}",
-                    temp_name,
-                    branch_indent,
-                )
-            )
 
         prelude_context["lines"].extend(lines)
         return temp_name
 
     def generate_match_value_arm_assignment(
-        self, arm, target_type, context, temp_name, indent
+        self, arm, target_type, context, temp_name, indent, replacements=None
     ):
-        value_expr, prelude_statements = self.match_arm_value_expression(arm)
-        code = ""
-        for stmt in prelude_statements:
-            code += self.generate_statement(stmt, indent)
+        def render_assignment():
+            value_expr, prelude_statements = self.match_arm_value_expression(arm)
+            code = ""
+            for stmt in prelude_statements:
+                code += self.generate_statement(stmt, indent)
 
-        self.validate_expression_target_shape(value_expr, target_type, context)
-        value = self.generate_expression(value_expr, target_type, context)
-        return f"{code}{'    ' * indent}{temp_name} = {value}\n"
+            self.validate_expression_target_shape(value_expr, target_type, context)
+            value = self.generate_expression(value_expr, target_type, context)
+            return f"{code}{'    ' * indent}{temp_name} = {value}\n"
 
-    def validate_match_arms(self, arms):
-        rejection_reason = self.match_arm_rejection_reason(arms)
+        return self.generate_with_identifier_replacements(
+            replacements, render_assignment
+        )
+
+    def validate_match_arms(self, arms, subject_type=None):
+        rejection_reason = self.match_arm_rejection_reason(arms, subject_type)
         if rejection_reason is not None:
             raise self.match_arm_error(rejection_reason)
 
-    def validate_match_expression_arms(self, arms):
-        self.validate_match_arms(arms)
+    def validate_match_expression_arms(self, arms, subject_type=None):
+        self.validate_match_arms(arms, subject_type)
         if not arms:
             raise self.match_expression_error("at least one arm is required")
-        if not isinstance(getattr(arms[-1], "pattern", None), WildcardPatternNode):
+        final_pattern = getattr(arms[-1], "pattern", None)
+        final_guard = getattr(arms[-1], "guard", None)
+        if not (
+            isinstance(final_pattern, WildcardPatternNode)
+            or self.is_irrefutable_match_pattern(
+                final_pattern, final_guard, subject_type
+            )
+            or self.match_arms_cover_enum_variants(arms, subject_type)
+        ):
             raise self.match_expression_error(
                 "match expressions must include a final wildcard arm"
             )
         for arm in arms:
             self.match_arm_value_expression(arm)
 
-    def match_arm_rejection_reason(self, arms):
+    def match_arm_identifier_replacements(
+        self, pattern, expression, guard=None, subject_type=None
+    ):
+        replacements = {}
+        if (
+            guard is not None
+            and isinstance(pattern, IdentifierPatternNode)
+            and not self.is_enum_identifier_pattern(pattern)
+        ):
+            replacements[pattern.name] = expression
+            return replacements
+
+        self.collect_match_pattern_bindings(
+            pattern,
+            expression,
+            replacements,
+            top_level=True,
+            subject_type=subject_type,
+        )
+        return replacements
+
+    def generate_match_arm_body(self, body, indent, replacements=None):
+        return self.generate_with_identifier_replacements(
+            replacements, lambda: self.generate_switch_case_body(body, indent)
+        )
+
+    def match_arm_condition(
+        self,
+        pattern,
+        expression,
+        guard=None,
+        replacements=None,
+        subject_type=None,
+    ):
+        replacements = replacements or {}
+        condition = None
+
+        if isinstance(pattern, LiteralPatternNode):
+            condition = f"{expression} == {self.generate_expression(pattern.literal)}"
+        elif isinstance(pattern, IdentifierPatternNode):
+            if self.is_enum_identifier_pattern(pattern):
+                condition = self.enum_identifier_pattern_condition(
+                    pattern, expression, subject_type
+                )
+        elif isinstance(pattern, ConstructorPatternNode):
+            condition = self.constructor_pattern_condition(
+                pattern, expression, replacements, subject_type
+            )
+        elif isinstance(pattern, StructPatternNode):
+            condition = self.struct_pattern_condition(
+                pattern, expression, replacements, subject_type
+            )
+        elif isinstance(pattern, WildcardPatternNode):
+            condition = "True"
+
+        if guard is not None:
+            guard_expression = self.generate_expression_with_identifier_replacements(
+                guard, replacements
+            )
+            if condition is None:
+                return guard_expression
+            if condition == "True":
+                return guard_expression
+            return f"({condition}) and ({guard_expression})"
+
+        if condition is None:
+            raise self.match_arm_error()
+        return condition
+
+    def is_enum_identifier_pattern(self, pattern):
+        name = getattr(pattern, "name", None)
+        return isinstance(name, str) and name in self.enum_variant_aliases
+
+    def enum_identifier_pattern_condition(self, pattern, expression, subject_type=None):
+        name = pattern.name
+        alias = self.enum_variant_aliases[name]
+        enum_type = self.enum_variant_result_types.get(name)
+        if enum_type in self.struct_types or self.generic_enum_specialization_for_type(
+            subject_type, expected_base=enum_type
+        ):
+            return f"{expression}.variant == {alias}"
+        return f"{expression} == {alias}"
+
+    def constructor_pattern_condition(
+        self, pattern, expression, replacements, subject_type=None
+    ):
+        variant_path = getattr(pattern, "type_name", None)
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            raise self.match_arm_error("constructor patterns cannot be lowered")
+
+        arguments = getattr(pattern, "arguments", []) or []
+        if len(arguments) != len(variant_fields):
+            raise self.match_arm_error(
+                f"constructor pattern {variant_path} expects "
+                f"{len(variant_fields)} fields, got {len(arguments)}"
+            )
+
+        conditions = [
+            self.enum_variant_tag_condition(variant_path, expression, subject_type)
+        ]
+        for argument, (field_name, field_type) in zip(arguments, variant_fields):
+            field_expression = self.match_pattern_field_expression(
+                expression, field_name
+            )
+            conditions.extend(
+                self.match_pattern_field_conditions(
+                    argument,
+                    field_expression,
+                    replacements,
+                    top_level=False,
+                    subject_type=field_type,
+                )
+            )
+        return (
+            " and ".join(condition for condition in conditions if condition) or "True"
+        )
+
+    def struct_pattern_condition(
+        self, pattern, expression, replacements, subject_type=None
+    ):
+        pattern_type = getattr(pattern, "type_name", None)
+        variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
+        if variant_fields is not None:
+            field_types = dict(variant_fields)
+            conditions = [
+                self.enum_variant_tag_condition(pattern_type, expression, subject_type)
+            ]
+        elif (
+            self.struct_pattern_type_name(pattern_type, subject_type)
+            in self.struct_types
+        ):
+            field_types = self.struct_types[
+                self.struct_pattern_type_name(pattern_type, subject_type)
+            ]
+            conditions = []
+        else:
+            raise self.match_arm_error(
+                "struct destructuring patterns cannot be lowered"
+            )
+
+        field_patterns = getattr(pattern, "field_patterns", {}) or {}
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in field_types:
+                raise self.match_arm_error(
+                    f"struct pattern field {field_name} cannot be lowered"
+                )
+            field_expression = self.match_pattern_field_expression(
+                expression, field_name
+            )
+            conditions.extend(
+                self.match_pattern_field_conditions(
+                    field_pattern,
+                    field_expression,
+                    replacements,
+                    top_level=False,
+                    subject_type=field_types[field_name],
+                )
+            )
+        return (
+            " and ".join(condition for condition in conditions if condition) or "True"
+        )
+
+    def enum_pattern_variant_fields(self, variant_path, subject_type=None):
+        variant_fields = self.enum_variant_constructor_fields.get(variant_path)
+        if variant_fields is not None:
+            return variant_fields
+        return self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+
+    def enum_variant_tag_condition(self, variant_path, expression, subject_type=None):
+        alias = self.enum_variant_aliases[variant_path]
+        enum_type = self.enum_variant_result_types.get(variant_path)
+        if enum_type in self.struct_types or self.generic_enum_specialization_for_type(
+            subject_type, expected_base=enum_type
+        ):
+            return f"{expression}.variant == {alias}"
+        return f"{expression} == {alias}"
+
+    def struct_pattern_type_name(self, pattern_type, subject_type=None):
+        if not isinstance(pattern_type, str):
+            return pattern_type
+        generic_enum_type = self.generic_enum_mapped_type(subject_type)
+        if generic_enum_type is not None and pattern_type == self.type_name(
+            subject_type
+        ):
+            return generic_enum_type
+        return self.type_name(pattern_type)
+
+    def match_pattern_field_expression(self, expression, field_name):
+        if re.match(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$", expression):
+            return f"{expression}.{field_name}"
+        return f"({expression}).{field_name}"
+
+    def collect_match_pattern_bindings(
+        self,
+        pattern,
+        expression,
+        replacements,
+        top_level=False,
+        subject_type=None,
+    ):
+        self.match_pattern_field_conditions(
+            pattern,
+            expression,
+            replacements,
+            top_level=top_level,
+            collect_conditions=False,
+            subject_type=subject_type,
+        )
+
+    def match_pattern_field_conditions(
+        self,
+        pattern,
+        expression,
+        replacements,
+        top_level=False,
+        collect_conditions=True,
+        subject_type=None,
+    ):
+        conditions = []
+        if isinstance(pattern, WildcardPatternNode):
+            return conditions
+        if isinstance(pattern, LiteralPatternNode):
+            binding_name = self.literal_pattern_binding_name(pattern)
+            if binding_name is not None:
+                if not top_level:
+                    replacements[binding_name] = expression
+                return conditions
+            if collect_conditions:
+                conditions.append(
+                    f"{expression} == {self.generate_expression(pattern.literal)}"
+                )
+            return conditions
+        if isinstance(pattern, IdentifierPatternNode):
+            if self.is_enum_identifier_pattern(pattern):
+                if collect_conditions:
+                    conditions.append(
+                        self.enum_identifier_pattern_condition(
+                            pattern, expression, subject_type
+                        )
+                    )
+                return conditions
+            if not top_level:
+                replacements[pattern.name] = expression
+            return conditions
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            variant_fields = self.enum_pattern_variant_fields(
+                variant_path, subject_type
+            )
+            if variant_fields is None:
+                return conditions
+            if collect_conditions:
+                conditions.append(
+                    self.enum_variant_tag_condition(
+                        variant_path, expression, subject_type
+                    )
+                )
+            for argument, (field_name, field_type) in zip(
+                getattr(pattern, "arguments", []) or [], variant_fields
+            ):
+                conditions.extend(
+                    self.match_pattern_field_conditions(
+                        argument,
+                        self.match_pattern_field_expression(expression, field_name),
+                        replacements,
+                        top_level=False,
+                        collect_conditions=collect_conditions,
+                        subject_type=field_type,
+                    )
+                )
+            return conditions
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = getattr(pattern, "type_name", None)
+            variant_fields = self.enum_pattern_variant_fields(
+                pattern_type, subject_type
+            )
+            if variant_fields is not None:
+                if collect_conditions:
+                    conditions.append(
+                        self.enum_variant_tag_condition(
+                            pattern_type, expression, subject_type
+                        )
+                    )
+            field_types = None
+            if variant_fields is not None:
+                field_types = dict(variant_fields)
+            elif (
+                self.struct_pattern_type_name(pattern_type, subject_type)
+                in self.struct_types
+            ):
+                field_types = self.struct_types[
+                    self.struct_pattern_type_name(pattern_type, subject_type)
+                ]
+            for field_name, field_pattern in (
+                getattr(pattern, "field_patterns", {}) or {}
+            ).items():
+                conditions.extend(
+                    self.match_pattern_field_conditions(
+                        field_pattern,
+                        self.match_pattern_field_expression(expression, field_name),
+                        replacements,
+                        top_level=False,
+                        collect_conditions=collect_conditions,
+                        subject_type=(
+                            field_types.get(field_name)
+                            if field_types is not None
+                            else subject_type
+                        ),
+                    )
+                )
+        return conditions
+
+    def literal_pattern_binding_name(self, pattern):
+        literal = getattr(pattern, "literal", None)
+        value = getattr(literal, "value", None)
+        literal_type = getattr(getattr(literal, "literal_type", None), "name", None)
+        if (
+            literal_type == "unknown"
+            and isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z_]\w*", value)
+        ):
+            return value
+        return None
+
+    def match_arm_rejection_reason(self, arms, subject_type=None):
         wildcard_index = None
+        irrefutable_index = None
         for index, arm in enumerate(arms):
-            if getattr(arm, "guard", None) is not None:
-                return "guarded arms cannot be lowered"
+            guard = getattr(arm, "guard", None)
 
             pattern = getattr(arm, "pattern", None)
             if self.is_range_style_match_pattern(pattern):
                 return "range-style patterns cannot be lowered"
 
             if isinstance(pattern, WildcardPatternNode):
+                if guard is not None:
+                    return "guarded wildcard arms cannot be lowered"
                 if wildcard_index is not None:
                     return "multiple wildcard arms cannot be lowered"
                 wildcard_index = index
@@ -3359,18 +5238,316 @@ class MojoCodeGen:
                 continue
 
             if isinstance(pattern, IdentifierPatternNode):
+                if self.is_enum_identifier_pattern(pattern):
+                    continue
+                if guard is not None:
+                    continue
                 return "identifier binding patterns cannot be lowered"
 
             if isinstance(pattern, ConstructorPatternNode):
-                return "constructor patterns cannot be lowered"
+                reason = self.constructor_pattern_rejection_reason(
+                    pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
 
             if isinstance(pattern, StructPatternNode):
-                return "struct destructuring patterns cannot be lowered"
+                reason = self.struct_pattern_rejection_reason(pattern, subject_type)
+                if reason is not None:
+                    return reason
+                if self.is_irrefutable_match_pattern(pattern, guard, subject_type):
+                    if irrefutable_index is not None:
+                        return "multiple irrefutable patterns cannot be lowered"
+                    irrefutable_index = index
+                continue
 
             return "only unguarded literal patterns and a final wildcard can be lowered"
 
         if wildcard_index is not None and wildcard_index != len(arms) - 1:
             return "wildcard arm must be final"
+        if irrefutable_index is not None and irrefutable_index != len(arms) - 1:
+            return "irrefutable pattern must be final"
+        return None
+
+    def is_irrefutable_match_pattern(self, pattern, guard=None, subject_type=None):
+        if guard is not None:
+            return False
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = getattr(pattern, "type_name", None)
+            if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
+                return False
+            return (
+                self.struct_pattern_type_name(pattern_type, subject_type)
+                in self.struct_types
+            )
+        return False
+
+    def match_arms_cover_enum_variants(self, arms, subject_type=None):
+        enum_type = None
+        patterns_by_variant = {}
+        for arm in arms:
+            if getattr(arm, "guard", None) is not None:
+                continue
+            pattern = getattr(arm, "pattern", None)
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+            if variant_path is None:
+                continue
+            arm_enum_type = self.enum_variant_result_types.get(variant_path)
+            if arm_enum_type is None:
+                continue
+            if enum_type is None:
+                enum_type = arm_enum_type
+            elif enum_type != arm_enum_type:
+                return False
+            variant_name = variant_path.split("::", 1)[1]
+            patterns_by_variant.setdefault(variant_name, []).append(pattern)
+
+        expected_variants = set(self.enum_variant_names.get(enum_type, []))
+        covered_variants = {
+            variant_name
+            for variant_name, patterns in patterns_by_variant.items()
+            if self.match_patterns_cover_enum_variant_group(patterns, subject_type)
+        }
+        return bool(expected_variants) and expected_variants.issubset(covered_variants)
+
+    def match_patterns_cover_enum_variant_group(self, patterns, subject_type=None):
+        if any(
+            self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+            for pattern in patterns
+        ):
+            return True
+
+        variant_path = self.match_pattern_enum_variant_path(patterns[0], subject_type)
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if not variant_fields:
+            return False
+
+        fields_by_name = dict(variant_fields)
+        constrained_fields = {}
+        for pattern in patterns:
+            field_patterns = self.match_pattern_field_pattern_map(pattern, subject_type)
+            if field_patterns is None:
+                return False
+            for field_name in fields_by_name:
+                field_pattern = field_patterns.get(field_name)
+                if field_pattern is None:
+                    continue
+                if self.is_unconstrained_match_pattern(
+                    field_pattern, fields_by_name[field_name]
+                ):
+                    continue
+                constrained_fields.setdefault(field_name, []).append(field_pattern)
+
+        if len(constrained_fields) != 1:
+            return False
+        field_name, nested_patterns = next(iter(constrained_fields.items()))
+        return self.match_patterns_cover_enum_type(
+            nested_patterns,
+            fields_by_name[field_name],
+        )
+
+    def match_pattern_field_pattern_map(self, pattern, subject_type=None):
+        if isinstance(pattern, StructPatternNode):
+            return dict(getattr(pattern, "field_patterns", {}) or {})
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            variant_fields = self.enum_pattern_variant_fields(
+                variant_path, subject_type
+            )
+            if variant_fields is None:
+                return None
+            return {
+                field_name: argument
+                for argument, (field_name, _field_type) in zip(
+                    getattr(pattern, "arguments", []) or [], variant_fields
+                )
+            }
+        return None
+
+    def match_patterns_cover_enum_type(self, patterns, subject_type):
+        enum_type = None
+        covered_variants = set()
+        for pattern in patterns:
+            if not self.match_pattern_covers_entire_enum_variant(pattern, subject_type):
+                return False
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+            if variant_path is None:
+                return False
+            pattern_enum_type = self.enum_variant_result_types.get(variant_path)
+            if pattern_enum_type is None:
+                return False
+            if enum_type is None:
+                enum_type = pattern_enum_type
+            elif enum_type != pattern_enum_type:
+                return False
+            covered_variants.add(variant_path.split("::", 1)[1])
+
+        expected_variants = set(self.enum_variant_names.get(enum_type, []))
+        return bool(expected_variants) and expected_variants.issubset(covered_variants)
+
+    def is_unconditional_final_match_arm(
+        self, arms, index, pattern, guard, subject_type=None
+    ):
+        if guard is not None or index != len(arms) - 1:
+            return False
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if self.is_irrefutable_match_pattern(pattern, guard, subject_type):
+            return True
+        return self.match_arms_cover_enum_variants(
+            arms, subject_type
+        ) and self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+
+    def match_pattern_covers_entire_enum_variant(self, pattern, subject_type=None):
+        variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+        if variant_path is None:
+            return False
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            return False
+        if isinstance(pattern, IdentifierPatternNode):
+            return not variant_fields
+        if isinstance(pattern, ConstructorPatternNode):
+            arguments = getattr(pattern, "arguments", []) or []
+            return len(arguments) == len(variant_fields) and all(
+                self.is_unconstrained_match_pattern(argument, field_type)
+                for argument, (_field_name, field_type) in zip(
+                    arguments, variant_fields
+                )
+            )
+        if isinstance(pattern, StructPatternNode):
+            field_types = dict(variant_fields)
+            return all(
+                self.is_unconstrained_match_pattern(
+                    field_pattern, field_types.get(field_name)
+                )
+                for field_name, field_pattern in (
+                    getattr(pattern, "field_patterns", {}) or {}
+                ).items()
+            )
+        return False
+
+    def is_unconstrained_match_pattern(self, pattern, subject_type=None):
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, LiteralPatternNode):
+            return self.literal_pattern_binding_name(pattern) is not None
+        if isinstance(pattern, IdentifierPatternNode):
+            return not self.is_enum_identifier_pattern(pattern)
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = getattr(pattern, "type_name", None)
+            if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
+                return False
+            struct_type = self.struct_pattern_type_name(pattern_type, subject_type)
+            field_types = self.struct_types.get(struct_type)
+            if field_types is None:
+                return False
+            for field_name, field_pattern in (
+                getattr(pattern, "field_patterns", {}) or {}
+            ).items():
+                if field_name not in field_types:
+                    return False
+                if not self.is_unconstrained_match_pattern(
+                    field_pattern, field_types[field_name]
+                ):
+                    return False
+            return True
+        return False
+
+    def match_pattern_enum_variant_path(self, pattern, subject_type=None):
+        if isinstance(
+            pattern, IdentifierPatternNode
+        ) and self.is_enum_identifier_pattern(pattern):
+            return pattern.name.replace(".", "::")
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
+                return variant_path.replace(".", "::")
+        if isinstance(pattern, StructPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
+                return variant_path.replace(".", "::")
+        return None
+
+    def constructor_pattern_rejection_reason(self, pattern, subject_type=None):
+        variant_path = getattr(pattern, "type_name", None)
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            return "constructor patterns cannot be lowered"
+        arguments = getattr(pattern, "arguments", []) or []
+        if len(arguments) != len(variant_fields):
+            return (
+                f"constructor pattern {variant_path} expects "
+                f"{len(variant_fields)} fields, got {len(arguments)}"
+            )
+        for argument, (_field_name, field_type) in zip(arguments, variant_fields):
+            reason = self.nested_pattern_rejection_reason([argument], field_type)
+            if reason is not None:
+                return reason
+        return None
+
+    def struct_pattern_rejection_reason(self, pattern, subject_type=None):
+        pattern_type = getattr(pattern, "type_name", None)
+        variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
+        if variant_fields is not None:
+            field_types = dict(variant_fields)
+        elif (
+            self.struct_pattern_type_name(pattern_type, subject_type)
+            in self.struct_types
+        ):
+            field_types = self.struct_types[
+                self.struct_pattern_type_name(pattern_type, subject_type)
+            ]
+        else:
+            return "struct destructuring patterns cannot be lowered"
+
+        field_patterns = getattr(pattern, "field_patterns", {}) or {}
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in field_types:
+                return f"struct pattern field {field_name} cannot be lowered"
+            reason = self.nested_pattern_rejection_reason(
+                [field_pattern], field_types[field_name]
+            )
+            if reason is not None:
+                return reason
+        return None
+
+    def nested_pattern_rejection_reason(self, patterns, subject_type=None):
+        for nested_pattern in patterns:
+            if isinstance(nested_pattern, (WildcardPatternNode, LiteralPatternNode)):
+                continue
+            if isinstance(nested_pattern, IdentifierPatternNode):
+                if self.is_enum_identifier_pattern(nested_pattern):
+                    continue
+                continue
+            if isinstance(nested_pattern, ConstructorPatternNode):
+                reason = self.constructor_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
+            if isinstance(nested_pattern, StructPatternNode):
+                reason = self.struct_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
+                if reason is not None:
+                    return reason
+                continue
+            if self.is_range_style_match_pattern(nested_pattern):
+                return "range-style patterns cannot be lowered"
+            return "nested pattern cannot be lowered"
         return None
 
     def is_range_style_match_pattern(self, pattern):
@@ -3403,6 +5580,24 @@ class MojoCodeGen:
             return context
         return None
 
+    def push_loop_exit_alias_state_scope(self):
+        self.loop_exit_alias_state_stack.append(
+            {"loop_depth": self.loop_depth, "states": []}
+        )
+
+    def pop_loop_exit_alias_state_scope(self):
+        if not self.loop_exit_alias_state_stack:
+            return []
+        return self.loop_exit_alias_state_stack.pop()["states"]
+
+    def record_loop_exit_alias_state(self):
+        if not self.loop_exit_alias_state_stack:
+            return
+        scope = self.loop_exit_alias_state_stack[-1]
+        if scope["loop_depth"] != self.loop_depth:
+            return
+        scope["states"].append(self.resource_access_alias_state())
+
     def statement_body_terminates_inner_loop(self, body):
         statements = self.statement_list(body)
         if not statements:
@@ -3427,88 +5622,56 @@ class MojoCodeGen:
         self.validate_expression_target_shape(
             node.right, left_type, "assignment target"
         )
-        if isinstance(node.right, ArrayLiteralNode) and self.is_array_type_name(
-            left_type
-        ):
-            right = self.generate_array_literal_expression(node.right, left_type)
-        else:
-            right = self.generate_expression(node.right)
+        right = self.generate_expression(node.right, left_type, "assignment target")
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
+
+    def generate_branch_statements(self, branch, indent):
+        code = ""
+        if hasattr(branch, "statements"):
+            for stmt in branch.statements:
+                code += self.generate_statement(stmt, indent)
+        elif isinstance(branch, list):
+            for stmt in branch:
+                code += self.generate_statement(stmt, indent)
+        elif branch is not None:
+            code += self.generate_statement(branch, indent)
+        return code
 
     def generate_if(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(
             node.condition if hasattr(node, "condition") else node.if_condition
         )
+        entry_alias_state = self.resource_access_alias_state()
         code = f"{indent_str}if {condition}:\n"
 
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
-        if hasattr(if_body, "statements"):
-            for stmt in if_body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(if_body, list):
-            for stmt in if_body:
-                code += self.generate_statement(stmt, indent + 1)
+        self.restore_resource_access_alias_state(entry_alias_state)
+        code += self.generate_branch_statements(if_body, indent + 1)
+        then_alias_state = self.resource_access_alias_state()
 
+        else_alias_state = entry_alias_state
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
+            self.restore_resource_access_alias_state(entry_alias_state)
             if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
-                # Generate elif by recursively generating the nested if with elif prefix
-                elif_condition = self.generate_expression(
-                    else_branch.condition
-                    if hasattr(else_branch, "condition")
-                    else else_branch.if_condition
-                )
-                code += f"{indent_str}elif {elif_condition}:\n"
-
-                # Generate elif body
-                elif_body = getattr(
-                    else_branch, "then_branch", getattr(else_branch, "if_body", None)
-                )
-                if hasattr(elif_body, "statements"):
-                    for stmt in elif_body.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(elif_body, list):
-                    for stmt in elif_body:
-                        code += self.generate_statement(stmt, indent + 1)
-
-                nested_else = getattr(else_branch, "else_branch", None)
-                if nested_else:
-                    if hasattr(nested_else, "__class__") and "If" in str(
-                        nested_else.__class__
-                    ):
-                        # Another elif
-                        remaining_code = self.generate_if(nested_else, indent)
-                        # Remove the "if" prefix and replace with "elif"
-                        remaining_lines = remaining_code.split("\n")
-                        if remaining_lines[0].strip().startswith("if "):
-                            remaining_lines[0] = remaining_lines[0].replace(
-                                "if ", "elif ", 1
-                            )
-                        code += "\n".join(remaining_lines)
-                    else:
-                        # Final else clause
-                        code += f"{indent_str}else:\n"
-                        if hasattr(nested_else, "statements"):
-                            for stmt in nested_else.statements:
-                                code += self.generate_statement(stmt, indent + 1)
-                        elif isinstance(nested_else, list):
-                            for stmt in nested_else:
-                                code += self.generate_statement(stmt, indent + 1)
-                        else:
-                            code += self.generate_statement(nested_else, indent + 1)
+                remaining_code = self.generate_if(else_branch, indent)
+                remaining_lines = remaining_code.splitlines(keepends=True)
+                if remaining_lines and remaining_lines[0].strip().startswith("if "):
+                    remaining_lines[0] = remaining_lines[0].replace("if ", "elif ", 1)
+                code += "".join(remaining_lines)
             else:
                 code += f"{indent_str}else:\n"
-                if hasattr(else_branch, "statements"):
-                    for stmt in else_branch.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(else_branch, list):
-                    for stmt in else_branch:
-                        code += self.generate_statement(stmt, indent + 1)
-                else:
-                    code += self.generate_statement(else_branch, indent + 1)
+                code += self.generate_branch_statements(else_branch, indent + 1)
+            else_alias_state = self.resource_access_alias_state()
 
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                then_alias_state,
+                else_alias_state,
+            )
+        )
         return code
 
     def generate_for(self, node, indent):
@@ -3516,44 +5679,84 @@ class MojoCodeGen:
 
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
-        update = self.generate_expression(node.update)
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
-        self.for_contexts.append({"loop_depth": self.loop_depth, "update": update})
+        self.for_contexts.append({"loop_depth": self.loop_depth, "update": node.update})
+        self.push_loop_exit_alias_state_scope()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.for_contexts.pop()
             self.loop_depth -= 1
 
-        # Add update at the end of the loop
-        code += f"{indent_str}    {update}\n"
+        code += self.generate_for_update_statement(node.update, indent + 1)
+        update_alias_state = self.resource_access_alias_state()
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                update_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
+
+    def generate_for_update_statement(self, update, indent):
+        if update is None:
+            return ""
+
+        if isinstance(update, ExpressionStatementNode):
+            update = update.expression
+
+        if isinstance(update, AssignmentNode):
+            return self.generate_assignment_statement(update, indent)
+
+        indent_str = "    " * indent
+        prelude, expression = self.generate_expression_with_prelude(update, indent)
+        if expression.strip():
+            return f"{prelude}{indent_str}{expression}\n"
+        return prelude
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}for {pattern} in {iterable}:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
         try:
             body_code = ""
             for stmt in self.statement_list(getattr(node, "body", [])):
                 body_code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
 
         if body_code:
             code += body_code
         else:
             code += f"{indent_str}    pass\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -3571,15 +5774,29 @@ class MojoCodeGen:
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(node.condition)
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -3588,11 +5805,22 @@ class MojoCodeGen:
         code = f"{indent_str}while True:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                *(loop_exit_alias_states or [body_alias_state])
+            )
+        )
 
         return code
 
@@ -3610,10 +5838,15 @@ class MojoCodeGen:
         self.do_while_contexts.append(
             {"loop_depth": self.loop_depth, "break_flag": break_flag}
         )
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 2)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.do_while_contexts.pop()
             self.loop_depth -= 1
 
@@ -3623,6 +5856,13 @@ class MojoCodeGen:
         code += f"{indent_str}        break\n"
         code += f"{indent_str}    if not {condition}:\n"
         code += f"{indent_str}        break\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -3827,16 +6067,38 @@ class MojoCodeGen:
             if helper_name not in self.function_return_types:
                 return helper_name
 
+    def generate_with_identifier_replacements(self, replacements, callback):
+        previous_replacements = self.expression_identifier_replacements
+        self.expression_identifier_replacements = {
+            **previous_replacements,
+            **(replacements or {}),
+        }
+        try:
+            return callback()
+        finally:
+            self.expression_identifier_replacements = previous_replacements
+
+    def generate_expression_with_identifier_replacements(self, expr, replacements):
+        return self.generate_with_identifier_replacements(
+            replacements, lambda: self.generate_expression(expr)
+        )
+
     def generate_expression(self, expr, target_type=None, target_context=None):
         """Render a CrossGL expression as Mojo expression syntax."""
         if isinstance(expr, str):
-            return self.map_enum_variant_reference(expr)
+            if expr in self.expression_identifier_replacements:
+                return self.expression_identifier_replacements[expr]
+            return self.map_enum_variant_reference(expr, target_type)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "vtype") and expr.vtype and expr.name:
+                if expr.name in self.expression_identifier_replacements:
+                    return self.expression_identifier_replacements[expr.name]
                 return f"{expr.name}"
             elif hasattr(expr, "name"):
+                if expr.name in self.expression_identifier_replacements:
+                    return self.expression_identifier_replacements[expr.name]
                 return expr.name
             else:
                 return str(expr)
@@ -3859,7 +6121,7 @@ class MojoCodeGen:
                 expr, target_type, target_context or "match expression"
             )
         elif isinstance(expr, ConstructorNode):
-            return self.generate_constructor_node(expr)
+            return self.generate_constructor_node(expr, target_type, target_context)
         elif isinstance(expr, CastNode):
             return self.generate_cast_node(expr)
         elif isinstance(expr, SwizzleNode):
@@ -3923,6 +6185,12 @@ class MojoCodeGen:
                 lambda_expr = self.generate_lambda_expression(expr.args)
                 if lambda_expr is not None:
                     return lambda_expr
+
+            enum_constructor = self.generate_enum_variant_constructor_call(
+                func_name, expr.args, target_type
+            )
+            if enum_constructor is not None:
+                return enum_constructor
 
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
@@ -4038,9 +6306,10 @@ class MojoCodeGen:
             if enum_variant != f"{obj}.{expr.member}":
                 return enum_variant
             obj_type = self.expression_result_type(expr.object)
+            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
             if (
-                obj_type in self.struct_types
-                and expr.member in self.struct_types[obj_type]
+                obj_struct_type in self.struct_types
+                and expr.member in self.struct_types[obj_struct_type]
             ):
                 return f"{obj}.{expr.member}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
@@ -4074,7 +6343,10 @@ class MojoCodeGen:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             # Handle IdentifierNode
-            return self.map_enum_variant_reference(getattr(expr, "name", str(expr)))
+            name = getattr(expr, "name", str(expr))
+            if name in self.expression_identifier_replacements:
+                return self.expression_identifier_replacements[name]
+            return self.map_enum_variant_reference(name, target_type)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
         ):
@@ -4102,34 +6374,192 @@ class MojoCodeGen:
                     return f"{array_name}"  # Just return the array name for now
             return expr_str
 
-    def generate_constructor_node(self, expr):
-        type_name = self.convert_type_node_to_string(expr.constructor_type)
-        mapped_type = self.map_type(type_name)
-        self.validate_constructor_resource_size_target_shapes(
-            expr, type_name, f"constructor {type_name}"
-        )
-        field_items = list(self.struct_types.get(type_name, {}).items())
-        positional_args = []
-        for index, argument in enumerate(expr.arguments):
-            field_type = field_items[index][1] if index < len(field_items) else None
-            positional_args.append(
+    def generate_enum_variant_constructor_call(self, func_name, args, target_type=None):
+        constructor = self.enum_variant_constructors.get(func_name)
+        if constructor is None:
+            return self.generate_generic_enum_variant_constructor_call(
+                func_name, args, target_type
+            )
+
+        fields = self.enum_variant_constructor_fields.get(func_name, [])
+        if len(args) != len(fields):
+            raise ValueError(
+                f"Enum constructor {func_name} expects {len(fields)} arguments, "
+                f"got {len(args)}"
+            )
+
+        rendered_args = []
+        for index, arg in enumerate(args):
+            expected_type = fields[index][1] if index < len(fields) else None
+            rendered_args.append(
                 self.generate_expression(
-                    argument,
-                    field_type,
-                    f"constructor {type_name} field {index + 1}",
+                    arg,
+                    expected_type,
+                    f"enum constructor {func_name} argument {index + 1}",
                 )
             )
-        named_args = [
-            f"{name}="
-            f"{self.generate_expression(value, self.struct_types.get(type_name, {}).get(name), f'constructor {type_name} field {name}')}"
-            for name, value in expr.named_arguments.items()
-        ]
+        return f"{constructor}({', '.join(rendered_args)})"
+
+    def generate_generic_enum_variant_constructor_call(
+        self, func_name, args, target_type=None
+    ):
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None:
+            return None
+        if len(args) != len(fields):
+            raise ValueError(
+                f"Enum constructor {func_name} expects {len(fields)} arguments, "
+                f"got {len(args)}"
+            )
+
+        specialization, variant_name = self.generic_enum_variant_specialization(
+            func_name, target_type
+        )
+        if specialization is None:
+            return None
+
+        rendered_args = []
+        for index, arg in enumerate(args):
+            rendered_args.append(
+                self.generate_expression(
+                    arg,
+                    fields[index][1],
+                    f"enum constructor {func_name} argument {index + 1}",
+                )
+            )
+        constructor = enum_variant_constructor_name(
+            specialization["struct_name"], variant_name
+        )
+        return f"{constructor}({', '.join(rendered_args)})"
+
+    def generate_constructor_node(self, expr, target_type=None, target_context=None):
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        mapped_type = self.map_type(type_name)
+        target_name = self.type_name(target_type)
+        struct_type = target_name if target_name in self.struct_types else type_name
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        base_context = target_context or f"constructor {type_name}"
+        named_arguments = getattr(expr, "named_arguments", {}) or {}
+        if struct_type in self.struct_types:
+            self.validate_struct_constructor_field_bindings(
+                struct_type,
+                field_items,
+                len(expr.arguments),
+                named_arguments,
+                base_context,
+            )
+        positional_args = []
+        rendered_fields = {}
+        for index, argument in enumerate(expr.arguments):
+            field_type = None
+            field_name = None
+            if index < len(field_items):
+                field_name, field_type = field_items[index]
+                field_context = f"{base_context} field {struct_type}.{field_name}"
+            else:
+                field_context = f"{base_context} field {index + 1}"
+            self.validate_expression_target_shape(argument, field_type, field_context)
+            rendered_argument = self.generate_expression(
+                argument, field_type, field_context
+            )
+            positional_args.append(rendered_argument)
+            if field_name is not None:
+                rendered_fields[field_name] = rendered_argument
+        named_args = []
+        for name, value in named_arguments.items():
+            field_type = fields.get(name)
+            field_context = (
+                f"{base_context} field {struct_type}.{name}"
+                if field_type is not None
+                else f"{base_context} field {name}"
+            )
+            self.validate_expression_target_shape(value, field_type, field_context)
+            rendered_value = self.generate_expression(value, field_type, field_context)
+            named_args.append(f"{name}={rendered_value}")
+            if field_type is not None:
+                rendered_fields[name] = rendered_value
+
+        if struct_type in self.struct_types:
+            missing_fields = [
+                (field_name, field_type)
+                for field_name, field_type in field_items
+                if field_name not in rendered_fields
+            ]
+            if missing_fields:
+                for field_name, field_type in missing_fields:
+                    rendered_fields[field_name] = self.zero_value_for_type(field_type)
+                field_args = [
+                    f"{field_name}={rendered_fields[field_name]}"
+                    for field_name, _ in field_items
+                ]
+                return f"{mapped_type}({', '.join(field_args)})"
+
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
+
+    def validate_struct_constructor_field_bindings(
+        self,
+        struct_type,
+        field_items,
+        positional_count,
+        named_arguments,
+        base_context,
+        constructor_style="braced",
+        require_all_fields=False,
+    ):
+        fields = dict(field_items)
+        expected = ", ".join(fields) or "no fields"
+        initialized_fields = set()
+        for index in range(positional_count):
+            if index >= len(field_items):
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"too many positional fields in {base_context}: field "
+                    f"{index + 1} has no matching field in {struct_type}"
+                )
+            field_name, _ = field_items[index]
+            initialized_fields.add(field_name)
+
+        for field_name in named_arguments:
+            if field_name not in fields:
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"unknown field {struct_type}.{field_name} in {base_context}; "
+                    f"expected one of: {expected}"
+                )
+            if field_name in initialized_fields:
+                raise ValueError(
+                    f"Invalid {constructor_style} struct constructor for Mojo "
+                    "codegen; "
+                    f"duplicate field {struct_type}.{field_name} in {base_context}"
+                )
+            initialized_fields.add(field_name)
+
+        if require_all_fields:
+            for field_name, _ in field_items:
+                if field_name not in initialized_fields:
+                    raise ValueError(
+                        f"Invalid {constructor_style} struct constructor for Mojo "
+                        "codegen; "
+                        f"missing field {struct_type}.{field_name} in "
+                        f"{base_context}; expected fields: {expected}"
+                    )
 
     def generate_struct_function_constructor_call(self, expr, type_name, context):
         mapped_type = self.map_type(type_name)
         field_items = list(self.struct_types.get(type_name, {}).items())
         base_context = context or f"constructor {type_name}"
+        self.validate_struct_constructor_field_bindings(
+            type_name,
+            field_items,
+            len(expr.args),
+            {},
+            base_context,
+            "function-style",
+            True,
+        )
         positional_args = []
         for index, argument in enumerate(expr.args):
             field_type = None
@@ -4812,7 +7242,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_resource_size_target_shape(
@@ -4865,7 +7297,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_image_result_target_shape(
@@ -4923,7 +7357,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_buffer_result_target_shape(
@@ -4976,7 +7412,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_reinterpret_result_target_shape(
@@ -7584,6 +10022,33 @@ class MojoCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def type_name_string(self, type_value):
+        if type_value is None:
+            return None
+        return self.type_name(type_value)
+
+    def identifier_replacement_result_type(self, name):
+        replacement = self.expression_identifier_replacements.get(name)
+        if replacement is None:
+            return None
+        return self.expression_path_result_type(replacement)
+
+    def expression_path_result_type(self, expression):
+        if not isinstance(expression, str) or not re.fullmatch(
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expression
+        ):
+            return None
+
+        parts = expression.split(".")
+        result_type = self.variable_types.get(parts[0])
+        for member in parts[1:]:
+            struct_type = self.generic_enum_mapped_type(result_type) or result_type
+            fields = self.struct_types.get(struct_type)
+            if fields is None or member not in fields:
+                return None
+            result_type = fields[member]
+        return result_type
+
     def normalize_generic_vector_type_name(self, type_name):
         if not isinstance(type_name, str):
             return type_name
@@ -7599,7 +10064,8 @@ class MojoCodeGen:
         return type_name
 
     def is_array_type_name(self, type_name):
-        return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
+        type_text = str(type_name or "")
+        return "[" in type_text and type_text.endswith("]")
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
@@ -7623,7 +10089,11 @@ class MojoCodeGen:
     def is_struct_type_name(self, type_name):
         if type_name is None:
             return False
-        return self.type_name(type_name) in self.struct_types
+        resolved_type = self.type_name(type_name)
+        if resolved_type in self.struct_types:
+            return True
+        generic_enum_type = self.generic_enum_mapped_type(resolved_type)
+        return generic_enum_type in self.struct_types
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
@@ -7641,11 +10111,18 @@ class MojoCodeGen:
         array_type = self.array_storage_type(element_type, size)
         if size is None:
             return f"{array_type}()"
+        if self.should_zero_initialize_array_elements(element_type):
+            return self.zero_array_value(element_type, size)
         return f"{array_type}(unsafe_uninitialized=True)"
 
     def array_initial_value_for_type(self, type_name):
         element_type, size = self.parse_array_type_name(type_name)
         return self.array_initial_value(element_type, size)
+
+    def should_zero_initialize_array_elements(self, element_type):
+        return self.is_struct_type_name(element_type) or self.is_resource_type_name(
+            element_type
+        )
 
     def array_element_type(self, type_name):
         if not self.is_array_type_name(type_name):
@@ -7706,8 +10183,11 @@ class MojoCodeGen:
             element_type, size = self.parse_array_type_name(type_name)
             return self.zero_array_value(element_type, size)
 
-        if type_name in self.struct_types:
-            return self.zero_struct_value(type_name)
+        struct_type = type_name
+        if struct_type not in self.struct_types:
+            struct_type = self.generic_enum_mapped_type(type_name) or type_name
+        if struct_type in self.struct_types:
+            return self.zero_struct_value(struct_type)
 
         vector_info = self.vector_type_info(type_name)
         if vector_info is not None:
@@ -7817,15 +10297,21 @@ class MojoCodeGen:
 
     def expression_result_type(self, expr):
         if isinstance(expr, str):
-            return self.variable_types.get(expr)
+            return self.identifier_replacement_result_type(
+                expr
+            ) or self.variable_types.get(expr)
         if isinstance(expr, VariableNode) and hasattr(expr, "name"):
-            return self.variable_types.get(expr.name)
+            return self.identifier_replacement_result_type(
+                expr.name
+            ) or self.variable_types.get(expr.name)
         if isinstance(expr, ArrayLiteralNode):
             element_type = self.infer_array_literal_element_type(expr)
             return self.array_type_name(element_type, len(expr.elements))
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm in arms:
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 arm_type = self.expression_result_type(arm_expr)
@@ -7873,6 +10359,8 @@ class MojoCodeGen:
                 return member_result_type
 
             func_name = self.function_call_name(expr)
+            if func_name in self.enum_variant_result_types:
+                return self.enum_variant_result_types[func_name]
             if func_name in self.struct_types:
                 return func_name
             if func_name in self.vector_constructor_info:
@@ -8034,18 +10522,24 @@ class MojoCodeGen:
             return self.buffer_op_result_type(expr)
         if isinstance(expr, MemberAccessNode):
             obj_type = self.expression_result_type(expr.object)
+            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
             if (
-                obj_type in self.struct_types
-                and expr.member in self.struct_types[obj_type]
+                obj_struct_type in self.struct_types
+                and expr.member in self.struct_types[obj_struct_type]
             ):
-                return self.struct_types[obj_type].get(expr.member)
-            if obj_type in self.struct_types:
+                return self.struct_types[obj_struct_type].get(expr.member)
+            if obj_struct_type in self.struct_types:
                 return None
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 return self.swizzle_result_type(obj_type, len(swizzle_indices))
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            return self.variable_types.get(getattr(expr, "name", ""))
+            name = getattr(expr, "name", "")
+            return (
+                self.identifier_replacement_result_type(name)
+                or self.enum_variant_result_types.get(name)
+                or self.variable_types.get(name)
+            )
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if literal_type:
@@ -8384,7 +10878,7 @@ class MojoCodeGen:
         else:
             vtype_str = str(vtype)
 
-        if "[" in vtype_str and "]" in vtype_str:
+        if self.is_array_type_name(vtype_str):
             base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:
@@ -8408,6 +10902,10 @@ class MojoCodeGen:
             dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
             self.required_matrix_types.add((dtype, columns, rows))
             return self.matrix_type_name(dtype, columns, rows)
+
+        generic_enum_type = self.generic_enum_mapped_type(vtype_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
 
         if vtype_str in self.enum_types:
             return vtype_str

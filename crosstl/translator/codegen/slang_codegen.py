@@ -3152,6 +3152,7 @@ class SlangCodeGen:
                 node, shader_type, effective_param_list
             )
             self.validate_slang_ray_query_calls(node, shader_type, effective_param_list)
+            self.validate_slang_mesh_intrinsic_calls(node, shader_type)
             self.validate_slang_mesh_payload_parameter(
                 shader_type, effective_param_list
             )
@@ -3887,29 +3888,38 @@ class SlangCodeGen:
 
     def slang_ray_tracing_calls(self, func):
         calls = []
-        ray_intrinsics = {
+        for node in self.walk_ast(getattr(func, "body", [])):
+            call = self.slang_ray_tracing_call_parts(node)
+            if call is not None:
+                calls.append(call)
+        return calls
+
+    def slang_ray_tracing_intrinsic_names(self):
+        return {
             "TraceRay",
             "CallShader",
             "ReportHit",
             "AcceptHitAndEndSearch",
             "IgnoreHit",
         }
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, RayTracingOpNode):
-                calls.append(
-                    (getattr(node, "operation", None), getattr(node, "arguments", []))
-                )
-                continue
 
-            if not isinstance(node, FunctionCallNode):
-                continue
-            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
-            func_name = getattr(func_expr, "name", func_expr)
-            if func_name in ray_intrinsics:
-                calls.append(
-                    (func_name, getattr(node, "arguments", getattr(node, "args", [])))
-                )
-        return calls
+    def slang_ray_tracing_call_parts(self, node, include_user_functions=False):
+        if isinstance(node, RayTracingOpNode):
+            operation = getattr(node, "operation", None)
+            if not include_user_functions and operation in self.user_function_names:
+                return None
+            return operation, getattr(node, "arguments", [])
+
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None) or getattr(node, "name", None)
+        func_name = getattr(func_expr, "name", func_expr)
+        if func_name not in self.slang_ray_tracing_intrinsic_names():
+            return None
+        if not include_user_functions and func_name in self.user_function_names:
+            return None
+        return func_name, getattr(node, "arguments", getattr(node, "args", []))
 
     def slang_function_call_name(self, node):
         if not isinstance(node, FunctionCallNode):
@@ -4064,6 +4074,15 @@ class SlangCodeGen:
     def slang_expression_is_lvalue(self, expr):
         if isinstance(expr, (VariableNode, IdentifierNode)):
             return True
+        if isinstance(expr, UnaryOpNode):
+            if getattr(expr, "op", None) == "*":
+                return (
+                    self.pointer_pointee_type_name(
+                        self.expression_result_type(getattr(expr, "operand", None))
+                    )
+                    is not None
+                )
+            return False
         if isinstance(expr, ArrayAccessNode):
             return self.slang_expression_is_lvalue(
                 getattr(expr, "array", getattr(expr, "array_expr", None))
@@ -4090,6 +4109,30 @@ class SlangCodeGen:
         raise ValueError(
             f"Slang {shader_type} {operation} {role} argument must be "
             f"an lvalue, got {actual_type}"
+        )
+
+    def validate_slang_ray_address_of_lvalue_argument(
+        self, argument, shader_type, operation, role
+    ):
+        if not (
+            isinstance(argument, UnaryOpNode)
+            and getattr(argument, "op", None) == "&"
+            and not getattr(argument, "is_postfix", False)
+        ):
+            return
+
+        operand = getattr(argument, "operand", None)
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            operand
+        )
+        if base_type is None:
+            return
+        if self.slang_expression_is_lvalue(operand):
+            return
+        actual_type = f"{base_type}{array_suffix}"
+        raise ValueError(
+            f"Slang {shader_type} {operation} {role} argument must take the "
+            f"address of an lvalue, got {actual_type}"
         )
 
     def slang_parameter_requires_lvalue_argument(self, parameter):
@@ -4310,8 +4353,11 @@ class SlangCodeGen:
             expected_type = self.slang_parameter_type_name(parameter)
             if not expected_type:
                 continue
+            expected_compare_type = (
+                self.reference_referent_type_name(expected_type) or expected_type
+            )
             expected_base, expected_suffix = split_array_type_suffix(
-                self.convert_type(expected_type)
+                self.convert_type(expected_compare_type)
             )
             actual_base, actual_suffix = (
                 self.slang_expression_mapped_base_and_array_suffix(args[index])
@@ -4319,6 +4365,9 @@ class SlangCodeGen:
             if actual_base is None:
                 continue
             if actual_base == expected_base and actual_suffix == expected_suffix:
+                self.validate_slang_ray_address_of_lvalue_argument(
+                    args[index], shader_type, helper_name, role
+                )
                 if role in {
                     "payload",
                     "callable data",
@@ -4328,7 +4377,7 @@ class SlangCodeGen:
                     )
                 continue
             actual_type = f"{actual_base}{actual_suffix}"
-            expected_label = f"{expected_base}{expected_suffix}"
+            expected_label = self.convert_type(expected_type)
             raise ValueError(
                 f"Slang {shader_type} {helper_name} {role} "
                 f"argument type {actual_type} must match parameter type "
@@ -4418,6 +4467,45 @@ class SlangCodeGen:
             self.buffer_resource_types = saved_buffer_resource_types
             self.buffer_resource_accesses = saved_buffer_resource_accesses
 
+    def slang_ray_tracing_result_type(self, operation):
+        return {
+            "TraceRay": "void",
+            "CallShader": "void",
+            "ReportHit": "bool",
+            "AcceptHitAndEndSearch": "void",
+            "IgnoreHit": "void",
+        }.get(operation)
+
+    def slang_ray_tracing_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        return expected_type
+
+    def slang_ray_tracing_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_ray_tracing_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if result_type == "void":
+            return f"returns void but target expects {expected_type}"
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_ray_tracing_diagnostic_expression(self, operation, reason):
+        expected_type = self.slang_ray_tracing_expected_target_type()
+        fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
+        return (
+            f"/* unsupported Slang ray tracing intrinsic: {operation} {reason} */ "
+            f"{fallback}"
+        )
+
     def slang_ray_query_method_return_type(self, operation):
         return {
             "Proceed": "bool",
@@ -4487,6 +4575,54 @@ class SlangCodeGen:
             "CommittedObjectToWorld3x4",
             "CommittedWorldToObject3x4",
         }
+
+    def generate_slang_ray_query_expression(self, operation, query_expr, args):
+        result_type = self.slang_ray_query_method_return_type(operation)
+        target_reason = self.slang_ray_query_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.slang_ray_query_diagnostic_expression(operation, target_reason)
+
+        query = self.generate_expression(query_expr)
+        arg_list = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{query}.{operation}({arg_list})"
+
+    def slang_ray_query_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_ray_query_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if result_type == "void":
+            return f"returns void but target expects {expected_type}"
+        if not self.is_slang_ray_query_value_type(result_type):
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_ray_query_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        if self.is_slang_ray_query_value_type(expected_type):
+            return expected_type
+        return None
+
+    def is_slang_ray_query_value_type(self, type_name):
+        return (
+            self.is_scalar_value_type(type_name)
+            or self.is_vector_value_type(type_name)
+            or self.is_matrix_value_type(type_name)
+        )
+
+    def slang_ray_query_diagnostic_expression(self, operation, reason):
+        expected_type = self.slang_ray_query_expected_target_type()
+        fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
+        return f"/* unsupported Slang RayQuery: {operation} {reason} */ {fallback}"
 
     def slang_ray_query_call_parts(self, node):
         if isinstance(node, RayQueryOpNode):
@@ -5046,6 +5182,11 @@ class SlangCodeGen:
             tail_return = self.generate_tail_expression_statement(node)
             if tail_return is not None:
                 return tail_return
+            synchronization_statement = self.generate_slang_synchronization_statement(
+                node.expression
+            )
+            if synchronization_statement is not None:
+                return synchronization_statement
             prelude, result_names, expr = self.generate_expression_with_prelude(
                 node.expression
             )
@@ -5072,6 +5213,11 @@ class SlangCodeGen:
         elif isinstance(node, ContinueNode):
             return "continue;"
         else:
+            synchronization_statement = self.generate_slang_synchronization_statement(
+                node
+            )
+            if synchronization_statement is not None:
+                return synchronization_statement
             prelude, result_names, expr = self.generate_expression_with_prelude(node)
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
@@ -5252,6 +5398,25 @@ class SlangCodeGen:
             "bool4",
         }
 
+    def is_matrix_value_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return False
+        type_name = self.convert_type(type_name)
+        if not isinstance(type_name, str):
+            return False
+        for prefix in ("float", "double"):
+            if not type_name.startswith(prefix):
+                continue
+            suffix = type_name[len(prefix) :]
+            return (
+                len(suffix) == 3
+                and suffix[0] in "234"
+                and suffix[1] == "x"
+                and suffix[2] in "234"
+            )
+        return False
+
     def vector_component_type(self, type_name):
         mapped_type = self.convert_type(type_name)
         if mapped_type.startswith("double"):
@@ -5366,6 +5531,63 @@ class SlangCodeGen:
             "double",
         }
 
+    def binary_expression_result_type(self, expr):
+        left_type = self.expression_result_type(expr.left)
+        right_type = self.expression_result_type(expr.right)
+        if expr.op in {"==", "!=", "<", ">", "<=", ">="}:
+            return self.comparison_expression_result_type(left_type, right_type)
+        if expr.op in {"&&", "||"}:
+            return self.logical_expression_result_type(left_type, right_type)
+        if self.is_vector_value_type(left_type):
+            return left_type
+        if self.is_vector_value_type(right_type):
+            return right_type
+        if left_type == "float" or right_type == "float":
+            return "float"
+        return left_type or right_type
+
+    def comparison_expression_result_type(self, left_type, right_type):
+        left_info = self.vector_value_info(left_type)
+        right_info = self.vector_value_info(right_type)
+        if left_info is not None and right_info is not None:
+            if left_info["size"] == right_info["size"]:
+                return f"bool{left_info['size']}"
+            return None
+        if left_info is not None and self.is_scalar_value_type(right_type):
+            return f"bool{left_info['size']}"
+        if right_info is not None and self.is_scalar_value_type(left_type):
+            return f"bool{right_info['size']}"
+        if left_type is not None or right_type is not None:
+            return "bool"
+        return None
+
+    def logical_expression_result_type(self, left_type, right_type):
+        left_info = self.vector_value_info(left_type)
+        right_info = self.vector_value_info(right_type)
+        if (
+            left_info is not None
+            and left_info["component_type"] == "bool"
+            and right_type == "bool"
+        ):
+            return f"bool{left_info['size']}"
+        if (
+            right_info is not None
+            and right_info["component_type"] == "bool"
+            and left_type == "bool"
+        ):
+            return f"bool{right_info['size']}"
+        if (
+            left_info is not None
+            and right_info is not None
+            and left_info["component_type"] == "bool"
+            and right_info["component_type"] == "bool"
+            and left_info["size"] == right_info["size"]
+        ):
+            return f"bool{left_info['size']}"
+        if left_type == "bool" and right_type == "bool":
+            return "bool"
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -5384,17 +5606,17 @@ class SlangCodeGen:
             if isinstance(expr.value, bool):
                 return "bool"
         if isinstance(expr, BinaryOpNode):
-            left_type = self.expression_result_type(expr.left)
-            right_type = self.expression_result_type(expr.right)
-            if self.is_vector_value_type(left_type):
-                return left_type
-            if self.is_vector_value_type(right_type):
-                return right_type
-            if left_type == "float" or right_type == "float":
-                return "float"
-            return left_type or right_type
+            return self.binary_expression_result_type(expr)
         if isinstance(expr, UnaryOpNode):
-            return self.expression_result_type(expr.operand)
+            operand_type = self.expression_result_type(expr.operand)
+            if expr.op == "&" and operand_type is not None:
+                operand_type = (
+                    self.reference_referent_type_name(operand_type) or operand_type
+                )
+                return f"{operand_type}*"
+            if expr.op == "*" and operand_type is not None:
+                return self.pointer_pointee_type_name(operand_type) or operand_type
+            return operand_type
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
         if isinstance(expr, MatchNode):
@@ -5436,17 +5658,27 @@ class SlangCodeGen:
             return None
         if isinstance(expr, RayQueryOpNode):
             return self.slang_ray_query_method_return_type(expr.operation)
+        if isinstance(expr, WaveOpNode):
+            return self.slang_wave_result_type(expr)
         if isinstance(expr, AtomicOpNode):
             operation = self.image_atomic_operation_from_atomic_op(expr.operation)
             if operation is None:
                 return None
             image_type = self.resource_base_type(self.image_resource_type(expr.target))
             return self.image_atomic_return_type(image_type)
+        if isinstance(expr, RayTracingOpNode):
+            if expr.operation in self.user_function_names:
+                return self.user_function_return_types.get(expr.operation)
+            return self.slang_ray_tracing_result_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.slang_ray_query_call_parts(expr)
             if ray_query_call is not None:
                 operation, _query_expr, _args = ray_query_call
                 return self.slang_ray_query_method_return_type(operation)
+            ray_tracing_call = self.slang_ray_tracing_call_parts(expr)
+            if ray_tracing_call is not None:
+                operation, _args = ray_tracing_call
+                return self.slang_ray_tracing_result_type(operation)
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             if (
@@ -5686,19 +5918,34 @@ class SlangCodeGen:
         elif isinstance(node, AtomicOpNode):
             return self.generate_slang_atomic_op_expression(node)
         elif isinstance(node, RayQueryOpNode):
-            query = self.generate_expression(node.query_expr)
-            args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-            return f"{query}.{node.operation}({args})"
+            return self.generate_slang_ray_query_expression(
+                node.operation, node.query_expr, node.arguments
+            )
         elif isinstance(node, FunctionCallNode):
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
+            ray_query_call = self.slang_ray_query_call_parts(node)
+            if ray_query_call is not None:
+                operation, query_expr, args = ray_query_call
+                return self.generate_slang_ray_query_expression(
+                    operation, query_expr, args
+                )
+            ray_tracing_call = self.slang_ray_tracing_call_parts(node)
+            if ray_tracing_call is not None:
+                operation, args = ray_tracing_call
+                return self.generate_slang_ray_tracing_call_expression(operation, args)
             if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):
                 callee = func_expr
             else:
                 callee = self.generate_expression(func_expr)
+            synchronization_call = self.generate_slang_synchronization_call(
+                callee, node.args, statement_context=False
+            )
+            if synchronization_call is not None:
+                return synchronization_call
             if callee not in self.user_function_names:
                 resource_call = self.generate_resource_call(callee, node.args)
                 if resource_call is not None:
@@ -5772,12 +6019,83 @@ class SlangCodeGen:
         else:
             return str(node)
 
+    def function_call_simple_callee_name(self, node):
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None)
+        if func_expr is None:
+            func_expr = getattr(node, "name", None)
+        if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
+            return func_expr.name
+        if isinstance(func_expr, str):
+            return func_expr
+        return None
+
+    def generate_slang_synchronization_statement(self, node):
+        callee = self.function_call_simple_callee_name(node)
+        call = self.generate_slang_synchronization_call(
+            callee, getattr(node, "args", []), statement_context=True
+        )
+        if call is None:
+            return None
+        return f"{call};"
+
+    def generate_slang_synchronization_call(
+        self, callee, args, statement_context=False
+    ):
+        if not isinstance(callee, str) or callee in self.user_function_names:
+            return None
+
+        intrinsic = self.slang_synchronization_intrinsic_name(callee)
+        if intrinsic is None:
+            return None
+        if args:
+            raise ValueError(
+                f"Slang synchronization builtin '{callee}' requires 0 "
+                f"argument(s), got {len(args)}"
+            )
+        if not statement_context:
+            raise ValueError(
+                f"Slang synchronization builtin '{callee}' is statement-only "
+                "and cannot be used as a value"
+            )
+        return f"{intrinsic}()"
+
+    def slang_synchronization_intrinsic_name(self, callee):
+        return {
+            "barrier": "GroupMemoryBarrierWithGroupSync",
+            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+            "groupMemoryBarrier": "GroupMemoryBarrier",
+            "memoryBarrierShared": "GroupMemoryBarrier",
+            "memoryBarrierBuffer": "DeviceMemoryBarrier",
+            "deviceMemoryBarrier": "DeviceMemoryBarrier",
+            "memoryBarrierImage": "DeviceMemoryBarrier",
+            "memoryBarrier": "AllMemoryBarrier",
+            "allMemoryBarrier": "AllMemoryBarrier",
+        }.get(callee)
+
     def generate_slang_ray_tracing_op_expression(self, node):
-        args = [self.generate_expression(arg) for arg in node.arguments]
-        if node.operation == "TraceRay" and len(args) == 11:
+        if node.operation in self.user_function_names:
+            args = self.generate_user_function_arguments(node.operation, node.arguments)
+            return f"{self.convert_type(node.operation)}({args})"
+        return self.generate_slang_ray_tracing_call_expression(
+            node.operation, node.arguments
+        )
+
+    def generate_slang_ray_tracing_call_expression(self, operation, arguments):
+        result_type = self.slang_ray_tracing_result_type(operation)
+        target_reason = self.slang_ray_tracing_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.slang_ray_tracing_diagnostic_expression(
+                operation, target_reason
+            )
+
+        args = [self.generate_expression(arg) for arg in arguments]
+        if operation == "TraceRay" and len(args) == 11:
             ray_desc = f"RayDesc({args[6]}, {args[7]}, {args[8]}, {args[9]})"
             args = args[:6] + [ray_desc, args[10]]
-        return f"{node.operation}({', '.join(args)})"
+        return f"{operation}({', '.join(args)})"
 
     def generate_slang_wave_op_expression(self, node):
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
@@ -5787,20 +6105,170 @@ class SlangCodeGen:
             )
 
         actual_arity = len(node.arguments)
+        rejection_reason = None
         if actual_arity != expected_arity:
+            rejection_reason = f"expects {expected_arity} arguments, got {actual_arity}"
+        else:
+            rejection_reason = self.slang_wave_argument_rejection_reason(
+                node.operation, node.arguments
+            )
+        if rejection_reason is not None:
             return self.unsupported_slang_wave_op_expression(
-                node.operation,
-                f"expects {expected_arity} arguments, got {actual_arity}",
+                node.operation, rejection_reason
+            )
+        result_type = self.slang_wave_result_type(node)
+        target_reason = self.slang_wave_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.unsupported_slang_wave_op_expression(
+                node.operation, target_reason
             )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{node.operation}({args})"
 
+    def slang_wave_result_type(self, node):
+        operation = getattr(node, "operation", None)
+        args = getattr(node, "arguments", []) or []
+        if operation in {"WaveGetLaneCount", "WaveGetLaneIndex"}:
+            return "uint"
+        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "bool"
+        if operation in {"WaveActiveBallot", "WaveMatch"}:
+            return "uint4"
+        if operation in {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }:
+            return self.expression_result_type(args[0]) if args else None
+        return None
+
+    def slang_wave_argument_rejection_reason(self, operation, args):
+        integer_bit_ops = {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }
+        if operation in integer_bit_ops:
+            value_type = self.slang_wave_argument_mapped_type(args[0])
+            if value_type is not None and not self.is_slang_wave_integer_value_type(
+                value_type
+            ):
+                return (
+                    "value must be scalar or vector int or uint, " f"got {value_type}"
+                )
+
+        if operation in {
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveBallot",
+        }:
+            predicate_type = self.slang_wave_argument_mapped_type(args[0])
+            if predicate_type is not None and predicate_type != "bool":
+                return f"predicate must be scalar bool, got {predicate_type}"
+
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            lane_type = self.slang_wave_argument_mapped_type(args[1])
+            if lane_type is not None and lane_type not in {"int", "uint"}:
+                return f"lane index must be scalar int or uint, got {lane_type}"
+
+        if operation.startswith("WaveMultiPrefix"):
+            mask_type = self.slang_wave_argument_mapped_type(args[1])
+            if mask_type is not None and mask_type != "uint4":
+                return f"partition mask must be uint4, got {mask_type}"
+
+        return None
+
+    def slang_wave_argument_mapped_type(self, arg):
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None:
+            return None
+        return self.convert_type(arg_type)
+
+    def slang_wave_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_wave_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if not self.is_slang_wave_value_type(result_type):
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_wave_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        if self.is_slang_wave_value_type(expected_type):
+            return expected_type
+        return None
+
+    def is_slang_wave_value_type(self, type_name):
+        return self.is_scalar_value_type(type_name) or self.is_vector_value_type(
+            type_name
+        )
+
+    def is_slang_wave_integer_value_type(self, type_name):
+        return type_name in {
+            "int",
+            "uint",
+            "int2",
+            "int3",
+            "int4",
+            "uint2",
+            "uint3",
+            "uint4",
+        }
+
     def unsupported_slang_wave_op_expression(self, operation, reason):
         return (
             f"/* unsupported Slang wave intrinsic: {operation} {reason} */ "
-            f"{self.slang_wave_default_value(operation)}"
+            f"{self.slang_wave_fallback_value(operation)}"
         )
+
+    def slang_wave_fallback_value(self, operation):
+        default_value = self.slang_wave_default_value(operation)
+        expected_type = self.slang_wave_expected_target_type()
+        if expected_type and not self.slang_wave_default_matches_expected_type(
+            default_value, expected_type
+        ):
+            return self.zero_value_for_type(expected_type)
+        return default_value
+
+    def slang_wave_default_matches_expected_type(self, default_value, expected_type):
+        if self.is_vector_value_type(expected_type):
+            return default_value.startswith(f"{expected_type}(")
+        if expected_type == "bool":
+            return default_value == "false"
+        if expected_type in {"int", "uint", "float", "double"}:
+            return default_value in {"0", "0u"}
+        return False
 
     def slang_wave_default_value(self, operation):
         if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
@@ -5817,32 +6285,217 @@ class SlangCodeGen:
             )
 
         actual_arity = len(node.arguments)
+        rejection_reason = None
         if actual_arity not in expected_arities:
             expected = " or ".join(str(arity) for arity in sorted(expected_arities))
+            rejection_reason = f"expects {expected} arguments, got {actual_arity}"
+        else:
+            self.validate_slang_mesh_op_stage(node.operation)
+            rejection_reason = self.slang_mesh_argument_rejection_reason(
+                node.operation, node.arguments
+            )
+            if rejection_reason is None:
+                self.validate_slang_dispatch_mesh_payload_argument(node)
+                target_reason = self.slang_mesh_target_type_rejection_reason()
+                if target_reason is not None:
+                    return self.unsupported_slang_mesh_op_expression(
+                        node.operation, target_reason
+                    )
+                args = ", ".join(
+                    self.generate_expression(arg) for arg in node.arguments
+                )
+                return f"{node.operation}({args})"
+
+        if rejection_reason is not None:
             return self.unsupported_slang_mesh_op_expression(
-                node.operation,
-                f"expects {expected} arguments, got {actual_arity}",
+                node.operation, rejection_reason
             )
 
-        self.validate_slang_mesh_op_stage(node.operation)
-        self.validate_slang_dispatch_mesh_payload_argument(node)
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-        return f"{node.operation}({args})"
-
-    def validate_slang_mesh_op_stage(self, operation):
-        if not self.current_shader_type:
+    def validate_slang_mesh_op_stage_for_shader(self, operation, shader_type):
+        if not shader_type:
             return
 
-        shader_stage = self.slang_shader_stage_name(self.current_shader_type)
+        shader_stage = self.slang_shader_stage_name(shader_type)
         if operation == "SetMeshOutputCounts" and shader_stage != "mesh":
             raise ValueError(
-                f"Slang {self.current_shader_type} stage cannot call "
+                f"Slang {shader_type} stage cannot call "
                 "SetMeshOutputCounts; SetMeshOutputCounts is only valid in mesh stages"
             )
         if operation == "DispatchMesh" and shader_stage != "amplification":
             raise ValueError(
-                f"Slang {self.current_shader_type} stage cannot call DispatchMesh; "
+                f"Slang {shader_type} stage cannot call DispatchMesh; "
                 "DispatchMesh is only valid in amplification/task/object stages"
+            )
+
+    def validate_slang_mesh_op_stage(self, operation):
+        self.validate_slang_mesh_op_stage_for_shader(
+            operation, self.current_shader_type
+        )
+
+    def slang_mesh_intrinsic_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if isinstance(node, MeshOpNode):
+                calls.append(
+                    (
+                        getattr(node, "operation", None),
+                        getattr(node, "arguments", []),
+                    )
+                )
+                continue
+            call_name = self.slang_function_call_name(node)
+            if call_name in self.SLANG_MESH_INTRINSIC_ARITIES:
+                calls.append(
+                    (call_name, getattr(node, "arguments", getattr(node, "args", [])))
+                )
+        return calls
+
+    def validate_slang_mesh_intrinsic_calls(
+        self, func, shader_type, visited_helpers=None
+    ):
+        if visited_helpers is None:
+            visited_helpers = set()
+
+        saved_variable_types = self.variable_types.copy()
+        try:
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                type_name = self.slang_parameter_type_name(parameter)
+                if type_name:
+                    self.register_variable_type(parameter.name, type_name, parameter)
+            for name, type_name in self.slang_function_scope_variable_types(
+                func
+            ).items():
+                self.register_variable_type(name, type_name)
+
+            for operation, args in self.slang_mesh_intrinsic_calls(func):
+                if operation in self.SLANG_MESH_INTRINSIC_ARITIES:
+                    expected_arities = self.SLANG_MESH_INTRINSIC_ARITIES[operation]
+                    if len(args) not in expected_arities:
+                        continue
+                    self.validate_slang_mesh_op_stage_for_shader(operation, shader_type)
+
+            for helper_call in self.slang_user_function_call_nodes(func):
+                helper_name = self.slang_function_call_name(helper_call)
+                if helper_name in visited_helpers:
+                    continue
+                helper_func = self.user_functions_by_name.get(helper_name)
+                if helper_func is None or helper_func is func:
+                    continue
+                self.validate_slang_mesh_helper_call_arguments(helper_call, shader_type)
+                self.validate_slang_mesh_intrinsic_calls(
+                    helper_func, shader_type, visited_helpers | {helper_name}
+                )
+        finally:
+            self.variable_types = saved_variable_types
+
+    def slang_mesh_interface_argument_role(self, operation, args):
+        if operation == "DispatchMesh" and len(args) >= 4:
+            return args[3], "payload"
+        return None, None
+
+    def slang_mesh_interface_parameter_roles(self, func, visited_helpers=None):
+        if visited_helpers is None:
+            visited_helpers = set()
+
+        func_name = getattr(func, "name", None)
+        if func_name in visited_helpers:
+            return {}
+        if func_name:
+            visited_helpers = visited_helpers | {func_name}
+
+        parameters = getattr(func, "parameters", getattr(func, "params", []))
+        parameter_names = {
+            getattr(parameter, "name", None) for parameter in parameters or []
+        }
+        parameter_names.discard(None)
+        roles = {}
+        alias_roots = self.slang_parameter_alias_roots(func, parameter_names)
+
+        for operation, args in self.slang_mesh_intrinsic_calls(func):
+            argument, role = self.slang_mesh_interface_argument_role(operation, args)
+            if argument is None:
+                continue
+            root_name = self.slang_expression_root_identifier(argument)
+            root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+            if root_name in parameter_names and root_name not in roles:
+                roles[root_name] = role
+
+        for call_node in self.slang_user_function_call_nodes(func):
+            helper_name = self.slang_function_call_name(call_node)
+            if helper_name in visited_helpers:
+                continue
+            helper_func = self.user_functions_by_name.get(helper_name)
+            if helper_func is None:
+                continue
+            helper_roles = self.slang_mesh_interface_parameter_roles(
+                helper_func, visited_helpers
+            )
+            if not helper_roles:
+                continue
+            helper_params = getattr(
+                helper_func, "parameters", getattr(helper_func, "params", [])
+            )
+            args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+            for index, helper_param in enumerate(helper_params or []):
+                helper_param_name = getattr(helper_param, "name", None)
+                if helper_param_name not in helper_roles or index >= len(args):
+                    continue
+                root_name = self.slang_expression_root_identifier(args[index])
+                root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+                if root_name in parameter_names and root_name not in roles:
+                    roles[root_name] = helper_roles[helper_param_name]
+
+        return roles
+
+    def validate_slang_mesh_helper_call_arguments(self, call_node, shader_type):
+        helper_name = self.slang_function_call_name(call_node)
+        helper_func = self.user_functions_by_name.get(helper_name)
+        if helper_func is None:
+            return
+
+        roles = self.slang_mesh_interface_parameter_roles(helper_func)
+        if not roles:
+            return
+
+        parameters = getattr(
+            helper_func, "parameters", getattr(helper_func, "params", [])
+        )
+        args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+        for index, parameter in enumerate(parameters or []):
+            param_name = getattr(parameter, "name", None)
+            if param_name not in roles or index >= len(args):
+                continue
+            role = roles[param_name]
+            expected_type = self.slang_parameter_type_name(parameter)
+            if not expected_type:
+                continue
+            expected_compare_type = (
+                self.reference_referent_type_name(expected_type) or expected_type
+            )
+            expected_base, expected_suffix = split_array_type_suffix(
+                self.convert_type(expected_compare_type)
+            )
+            actual_base, actual_suffix = (
+                self.slang_expression_mapped_base_and_array_suffix(args[index])
+            )
+            if actual_base is None:
+                continue
+            if actual_base == expected_base and actual_suffix == expected_suffix:
+                if role == "payload" and self.slang_parameter_requires_lvalue_argument(
+                    parameter
+                ):
+                    self.validate_slang_ray_lvalue_argument(
+                        args[index], shader_type, helper_name, role
+                    )
+                continue
+            actual_type = f"{actual_base}{actual_suffix}"
+            expected_label = self.convert_type(expected_type)
+            raise ValueError(
+                f"Slang {shader_type} {helper_name} {role} "
+                f"argument type {actual_type} must match parameter type "
+                f"{expected_label}"
             )
 
     def validate_slang_dispatch_mesh_payload_argument(self, node):
@@ -5856,9 +6509,18 @@ class SlangCodeGen:
                 "@mesh_payload parameter"
             )
 
-        payload_type = self.slang_dispatch_mesh_payload_argument_type(node.arguments[3])
-        if payload_type is None or payload_type in payload_types:
+        payload_argument = node.arguments[3]
+        payload_type = self.slang_dispatch_mesh_payload_argument_type(payload_argument)
+        if payload_type is None:
             return
+
+        if payload_type in payload_types:
+            if self.slang_expression_is_lvalue(payload_argument):
+                return
+            raise ValueError(
+                "Slang DispatchMesh payload argument must be an lvalue, "
+                f"got {payload_type}"
+            )
 
         expected_label = self.slang_dispatch_mesh_payload_type_label(payload_types)
         raise ValueError(
@@ -5882,8 +6544,52 @@ class SlangCodeGen:
             return payload_types[0]
         return " or ".join(payload_types)
 
+    def slang_mesh_argument_rejection_reason(self, operation, args):
+        if operation == "SetMeshOutputCounts":
+            for index, label in enumerate(("vertex count", "primitive count")):
+                count_type = self.slang_mesh_argument_mapped_type(args[index])
+                if count_type is not None and count_type not in {"int", "uint"}:
+                    return f"{label} must be scalar int or uint, got {count_type}"
+
+        if operation == "DispatchMesh":
+            for index, label in enumerate(("x count", "y count", "z count")):
+                count_type = self.slang_mesh_argument_mapped_type(args[index])
+                if count_type is not None and count_type not in {"int", "uint"}:
+                    return f"{label} must be scalar int or uint, got {count_type}"
+        return None
+
+    def slang_mesh_argument_mapped_type(self, arg):
+        arg_type = self.expression_result_type(arg)
+        if arg_type is None:
+            return None
+        return self.convert_type(arg_type)
+
+    def slang_mesh_target_type_rejection_reason(self):
+        expected_type = self.slang_mesh_expected_target_type()
+        if expected_type is None:
+            return None
+        return f"returns void but target expects {expected_type}"
+
+    def slang_mesh_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type in {"auto", "void"}:
+            return None
+        return expected_type
+
     def unsupported_slang_mesh_op_expression(self, operation, reason):
-        return f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ 0"
+        return (
+            f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ "
+            f"{self.slang_mesh_fallback_value()}"
+        )
+
+    def slang_mesh_fallback_value(self):
+        expected_type = self.slang_mesh_expected_target_type()
+        if expected_type is not None:
+            return self.zero_value_for_type(expected_type)
+        return "0"
 
     def generate_lambda_expression(self, args):
         """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""
@@ -6870,6 +7576,8 @@ class SlangCodeGen:
         return size if size in {2, 3, 4} else None
 
     def vector_zero_value(self, type_name):
+        if isinstance(type_name, str) and type_name.startswith("bool"):
+            return "false"
         if isinstance(type_name, str) and type_name.startswith("uint"):
             return "0u"
         if isinstance(type_name, str) and type_name.startswith("int"):
@@ -7168,6 +7876,8 @@ class SlangCodeGen:
         if self.is_vector_value_type(type_name):
             component_zero = self.vector_zero_value(type_name)
             return f"{type_name}({component_zero})"
+        if self.is_matrix_value_type(type_name):
+            return f"{type_name}(0.0)"
         if type_name in self.user_struct_names:
             return f"{type_name}()"
         return "0"
@@ -7837,23 +8547,44 @@ class SlangCodeGen:
 
             if func_name == "texture":
                 if extra_args:
-                    bias_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                        extra_args[0], "bias argument"
+                    bias_reason = self.scalar_texture_bias_unsupported_reason(
+                        extra_args[0]
                     )
                     if bias_reason:
                         return self.unsupported_sampled_texture_call(
                             func_name, bias_reason
                         )
+                    expected_reason = (
+                        self.texture_result_expected_type_unsupported_reason(
+                            func_name, "float4"
+                        )
+                    )
+                    if expected_reason:
+                        return self.unsupported_sampled_texture_call(
+                            func_name, expected_reason
+                        )
                     bias = self.generate_expression(extra_args[0])
                     return f"{texture_name}.SampleBias({coord}, {bias})"
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 return f"{texture_name}.Sample({coord})"
 
             if func_name == "textureLod" and extra_args:
-                lod_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                    extra_args[0], "lod argument"
-                )
+                lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
                 if lod_reason:
                     return self.unsupported_sampled_texture_call(func_name, lod_reason)
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 lod = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleLevel({coord}, {lod})"
 
@@ -7865,6 +8596,13 @@ class SlangCodeGen:
                 )
                 if grad_reason:
                     return self.unsupported_sampled_texture_call(func_name, grad_reason)
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 ddx = self.generate_expression(extra_args[0])
                 ddy = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
@@ -7920,13 +8658,20 @@ class SlangCodeGen:
             )
             if coord_reason:
                 return self.unsupported_sampled_texture_call(func_name, coord_reason)
-            fetch_index_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                extra_args[0], "fetch index argument"
+            fetch_index_reason = (
+                self.scalar_integer_texture_argument_unsupported_reason(
+                    extra_args[0], "fetch index argument"
+                )
             )
             if fetch_index_reason:
                 return self.unsupported_sampled_texture_call(
                     func_name, fetch_index_reason
                 )
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_sampled_texture_call(func_name, expected_reason)
             lod_or_sample = self.generate_expression(extra_args[0])
             texture_type = self.get_expression_type(args[0])
             if self.is_multisample_sampler_type(texture_type):
@@ -7973,7 +8718,7 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(func_name, arity_reason)
 
         result_type = self.query_return_type(spec["dimensions"])
-        expected_reason = self.dimension_query_expected_type_unsupported_reason(
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
             func_name, result_type
         )
         if expected_reason:
@@ -8024,12 +8769,10 @@ class SlangCodeGen:
         if len(args) > 2:
             return "accepts resource and optional mip argument"
         if len(args) == 2:
-            return self.scalar_texture_argument_rank_unsupported_reason(
-                args[1], "mip argument"
-            )
+            return self.scalar_texture_mip_unsupported_reason(args[1])
         return None
 
-    def dimension_query_expected_type_unsupported_reason(self, func_name, result_type):
+    def resource_query_expected_type_unsupported_reason(self, func_name, result_type):
         expected_type = self.convert_type(self.current_expression_expected_type)
         if not expected_type or expected_type == "auto":
             return None
@@ -8061,6 +8804,16 @@ class SlangCodeGen:
         if spec is None or not spec["samples"]:
             return self.unsupported_resource_query_call(
                 func_name, self.sample_count_query_requirement(func_name)
+            )
+
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "int"
+        )
+        if expected_reason:
+            return self.unsupported_resource_query_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
             )
 
         resource_name = self.generate_expression(args[0])
@@ -8156,9 +8909,10 @@ class SlangCodeGen:
         return "has unsupported arguments"
 
     def unsupported_sampled_texture_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
             f"/* unsupported Slang sampled texture: "
-            f"{func_name} {reason} */ float4(0.0)"
+            f"{func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_offset(self, func_name, args):
@@ -8183,16 +8937,28 @@ class SlangCodeGen:
             return self.unsupported_texture_offset_call(func_name, coord_reason)
 
         if func_name == "textureOffset":
-            if len(extra_args) != 1:
+            if len(extra_args) not in {1, 2}:
                 return self.unsupported_texture_offset_call(
-                    func_name, "requires one offset argument"
+                    func_name, "requires offset and optional bias arguments"
                 )
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[0]
             )
             if offset_reason:
                 return self.unsupported_texture_offset_call(func_name, offset_reason)
+            if len(extra_args) == 2:
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[1])
+                if bias_reason:
+                    return self.unsupported_texture_offset_call(func_name, bias_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_offset_call(func_name, expected_reason)
             offset = self.generate_expression(extra_args[0])
+            if len(extra_args) == 2:
+                bias = self.generate_expression(extra_args[1])
+                return f"{texture_name}.SampleBias({coord}, {bias}, {offset})"
             return f"{texture_name}.Sample({coord}, {offset})"
 
         if func_name == "textureLodOffset":
@@ -8200,11 +8966,19 @@ class SlangCodeGen:
                 return self.unsupported_texture_offset_call(
                     func_name, "requires lod and offset arguments"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_offset_call(func_name, lod_reason)
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[1]
             )
             if offset_reason:
                 return self.unsupported_texture_offset_call(func_name, offset_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_offset_call(func_name, expected_reason)
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleLevel({coord}, {lod}, {offset})"
@@ -8223,15 +8997,49 @@ class SlangCodeGen:
         )
         if offset_reason:
             return self.unsupported_texture_offset_call(func_name, offset_reason)
+        expected_reason = self.texture_result_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_offset_call(func_name, expected_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
         return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy}, {offset})"
 
     def unsupported_texture_offset_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture offset: {func_name} {reason} */ float4(0.0)"
+            f"/* unsupported Slang texture offset: {func_name} {reason} */ "
+            f"{fallback}"
         )
+
+    def texture_result_expected_type_unsupported_reason(self, func_name, result_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type == "auto":
+            return None
+        if not (
+            self.is_scalar_value_type(expected_type)
+            or self.is_vector_value_type(expected_type)
+        ):
+            return None
+        result_type = self.convert_type(result_type)
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def texture_result_diagnostic_fallback(self, default_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if (
+            expected_type
+            and expected_type != "auto"
+            and (
+                self.is_scalar_value_type(expected_type)
+                or self.is_vector_value_type(expected_type)
+            )
+        ):
+            return self.zero_value_for_type(expected_type)
+        return self.zero_value_for_type(default_type)
 
     def generate_texture_projected(self, func_name, args):
         sample_args = self.sampled_texture_args(args)
@@ -8257,6 +9065,11 @@ class SlangCodeGen:
             if not extra_args:
                 return f"{texture_name}.Sample({projected_coord})"
             if len(extra_args) == 1:
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[0])
+                if bias_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, bias_reason
+                    )
                 bias = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleBias({projected_coord}, {bias})"
             return self.unsupported_texture_projected_call(
@@ -8282,6 +9095,11 @@ class SlangCodeGen:
                     return self.unsupported_texture_projected_call(
                         func_name, offset_reason
                     )
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[1])
+                if bias_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, bias_reason
+                    )
                 offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleBias({projected_coord}, {bias}, {offset})"
@@ -8294,6 +9112,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires one lod argument"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_projected_call(func_name, lod_reason)
             lod = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleLevel({projected_coord}, {lod})"
 
@@ -8302,6 +9123,9 @@ class SlangCodeGen:
                 return self.unsupported_texture_projected_call(
                     func_name, "requires lod and offset arguments"
                 )
+            lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
+            if lod_reason:
+                return self.unsupported_texture_projected_call(func_name, lod_reason)
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[1]
             )
@@ -8442,6 +9266,12 @@ class SlangCodeGen:
                     "requires a typed offsets array or four offset arguments",
                 )
 
+        component_reason = self.texture_gather_component_unsupported_reason(
+            component_arg
+        )
+        if component_reason:
+            return self.unsupported_texture_gather_call(func_name, component_reason)
+
         method_args = [coord] + [
             self.generate_expression(offset_arg) for offset_arg in offset_args
         ]
@@ -8482,6 +9312,20 @@ class SlangCodeGen:
             3: "GatherAlpha",
         }
         return methods.get(self.literal_int_value(component_arg))
+
+    def texture_gather_component_unsupported_reason(self, component_arg):
+        if component_arg is None:
+            return None
+
+        component_type = self.expression_result_type(component_arg)
+        if component_type is None:
+            return None
+
+        mapped_type = self.convert_type(component_type)
+        if mapped_type in {"int", "uint"}:
+            return None
+
+        return f"component argument must be scalar int or uint, got {mapped_type}"
 
     def texture_gather_component_expression(self, texture_name, method_args, component):
         arg_list = ", ".join(method_args)
@@ -8524,11 +9368,20 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_compare_call(func_name, coord_reason)
-        compare_reason = self.compare_reference_rank_unsupported_reason(
+        compare_reason = self.compare_reference_unsupported_reason(
             args[coord_index + 1]
         )
         if compare_reason:
             return self.unsupported_texture_compare_call(func_name, compare_reason)
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "float"
+        )
+        if expected_reason:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
 
         if func_name == "textureCompare":
             if extra_args:
@@ -8555,6 +9408,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires one lod argument"
                 )
+            lod_reason = self.scalar_numeric_texture_argument_unsupported_reason(
+                extra_args[0], "lod argument"
+            )
+            if lod_reason:
+                return self.unsupported_texture_compare_call(func_name, lod_reason)
             lod = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleCmpLevel({coord}, {compare}, {lod})"
 
@@ -8591,12 +9449,21 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_gather_compare_call(func_name, coord_reason)
-        compare_reason = self.compare_reference_rank_unsupported_reason(
+        compare_reason = self.compare_reference_unsupported_reason(
             args[coord_index + 1]
         )
         if compare_reason:
             return self.unsupported_texture_gather_compare_call(
                 func_name, compare_reason
+            )
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_gather_compare_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
             )
 
         if func_name == "textureGatherCompare":
@@ -8651,16 +9518,22 @@ class SlangCodeGen:
         expected_rank = self.texture_offset_rank(resource_type)
         if expected_rank is None:
             return "requires an offset-capable sampler1D/2D/3D texture resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def texture_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         expected_rank = self.texture_gradient_rank(resource_type)
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             gradient, expected_rank, resource_type, "gradient"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_gradient_type_unsupported_reason(gradient)
 
     def gather_offset_rank_unsupported_reason(self, texture_node, offset):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -8669,9 +9542,12 @@ class SlangCodeGen:
         expected_rank = self.gather_offset_rank(resource_type)
         if expected_rank is None:
             return "requires a gather-offset-capable sampler2D/2DArray texture resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def gather_offsets_rank_unsupported_reason(self, texture_node, extra_args):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -8682,18 +9558,26 @@ class SlangCodeGen:
             return "requires a gather-offset-capable sampler2D/2DArray texture resource"
 
         if len(extra_args) in {1, 2} and self.is_array_expression(extra_args[0]):
-            return self.texture_rank_unsupported_reason(
+            rank_reason = self.texture_rank_unsupported_reason(
                 extra_args[0],
                 expected_rank,
                 resource_type,
                 "offset",
                 array_element=True,
             )
+            if rank_reason:
+                return rank_reason
+            return self.texture_offset_type_unsupported_reason(
+                extra_args[0], array_element=True
+            )
         if len(extra_args) in {4, 5}:
             for offset in extra_args[:4]:
                 reason = self.texture_rank_unsupported_reason(
                     offset, expected_rank, resource_type, "offset"
                 )
+                if reason:
+                    return reason
+                reason = self.texture_offset_type_unsupported_reason(offset)
                 if reason:
                     return reason
         return None
@@ -8712,28 +9596,114 @@ class SlangCodeGen:
         expected_rank = self.shadow_compare_offset_rank(resource_type)
         if expected_rank is None:
             return "requires an offset-capable sampler2DShadow/2DArrayShadow resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def shadow_compare_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         expected_rank = self.shadow_compare_gradient_rank(resource_type)
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             gradient, expected_rank, resource_type, "gradient"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_gradient_type_unsupported_reason(gradient)
 
-    def compare_reference_rank_unsupported_reason(self, compare):
-        compare_rank = self.expression_value_rank(compare)
-        if compare_rank is None or compare_rank == 1:
+    def compare_reference_unsupported_reason(self, compare):
+        type_name = self.type_name_string(self.expression_result_type(compare))
+        if type_name is None:
             return None
-        return "requires a scalar compare reference"
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"float", "double"}:
+            return None
+
+        return f"compare reference must be scalar float or double, got {mapped_type}"
+
+    def texture_offset_type_unsupported_reason(self, offset, array_element=False):
+        type_name = self.type_name_string(self.expression_result_type(offset))
+        if type_name is None:
+            return None
+        if array_element and "[" in type_name and "]" in type_name:
+            type_name, _suffix = split_array_type_suffix(type_name)
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type == "int":
+            return None
+
+        info = self.vector_value_info(type_name)
+        if info is not None and info["component_type"] == "int":
+            return None
+
+        return f"offset must be scalar or vector int, got {mapped_type}"
+
+    def texture_gradient_type_unsupported_reason(self, gradient):
+        type_name = self.type_name_string(self.expression_result_type(gradient))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"float", "double"}:
+            return None
+
+        info = self.vector_value_info(type_name)
+        if info is not None and info["component_type"] in {"float", "double"}:
+            return None
+
+        return f"gradient must be scalar or vector float or double, got {mapped_type}"
 
     def scalar_texture_argument_rank_unsupported_reason(self, node, role):
         actual_rank = self.expression_value_rank(node)
         if actual_rank is None or actual_rank == 1:
             return None
         return f"requires {self.texture_rank_phrase(1, role)}"
+
+    def scalar_texture_lod_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "lod argument"
+        ) or self.scalar_numeric_texture_argument_unsupported_reason(
+            node, "lod argument"
+        )
+
+    def scalar_texture_bias_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "bias argument"
+        ) or self.scalar_numeric_texture_argument_unsupported_reason(
+            node, "bias argument"
+        )
+
+    def scalar_texture_mip_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "mip argument"
+        ) or self.scalar_integer_texture_argument_unsupported_reason(
+            node, "mip argument"
+        )
+
+    def scalar_integer_texture_argument_unsupported_reason(self, node, role):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"int", "uint"}:
+            return None
+
+        return f"{role} must be scalar int or uint, got {mapped_type}"
+
+    def scalar_numeric_texture_argument_unsupported_reason(self, node, role):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"int", "uint", "float", "double"}:
+            return None
+
+        return f"{role} must be scalar int, uint, float, or double, got {mapped_type}"
 
     def texture_rank_unsupported_reason(
         self, node, expected_rank, resource_type, role, array_element=False
@@ -8845,13 +9815,18 @@ class SlangCodeGen:
             "samplerCubeArrayShadow",
         }
 
-    def unsupported_texture_compare_call(self, func_name, reason):
-        return f"/* unsupported Slang shadow compare: {func_name} {reason} */ 0.0"
+    def unsupported_texture_compare_call(self, func_name, reason, fallback="0.0"):
+        return (
+            f"/* unsupported Slang shadow compare: {func_name} {reason} */ "
+            f"{fallback}"
+        )
 
-    def unsupported_texture_gather_compare_call(self, func_name, reason):
+    def unsupported_texture_gather_compare_call(
+        self, func_name, reason, fallback="float4(0.0)"
+    ):
         return (
             f"/* unsupported Slang shadow gather compare: "
-            f"{func_name} {reason} */ float4(0.0)"
+            f"{func_name} {reason} */ {fallback}"
         )
 
     def literal_int_value(self, node):
@@ -8870,7 +9845,7 @@ class SlangCodeGen:
         return None
 
     def is_array_expression(self, node):
-        type_name = self.get_expression_type(node)
+        type_name = self.type_name_string(self.expression_result_type(node))
         return isinstance(type_name, str) and "[" in type_name and "]" in type_name
 
     def generate_texture_query_levels(self, args):
@@ -8893,6 +9868,16 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(
                 "textureQueryLevels",
                 "requires a mipmapped sampled texture resource",
+            )
+
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            "textureQueryLevels", "int"
+        )
+        if expected_reason:
+            return self.unsupported_resource_query_call(
+                "textureQueryLevels",
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
             )
 
         resource_name = self.generate_expression(args[0])
@@ -8938,6 +9923,14 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_query_lod_call(coord_reason)
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            "textureQueryLod", "float2"
+        )
+        if expected_reason:
+            return self.unsupported_texture_query_lod_call(
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
         unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({coord})"
         clamped = f"{texture_name}.CalculateLevelOfDetail({coord})"
         return f"float2({unclamped}, {clamped})"
@@ -8978,10 +9971,8 @@ class SlangCodeGen:
 
         return "requires texture and coordinate arguments"
 
-    def unsupported_texture_query_lod_call(self, reason):
-        return self.unsupported_resource_query_call(
-            "textureQueryLod", reason, "float2(0.0, 0.0)"
-        )
+    def unsupported_texture_query_lod_call(self, reason, fallback="float2(0.0, 0.0)"):
+        return self.unsupported_resource_query_call("textureQueryLod", reason, fallback)
 
     def register_helper_function(self, name, source):
         if name not in self.helper_functions:
