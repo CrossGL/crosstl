@@ -10190,6 +10190,88 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
     assert "msTex.Sample" not in generated_code
 
 
+def test_texture_offset_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(
+                sampler2d tex,
+                vec2 uv,
+                ivec2 offset
+            ) {
+                return textureOffset(tex, uv, offset);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                bool take = true;
+                vec4 validOffset = textureOffset(colorMap, uv, offset);
+                float scalarOffset = textureOffset(colorMap, uv, offset);
+                ivec2 vectorLodOffset = textureLodOffset(colorMap, uv, 1.0, offset);
+                acceptFloat(textureGradOffset(colorMap, uv, ddx, ddy, offset));
+                float scalarTernary = take
+                    ? textureOffset(colorMap, uv, offset)
+                    : 1.0;
+                float scalarArray[2] = {
+                    textureLodOffset(colorMap, uv, 1.0, offset),
+                    1.0
+                };
+                float missingOffset = textureOffset(colorMap, uv);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validOffset = colorMap.Sample(uv, offset);" in generated_code
+    assert (
+        "float scalarOffset = /* unsupported Slang texture offset: "
+        "textureOffset returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorLodOffset = /* unsupported Slang texture offset: "
+        "textureLodOffset returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang texture offset: textureGradOffset "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang texture offset: textureOffset returns "
+        "float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang texture offset: "
+        "textureOffset returns float4 but target expects float */ 0 : 1.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang texture offset: "
+        "textureLodOffset returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingOffset = /* unsupported Slang texture offset: "
+        "textureOffset requires offset and optional bias arguments */ 0;"
+        in generated_code
+    )
+    assert "float scalarOffset = colorMap.Sample(uv, offset);" not in generated_code
+    assert "int2 vectorLodOffset = colorMap.SampleLevel" not in generated_code
+    assert "acceptFloat(colorMap.SampleGrad" not in generated_code
+
+
 def test_projected_texture_builtins_emit_slang_projected_samples():
     code = """
     shader Resources {

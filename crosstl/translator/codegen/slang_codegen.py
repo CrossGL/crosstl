@@ -8910,11 +8910,17 @@ class SlangCodeGen:
             )
             if offset_reason:
                 return self.unsupported_texture_offset_call(func_name, offset_reason)
-            offset = self.generate_expression(extra_args[0])
             if len(extra_args) == 2:
                 bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[1])
                 if bias_reason:
                     return self.unsupported_texture_offset_call(func_name, bias_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_offset_call(func_name, expected_reason)
+            offset = self.generate_expression(extra_args[0])
+            if len(extra_args) == 2:
                 bias = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleBias({coord}, {bias}, {offset})"
             return f"{texture_name}.Sample({coord}, {offset})"
@@ -8932,6 +8938,11 @@ class SlangCodeGen:
             )
             if offset_reason:
                 return self.unsupported_texture_offset_call(func_name, offset_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_offset_call(func_name, expected_reason)
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleLevel({coord}, {lod}, {offset})"
@@ -8950,15 +8961,49 @@ class SlangCodeGen:
         )
         if offset_reason:
             return self.unsupported_texture_offset_call(func_name, offset_reason)
+        expected_reason = self.texture_result_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_offset_call(func_name, expected_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
         return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy}, {offset})"
 
     def unsupported_texture_offset_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture offset: {func_name} {reason} */ float4(0.0)"
+            f"/* unsupported Slang texture offset: {func_name} {reason} */ "
+            f"{fallback}"
         )
+
+    def texture_result_expected_type_unsupported_reason(self, func_name, result_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type == "auto":
+            return None
+        if not (
+            self.is_scalar_value_type(expected_type)
+            or self.is_vector_value_type(expected_type)
+        ):
+            return None
+        result_type = self.convert_type(result_type)
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def texture_result_diagnostic_fallback(self, default_type):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if (
+            expected_type
+            and expected_type != "auto"
+            and (
+                self.is_scalar_value_type(expected_type)
+                or self.is_vector_value_type(expected_type)
+            )
+        ):
+            return self.zero_value_for_type(expected_type)
+        return self.zero_value_for_type(default_type)
 
     def generate_texture_projected(self, func_name, args):
         sample_args = self.sampled_texture_args(args)

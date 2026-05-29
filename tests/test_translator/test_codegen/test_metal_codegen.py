@@ -5500,6 +5500,71 @@ def test_metal_trace_ray_uses_primitive_acceleration_structure_shape():
     assert "primitiveAS, 0xff" not in generated
 
 
+def test_metal_trace_ray_infers_local_acceleration_structure_aliases():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+        primitive_acceleration_structure primitiveAS @binding(2);
+        intersection_function_table<triangle_data> primitiveIntersectionFunctions
+            @binding(3);
+
+        ray_generation {
+            void main() {
+                let instanceAlias = topLevelAS;
+                let chainedAlias = instanceAlias;
+                TraceRay(
+                    chainedAlias,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+
+                let primitiveAlias = primitiveAS;
+                TraceRay(
+                    primitiveAlias,
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "instance_acceleration_structure instanceAlias = topLevelAS;" in generated
+    assert "instance_acceleration_structure chainedAlias = instanceAlias;" in generated
+    assert "primitive_acceleration_structure primitiveAlias = primitiveAS;" in generated
+    assert (
+        ".intersect(__crossgl_ray_0, chainedAlias, 255, intersectionFunctions);"
+        in generated
+    )
+    assert (
+        ".intersect(__crossgl_ray_3, primitiveAlias, primitiveIntersectionFunctions);"
+        in generated
+    )
+    assert "float instanceAlias = topLevelAS;" not in generated
+    assert (
+        "unsupported Metal ray tracing intrinsic: TraceRay acceleration structure"
+        not in generated
+    )
+
+
 def test_metal_acceleration_structure_globals_thread_through_helpers():
     code = """
     shader rt {

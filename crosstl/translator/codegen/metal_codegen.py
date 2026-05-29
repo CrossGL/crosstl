@@ -3492,6 +3492,13 @@ class MetalCodeGen:
                     self.current_sampler_parameter_array_sizes[stmt.name] = (
                         sampler_array_size
                     )
+            acceleration_structure_alias_type = (
+                self.local_variable_acceleration_structure_alias_resource_type(
+                    stmt, var_type
+                )
+            )
+            if acceleration_structure_alias_type is not None:
+                var_type = acceleration_structure_alias_type
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3828,6 +3835,65 @@ class MetalCodeGen:
             return "sampler"
         if self.is_sampler_type(declared_type_name):
             return "sampler"
+        return None
+
+    def local_variable_acceleration_structure_alias_resource_type(
+        self, node, declared_type
+    ):
+        initial_type = self.acceleration_structure_argument_resource_type(
+            getattr(node, "initial_value", None)
+        )
+        if initial_type is None:
+            return None
+
+        declared_type_name = self.type_name_string(declared_type)
+        if self.local_variable_type_node(node) is None:
+            return initial_type
+        if self.is_acceleration_structure_type(declared_type_name):
+            declared_resource_type = self.map_resource_type_with_format(
+                declared_type_name, node
+            )
+            if declared_resource_type != initial_type:
+                alias_name = getattr(node, "name", "<anonymous>")
+                raise ValueError(
+                    f"Metal local acceleration structure alias '{alias_name}' "
+                    f"declares {declared_type_name} but initializer has "
+                    f"{initial_type}"
+                )
+            return declared_resource_type
+        return None
+
+    def acceleration_structure_argument_resource_type(self, argument):
+        if argument is None:
+            return None
+
+        argument_type = self.expression_result_type(argument)
+        if argument_type and self.is_acceleration_structure_type(argument_type):
+            if self.metal_type_is_pointer_like(argument_type):
+                return None
+            return self.map_resource_type_with_format(argument_type)
+
+        argument_name = self.expression_name(argument)
+        if not argument_name:
+            return None
+
+        local_type = self.local_variable_types.get(argument_name)
+        if local_type and self.is_acceleration_structure_type(local_type):
+            if self.metal_type_is_pointer_like(local_type):
+                return None
+            return self.map_resource_type_with_format(local_type)
+
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            array_size,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) != argument_name:
+                continue
+            if array_size is not None and not isinstance(argument, ArrayAccessNode):
+                return None
+            return mapped_type
         return None
 
     def sampler_argument_resource_array_size(self, sampler_arg):

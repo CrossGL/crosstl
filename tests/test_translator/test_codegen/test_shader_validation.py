@@ -3770,8 +3770,9 @@ shader MetalRayTracingHelperValidation {
     accelerationStructureEXT topLevelAS @binding(0);
 
     void shoot(vec3 origin, vec3 direction) {
+        let topLevelAlias = topLevelAS;
         TraceRay(
-            topLevelAS,
+            topLevelAlias,
             0,
             0xff,
             0,
@@ -7428,6 +7429,10 @@ def test_generated_metal_ray_tracing_helper_trace_ray_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_RAY_TRACING_HELPER_SHADER)
     )
+    assert "instance_acceleration_structure topLevelAlias = topLevelAS;" in code
+    assert "intersect(__crossgl_ray_0, topLevelAlias, 255)" in code
+    assert "float topLevelAlias = topLevelAS;" not in code
+    assert "unsupported Metal ray tracing intrinsic: TraceRay acceleration" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

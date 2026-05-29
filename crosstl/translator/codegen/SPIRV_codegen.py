@@ -6069,6 +6069,15 @@ class VulkanSPIRVCodeGen:
                 if registered_type is not None:
                     return registered_type
 
+        if isinstance(expr, FunctionCallNode):
+            callee_name = self.function_call_name(expr)
+            if callee_name in self.function_signatures:
+                return_type = self.function_signatures[callee_name][0]
+                if return_type.type.base_type != "void":
+                    return return_type
+            if callee_name in self.struct_types:
+                return self.struct_types[callee_name]
+
         return None
 
     def flatten_vector_constructor_args(

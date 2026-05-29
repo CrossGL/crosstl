@@ -6665,6 +6665,73 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    @pytest.mark.parametrize(
+        ("helper_source", "payload_expression"),
+        [
+            (
+                """
+                TaskPayloadA makePayload(uint meshlet) {
+                    TaskPayloadA payload;
+                    payload.meshlet = meshlet;
+                    return payload;
+                }
+                """,
+                "makePayload(9u)",
+            ),
+            ("", "TaskPayloadA(9u)"),
+        ],
+    )
+    def test_task_stage_dispatch_mesh_typed_payload_expressions_select_targets(
+        self, tmp_path, helper_source, payload_expression
+    ):
+        source_code = """
+        shader TaskHelperPayloadSPIRV {
+            struct TaskPayloadA {
+                uint meshlet;
+            };
+
+            struct TaskPayloadB {
+                uint other;
+            };
+
+            task {
+                @taskPayloadSharedEXT TaskPayloadA payloadA;
+                @taskPayloadSharedEXT TaskPayloadB payloadB;
+
+                %s
+
+                void main() @numthreads(1, 1, 1) {
+                    DispatchMesh(2, 3, 4, %s);
+                    int afterDispatch = 1;
+                }
+            }
+        }
+        """ % (helper_source, payload_expression)
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint TaskEXT %(\d+) "main"([^\n]*)', spv_code)
+        assert entry_match is not None
+        payload_a_match = re.search(r'OpName %(\d+) "payloadA"', spv_code)
+        payload_b_match = re.search(r'OpName %(\d+) "payloadB"', spv_code)
+        assert payload_a_match is not None
+        assert payload_b_match is not None
+        payload_a_id = payload_a_match.group(1)
+        payload_b_id = payload_b_match.group(1)
+        entry_operands = entry_match.group(2).split()
+        assert f"%{payload_a_id}" in entry_operands
+        assert f"%{payload_b_id}" not in entry_operands
+        assert re.search(rf"OpStore %{payload_a_id} %\d+", spv_code)
+        assert re.search(
+            rf"OpEmitMeshTasksEXT %\d+ %\d+ %\d+ %{payload_a_id}", spv_code
+        )
+        assert "payload target is ambiguous" not in spv_code
+        assert "payload argument requires taskPayloadSharedEXT storage" not in spv_code
+        assert "afterDispatch" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_task_stage_dispatch_mesh_payload_rejects_ambiguous_targets(self):
         source_code = """
         shader TaskAmbiguousPayloadSPIRV {
