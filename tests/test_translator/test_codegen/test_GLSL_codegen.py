@@ -9534,6 +9534,90 @@ def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
     assert "return VertexOutput" not in generated_code
 
 
+def test_glsl_stage_io_multidimensional_arrays_use_c_style_declarators():
+    shader = """
+    shader StageIOMultidimensionalArrays {
+        vertex {
+            struct VertexInput {
+                vec3 positions[2][3];
+                ivec2 ids[2][2];
+            }
+
+            struct VertexOutput {
+                vec4 colors[2][3];
+                vec4 position @ gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.colors[1][2] = vec4(input.positions[0][1], 1.0);
+                output.position = output.colors[1][2];
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "in vec3 positions[2][3];" in generated_code
+    assert "in ivec2 ids[2][2];" in generated_code
+    assert "out vec4 colors[2][3];" in generated_code
+    assert "vec3[2][3] positions" not in generated_code
+    assert "ivec2[2][2] ids" not in generated_code
+    assert "vec4[2][3] colors" not in generated_code
+
+
+def test_glsl_interface_block_instance_preserves_all_array_dimensions():
+    shader = """
+    shader GLSLInterfaceBlockInstanceArray {
+        @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array(2, 3)
+        struct VertexIn {
+            ivec2 ids[2][2];
+            vec3 positions[2][3];
+        };
+
+        @glsl_interface_block(out) @glsl_interface_instance(fragmentOut)
+        struct FragmentOut {
+            vec4 colors[2][3];
+        };
+
+        vertex {
+            void main() {
+                gl_Position = vec4(vertexIn[1][2].positions[0][1], 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "} vertexIn[2][3];" in generated_code
+    assert "ivec2 ids[2][2];" in generated_code
+    assert "vec3 positions[2][3];" in generated_code
+    assert "vec4 colors[2][3];" in generated_code
+
+
+def test_glsl_stage_io_multidimensional_array_locations_are_reserved():
+    shader = """
+    shader StageIOMultidimensionalArrayLocationConflict {
+        vertex {
+            struct VertexInput {
+                vec4 first[2][3] @location(0);
+                vec4 second @location(5);
+            }
+
+            void main(VertexInput input) {
+                gl_Position = input.first[0][0] + input.second;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="locations 0-5"):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
     shader = """
     shader TraitSelfOption {

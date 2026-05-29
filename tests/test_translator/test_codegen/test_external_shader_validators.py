@@ -2479,6 +2479,47 @@ def test_generated_glsl_geometry_interface_blocks_validate_with_glslangvalidator
     _run_validator([glslang, "-S", "geom", str(shader_path)])
 
 
+def test_generated_glsl_stage_io_multidimensional_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "stage_io_multidimensional_arrays.vert"
+
+    shader = """
+    shader GLSLStageIOMultidimensionalArraysValidator {
+        vertex {
+            struct VertexInput {
+                vec3 positions[2][3];
+                ivec2 ids[2][2];
+            }
+
+            struct VertexOutput {
+                vec4 colors[2][3];
+                vec4 position @ gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.colors[1][2] = vec4(input.positions[0][1], 1.0);
+                output.position = output.colors[1][2];
+                return output;
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "vertex")
+    assert "in vec3 positions[2][3];" in code
+    assert "in ivec2 ids[2][2];" in code
+    assert "out vec4 colors[2][3];" in code
+    assert "vec3[2][3] positions" not in code
+    assert "ivec2[2][2] ids" not in code
+    assert "vec4[2][3] colors" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "vert", str(shader_path)])
+
+
 @pytest.mark.parametrize(
     ("topology", "max_vertices", "index_assignment", "expected_layout"),
     [

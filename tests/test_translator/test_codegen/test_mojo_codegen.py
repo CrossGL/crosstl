@@ -23,6 +23,7 @@ from crosstl.translator.ast import (
     MatchArmNode,
     MatchNode,
     MeshOpNode,
+    NamedType,
     PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
@@ -9789,17 +9790,152 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert not codegen.resource_access_aliasable_type("TextureBox<int>")
     assert not codegen.resource_access_aliasable_type("BufferBox<int>")
     assert not codegen.resource_access_aliasable_type("SamplerBox<float>")
-    assert "struct TextureBox:" in generated_code
-    assert "struct BufferBox:" in generated_code
-    assert "struct SamplerBox:" in generated_code
+    assert "struct TextureBox[T: AnyType]:" in generated_code
+    assert "struct BufferBox[T: AnyType]:" in generated_code
+    assert "struct SamplerBox[T: AnyType]:" in generated_code
     assert "alias TextureMode = Int32" in generated_code
-    assert "var globalTextureBox: TextureBox<int>" in generated_code
-    assert "var globalBufferBox: BufferBox<int>" in generated_code
-    assert "var globalSamplerBox: SamplerBox<float>" in generated_code
+    assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
+    assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
+    assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
+    assert "TextureBox<int>" not in generated_code
+    assert "BufferBox<int>" not in generated_code
+    assert "SamplerBox<float>" not in generated_code
     assert "# CrossGL resource metadata: name=globalTextureBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalBufferBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalSamplerBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalMode" not in generated_code
+
+
+def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+    Box<int> globalBox;
+    Pair<float> globalPair;
+
+    int readBox(Box<int> payload) {
+        return payload.value + globalBox.value;
+    }
+
+    float readPair(Pair<float> payload) {
+        return payload.left.value + payload.right.value;
+    }
+    """
+    codegen = MojoCodeGen()
+    generated_code = codegen.generate(parse_code(tokenize_code(source)))
+
+    assert "struct Box[T: AnyType]:" in generated_code
+    assert "struct Pair[T: AnyType]:" in generated_code
+    assert "var left: Box[T]" in generated_code
+    assert "var right: Box[T]" in generated_code
+    assert "var globalBox = Box[Int32](0, 0)" in generated_code
+    assert (
+        "var globalPair = Pair[Float32](Box[Float32](0.0, 0), " "Box[Float32](0.0, 0))"
+    ) in generated_code
+    assert "fn readBox(payload: Box[Int32]) -> Int32:" in generated_code
+    assert "fn readPair(payload: Pair[Float32]) -> Float32:" in generated_code
+    assert "return (payload.value + globalBox.value)" in generated_code
+    assert "return (payload.left.value + payload.right.value)" in generated_code
+    assert codegen.generic_struct_fields_for_type("Pair<float>") == {
+        "left": "Box<float>",
+        "right": "Box<float>",
+    }
+    assert codegen.expression_path_result_type("globalPair.left.value") == "float"
+    assert "Box<int>" not in generated_code
+    assert "Pair<float>" not in generated_code
+
+
+def test_generic_user_struct_constructor_nodes_use_specialized_field_types():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    """
+    codegen = MojoCodeGen()
+    codegen.generate(parse_code(tokenize_code(source)))
+
+    constructor_type = NamedType("Box", [PrimitiveType("int")])
+    full_constructor = ConstructorNode(
+        constructor_type,
+        [
+            LiteralNode(3, PrimitiveType("int")),
+            LiteralNode(1, PrimitiveType("int")),
+        ],
+    )
+    partial_constructor = ConstructorNode(
+        constructor_type,
+        [LiteralNode(3, PrimitiveType("int"))],
+    )
+
+    assert (
+        codegen.generate_constructor_node(full_constructor, "Box<int>")
+        == "Box[Int32](3, 1)"
+    )
+    assert (
+        codegen.generate_constructor_node(partial_constructor, "Box<int>")
+        == "Box[Int32](value=3, tag=0)"
+    )
+
+
+def test_generic_user_struct_resource_fields_are_aliasable_after_specialization():
+    source = """
+    generic<T> struct Wrapper {
+        T value;
+        int tag;
+    };
+    """
+    codegen = MojoCodeGen()
+    codegen.generate(parse_code(tokenize_code(source)))
+
+    assert not codegen.resource_access_aliasable_type("Wrapper<int>")
+    assert codegen.resource_access_aliasable_type("Wrapper<RWTexture2D<float4>>")
+    assert codegen.resource_aliasable_field_paths_for_type(
+        "Wrapper<RWTexture2D<float4>>"
+    ) == ["value"]
+
+
+def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+    Box<int> globalBox;
+    Pair<float> globalPair;
+
+    int readBox(Box<int> payload) {
+        return payload.value + globalBox.value;
+    }
+
+    float readPair(Pair<float> payload) {
+        return payload.left.value + payload.right.value;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_specializations.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():

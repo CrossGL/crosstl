@@ -869,6 +869,65 @@ def test_metal_threadgroup_array_helpers_preserve_address_space_and_barriers():
     assert "float value = readScratch(scratch, index);" in generated_code
 
 
+def test_metal_helper_control_flow_barriers_lower_in_nested_blocks():
+    shader = """
+    shader HelperControlFlowBarrierValidation {
+        void syncScratch(uint mode) {
+            if (mode != 0u) {
+                groupMemoryBarrier();
+            } else {
+                memoryBarrierShared();
+            }
+
+            for (int i = 0; i < 2; i = i + 1) {
+                memoryBarrierBuffer();
+            }
+
+            switch (mode) {
+                case 0u:
+                    memoryBarrierImage();
+                    break;
+                default:
+                    allMemoryBarrier();
+                    break;
+            }
+        }
+
+        compute {
+            void main() {
+                shared float scratch[16];
+                uint index = gl_LocalInvocationIndex;
+                scratch[index] = float(index);
+                syncScratch(index);
+                scratch[index] = scratch[index] + 1.0;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "void syncScratch(uint mode)" in generated_code
+    assert "if (mode != 0u)" in generated_code
+    assert "for (int i = 0; i < 2; i = i + 1)" in generated_code
+    assert "switch (mode)" in generated_code
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert generated_code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
+    assert "threadgroup_barrier(mem_flags::mem_texture);" in generated_code
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in generated_code
+    assert "groupMemoryBarrier();" not in generated_code
+    assert "memoryBarrierShared();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+    assert "allMemoryBarrier();" not in generated_code
+    assert "syncScratch(index);" in generated_code
+
+
 def test_metal_parameter_address_space_qualifiers_lower_for_pointer_reference_and_array_types():
     shader = """
     shader MetalAddressSpaceParameters {

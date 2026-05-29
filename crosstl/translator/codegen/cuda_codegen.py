@@ -3461,52 +3461,91 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         local_alias_types,
         assigned_names,
     ):
-        """Collect a single deterministic if/else alias assignment."""
-        if getattr(statement, "else_if_conditions", None) or getattr(
-            statement,
-            "else_if_bodies",
-            None,
+        """Collect a deterministic if/else alias assignment chain."""
+        branch_assignments = []
+        current_if = statement
+        else_assignment = None
+
+        while isinstance(current_if, IfNode):
+            condition = getattr(
+                current_if,
+                "condition",
+                getattr(current_if, "if_condition", None),
+            )
+            then_body = getattr(
+                current_if,
+                "then_branch",
+                getattr(current_if, "if_body", None),
+            )
+            else_body = getattr(
+                current_if,
+                "else_branch",
+                getattr(current_if, "else_body", None),
+            )
+            if condition is None or then_body is None or else_body is None:
+                return None
+
+            then_assignment = self.query_return_body_alias_assignment(then_body)
+            if then_assignment is None:
+                return None
+            branch_assignments.append((condition, then_assignment))
+
+            else_if_conditions = list(
+                getattr(current_if, "else_if_conditions", None) or []
+            )
+            else_if_bodies = list(getattr(current_if, "else_if_bodies", None) or [])
+            if len(else_if_conditions) != len(else_if_bodies):
+                return None
+
+            for else_if_condition, else_if_body in zip(
+                else_if_conditions,
+                else_if_bodies,
+            ):
+                if else_if_condition is None:
+                    return None
+                else_if_assignment = self.query_return_body_alias_assignment(
+                    else_if_body
+                )
+                if else_if_assignment is None:
+                    return None
+                branch_assignments.append((else_if_condition, else_if_assignment))
+
+            if isinstance(else_body, IfNode):
+                current_if = else_body
+                continue
+
+            else_assignment = self.query_return_body_alias_assignment(else_body)
+            if else_assignment is None:
+                return None
+            break
+
+        if else_assignment is None:
+            return None
+
+        target_name = branch_assignments[0][1][0]
+        if target_name not in local_alias_types or target_name in assigned_names:
+            return None
+        if any(
+            branch_assignment[0] != target_name
+            for _, branch_assignment in branch_assignments
         ):
             return None
 
-        condition = getattr(
-            statement,
-            "condition",
-            getattr(statement, "if_condition", None),
-        )
-        then_body = getattr(
-            statement,
-            "then_branch",
-            getattr(statement, "if_body", None),
-        )
-        else_body = getattr(
-            statement,
-            "else_branch",
-            getattr(statement, "else_body", None),
-        )
-        if condition is None or then_body is None or else_body is None:
-            return None
-
-        then_statements = self.statement_list(then_body)
-        else_statements = self.statement_list(else_body)
-        if len(then_statements) != 1 or len(else_statements) != 1:
-            return None
-
-        then_assignment = self.query_return_simple_assignment(then_statements[0])
-        else_assignment = self.query_return_simple_assignment(else_statements[0])
-        if then_assignment is None or else_assignment is None:
-            return None
-
-        then_name, then_value = then_assignment
         else_name, else_value = else_assignment
-        if (
-            then_name != else_name
-            or then_name not in local_alias_types
-            or then_name in assigned_names
-        ):
+        if else_name != target_name:
             return None
 
-        return then_name, TernaryOpNode(condition, then_value, else_value)
+        value = else_value
+        for branch_condition, (_, branch_value) in reversed(branch_assignments):
+            value = TernaryOpNode(branch_condition, branch_value, value)
+        return target_name, value
+
+    def query_return_body_alias_assignment(self, body):
+        """Return a branch body's only alias assignment, if it is simple."""
+        statements = self.statement_list(body)
+        if len(statements) != 1:
+            return None
+        return self.query_return_simple_assignment(statements[0])
 
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""

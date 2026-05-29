@@ -467,6 +467,57 @@ def test_codegen_interface_block_roundtrip():
     assert "cbuffer Uniforms" in output
 
 
+def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():
+    code = textwrap.dedent("""
+        #version 460 core
+        in VertexIn {
+            vec3 positions[2][3];
+            ivec2 ids[2][2];
+        } vin[2][3];
+
+        out VertexOut {
+            vec4 colors[2][3];
+        } vout;
+
+        struct PatchData {
+            vec4 control[2][3];
+        };
+
+        vec4 pickColor(in vec4 table[2][3], inout PatchData patches[2][2], int i, int j) {
+            patches[0][1].control[i][j] = table[i][j];
+            return patches[0][1].control[i][j];
+        }
+
+        void main() {
+            PatchData patches[2][2];
+            vec4 table[2][3];
+            vout.colors[1][2] = pickColor(table, patches, 1, 2);
+            gl_Position = vec4(vin[1][2].positions[0][1], 1.0);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+    assert "@glsl_interface_instance(vin) @glsl_interface_array(2, 3)" in crossgl
+    assert "vec3 positions[2][3];" in crossgl
+    assert "ivec2 ids[2][2];" in crossgl
+    assert "vec4 colors[2][3];" in crossgl
+    assert (
+        "vec4 pickColor(in vec4 table[2][3], inout PatchData patches[2][2]" in crossgl
+    )
+    assert "PatchData patches[2][2];" in crossgl
+    assert "vec4 table[2][3];" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "} vin[2][3];" in glsl
+    assert "vec3 positions[2][3];" in glsl
+    assert "ivec2 ids[2][2];" in glsl
+    assert "vec4 colors[2][3];" in glsl
+    assert "vec4 pickColor(vec4 table[2][3], PatchData patches[2][2]" in glsl
+    assert "vec4[2][3] table" not in glsl
+    assert "PatchData[2][2] patches" not in glsl
+
+
 def test_codegen_compute_atomics_and_barriers():
     code = textwrap.dedent("""
         #version 450 core

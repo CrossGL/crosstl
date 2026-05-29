@@ -1980,6 +1980,42 @@ shader MetalThreadgroupHelperBarrierValidation {
 """
 
 
+METAL_HELPER_CONTROL_FLOW_BARRIERS_SHADER = """
+shader MetalHelperControlFlowBarrierValidation {
+    void syncScratch(uint mode) {
+        if (mode != 0u) {
+            groupMemoryBarrier();
+        } else {
+            memoryBarrierShared();
+        }
+
+        for (int i = 0; i < 2; i = i + 1) {
+            memoryBarrierBuffer();
+        }
+
+        switch (mode) {
+            case 0u:
+                memoryBarrierImage();
+                break;
+            default:
+                allMemoryBarrier();
+                break;
+        }
+    }
+
+    compute {
+        void main() {
+            shared float scratch[16];
+            uint index = gl_LocalInvocationIndex;
+            scratch[index] = float(index);
+            syncScratch(index);
+            scratch[index] = scratch[index] + 1.0;
+        }
+    }
+}
+"""
+
+
 METAL_THREADGROUP_ATOMIC_BARRIERS_SHADER = """
 shader MetalThreadgroupAtomicBarrierValidation {
     uint bump(threadgroup atomic_uint counters[64], uint index) {
@@ -8353,6 +8389,38 @@ def test_generated_metal_threadgroup_helper_barriers_compile_with_metal(tmp_path
     assert "memoryBarrierShared();" not in code
     assert "memoryBarrierBuffer();" not in code
     assert "deviceMemoryBarrier();" not in code
+    assert "memoryBarrierImage();" not in code
+    assert "allMemoryBarrier();" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_helper_control_flow_barriers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "helper_control_flow_barriers.metal"
+    output = tmp_path / "helper_control_flow_barriers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_HELPER_CONTROL_FLOW_BARRIERS_SHADER),
+        "compute",
+    )
+    assert "void syncScratch(uint mode)" in code
+    assert "threadgroup float scratch[16];" in code
+    assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    assert code.count("threadgroup_barrier(mem_flags::mem_device);") == 1
+    assert "threadgroup_barrier(mem_flags::mem_texture);" in code
+    assert (
+        "threadgroup_barrier(mem_flags::mem_device | "
+        "mem_flags::mem_threadgroup | mem_flags::mem_texture);"
+    ) in code
+    assert "groupMemoryBarrier();" not in code
+    assert "memoryBarrierShared();" not in code
+    assert "memoryBarrierBuffer();" not in code
     assert "memoryBarrierImage();" not in code
     assert "allMemoryBarrier();" not in code
     source.write_text(code, encoding="utf-8")

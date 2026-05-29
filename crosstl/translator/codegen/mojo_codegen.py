@@ -906,6 +906,7 @@ class MojoCodeGen:
         self.enum_unit_variant_constructors = {}
         self.generic_enum_struct_definitions = {}
         self.generic_enum_specializations = {}
+        self.generic_struct_type_params = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
@@ -1112,6 +1113,7 @@ class MojoCodeGen:
         self.enum_unit_variant_constructors = {}
         self.generic_enum_struct_definitions = {}
         self.generic_enum_specializations = {}
+        self.generic_struct_type_params = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
@@ -1738,19 +1740,13 @@ class MojoCodeGen:
         return refs
 
     def constructor_node_struct_type(self, expr, target_type=None):
-        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
-        target_name = self.type_name(target_type)
-        target_base, _ = self.resource_base_type_and_count(target_name)
-        if target_base in self.struct_types:
-            return target_base
-        if target_name in self.struct_types:
-            return target_name
-        if constructor_type in self.struct_types:
-            return constructor_type
-        return None
+        struct_type, _ = self.constructor_node_struct_type_and_fields(expr, target_type)
+        return struct_type
 
-    def constructor_node_field_bindings(self, expr, struct_type):
-        fields = self.struct_types.get(struct_type, {})
+    def constructor_node_field_bindings(self, expr, struct_type, fields=None):
+        fields = (
+            fields if fields is not None else self.struct_types.get(struct_type, {})
+        )
         field_items = list(fields.items())
         for index, arg in enumerate(getattr(expr, "arguments", []) or []):
             if index >= len(field_items):
@@ -1766,13 +1762,15 @@ class MojoCodeGen:
     def return_constructor_node_resource_field_alias_paths(
         self, expr, param_indices, target_type=None
     ):
-        struct_type = self.constructor_node_struct_type(expr, target_type)
-        if struct_type not in self.struct_types:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return []
 
         refs = []
         for field_name, field_type, arg in self.constructor_node_field_bindings(
-            expr, struct_type
+            expr, struct_type, fields
         ):
             if not self.resource_access_aliasable_type(field_type):
                 continue
@@ -1843,11 +1841,13 @@ class MojoCodeGen:
             return [(param_indices[root_name], relative_path)]
 
         if isinstance(expr, ConstructorNode):
-            struct_type = self.constructor_node_struct_type(expr, target_type)
-            if struct_type in self.struct_types:
+            struct_type, fields = self.constructor_node_struct_type_and_fields(
+                expr, target_type
+            )
+            if struct_type is not None:
                 first, _, rest = relative_path.partition(".")
                 for field_name, field_type, arg in self.constructor_node_field_bindings(
-                    expr, struct_type
+                    expr, struct_type, fields
                 ):
                     if field_name == first:
                         return self.return_resource_alias_field_paths_for_relative_path(
@@ -2045,6 +2045,8 @@ class MojoCodeGen:
         for node in structs:
             if isinstance(node, StructNode):
                 self.validate_user_defined_type_name(node.name, "struct")
+                if node.name not in self.generic_enum_struct_definitions:
+                    self.register_generic_struct_type_metadata(node)
             if (
                 isinstance(node, StructNode)
                 and node.name not in self.generic_enum_struct_definitions
@@ -2159,6 +2161,102 @@ class MojoCodeGen:
         if base_name in self.generic_parameter_names and not generic_args:
             return True
         return any(self.generic_type_contains_parameter(arg) for arg in generic_args)
+
+    def register_generic_struct_type_metadata(self, node):
+        param_names = [
+            param.name
+            for param in getattr(node, "generic_params", []) or []
+            if getattr(param, "name", None)
+        ]
+        if param_names:
+            self.generic_struct_type_params[node.name] = param_names
+        else:
+            self.generic_struct_type_params.pop(node.name, None)
+
+    def generic_struct_specialization(self, type_value):
+        type_text = self.type_name(type_value)
+        generic = self.parse_generic_type_name(type_text)
+        if generic is None:
+            return None
+
+        base_name, generic_args = generic
+        param_names = self.generic_struct_type_params.get(base_name)
+        if param_names is None or len(param_names) != len(generic_args):
+            return None
+        if base_name not in self.struct_types:
+            return None
+        return base_name, dict(zip(param_names, generic_args))
+
+    def substitute_generic_struct_type_params(self, type_value, substitutions):
+        type_text = self.type_name(type_value)
+        if self.is_array_type_name(type_text):
+            element_type, size = self.parse_array_type_name(type_text)
+            return self.array_type_name(
+                self.substitute_generic_struct_type_params(element_type, substitutions),
+                size,
+            )
+
+        generic = self.parse_generic_type_name(type_text)
+        if generic is not None:
+            base_name, generic_args = generic
+            mapped_args = [
+                self.substitute_generic_struct_type_params(arg, substitutions)
+                for arg in generic_args
+            ]
+            return f"{base_name}<{', '.join(mapped_args)}>"
+
+        return substitutions.get(type_text, type_text)
+
+    def generic_struct_fields_for_type(self, type_value):
+        specialization = self.generic_struct_specialization(type_value)
+        if specialization is None:
+            return None
+
+        base_name, substitutions = specialization
+        return {
+            field_name: self.substitute_generic_struct_type_params(
+                field_type, substitutions
+            )
+            for field_name, field_type in self.struct_types.get(base_name, {}).items()
+        }
+
+    def struct_type_name_and_fields(self, type_value):
+        type_text = self.type_name(type_value)
+        generic_fields = self.generic_struct_fields_for_type(type_text)
+        if generic_fields is not None:
+            base_name, _ = self.generic_struct_specialization(type_text)
+            return base_name, generic_fields
+
+        if type_text in self.struct_types:
+            return type_text, self.struct_types[type_text]
+
+        generic_enum_type = self.generic_enum_mapped_type(type_text)
+        if generic_enum_type in self.struct_types:
+            return generic_enum_type, self.struct_types[generic_enum_type]
+
+        return None, {}
+
+    def generic_struct_mapped_type(self, type_value):
+        specialization = self.generic_struct_specialization(type_value)
+        if specialization is None:
+            return None
+
+        base_name, substitutions = specialization
+        type_args = [
+            self.map_type(substitutions[param_name])
+            for param_name in self.generic_struct_type_params[base_name]
+        ]
+        return f"{base_name}[{', '.join(type_args)}]"
+
+    def constructor_node_struct_type_and_fields(self, expr, target_type=None):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        target_base, _ = self.resource_base_type_and_count(target_name)
+        for candidate in (target_name, target_base, constructor_type):
+            struct_type, fields = self.struct_type_name_and_fields(candidate)
+            if struct_type is not None:
+                return struct_type, fields
+        return None, {}
 
     def generic_enum_mapped_type(self, type_value):
         specialization = self.generic_enum_specialization_for_type(type_value)
@@ -3004,6 +3102,16 @@ class MojoCodeGen:
             base_type, _ = self.parse_array_type_name(type_name)
             return self._resource_access_aliasable_type(base_type, seen)
 
+        generic_fields = self.generic_struct_fields_for_type(type_name)
+        if generic_fields is not None:
+            if type_name in seen:
+                return False
+            next_seen = {*seen, type_name}
+            return any(
+                self._resource_access_aliasable_type(field_type, next_seen)
+                for field_type in generic_fields.values()
+            )
+
         base_type, _ = self.resource_base_type_and_count(type_name)
         if self.mojo_resource_kind(base_type) is not None:
             return True
@@ -3038,6 +3146,19 @@ class MojoCodeGen:
         base_type, _ = self.resource_base_type_and_count(type_name)
         if self.mojo_resource_kind(base_type) is not None:
             return [""]
+
+        generic_fields = self.generic_struct_fields_for_type(type_name)
+        if generic_fields is not None:
+            if type_name in seen:
+                return []
+            paths = []
+            next_seen = {*seen, type_name}
+            for field_name, field_type in generic_fields.items():
+                for subpath in self.resource_aliasable_field_paths_for_type(
+                    field_type, next_seen
+                ):
+                    paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+            return paths
 
         if base_type in seen:
             return []
@@ -3225,12 +3346,16 @@ class MojoCodeGen:
     def struct_constructor_field_alias_candidates(self, expr, target_type):
         func_name = self.function_call_name(expr)
         target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
-        struct_type = target_base if target_base in self.struct_types else func_name
-        if struct_type not in self.struct_types or func_name != struct_type:
+        struct_type, fields = self.struct_type_name_and_fields(target_type)
+        if struct_type is None:
+            struct_type, fields = self.struct_type_name_and_fields(target_base)
+        if struct_type is None:
+            struct_type, fields = self.struct_type_name_and_fields(func_name)
+        if struct_type is None or func_name != struct_type:
             return {}
 
         aliases = {}
-        field_items = list(self.struct_types.get(struct_type, {}).items())
+        field_items = list(fields.items())
         for arg, (field_name, field_type) in zip(expr.args, field_items):
             if not self.resource_access_aliasable_type(field_type):
                 continue
@@ -3243,13 +3368,15 @@ class MojoCodeGen:
         return aliases
 
     def constructor_node_field_alias_candidates(self, expr, target_type):
-        struct_type = self.constructor_node_struct_type(expr, target_type)
-        if struct_type not in self.struct_types:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return {}
 
         aliases = {}
         for field_name, field_type, arg in self.constructor_node_field_bindings(
-            expr, struct_type
+            expr, struct_type, fields
         ):
             if not self.resource_access_aliasable_type(field_type):
                 continue
@@ -4022,6 +4149,7 @@ class MojoCodeGen:
         if not struct_name:
             return
         self.validate_user_defined_type_name(struct_name, "struct")
+        self.register_generic_struct_type_metadata(node)
         self.struct_types[struct_name] = {}
         self.struct_member_semantics[struct_name] = {}
 
@@ -4042,7 +4170,17 @@ class MojoCodeGen:
                 )
 
     def generate_struct(self, node):
-        code = f"@value\nstruct {node.name}:\n"
+        generic_params = [
+            param.name
+            for param in getattr(node, "generic_params", []) or []
+            if getattr(param, "name", None)
+        ]
+        generic_suffix = ""
+        if generic_params:
+            generic_suffix = (
+                "[" + ", ".join(f"{param}: AnyType" for param in generic_params) + "]"
+            )
+        code = f"@value\nstruct {node.name}{generic_suffix}:\n"
         self.register_struct_type_metadata(node)
 
         members = getattr(node, "members", [])
@@ -6587,7 +6725,7 @@ class MojoCodeGen:
 
             if func_name in self.struct_types:
                 return self.generate_struct_function_constructor_call(
-                    expr, func_name, target_context
+                    expr, func_name, target_context, target_type
                 )
 
             # Handle standard function calls
@@ -6600,11 +6738,8 @@ class MojoCodeGen:
             if enum_variant != f"{obj}.{expr.member}":
                 return enum_variant
             obj_type = self.expression_result_type(expr.object)
-            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
-            if (
-                obj_struct_type in self.struct_types
-                and expr.member in self.struct_types[obj_struct_type]
-            ):
+            obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
+            if obj_struct_type is not None and expr.member in obj_fields:
                 return f"{obj}.{expr.member}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
@@ -6730,8 +6865,18 @@ class MojoCodeGen:
         type_name = self.convert_type_node_to_string(expr.constructor_type)
         mapped_type = self.map_type(type_name)
         target_name = self.type_name(target_type)
-        struct_type = target_name if target_name in self.struct_types else type_name
-        fields = self.struct_types.get(struct_type, {})
+        target_struct_type, target_fields = self.struct_type_name_and_fields(
+            target_name
+        )
+        constructor_struct_type, constructor_fields = self.struct_type_name_and_fields(
+            type_name
+        )
+        if target_struct_type is not None:
+            struct_type, fields = target_struct_type, target_fields
+        elif constructor_struct_type is not None:
+            struct_type, fields = constructor_struct_type, constructor_fields
+        else:
+            struct_type, fields = type_name, {}
         field_items = list(fields.items())
         base_context = target_context or f"constructor {type_name}"
         named_arguments = getattr(expr, "named_arguments", {}) or {}
@@ -6841,12 +6986,20 @@ class MojoCodeGen:
                         f"{base_context}; expected fields: {expected}"
                     )
 
-    def generate_struct_function_constructor_call(self, expr, type_name, context):
-        mapped_type = self.map_type(type_name)
-        field_items = list(self.struct_types.get(type_name, {}).items())
-        base_context = context or f"constructor {type_name}"
+    def generate_struct_function_constructor_call(
+        self, expr, type_name, context, target_type=None
+    ):
+        struct_type, fields = self.struct_type_name_and_fields(target_type)
+        if struct_type is None or struct_type != type_name:
+            struct_type, fields = self.struct_type_name_and_fields(type_name)
+        mapped_type = (
+            self.map_type(target_type) if target_type else self.map_type(type_name)
+        )
+        field_items = list(fields.items())
+        context_type = self.type_name(target_type) if target_type else type_name
+        base_context = context or f"constructor {context_type}"
         self.validate_struct_constructor_field_bindings(
-            type_name,
+            struct_type or type_name,
             field_items,
             len(expr.args),
             {},
@@ -6859,7 +7012,9 @@ class MojoCodeGen:
             field_type = None
             if index < len(field_items):
                 field_name, field_type = field_items[index]
-                field_context = f"{base_context} field {type_name}.{field_name}"
+                field_context = (
+                    f"{base_context} field {struct_type or type_name}.{field_name}"
+                )
             else:
                 field_context = f"{base_context} field {index + 1}"
             self.validate_expression_target_shape(
@@ -7747,33 +7902,17 @@ class MojoCodeGen:
     def validate_constructor_image_result_target_shapes(
         self, expr, target_type, context
     ):
-        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
-        target_name = self.type_name(target_type)
-        if target_name in self.struct_types:
-            struct_type = target_name
-        elif constructor_type in self.struct_types:
-            struct_type = constructor_type
-        else:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return
 
-        fields = self.struct_types.get(struct_type, {})
-        field_items = list(fields.items())
-        for index, argument in enumerate(expr.arguments):
-            if index >= len(field_items):
-                continue
-            field_name, field_type = field_items[index]
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
             self.validate_image_result_target_shape(
                 argument,
-                field_type,
-                f"{context} field {struct_type}.{field_name}",
-            )
-
-        for field_name, value in expr.named_arguments.items():
-            field_type = fields.get(field_name)
-            if field_type is None:
-                continue
-            self.validate_image_result_target_shape(
-                value,
                 field_type,
                 f"{context} field {struct_type}.{field_name}",
             )
@@ -7781,33 +7920,17 @@ class MojoCodeGen:
     def validate_constructor_buffer_result_target_shapes(
         self, expr, target_type, context
     ):
-        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
-        target_name = self.type_name(target_type)
-        if target_name in self.struct_types:
-            struct_type = target_name
-        elif constructor_type in self.struct_types:
-            struct_type = constructor_type
-        else:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return
 
-        fields = self.struct_types.get(struct_type, {})
-        field_items = list(fields.items())
-        for index, argument in enumerate(expr.arguments):
-            if index >= len(field_items):
-                continue
-            field_name, field_type = field_items[index]
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
             self.validate_buffer_result_target_shape(
                 argument,
-                field_type,
-                f"{context} field {struct_type}.{field_name}",
-            )
-
-        for field_name, value in expr.named_arguments.items():
-            field_type = fields.get(field_name)
-            if field_type is None:
-                continue
-            self.validate_buffer_result_target_shape(
-                value,
                 field_type,
                 f"{context} field {struct_type}.{field_name}",
             )
@@ -7815,33 +7938,17 @@ class MojoCodeGen:
     def validate_constructor_reinterpret_result_target_shapes(
         self, expr, target_type, context
     ):
-        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
-        target_name = self.type_name(target_type)
-        if target_name in self.struct_types:
-            struct_type = target_name
-        elif constructor_type in self.struct_types:
-            struct_type = constructor_type
-        else:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return
 
-        fields = self.struct_types.get(struct_type, {})
-        field_items = list(fields.items())
-        for index, argument in enumerate(expr.arguments):
-            if index >= len(field_items):
-                continue
-            field_name, field_type = field_items[index]
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
             self.validate_reinterpret_result_target_shape(
                 argument,
-                field_type,
-                f"{context} field {struct_type}.{field_name}",
-            )
-
-        for field_name, value in expr.named_arguments.items():
-            field_type = fields.get(field_name)
-            if field_type is None:
-                continue
-            self.validate_reinterpret_result_target_shape(
-                value,
                 field_type,
                 f"{context} field {struct_type}.{field_name}",
             )
@@ -7849,33 +7956,17 @@ class MojoCodeGen:
     def validate_constructor_resource_size_target_shapes(
         self, expr, target_type, context
     ):
-        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
-        target_name = self.type_name(target_type)
-        if target_name in self.struct_types:
-            struct_type = target_name
-        elif constructor_type in self.struct_types:
-            struct_type = constructor_type
-        else:
+        struct_type, fields = self.constructor_node_struct_type_and_fields(
+            expr, target_type
+        )
+        if struct_type is None:
             return
 
-        fields = self.struct_types.get(struct_type, {})
-        field_items = list(fields.items())
-        for index, argument in enumerate(expr.arguments):
-            if index >= len(field_items):
-                continue
-            field_name, field_type = field_items[index]
+        for field_name, field_type, argument in self.constructor_node_field_bindings(
+            expr, struct_type, fields
+        ):
             self.validate_resource_size_target_shape(
                 argument,
-                field_type,
-                f"{context} field {struct_type}.{field_name}",
-            )
-
-        for field_name, value in expr.named_arguments.items():
-            field_type = fields.get(field_name)
-            if field_type is None:
-                continue
-            self.validate_resource_size_target_shape(
-                value,
                 field_type,
                 f"{context} field {struct_type}.{field_name}",
             )
@@ -10336,9 +10427,8 @@ class MojoCodeGen:
         parts = expression.split(".")
         result_type = self.variable_types.get(parts[0])
         for member in parts[1:]:
-            struct_type = self.generic_enum_mapped_type(result_type) or result_type
-            fields = self.struct_types.get(struct_type)
-            if fields is None or member not in fields:
+            _struct_type, fields = self.struct_type_name_and_fields(result_type)
+            if member not in fields:
                 return None
             result_type = fields[member]
         return result_type
@@ -10384,10 +10474,10 @@ class MojoCodeGen:
         if type_name is None:
             return False
         resolved_type = self.type_name(type_name)
-        if resolved_type in self.struct_types:
+        struct_type, _ = self.struct_type_name_and_fields(resolved_type)
+        if struct_type is not None:
             return True
-        generic_enum_type = self.generic_enum_mapped_type(resolved_type)
-        return generic_enum_type in self.struct_types
+        return False
 
     def array_type_name(self, element_type, size):
         element_type_name = self.type_name(element_type)
@@ -10477,11 +10567,11 @@ class MojoCodeGen:
             element_type, size = self.parse_array_type_name(type_name)
             return self.zero_array_value(element_type, size)
 
-        struct_type = type_name
-        if struct_type not in self.struct_types:
-            struct_type = self.generic_enum_mapped_type(type_name) or type_name
-        if struct_type in self.struct_types:
-            return self.zero_struct_value(struct_type)
+        struct_type, fields = self.struct_type_name_and_fields(type_name)
+        if struct_type is not None:
+            return self.zero_struct_value(
+                struct_type, fields=fields, mapped_type=self.map_type(type_name)
+            )
 
         vector_info = self.vector_type_info(type_name)
         if vector_info is not None:
@@ -10515,12 +10605,12 @@ class MojoCodeGen:
         values = [self.zero_value_for_type(element_type) for _ in range(element_count)]
         return f"{array_type}({', '.join(values)})"
 
-    def zero_struct_value(self, type_name):
-        fields = self.struct_types.get(type_name, {})
+    def zero_struct_value(self, type_name, fields=None, mapped_type=None):
+        fields = fields if fields is not None else self.struct_types.get(type_name, {})
         values = [
             self.zero_value_for_type(field_type) for field_type in fields.values()
         ]
-        return f"{type_name}({', '.join(values)})"
+        return f"{mapped_type or type_name}({', '.join(values)})"
 
     def zero_matrix_value(self, dtype, columns, rows):
         self.required_matrix_types.add((dtype, columns, rows))
@@ -10816,13 +10906,10 @@ class MojoCodeGen:
             return self.buffer_op_result_type(expr)
         if isinstance(expr, MemberAccessNode):
             obj_type = self.expression_result_type(expr.object)
-            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
-            if (
-                obj_struct_type in self.struct_types
-                and expr.member in self.struct_types[obj_struct_type]
-            ):
-                return self.struct_types[obj_struct_type].get(expr.member)
-            if obj_struct_type in self.struct_types:
+            obj_struct_type, obj_fields = self.struct_type_name_and_fields(obj_type)
+            if obj_struct_type is not None and expr.member in obj_fields:
+                return obj_fields.get(expr.member)
+            if obj_struct_type is not None:
                 return None
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
@@ -11196,6 +11283,10 @@ class MojoCodeGen:
             dtype, columns, rows = MOJO_MATRIX_TYPES[vtype_str]
             self.required_matrix_types.add((dtype, columns, rows))
             return self.matrix_type_name(dtype, columns, rows)
+
+        generic_struct_type = self.generic_struct_mapped_type(vtype_str)
+        if generic_struct_type is not None:
+            return generic_struct_type
 
         generic_enum_type = self.generic_enum_mapped_type(vtype_str)
         if generic_enum_type is not None:

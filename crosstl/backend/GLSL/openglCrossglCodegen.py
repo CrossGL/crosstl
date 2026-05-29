@@ -952,13 +952,17 @@ class GLSLToCrossGLConverter:
         if instance_name:
             attributes.append(f"@glsl_interface_instance({instance_name})")
             if getattr(node, "interface_instance_is_array", False):
-                array_size = getattr(node, "interface_array_size", None)
-                if array_size is None:
+                array_sizes = getattr(node, "interface_array_sizes", None) or []
+                if not array_sizes:
+                    array_size = getattr(node, "interface_array_size", None)
+                    array_sizes = [array_size] if array_size is not None else []
+                if not array_sizes or any(size is None for size in array_sizes):
                     attributes.append("@glsl_interface_array")
                 else:
-                    attributes.append(
-                        f"@glsl_interface_array({self.generate_expression(array_size)})"
+                    sizes = ", ".join(
+                        self.generate_expression(size) for size in array_sizes
                     )
+                    attributes.append(f"@glsl_interface_array({sizes})")
 
         return f"{' '.join(attributes)} " if attributes else ""
 

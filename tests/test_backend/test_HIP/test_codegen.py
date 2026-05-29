@@ -7752,6 +7752,140 @@ class TestHipCodeGen:
         assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
+    def test_hip_memory_pointer_array_outputs_clear_stale_metadata(self):
+        """Test HIP memory and pointer array outputs clear stale metadata."""
+        code = """
+        void host(
+            void* devicePtr,
+            void* hostPtr,
+            hipMemPool_t pool,
+            hipMemLocation* locations,
+            hipMemAllocationProp* props,
+            hipPointerAttribute_t* pointerAttrs,
+            size_t* sizes,
+            int* attrs,
+            unsigned long long* accessFlags,
+            int* out
+        ) {
+            size_t staleSize = 0;
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemGetInfo(&sizes[0], &sizes[1]);
+            out[0] = sizes[0];
+            out[1] = sizes[1];
+
+            hipMemGetAddressRange((void**)&pointerAttrs, &staleSize, devicePtr);
+            hipPointerGetAttributes(&pointerAttrs[0], devicePtr);
+            out[2] = pointerAttrs[0].memoryType;
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipPointerGetAttribute(
+                &attrs[0],
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            out[3] = attrs[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemPtrGetInfo(devicePtr, &sizes[2]);
+            out[4] = sizes[2];
+
+            hipMemGetAddressRange((void**)&accessFlags, &staleSize, devicePtr);
+            hipMemGetAccess(&accessFlags[0], &locations[0], devicePtr);
+            out[5] = accessFlags[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemPoolGetAttribute(
+                pool,
+                hipMemPoolAttrReleaseThreshold,
+                &sizes[3]
+            );
+            out[6] = sizes[3];
+
+            hipMemGetAddressRange((void**)&accessFlags, &staleSize, devicePtr);
+            hipMemPoolGetAccess(&accessFlags[1], pool, &locations[1]);
+            out[7] = accessFlags[1];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipHostGetFlags(&attrs[1], hostPtr);
+            out[8] = attrs[1];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipMemRangeGetAttribute(
+                &attrs[2],
+                sizeof(int),
+                hipMemRangeAttributePreferredLocation,
+                devicePtr,
+                256
+            );
+            out[9] = attrs[2];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemGetAllocationGranularity(
+                &sizes[4],
+                &props[0],
+                hipMemAllocationGranularityMinimum
+            );
+            out[10] = sizes[4];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory info: free output: sizes[0], total output: sizes[1]"
+            in result
+        )
+        assert "out[0] = sizes[0];" in result
+        assert "out[1] = sizes[1];" in result
+        assert (
+            "// HIP pointer attributes: output: pointerAttrs[0], " "pointer: devicePtr"
+        ) in result
+        assert "out[2] = pointerAttrs[0].memoryType;" in result
+        assert (
+            "// HIP pointer attribute: output: attrs[0], "
+            "attribute: hipPointerAttributeMemoryType, pointer: devicePtr"
+        ) in result
+        assert "out[3] = attrs[0];" in result
+        assert (
+            "// HIP memory pointer info: pointer: devicePtr, " "size output: sizes[2]"
+        ) in result
+        assert "out[4] = sizes[2];" in result
+        assert (
+            "// HIP virtual memory get access: output: accessFlags[0], "
+            "location: (&locations[0]), pointer: devicePtr"
+        ) in result
+        assert "out[5] = accessFlags[0];" in result
+        assert (
+            "// HIP memory pool get attribute: pool: pool, "
+            "attribute: hipMemPoolAttrReleaseThreshold, output: sizes[3]"
+        ) in result
+        assert "out[6] = sizes[3];" in result
+        assert (
+            "// HIP memory pool get access: output: accessFlags[1], "
+            "pool: pool, location: (&locations[1])"
+        ) in result
+        assert "out[7] = accessFlags[1];" in result
+        assert "// HIP host memory flags: output: attrs[1], host: hostPtr" in result
+        assert "out[8] = attrs[1];" in result
+        assert (
+            "// HIP memory range get attribute: output: attrs[2], "
+            "output bytes: sizeof(int), "
+            "attribute: hipMemRangeAttributePreferredLocation, "
+            "pointer: devicePtr, range bytes: 256"
+        ) in result
+        assert "out[9] = attrs[2];" in result
+        assert (
+            "// HIP virtual memory allocation granularity: output: sizes[4], "
+            "properties: (&props[0]), option: hipMemAllocationGranularityMinimum"
+        ) in result
+        assert "out[10] = sizes[4];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_symbol_range_function_output_reads_emit_metadata_expressions(self):
         """Test HIP symbol, range, function, and array scalar outputs."""
         code = """

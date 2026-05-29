@@ -5085,8 +5085,8 @@ class GLSLCodeGen:
         return None
 
     def stage_io_location_count(self, mapped_type):
-        base_type, array_size = parse_array_type(str(mapped_type))
-        array_count = max(array_size or 1, 1)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        array_count = self.stage_io_array_location_count(array_suffix)
         matrix_count = 1
 
         matrix_size = ""
@@ -5101,6 +5101,31 @@ class GLSLCodeGen:
                 matrix_count = int(columns)
 
         return max(matrix_count * array_count, 1)
+
+    def stage_io_array_location_count(self, array_suffix):
+        if not array_suffix:
+            return 1
+
+        count = 1
+        index = 0
+        while index < len(array_suffix):
+            if array_suffix[index] != "[":
+                return count
+            close_index = array_suffix.find("]", index + 1)
+            if close_index == -1:
+                return count
+            size = array_suffix[index + 1 : close_index].strip()
+            if not size:
+                return count
+            try:
+                dimension = int(size, 10)
+            except ValueError:
+                return count
+            if dimension <= 0:
+                return count
+            count *= dimension
+            index = close_index + 1
+        return count
 
     def reserve_stage_io_layout(
         self, used_locations, stage_name, direction, layout, mapped_type, name
@@ -5316,7 +5341,8 @@ class GLSLCodeGen:
                 member.name,
             )
             prefix = self.stage_io_declaration_prefix(member, "in")
-            declaration = f"{prefix} {member_type} {member.name};"
+            member_decl = format_c_style_array_declaration(member_type, member.name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "input", member.name, declaration
             ):
@@ -5326,7 +5352,10 @@ class GLSLCodeGen:
     def generate_legacy_output_declarations(self, node):
         code = ""
         for member in getattr(node, "members", []) or []:
-            declaration = f"out {self.member_type_name(member)} {member.name};"
+            member_decl = format_c_style_array_declaration(
+                self.member_type_name(member), member.name
+            )
+            declaration = f"out {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "output", member.name, declaration
             ):
@@ -5352,7 +5381,8 @@ class GLSLCodeGen:
             prefix = self.stage_io_declaration_prefix(member, "out")
             member_type = self.member_type_name(member)
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
-            declaration = f"{prefix} {member_type} {output_name};"
+            member_decl = format_c_style_array_declaration(member_type, output_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "output", output_name, declaration
             ):
@@ -5378,7 +5408,8 @@ class GLSLCodeGen:
             member_type = self.member_type_name(member)
             prefix = self.stage_io_declaration_prefix(member, "in")
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
-            declaration = f"{prefix} {member_type} {input_name};"
+            member_decl = format_c_style_array_declaration(member_type, input_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "fragment", "input", input_name, declaration
             ):
@@ -5408,7 +5439,8 @@ class GLSLCodeGen:
                 output_name,
             )
             prefix = self.stage_io_declaration_prefix(member, "out", layout)
-            declaration = f"{prefix} {member_type} {output_name};"
+            member_decl = format_c_style_array_declaration(member_type, output_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "fragment", "output", output_name, declaration
             ):
@@ -13524,7 +13556,9 @@ class GLSLCodeGen:
                 array_attr, "arguments", getattr(array_attr, "args", [])
             )
             if array_args:
-                array_suffix = f"[{self.attribute_value_to_string(array_args[0])}]"
+                array_suffix = "".join(
+                    f"[{self.attribute_value_to_string(arg)}]" for arg in array_args
+                )
             else:
                 array_suffix = "[]"
         return f" {instance_name}{array_suffix}"
