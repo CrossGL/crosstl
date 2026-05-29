@@ -7896,8 +7896,43 @@ class HLSLCodeGen:
 
         return resolved
 
-    def hlsl_bool_constant_value(self, expr):
-        return self.hlsl_literal_bool_value(expr, self.literal_bool_constants)
+    def hlsl_bool_constant_value(self, expr, constants=None):
+        if constants is None:
+            constants = self.literal_bool_constants
+        return self.hlsl_literal_bool_value(expr, constants)
+
+    def hlsl_initial_bool_constants(self, func):
+        visible_constants = dict(self.literal_bool_constants)
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+        return visible_constants
+
+    def hlsl_update_visible_bool_constants(self, stmt, visible_bool_constants):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+
+            visible_bool_constants.pop(name, None)
+            if "const" not in getattr(stmt, "qualifiers", []):
+                return
+
+            value = self.hlsl_bool_constant_value(
+                getattr(stmt, "initial_value", None), visible_bool_constants
+            )
+            if value is not None:
+                visible_bool_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            visible_bool_constants.pop(target_name, None)
 
     def validate_hlsl_scalar_int_uint_expression(self, argument, context):
         argument_type = self.expression_result_type(argument)
@@ -8252,6 +8287,7 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        visible_bool_constants=None,
     ):
         counts_seen, _ = self.validate_hlsl_mesh_output_write_switch_result(
             switch_node,
@@ -8260,6 +8296,7 @@ class HLSLCodeGen:
             declared_counts,
             set_count_literals,
             active_helper_calls,
+            visible_bool_constants=visible_bool_constants,
         )
         return counts_seen
 
@@ -8272,11 +8309,14 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
 
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
@@ -8299,6 +8339,7 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     case_loop_exit_nodes,
+                    visible_bool_constants=dict(visible_bool_constants),
                 )
             )
 
@@ -8426,6 +8467,7 @@ class HLSLCodeGen:
                 declared_counts,
                 set_count_literals,
                 active_helper_calls,
+                visible_bool_constants=self.hlsl_initial_bool_constants(helper),
             )
         finally:
             active_helper_calls.remove(helper_id)
@@ -8492,6 +8534,7 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        visible_bool_constants=None,
     ):
         counts_seen, _ = self.validate_hlsl_mesh_output_write_sequence_result(
             statements,
@@ -8500,6 +8543,7 @@ class HLSLCodeGen:
             declared_counts,
             set_count_literals,
             active_helper_calls,
+            visible_bool_constants=visible_bool_constants,
         )
         return counts_seen
 
@@ -8512,11 +8556,14 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
 
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
@@ -8530,6 +8577,7 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants=dict(visible_bool_constants),
                     )
                 )
                 if not can_continue:
@@ -8546,6 +8594,7 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants,
                     )
                 )
                 if not can_continue:
@@ -8562,6 +8611,7 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants,
                     )
                 )
                 if not can_continue:
@@ -8577,6 +8627,7 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     (BreakNode, ContinueNode),
+                    visible_bool_constants=dict(visible_bool_constants),
                 )
                 continue
 
@@ -8605,6 +8656,8 @@ class HLSLCodeGen:
             if self.hlsl_statement_contains_set_mesh_output_counts(stmt):
                 counts_seen = True
 
+            self.hlsl_update_visible_bool_constants(stmt, visible_bool_constants)
+
             if isinstance(stmt, ReturnNode):
                 return counts_seen, False
             if loop_exit_nodes and isinstance(stmt, loop_exit_nodes):
@@ -8621,9 +8674,12 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
     ):
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
 
         then_statements = self.hlsl_statement_body_items(
             getattr(if_node, "then_branch", getattr(if_node, "if_body", None))
@@ -8632,7 +8688,8 @@ class HLSLCodeGen:
             if_node, "else_branch", getattr(if_node, "else_body", None)
         )
         condition_value = self.hlsl_bool_constant_value(
-            getattr(if_node, "condition", getattr(if_node, "if_condition", None))
+            getattr(if_node, "condition", getattr(if_node, "if_condition", None)),
+            visible_bool_constants,
         )
         if condition_value is True:
             return self.validate_hlsl_mesh_output_write_sequence_result(
@@ -8643,6 +8700,7 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
             )
 
         if condition_value is False:
@@ -8656,6 +8714,7 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
             )
 
         branch_results = [
@@ -8667,6 +8726,7 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
             )
         ]
         if else_branch is not None:
@@ -8679,6 +8739,7 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     loop_exit_nodes,
+                    visible_bool_constants=dict(visible_bool_constants),
                 )
             )
         else:
@@ -8719,6 +8780,7 @@ class HLSLCodeGen:
             role_by_name,
             declared_counts,
             set_count_literals,
+            visible_bool_constants=self.hlsl_initial_bool_constants(func),
         )
 
     def validate_hlsl_mesh_output_parameters(self, func, parameters):

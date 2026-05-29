@@ -10443,6 +10443,137 @@ def test_generic_user_struct_vector_matrix_payloads_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def _generic_user_struct_constructor_diagnostic_ast(function_name, statements):
+    source = """
+    generic<T> struct Holder {
+        T value;
+        int tag;
+    };
+
+    void badExtra() {}
+    void badVectorPayload() {}
+    void badMatrixPayload() {}
+    void badFunctionStylePayload() {}
+    Holder<mat2> badReturn() {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    functions[function_name].body = BlockNode(statements)
+    return ast
+
+
+def test_generic_user_struct_constructor_field_diagnostics():
+    holder_vec3 = NamedType("Holder", [VectorType(PrimitiveType("float"), 3)])
+    ast = _generic_user_struct_constructor_diagnostic_ast(
+        "badExtra",
+        [
+            VariableNode(
+                "badValue",
+                holder_vec3,
+                ConstructorNode(
+                    holder_vec3,
+                    [
+                        LiteralNode(1.0, PrimitiveType("float")),
+                        LiteralNode(2, PrimitiveType("int")),
+                        LiteralNode(3, PrimitiveType("int")),
+                    ],
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"too many positional fields.*declaration badValue.*field 3.*Holder",
+    ):
+        generate_code(ast)
+
+
+@pytest.mark.parametrize(
+    "function_name, statements, pattern",
+    [
+        (
+            "badVectorPayload",
+            [
+                VariableNode(
+                    "badValue",
+                    NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                    ConstructorNode(
+                        NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                        [
+                            FunctionCallNode(
+                                "vec2",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    ),
+                )
+            ],
+            r"aggregate target.*declaration badValue field Holder\.value"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            "badFunctionStylePayload",
+            [
+                VariableNode(
+                    "badValue",
+                    NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                    FunctionCallNode(
+                        "Holder",
+                        [
+                            FunctionCallNode(
+                                "vec2",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    ),
+                )
+            ],
+            r"aggregate target.*declaration badValue field Holder\.value"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            "badReturn",
+            [
+                ReturnNode(
+                    ConstructorNode(
+                        NamedType("Holder", [MatrixType(PrimitiveType("float"), 2, 2)]),
+                        [
+                            FunctionCallNode(
+                                "vec3",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                    LiteralNode(3.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    )
+                )
+            ],
+            r"aggregate target.*return value field Holder\.value"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_generic_user_struct_constructor_aggregate_payload_diagnostics(
+    function_name, statements, pattern
+):
+    ast = _generic_user_struct_constructor_diagnostic_ast(function_name, statements)
+
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(ast)
+
+
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
     source = """
     generic<T, E> struct Result {

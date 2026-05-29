@@ -15715,7 +15715,7 @@ def test_default_composite_statics_use_lazy_lock():
     assert "static MODEL: Mat4<f32> = Default::default();" not in generated_code
 
 
-def test_lazy_lock_static_use_sites_are_dereferenced():
+def test_lazy_lock_static_use_sites_are_dereferenced(tmp_path):
     code = """
     vec3 direction;
     float values[] = {1.0, 2.0};
@@ -15735,6 +15735,7 @@ def test_lazy_lock_static_use_sites_are_dereferenced():
 
     assert "return ((*DIRECTION).x + (*VALUES)[0]);" in generated_code
     assert "direction.x + values[0]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_colliding_static_symbol_names_are_suffixed_and_referenced():

@@ -7668,6 +7668,67 @@ class MojoCodeGen:
         self.validate_image_result_target_shape(expr, target_type, context)
         self.validate_buffer_result_target_shape(expr, target_type, context)
         self.validate_reinterpret_result_target_shape(expr, target_type, context)
+        self.validate_aggregate_target_shape(expr, target_type, context)
+
+    def validate_aggregate_target_shape(self, expr, target_type, context):
+        if expr is None or target_type is None:
+            return
+
+        if isinstance(expr, TernaryOpNode):
+            self.validate_aggregate_target_shape(
+                expr.true_expr, target_type, f"{context} true branch"
+            )
+            self.validate_aggregate_target_shape(
+                expr.false_expr, target_type, f"{context} false branch"
+            )
+            return
+
+        if isinstance(expr, MatchNode):
+            arms = getattr(expr, "arms", []) or []
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
+            for arm_index, arm in enumerate(arms, start=1):
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                self.validate_aggregate_target_shape(
+                    arm_expr, target_type, f"{context} match arm {arm_index}"
+                )
+            return
+
+        if isinstance(expr, ArrayLiteralNode) and self.is_array_type_name(target_type):
+            element_type, _ = self.parse_array_type_name(target_type)
+            for index, element in enumerate(expr.elements, start=1):
+                self.validate_aggregate_target_shape(
+                    element, element_type, f"{context} array literal element {index}"
+                )
+            return
+
+        target_name = self.type_name(target_type)
+        source_type = self.expression_result_type(expr)
+        if source_type is None:
+            return
+
+        target_vector = self.vector_type_info(target_name)
+        target_matrix = self.matrix_type_info(target_name)
+        if target_vector is None and target_matrix is None:
+            return
+
+        source_vector = self.vector_type_info(source_type)
+        source_matrix = self.matrix_type_info(source_type)
+        if source_vector is None and source_matrix is None:
+            return
+
+        if target_vector is not None and source_vector is not None:
+            if source_vector[:2] == target_vector[:2]:
+                return
+        elif target_matrix is not None and source_matrix is not None:
+            if source_matrix == target_matrix:
+                return
+
+        raise ValueError(
+            f"Invalid aggregate target for Mojo codegen; {context} "
+            f"expects {target_name}, got {self.type_name(source_type)}"
+        )
 
     def validate_resource_size_target_shape(self, expr, target_type, context):
         if expr is None:
