@@ -11417,6 +11417,22 @@ def test_directx_wave_intrinsics_validate_argument_types():
     ):
         generate_code(parse_code(tokenize_code(bad_quad_lane_index_code)))
 
+    bad_quad_local_const_lane_index_code = """
+    shader BadQuadLocalConstLaneIndexRange {
+        compute {
+            uint main(uint value) {
+                const int LANE = 2 + 2;
+                return QuadReadLaneAt(value, LANE);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="QuadReadLaneAt.*quad lane index.*0.*3",
+    ):
+        generate_code(parse_code(tokenize_code(bad_quad_local_const_lane_index_code)))
+
     bad_quad_vote_predicate_code = """
     shader BadQuadVotePredicate {
         compute {
@@ -11481,13 +11497,15 @@ def test_directx_wave_intrinsics_validate_argument_types():
     shader ValidWaveTypeArguments {
         compute {
             uint main(bool predicate, uint value, uint lane, uvec4 mask) {
+                const int QUAD_LANE = 1 + 2;
                 uint count = WaveActiveCountBits(predicate);
                 uint prefix = WavePrefixCountBits(true);
                 uint laneValue = WaveReadLaneAt(value, lane);
                 uint quadValue = QuadReadLaneAt(value, 3u);
+                uint quadConstValue = QuadReadLaneAt(value, QUAD_LANE);
                 bool quadAny = QuadAny(predicate);
                 bool quadAll = QuadAll(predicate);
-                uint multi = WaveMultiPrefixSum(value, mask);
+                uint multi = WaveMultiPrefixSum(quadConstValue, mask);
                 uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
                 return count + prefix + laneValue + quadValue + multi + multiCount
                     + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
@@ -11501,10 +11519,30 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WavePrefixCountBits(true)" in generated
     assert "WaveReadLaneAt(value, lane)" in generated
     assert "QuadReadLaneAt(value, 3u)" in generated
+    assert "QuadReadLaneAt(value, QUAD_LANE)" in generated
     assert "QuadAny(predicate)" in generated
     assert "QuadAll(predicate)" in generated
-    assert "WaveMultiPrefixSum(value, mask)" in generated
+    assert "WaveMultiPrefixSum(quadConstValue, mask)" in generated
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
+
+    scoped_const_code = """
+    shader ScopedQuadLocalConstLaneIndexRange {
+        const int LANE = 1;
+        compute {
+            uint main(uint value) {
+                {
+                    const int LANE = 2 + 2;
+                    uint scratch = value;
+                }
+                return QuadReadLaneAt(value, LANE);
+            }
+        }
+    }
+    """
+    scoped_generated = generate_code(parse_code(tokenize_code(scoped_const_code)))
+    assert "static const int LANE = 1;" in scoped_generated
+    assert "const int LANE = (2 + 2);" in scoped_generated
+    assert "QuadReadLaneAt(value, LANE)" in scoped_generated
 
 
 def test_directx_wave_vote_intrinsics_accept_inline_predicate_expressions():

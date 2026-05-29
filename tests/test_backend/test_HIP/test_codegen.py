@@ -8817,6 +8817,126 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_memory_pool_member_outputs_clear_stale_metadata(self):
+        """Test HIP memory-pool member outputs clear stale metadata."""
+        code = """
+        struct PoolOutputs {
+            hipMemPool_t pool;
+            size_t attr;
+            unsigned long long access;
+            void* handle;
+            hipMemPoolPtrExportData exportData;
+            void* importedPtr;
+        };
+
+        void queryMemoryPoolMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            hipMemPool_t pool,
+            hipMemPoolProps* poolProps,
+            hipMemLocation* location,
+            int device,
+            void* pointer,
+            PoolOutputs* holder,
+            void** ptrs,
+            size_t* sizes,
+            unsigned long long* flags
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolCreate(&holder->pool, poolProps);
+            ptrs[0] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetDefaultMemPool(&holder->pool, device);
+            ptrs[1] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetMemPool(&holder->pool, device);
+            ptrs[2] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolGetAttribute(
+                pool,
+                hipMemPoolAttrReleaseThreshold,
+                &holder->attr
+            );
+            sizes[0] = holder->attr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolGetAccess(&holder->access, pool, location);
+            flags[0] = holder->access;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolExportToShareableHandle(
+                &holder->handle,
+                pool,
+                hipMemHandleTypePosixFileDescriptor,
+                0
+            );
+            ptrs[3] = holder->handle;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolExportPointer(&holder->exportData, pointer);
+            ptrs[4] = holder->exportData.reserved[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolImportPointer(&holder->importedPtr, pool, &holder->exportData);
+            ptrs[5] = holder->importedPtr;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            "// HIP memory pool create: output: holder->pool, properties: poolProps",
+            "// HIP get default memory pool: output: holder->pool, device: device",
+            "// HIP get device memory pool: output: holder->pool, device: device",
+            (
+                "// HIP memory pool get attribute: pool: pool, "
+                "attribute: hipMemPoolAttrReleaseThreshold, output: holder->attr"
+            ),
+            (
+                "// HIP memory pool get access: output: holder->access, "
+                "pool: pool, location: location"
+            ),
+            (
+                "// HIP memory pool export to shareable handle: "
+                "output: holder->handle, pool: pool, "
+                "handle type: hipMemHandleTypePosixFileDescriptor, flags: 0"
+            ),
+            (
+                "// HIP memory pool export pointer: output: holder->exportData, "
+                "pointer: pointer"
+            ),
+            (
+                "// HIP memory pool import pointer: output: holder->importedPtr, "
+                "pool: pool, export data: (&holder->exportData)"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for index, expression in [
+            (0, "holder->pool"),
+            (1, "holder->pool"),
+            (2, "holder->pool"),
+            (3, "holder->handle"),
+            (4, "holder->exportData.reserved[0]"),
+            (5, "holder->importedPtr"),
+        ]:
+            assert f"ptrs[{index}] = {expression};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "sizes[0] = holder->attr;" in result
+        assert "sizes[0] = (/* HIP device query:" not in result
+        assert "flags[0] = holder->access;" in result
+        assert "flags[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_symbol_range_function_output_reads_emit_metadata_expressions(self):
         """Test HIP symbol, range, function, and array scalar outputs."""
         code = """
@@ -12146,6 +12266,155 @@ class TestHipCodeGen:
             "floats[5] = floats[3];",
         ]:
             assert assignment in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_texture_reference_member_outputs_clear_stale_metadata(self):
+        """Test texture-reference member outputs clear stale metadata."""
+        code = """
+        struct TextureRefOutputs {
+            size_t alignment;
+            size_t offset;
+            hipTextureAddressMode addressMode;
+            hipTextureFilterMode filterMode;
+            unsigned int flags;
+            int maxAniso;
+            float mipBias;
+            hipArray_Format format;
+            int channels;
+            float minClamp;
+            float maxClamp;
+        };
+
+        void queryTextureReferenceMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            textureReference* texRef,
+            hipChannelFormatDesc* desc,
+            TextureRefOutputs* holder,
+            size_t* sizes,
+            int* ints,
+            float* floats,
+            unsigned int* flagsOut
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetTextureAlignmentOffset(&holder->alignment, texRef);
+            sizes[0] = holder->alignment;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipBindTexture(&holder->offset, texRef, devicePtr, desc, 256);
+            sizes[1] = holder->offset;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefSetAddress(&holder->offset, texRef, devicePtr, 512);
+            sizes[2] = holder->offset;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetAddressMode(&holder->addressMode, texRef, 1);
+            ints[0] = holder->addressMode;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFilterMode(&holder->filterMode, texRef);
+            ints[1] = holder->filterMode;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFlags(&holder->flags, texRef);
+            flagsOut[0] = holder->flags;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMaxAnisotropy(&holder->maxAniso, texRef);
+            ints[2] = holder->maxAniso;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelBias(&holder->mipBias, texRef);
+            floats[0] = holder->mipBias;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFormat(&holder->format, &holder->channels, texRef);
+            ints[3] = holder->format;
+            ints[4] = holder->channels;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelClamp(&holder->minClamp, &holder->maxClamp, texRef);
+            floats[1] = holder->minClamp;
+            floats[2] = holder->maxClamp;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP texture alignment offset query: output: holder->alignment, "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference bind: offset output: holder->offset, "
+                "texture: texRef, pointer: devicePtr, desc: desc, bytes: 256"
+            ),
+            (
+                "HIP texture reference set address: offset output: holder->offset, "
+                "texture: texRef, pointer: devicePtr, bytes: 512"
+            ),
+            (
+                "HIP texture reference get address mode: output: holder->addressMode, "
+                "texture: texRef, dim: 1"
+            ),
+            (
+                "HIP texture reference get filter mode: output: holder->filterMode, "
+                "texture: texRef"
+            ),
+            "HIP texture reference get flags: output: holder->flags, texture: texRef",
+            (
+                "HIP texture reference get max anisotropy: output: holder->maxAniso, "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level bias: "
+                "output: holder->mipBias, texture: texRef"
+            ),
+            (
+                "HIP texture reference get format: format output: holder->format, "
+                "channels output: holder->channels, texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level clamp: "
+                "min output: holder->minClamp, max output: holder->maxClamp, "
+                "texture: texRef"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for index, expression in [
+            (0, "holder->alignment"),
+            (1, "holder->offset"),
+            (2, "holder->offset"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "holder->addressMode"),
+            (1, "holder->filterMode"),
+            (2, "holder->maxAniso"),
+            (3, "holder->format"),
+            (4, "holder->channels"),
+        ]:
+            assert f"ints[{index}] = {expression};" in result
+            assert f"ints[{index}] = (/* HIP device query:" not in result
+        assert "flagsOut[0] = holder->flags;" in result
+        assert "flagsOut[0] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "holder->mipBias"),
+            (1, "holder->minClamp"),
+            (2, "holder->maxClamp"),
+        ]:
+            assert f"floats[{index}] = {expression};" in result
+            assert f"floats[{index}] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 

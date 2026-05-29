@@ -512,6 +512,7 @@ class HLSLCodeGen:
         self.literal_bool_constants = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.current_hlsl_visible_int_constants = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
@@ -825,6 +826,7 @@ class HLSLCodeGen:
         self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
         )
+        self.current_hlsl_visible_int_constants = None
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -2267,13 +2269,20 @@ class HLSLCodeGen:
             for texture_name, sampler_info in implicit_texture_samplers.items()
             if sampler_info.get("query_lod")
         }
-        body = getattr(func, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
+        previous_hlsl_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = self.hlsl_initial_int_constants(func)
+        try:
+            body = getattr(func, "body", [])
+            if hasattr(body, "statements"):
+                for stmt in body.statements:
+                    code += self.generate_statement(stmt, indent + 1)
+            elif isinstance(body, list):
+                for stmt in body:
+                    code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.current_hlsl_visible_int_constants = (
+                previous_hlsl_visible_int_constants
+            )
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_access_parameters = previous_image_access_parameters
@@ -2320,9 +2329,10 @@ class HLSLCodeGen:
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
                 )
-                return (
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt,
                     f"{indent_str}"
-                    f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n"
+                    f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
             declaration = format_c_style_array_declaration(
@@ -2340,7 +2350,7 @@ class HLSLCodeGen:
                     indent,
                     "HLSL",
                 )
-                return code
+                return self.hlsl_record_generated_statement_int_constants(stmt, code)
             if initial_value is not None:
                 ternary_init = (
                     self.generate_hlsl_typed_buffer_atomic_ternary_initialization(
@@ -2352,14 +2362,17 @@ class HLSLCodeGen:
                     )
                 )
                 if ternary_init is not None:
-                    return ternary_init
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, ternary_init
+                    )
                 atomic_init = self.generate_hlsl_typed_buffer_atomic_statement(
                     initial_value, stmt.name, vtype
                 )
                 if atomic_init is not None:
-                    return (
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt,
                         f"{indent_str}{declaration};\n"
-                        f"{self.generate_statement_code(atomic_init, indent)}"
+                        f"{self.generate_statement_code(atomic_init, indent)}",
                     )
                 if self.hlsl_expression_contains_typed_buffer_atomic(initial_value):
                     code, init_expr = (
@@ -2368,7 +2381,9 @@ class HLSLCodeGen:
                         )
                     )
                     code += f"{indent_str}{declaration} = {init_expr};\n"
-                    return code
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, code
+                    )
                 lifted_init = self.hlsl_typed_buffer_atomic_lifted_expression(
                     initial_value
                 )
@@ -2378,11 +2393,17 @@ class HLSLCodeGen:
                         "\n".join(lift_statements), indent
                     )
                     code += f"{indent_str}{declaration} = {init_expr};\n"
-                    return code
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, code
+                    )
                 init_expr = self.generate_expression_with_expected(initial_value, vtype)
-                return f"{indent_str}{declaration} = {init_expr};\n"
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, f"{indent_str}{declaration} = {init_expr};\n"
+                )
             else:
-                return f"{indent_str}{declaration};\n"
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, f"{indent_str}{declaration};\n"
+                )
 
         elif isinstance(stmt, ArrayNode):
             # Improved array node handling
@@ -2403,15 +2424,22 @@ class HLSLCodeGen:
                 )
             )
             if ternary_assignment is not None:
-                return ternary_assignment
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, ternary_assignment
+                )
             atomic_assignment = (
                 self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
                     stmt, indent
                 )
             )
             if atomic_assignment is not None:
-                return atomic_assignment
-            return self.generate_statement_code(self.generate_assignment(stmt), indent)
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, atomic_assignment
+                )
+            return self.hlsl_record_generated_statement_int_constants(
+                stmt,
+                self.generate_statement_code(self.generate_assignment(stmt), indent),
+            )
 
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
@@ -2512,14 +2540,21 @@ class HLSLCodeGen:
                         stmt.expression, indent
                     )
                     if ternary_assignment is not None:
-                        return ternary_assignment
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, ternary_assignment
+                        )
                     atomic_assignment = self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
                         stmt.expression, indent
                     )
                     if atomic_assignment is not None:
-                        return atomic_assignment
-                    return self.generate_statement_code(
-                        self.generate_assignment(stmt.expression), indent
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, atomic_assignment
+                        )
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt,
+                        self.generate_statement_code(
+                            self.generate_assignment(stmt.expression), indent
+                        ),
                     )
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
@@ -3133,6 +3168,11 @@ class HLSLCodeGen:
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
+        )
 
         try:
             # Handle for loop components
@@ -3172,6 +3212,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_block(self, node, indent):
         indent_str = "    " * indent
@@ -3187,6 +3228,11 @@ class HLSLCodeGen:
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
+        )
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -3194,6 +3240,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
@@ -3202,6 +3249,11 @@ class HLSLCodeGen:
         previous_local_variable_types = dict(self.local_variable_types)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
+        )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
         )
 
         try:
@@ -3233,6 +3285,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
@@ -3921,7 +3974,9 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_quad_lane_index_range(self, operation, argument):
-        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        lane_index = self.literal_int_value(
+            argument, self.hlsl_current_visible_int_constants()
+        )
         if lane_index is None:
             return
         if not 0 <= lane_index <= 3:
@@ -7973,6 +8028,18 @@ class HLSLCodeGen:
         )
         if target_name:
             visible_int_constants.pop(target_name, None)
+
+    def hlsl_current_visible_int_constants(self):
+        if self.current_hlsl_visible_int_constants is not None:
+            return self.current_hlsl_visible_int_constants
+        return self.literal_int_constants
+
+    def hlsl_record_generated_statement_int_constants(self, stmt, generated_code):
+        if self.current_hlsl_visible_int_constants is not None:
+            self.hlsl_update_visible_int_constants(
+                stmt, self.current_hlsl_visible_int_constants
+            )
+        return generated_code
 
     def validate_hlsl_scalar_int_uint_expression(self, argument, context):
         argument_type = self.expression_result_type(argument)
