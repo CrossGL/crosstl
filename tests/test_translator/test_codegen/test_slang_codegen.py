@@ -5653,6 +5653,70 @@ def test_slang_ray_tracing_interface_pointer_and_reference_aliases_emit_native_c
     )
 
 
+def test_slang_ray_tracing_interface_pointer_dereferences_emit_native_calls():
+    code = """
+    shader SlangRayInterfacePointerDereferences {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                RayPayload* payloadPtr = &payload;
+                CallableData callableData;
+                CallableData* callablePtr = &callableData;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, *payloadPtr);
+                CallShader(0, *callablePtr);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                HitAttributes* attributesPtr = &attributes;
+                bool accepted = ReportHit(1.0, 0, *attributesPtr);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RayPayload* payloadPtr = &payload;" in generated_code
+    assert "CallableData* callablePtr = &callableData;" in generated_code
+    assert "HitAttributes* attributesPtr = &attributes;" in generated_code
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, *payloadPtr);" in generated_code
+    assert "CallShader(0, *callablePtr);" in generated_code
+    assert "bool accepted = ReportHit(1.0, 0, *attributesPtr);" in generated_code
+
+
 def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
     code = """
     shader SlangRayPointerHolderHelpers {
@@ -7865,6 +7929,25 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
                 void main() {
                     RaytracingAccelerationStructure scene;
                     RayDesc ray;
+                    OtherRayPayload wrong;
+                    OtherRayPayload* wrongPtr = &wrong;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, *wrongPtr);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
                     OtherRayPayloadHolder wrongs;
                     OtherRayPayloadHolder* wrongPtr = &wrongs;
                     TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, wrongPtr->primary);
@@ -7899,6 +7982,23 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
             """
             ray_generation {
                 void main() {
+                    OtherCallableData wrong;
+                    OtherCallableData* wrongPtr = &wrong;
+                    CallShader(0, *wrongPtr);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
                     OtherCallableDataHolder wrongs;
                     OtherCallableDataHolder* wrongPtr = &wrongs;
                     CallShader(0, wrongPtr->primary);
@@ -7919,6 +8019,26 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
                     OtherHitAttributes wrong;
                     OtherHitAttributes& wrongRef = wrong;
                     ReportHit(1.0, 0, wrongRef);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes wrong;
+                    OtherHitAttributes* wrongPtr = &wrong;
+                    ReportHit(1.0, 0, *wrongPtr);
                 }
             }
 

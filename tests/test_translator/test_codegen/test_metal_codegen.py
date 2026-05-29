@@ -6307,6 +6307,40 @@ def test_metal_intersection_function_table_globals_thread_through_helpers():
     assert "uint count = tableSize();" not in generated
 
 
+def test_metal_intersection_function_table_accepts_helper_parameter_and_alias():
+    code = """
+    shader rt {
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        uint tableSize(intersection_function_table<instancing> table) {
+            return table.size();
+        }
+
+        ray_generation {
+            void main() {
+                intersection_function_table<instancing> tableAlias =
+                    intersectionFunctions;
+                uint count = tableSize(tableAlias);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "kernel void kernel_main("
+        "intersection_function_table<instancing> intersectionFunctions [[buffer(1)]])"
+    ) in generated
+    assert "uint tableSize(intersection_function_table<instancing> table)" in generated
+    assert "return table.size();" in generated
+    assert (
+        "intersection_function_table<instancing> tableAlias = intersectionFunctions;"
+    ) in generated
+    assert "uint count = tableSize(tableAlias);" in generated
+    assert "uint count = tableSize(intersectionFunctions);" not in generated
+    assert "unsupported Metal ray tracing resource" not in generated
+
+
 def test_metal_visible_function_table_stage_parameter_maps_signature_and_binding():
     code = """
     shader rt {

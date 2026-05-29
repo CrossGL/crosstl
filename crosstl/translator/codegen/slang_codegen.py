@@ -3925,7 +3925,9 @@ class SlangCodeGen:
             operation = getattr(node, "operation", None)
             if not include_user_functions and operation in self.user_function_names:
                 return None
-            return operation, getattr(node, "arguments", [])
+            return operation, self.normalized_slang_intrinsic_args(
+                getattr(node, "arguments", [])
+            )
 
         if not isinstance(node, FunctionCallNode):
             return None
@@ -3936,7 +3938,9 @@ class SlangCodeGen:
             return None
         if not include_user_functions and func_name in self.user_function_names:
             return None
-        return func_name, getattr(node, "arguments", getattr(node, "args", []))
+        return func_name, self.normalized_slang_intrinsic_args(
+            getattr(node, "arguments", getattr(node, "args", []))
+        )
 
     def slang_function_call_name(self, node):
         if not isinstance(node, FunctionCallNode):
@@ -6142,7 +6146,7 @@ class SlangCodeGen:
             args = self.generate_user_function_arguments(node.operation, node.arguments)
             return f"{self.convert_type(node.operation)}({args})"
         return self.generate_slang_ray_tracing_call_expression(
-            node.operation, node.arguments
+            node.operation, self.normalized_slang_intrinsic_args(node.arguments)
         )
 
     def generate_slang_ray_tracing_call_expression(self, operation, arguments):

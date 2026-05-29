@@ -24,6 +24,7 @@ from crosstl.translator.ast import (
     IdentifierPatternNode,
     LiteralPatternNode,
     LiteralNode,
+    MatrixType,
     MatchArmNode,
     MatchNode,
     MemberAccessNode,
@@ -10308,6 +10309,129 @@ def test_generic_user_struct_match_contexts_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_match_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_vector_matrix_payload_ast():
+    source = """
+    generic<T> struct Holder {
+        T value;
+        int tag;
+    };
+    Holder<vec3> globalVec;
+    Holder<mat2> globalMat;
+
+    Holder<vec3> makeVecHolder(vec3 value) {}
+    Holder<mat2> makeMatHolder(mat2 value) {}
+    vec3 readVec(Holder<vec3> holder) {}
+    mat2 readMat(Holder<mat2> holder) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    vec3 = VectorType(PrimitiveType("float"), 3)
+    mat2 = MatrixType(PrimitiveType("float"), 2, 2)
+    holder_vec3 = NamedType("Holder", [vec3])
+    holder_mat2 = NamedType("Holder", [mat2])
+
+    functions["makeVecHolder"].body = BlockNode(
+        [
+            VariableNode(
+                "local",
+                holder_vec3,
+                ConstructorNode(holder_vec3, [IdentifierNode("value")]),
+            ),
+            ReturnNode(IdentifierNode("local")),
+        ]
+    )
+    functions["makeMatHolder"].body = BlockNode(
+        [
+            ReturnNode(
+                ConstructorNode(
+                    holder_mat2,
+                    [
+                        IdentifierNode("value"),
+                        LiteralNode(9, PrimitiveType("int")),
+                    ],
+                )
+            )
+        ]
+    )
+    functions["readVec"].body = BlockNode(
+        [ReturnNode(MemberAccessNode(IdentifierNode("holder"), "value"))]
+    )
+    functions["readMat"].body = BlockNode(
+        [ReturnNode(MemberAccessNode(IdentifierNode("holder"), "value"))]
+    )
+    return ast
+
+
+def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
+    codegen = MojoCodeGen()
+    generated_code = codegen.generate(_generic_user_struct_vector_matrix_payload_ast())
+
+    assert "struct Holder[T: AnyType]:" in generated_code
+    assert "struct CrossGLMatrixF32C2R2:" in generated_code
+    assert (
+        "var globalVec = Holder[SIMD[DType.float32, 4]]("
+        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)" in generated_code
+    )
+    assert (
+        "var globalMat = Holder[CrossGLMatrixF32C2R2]("
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 0.0)), 0)" in generated_code
+    )
+    assert (
+        "fn makeVecHolder(value: SIMD[DType.float32, 4]) -> "
+        "Holder[SIMD[DType.float32, 4]]:" in generated_code
+    )
+    assert (
+        "var local: Holder[SIMD[DType.float32, 4]] = "
+        "Holder[SIMD[DType.float32, 4]](value=value, tag=0)" in generated_code
+    )
+    assert (
+        "fn makeMatHolder(value: CrossGLMatrixF32C2R2) -> "
+        "Holder[CrossGLMatrixF32C2R2]:" in generated_code
+    )
+    assert "return Holder[CrossGLMatrixF32C2R2](value, 9)" in generated_code
+    assert (
+        "fn readVec(holder: Holder[SIMD[DType.float32, 4]]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn readMat(holder: Holder[CrossGLMatrixF32C2R2]) -> "
+        "CrossGLMatrixF32C2R2:" in generated_code
+    )
+    assert "return holder.value" in generated_code
+    assert codegen.generic_struct_fields_for_type("Holder<vec3>") == {
+        "value": "vec3",
+        "tag": "int",
+    }
+    assert codegen.generic_struct_fields_for_type("Holder<mat2>") == {
+        "value": "mat2",
+        "tag": "int",
+    }
+    assert codegen.expression_path_result_type("globalVec.value") == "vec3"
+    assert codegen.expression_path_result_type("globalMat.value") == "mat2"
+    assert "Holder<vec3>" not in generated_code
+    assert "Holder<mat2>" not in generated_code
+    assert "MatrixType(" not in generated_code
+    assert "VectorType(" not in generated_code
+
+
+def test_generic_user_struct_vector_matrix_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_vector_matrix_payload_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_vector_matrix_payloads.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],

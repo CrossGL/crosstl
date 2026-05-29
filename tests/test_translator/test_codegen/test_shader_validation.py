@@ -4757,6 +4757,25 @@ shader MetalIntersectionFunctionTableValidation {
 """
 
 
+METAL_INTERSECTION_FUNCTION_TABLE_HELPER_ALIAS_SHADER = """
+shader MetalIntersectionFunctionTableHelperAliasValidation {
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    uint tableSize(intersection_function_table<instancing> table) {
+        return table.size();
+    }
+
+    ray_generation {
+        void main() {
+            intersection_function_table<instancing> tableAlias =
+                intersectionFunctions;
+            uint count = tableSize(tableAlias);
+        }
+    }
+}
+"""
+
+
 METAL_RAY_FUNCTION_TABLE_PARAMETER_SHADER = """
 shader MetalRayFunctionTableParameterValidation {
     struct CallableData {
@@ -8607,6 +8626,41 @@ def test_generated_metal_intersection_function_table_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_INTERSECTION_FUNCTION_TABLE_SHADER)
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_intersection_function_table_helper_alias_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "intersection_function_table_helper_alias.metal"
+    output = tmp_path / "intersection_function_table_helper_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_INTERSECTION_FUNCTION_TABLE_HELPER_ALIAS_SHADER)
+    )
+    assert "uint tableSize(intersection_function_table<instancing> table)" in code
+    assert (
+        "intersection_function_table<instancing> tableAlias = intersectionFunctions;"
+        in code
+    )
+    assert "uint count = tableSize(tableAlias);" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
