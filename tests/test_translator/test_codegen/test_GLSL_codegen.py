@@ -14427,7 +14427,7 @@ def test_opengl_implicit_projected_stage_input_members_strip_samplers():
         in generated_code
     )
     assert "unsupported GLSL texture compare" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProj(" not in generated_code
     assert "input." not in generated_code
 
 
@@ -14535,8 +14535,9 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float offsetProjected = textureOffset(tex, vec3(uvq.xy / uvq.z, depth), offset);"
-        in generated_code
+        "float offsetProjected = /* unsupported GLSL texture compare: "
+        "textureCompareProjOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
     )
     assert (
         "float lodProjected = textureLod(tex, vec3(uvq.xy / uvq.z, depth), lod);"
@@ -14567,8 +14568,10 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float offsetProjected = textureOffset(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), offset);"
-        in generated_code
+        generated_code.count(
+            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
     )
     assert (
         "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -14583,7 +14586,7 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert "compareSampler" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_opengl_direct_projected_shadow_compare_stage_input_members():
@@ -14628,16 +14631,17 @@ def test_opengl_direct_projected_shadow_compare_stage_input_members():
         in generated_code
     )
     assert (
-        "float planarOffset = textureOffset(shadowMap, vec3(uvqw.xy / uvqw.w, depth), offset);"
-        in generated_code
+        "float planarOffset = /* unsupported GLSL texture compare: "
+        "textureCompareProjOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
     )
     assert (
         "float arrayGrad = textureGrad(shadowArray, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
         in generated_code
     )
     assert "compareSampler" not in generated_code
-    assert "unsupported GLSL texture compare" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProjOffset(" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments():
@@ -14735,8 +14739,9 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planarOffset = textureOffset(shadowMaps[1], vec3(uvq.xy / uvq.z, depth), offset);"
-        in generated_code
+        "float planarOffset = /* unsupported GLSL texture compare: "
+        "textureCompareProjOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
     )
     assert (
         "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
@@ -14751,8 +14756,10 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float arrayOffset = textureOffset(shadowArrays[layer], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), offset);"
-        in generated_code
+        generated_code.count(
+            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
     )
     assert (
         "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -14772,7 +14779,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
     )
     assert "sampler shadowSamplers" not in generated_code
     assert "shadowSamplers[" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers():
@@ -14866,8 +14873,9 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planarOffset = textureOffset(shadowMaps[1], vec3(uvq.xy / uvq.z, depth), offset);"
-        in generated_code
+        "float planarOffset = /* unsupported GLSL texture compare: "
+        "textureCompareProjOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
     )
     assert (
         "float planarLod = textureLod(shadowMaps[2], vec3(uvq.xy / uvq.z, depth), lod);"
@@ -14882,8 +14890,10 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float arrayOffset = textureOffset(shadowArrays[layer], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), offset);"
-        in generated_code
+        generated_code.count(
+            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
     )
     assert (
         "float arrayGrad = textureGrad(shadowArrays[1], vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
@@ -14903,7 +14913,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
     )
     assert "sampler shadowMapsSampler" not in generated_code
     assert "sampler shadowArraysSampler" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constant_size():
@@ -15004,17 +15014,20 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
         in generated_code
     )
     assert (
-        "float planarLow = textureOffset(shadowMaps[1], vec3(uvq.xy / uvq.z, depth), offset);"
-        in generated_code
+        "float planarLow = /* unsupported GLSL texture compare: "
+        "textureCompareProjOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
     )
     assert (
         "float arrayHigh = textureGrad(shadowArrays[(2 * 2)], "
         "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
     ) in generated_code
     assert (
-        "float arrayLow = textureOffset(shadowArrays[3], "
-        "vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), offset);"
-    ) in generated_code
+        generated_code.count(
+            "/* unsupported GLSL texture compare: textureCompareProjOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
+    )
     assert (
         "shadowDeep(shadowMaps, shadowArrays, uvq, uvLayerQ, depth, lod, ddx, ddy, offset)"
         in generated_code
@@ -15030,7 +15043,7 @@ def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constan
     assert "sampler shadowSamplers" not in generated_code
     assert "shadowSamplers" not in generated_code
     assert "afterSampler" not in generated_code
-    assert "textureCompareProj" not in generated_code
+    assert "textureCompareProj(" not in generated_code
 
 
 def test_opengl_projected_array_shadow_lod_offset_reports_unsupported():
@@ -15858,14 +15871,23 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     )
     assert "textureGather(tex, uv, depth)" in generated_code
     assert "textureGatherOffset(tex, uv, depth, offset)" in generated_code
-    assert "textureOffset(tex, vec3(uv, depth), offset)" in generated_code
+    assert (
+        "float offsetCompared = /* unsupported GLSL texture compare: "
+        "textureCompareOffset texel offsets must be compile-time integer constants "
+        "*/ 0.0;" in generated_code
+    )
     assert (
         "vec4 gatherShadowArray(sampler2DArrayShadow tex, vec3 uvLayer, float depth, ivec2 offset)"
         in generated_code
     )
     assert "textureGather(tex, uvLayer, depth)" in generated_code
     assert "textureGatherOffset(tex, uvLayer, depth, offset)" in generated_code
-    assert "textureOffset(tex, vec4(uvLayer, depth), offset)" in generated_code
+    assert (
+        generated_code.count(
+            "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
+    )
     assert (
         "vec4 gatherCubeShadowArray(samplerCubeArrayShadow tex, vec4 cubeLayer, float depth)"
         in generated_code
@@ -15877,7 +15899,38 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     assert "compareSampler" not in generated_code
     assert "textureGatherCompare" not in generated_code
     assert "textureGatherCompareOffset" not in generated_code
-    assert "textureCompareOffset" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+
+
+def test_opengl_shadow_compare_offset_literal_offsets_lower_to_texture_offset():
+    shader = """
+    shader ShadowCompareLiteralOffset {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        vec4 sampleShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth) {
+            float compared = textureCompareOffset(tex, s, uv, depth, ivec2(1, 0));
+            return vec4(compared);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return sampleShadow(shadowMap, compareSampler, vec2(0.5), 0.25);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "float compared = textureOffset(tex, vec3(uv, depth), ivec2(1, 0));"
+        in generated_code
+    )
+    assert "compareSampler" not in generated_code
+    assert "unsupported GLSL texture compare" not in generated_code
 
 
 def test_opengl_cube_shadow_gather_compare_supports_cube_and_cube_array():
@@ -24172,10 +24225,11 @@ def test_glsl_storage_image_helper_dynamic_array_elements_keep_index_parameters(
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
     assert "int queryElement__glsl_image_counters_0()" in generated_code
     assert "return imageSize(counters[0]).x;" in generated_code
+    assert "int queryElement__glsl_image_counters_layer(int layer)" in generated_code
+    assert "return imageSize(counters[layer]).x;" in generated_code
     assert "int queryViaDynamic__glsl_images_counters(int layer)" in generated_code
-    assert "return queryElement(counters[layer]);" in generated_code
-    assert "queryElement__glsl_image_counters_layer" not in generated_code
-    assert "return imageSize(counters[layer]).x;" not in generated_code
+    assert "return queryElement__glsl_image_counters_layer(layer);" in generated_code
+    assert "return queryElement(counters[layer]);" not in generated_code
     assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
     assert (
         "int nestedCount = queryViaDynamic__glsl_images_counters(1);" in generated_code

@@ -1,6 +1,7 @@
 """CrossGL-to-GLSL code generator."""
 
 from copy import deepcopy
+from types import SimpleNamespace
 
 from ..ast import (
     AssignmentNode,
@@ -2421,9 +2422,14 @@ class GLSLCodeGen:
         if expression is None:
             return None
 
-        specializable = self.glsl_resource_argument_is_specializable(arg)
+        dynamic_parameters = self.glsl_resource_argument_dynamic_parameters(arg)
+        specializable = dynamic_parameters is not None
         if alias_binding is not None:
             specializable = specializable and alias_binding.get("specializable", True)
+            dynamic_parameters = [
+                *(alias_binding.get("dynamic_parameters") or []),
+                *(dynamic_parameters or []),
+            ]
 
         if alias_binding is not None:
             return {
@@ -2431,6 +2437,7 @@ class GLSLCodeGen:
                 "expression": expression,
                 "type": resource_type,
                 "specializable": specializable,
+                "dynamic_parameters": dynamic_parameters or [],
             }
 
         return {
@@ -2439,6 +2446,7 @@ class GLSLCodeGen:
             "format": self.image_resource_format(arg),
             "access": self.image_resource_access(arg),
             "specializable": specializable,
+            "dynamic_parameters": dynamic_parameters or [],
         }
 
     def glsl_resource_argument_expression(self, arg, aliases):
@@ -2460,18 +2468,41 @@ class GLSLCodeGen:
             return arg.name
         return None
 
-    def glsl_resource_argument_is_specializable(self, arg):
+    def glsl_resource_argument_dynamic_parameters(self, arg):
         if isinstance(arg, ArrayAccessNode) or (
             hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
         ):
+            array_expr = getattr(arg, "array", getattr(arg, "array_expr", None))
             index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            dynamic_parameters = self.glsl_resource_argument_dynamic_parameters(
+                array_expr
+            )
+            if dynamic_parameters is None:
+                return None
             literal_index = self.literal_int_value(
                 index_expr, self.literal_int_constants
             )
-            return isinstance(literal_index, int) and not isinstance(
-                literal_index, bool
+            if isinstance(literal_index, int) and not isinstance(literal_index, bool):
+                return dynamic_parameters
+            index_name = self.expression_name(index_expr)
+            if not index_name:
+                return None
+            index_expression = self.generate_expression(index_expr)
+            dynamic_parameters.append(
+                {
+                    "name": index_name,
+                    "type": self.dynamic_resource_index_parameter_type(index_expr),
+                    "expression": index_expression,
+                }
             )
-        return True
+            return dynamic_parameters
+        return []
+
+    def dynamic_resource_index_parameter_type(self, index_expr):
+        index_name = self.expression_name(index_expr)
+        if index_name:
+            return self.local_variable_types.get(index_name, "int")
+        return "int"
 
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
         callee = self.function_definitions.get(func_name)
@@ -2540,8 +2571,33 @@ class GLSLCodeGen:
             )
             if index not in bindings
         ]
+        remaining_param_names = {
+            getattr(param, "name", None)
+            for param in getattr(clone, "parameters", getattr(clone, "params", []))
+        }
+        dynamic_call_arguments = []
+        for _, (_, binding) in sorted(bindings.items()):
+            for dynamic_param in binding.get("dynamic_parameters") or []:
+                param_name = dynamic_param.get("name")
+                if not param_name or param_name in remaining_param_names:
+                    continue
+                remaining_param_names.add(param_name)
+                clone.parameters.append(
+                    SimpleNamespace(
+                        name=param_name,
+                        param_type=dynamic_param.get("type", "int"),
+                        vtype=dynamic_param.get("type", "int"),
+                        semantic=None,
+                        attributes=[],
+                        qualifiers=[],
+                    )
+                )
+                dynamic_call_arguments.append(
+                    dynamic_param.get("expression", param_name)
+                )
         clone._glsl_resource_source_name = func_name
         clone._glsl_resource_bound_indices = set(bindings)
+        clone._glsl_resource_dynamic_call_arguments = dynamic_call_arguments
         clone._glsl_resource_aliases = {
             param_name: binding for param_name, binding in bindings.values()
         }
@@ -2575,9 +2631,13 @@ class GLSLCodeGen:
 
     def glsl_resource_specialized_call_arguments(self, specialized_func, args):
         bound_indices = getattr(specialized_func, "_glsl_resource_bound_indices", set())
-        return [
+        call_args = [
             arg for index, arg in enumerate(args or []) if index not in bound_indices
         ]
+        call_args.extend(
+            getattr(specialized_func, "_glsl_resource_dynamic_call_arguments", []) or []
+        )
+        return call_args
 
     def generate_constants(self, ast):
         code = ""
@@ -4782,6 +4842,8 @@ class GLSLCodeGen:
                 param.name,
             )
             prefix = self.stage_io_declaration_prefix(param, "in")
+            if self.requires_flat_stage_input(stage_name, param_type):
+                prefix = self.with_flat_stage_input_qualifier(prefix)
             parameter_declaration = format_c_style_array_declaration(
                 param_type, param.name
             )
@@ -5127,7 +5189,10 @@ class GLSLCodeGen:
                 input_name,
             )
             prefix = self.stage_io_declaration_prefix(member, "in")
-            declaration = f"{prefix} {self.member_type_name(member)} {input_name};"
+            member_type = self.member_type_name(member)
+            if self.requires_flat_stage_input("fragment", member_type):
+                prefix = self.with_flat_stage_input_qualifier(prefix)
+            declaration = f"{prefix} {member_type} {input_name};"
             if self.reserve_stage_io_declaration(
                 "fragment", "input", input_name, declaration
             ):
@@ -5960,6 +6025,36 @@ class GLSLCodeGen:
         parts.extend(other_qualifiers)
         parts.append(direction)
         parts.extend(precision)
+        return " ".join(parts)
+
+    def requires_flat_stage_input(self, stage_name, mapped_type):
+        if stage_name != "fragment":
+            return False
+        base_type, _ = split_array_type_suffix(str(mapped_type))
+        return base_type in {
+            "int",
+            "uint",
+            "bool",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "bvec2",
+            "bvec3",
+            "bvec4",
+        }
+
+    def with_flat_stage_input_qualifier(self, prefix):
+        parts = prefix.split()
+        if "flat" in parts:
+            return prefix
+        try:
+            direction_index = parts.index("in")
+        except ValueError:
+            return f"flat {prefix}" if prefix else "flat"
+        parts.insert(direction_index, "flat")
         return " ".join(parts)
 
     def type_name_string(self, vtype):
@@ -9541,6 +9636,57 @@ class GLSLCodeGen:
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("GLSL", func_name, reason)
 
+    def glsl_texel_offset_is_compile_time_constant(self, offset_arg):
+        offset_type = self.type_name_string(self.expression_result_type(offset_arg))
+        scalar_integer_types = {"int", "uint"}
+        vector_integer_types = {
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+        }
+
+        literal_value = self.literal_int_value(offset_arg, self.literal_int_constants)
+        if isinstance(literal_value, int) and not isinstance(literal_value, bool):
+            return offset_type is None or offset_type in scalar_integer_types
+
+        class_name = offset_arg.__class__.__name__ if offset_arg is not None else ""
+        if "FunctionCall" in class_name:
+            constructor = getattr(
+                offset_arg, "function", getattr(offset_arg, "name", None)
+            )
+            arguments = getattr(
+                offset_arg, "arguments", getattr(offset_arg, "args", [])
+            )
+        elif "Constructor" in class_name:
+            constructor = getattr(offset_arg, "constructor_type", None)
+            arguments = getattr(offset_arg, "arguments", [])
+        else:
+            return False
+
+        constructor_name = self.type_name_string(constructor)
+        if constructor_name not in vector_integer_types:
+            return False
+        arguments = list(arguments or [])
+        if not arguments:
+            return False
+        for argument in arguments:
+            literal_argument = self.literal_int_value(
+                argument, self.literal_int_constants
+            )
+            if not isinstance(literal_argument, int) or isinstance(
+                literal_argument, bool
+            ):
+                return False
+        return True
+
+    def unsupported_dynamic_texel_offset_compare_call(self, func_name):
+        return self.unsupported_texture_compare_call(
+            func_name, "texel offsets must be compile-time integer constants"
+        )
+
     def generate_texture_compare_call(self, func_name, args):
         parts = self.texture_call_parts(args)
         if parts is None:
@@ -9589,7 +9735,10 @@ class GLSLCodeGen:
                     return self.unsupported_texture_compare_call(
                         func_name, texture_compare_offset_capability_error("GLSL")
                     )
-                offset = self.generate_expression(extra_args[1])
+                offset_arg = extra_args[1]
+                if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                    return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+                offset = self.generate_expression(offset_arg)
                 return f"textureOffset({texture_name}, {compare_coord}, {offset})"
 
             if is_texture_compare_lod_operation(func_name):
@@ -9697,7 +9846,10 @@ class GLSLCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, texture_compare_coordinate_error()
                 )
-            offset = self.generate_expression(extra_args[1])
+            offset_arg = extra_args[1]
+            if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+            offset = self.generate_expression(offset_arg)
             return f"textureOffset({texture_name}, {compare_coord}, {offset})"
 
         if is_texture_compare_lod_operation(func_name):

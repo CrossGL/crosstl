@@ -9877,6 +9877,8 @@ def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang(
         crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
+    assert "layout(location = 7) flat in ivec2 offset;" in code
+    assert "layout(location = 12) flat in int component;" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
@@ -9944,6 +9946,13 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
         "fragment",
+    )
+    assert "layout(location = 8) flat in ivec2 offset;" in code
+    assert (
+        code.count(
+            "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
+        )
+        == 2
     )
     source.write_text(code, encoding="utf-8")
 

@@ -2402,7 +2402,17 @@ def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path)
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "rgen", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "rgen",
+            "-o",
+            str(tmp_path / "ray_generation.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2426,7 +2436,17 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "comp",
+            "-o",
+            str(tmp_path / "ray_query_compute.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2456,7 +2476,17 @@ def test_generated_glsl_ray_query_trace_ray_inline_validates_with_glslangvalidat
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "comp",
+            "-o",
+            str(tmp_path / "ray_query_trace_ray_inline.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2546,10 +2576,11 @@ def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidat
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
     assert "int queryElement__glsl_image_counters_0()" in code
+    assert "int queryElement__glsl_image_counters_layer(int layer)" in code
+    assert "return imageSize(counters[layer]).x;" in code
     assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
-    assert "return queryElement(counters[layer]);" in code
-    assert "queryElement__glsl_image_counters_layer" not in code
-    assert "return imageSize(counters[layer]).x;" not in code
+    assert "return queryElement__glsl_image_counters_layer(layer);" in code
+    assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

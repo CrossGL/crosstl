@@ -277,7 +277,7 @@ def test_parse_fragment_sample_mask_builtin_roundtrip():
 
     glsl = GLSLCodeGen().generate(crosstl.translator.parse(crossgl))
 
-    assert "layout(location = 0) in int coverage;" in glsl
+    assert "layout(location = 0) flat in int coverage;" in glsl
     assert "gl_SampleMask[0] = coverage;" in glsl
     assert "gl_FragColor" not in glsl
     assert "fragColor" not in glsl
