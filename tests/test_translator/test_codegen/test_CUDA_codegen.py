@@ -6563,6 +6563,79 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_image_access_struct_reference_members_emit_cuda_diagnostics(self):
+        """Test CUDA preserves image access metadata through struct refs/pointers."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters @r32ui;
+        };
+
+        shader ImageAccessStructReferences {
+            void accessRef(ImageBundle& bundle, ivec2 pixel) {
+                vec4 blockedRefRead = imageLoad(bundle.writeImage, pixel);
+                imageStore(bundle.readImage, pixel, blockedRefRead);
+                uint blockedRefAtomic =
+                    imageAtomicAdd(bundle.readCounters, pixel, 1);
+                vec4 allowedRefRead = imageLoad(bundle.readImage, pixel);
+                imageStore(bundle.writeImage, pixel, allowedRefRead);
+            }
+
+            void accessPointer(ImageBundle* bundle, ivec2 pixel) {
+                vec4 blockedPointerRead = imageLoad(bundle->writeImage, pixel);
+                imageStore(bundle->readImage, pixel, blockedPointerRead);
+                uint blockedPointerAtomic =
+                    imageAtomicAdd(bundle->readCounters, pixel, 1);
+                vec4 allowedPointerRead = imageLoad(bundle->readImage, pixel);
+                imageStore(bundle->writeImage, pixel, allowedPointerRead);
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 2
+        assert cuda_code.count("imageStore requires writable image resource") == 2
+        assert (
+            "uint blockedRefAtomic = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicAdd requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "uint blockedPointerAtomic = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicAdd requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "float4 allowedRefRead = surf2Dread<float4>"
+            "(bundle.readImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowedRefRead, bundle.writeImage, "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "float4 allowedPointerRead = surf2Dread<float4>"
+            "(bundle->readImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowedPointerRead, bundle->writeImage, "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "imageAtomicAdd on unknown resource" not in cuda_code
+        assert "surf2Dread<float4>(bundle.writeImage" not in cuda_code
+        assert "surf2Dread<float4>(bundle->writeImage" not in cuda_code
+        assert "surf2Dwrite(blockedRefRead, bundle.readImage" not in cuda_code
+        assert "surf2Dwrite(blockedPointerRead, bundle->readImage" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_image_access_returned_local_aliases_emit_cuda_diagnostics(self):
         """Test CUDA preserves storage-image access metadata through returns."""
         source_code = """

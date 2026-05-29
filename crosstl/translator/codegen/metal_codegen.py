@@ -5671,6 +5671,19 @@ class MetalCodeGen:
             self.required_metal_wave_ballot_helper = True
             predicate = self.generate_expression(arguments[0])
             return f"__crossgl_metal_wave_ballot({predicate})"
+        if operation == "WaveActiveAllEqual":
+            value = self.generate_expression(arguments[0])
+            mapped_type, component_type, _array_suffix = (
+                self.metal_wave_argument_mapped_type(arguments[0])
+            )
+            equality = f"{value} == simd_broadcast_first({value})"
+            if (
+                mapped_type is not None
+                and component_type is not None
+                and mapped_type != component_type
+            ):
+                equality = f"all({equality})"
+            return f"simd_all({equality})"
         if operation == "WaveMatch":
             lane_count_parameter = self.current_metal_wave_lane_count_parameter
             if lane_count_parameter is None:
@@ -5913,6 +5926,13 @@ class MetalCodeGen:
                 arguments[0],
                 self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
                 "integer scalar or vector",
+            )
+        if operation == "WaveActiveAllEqual":
+            return self.metal_wave_validate_non_matrix_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
             )
         if operation in self.METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS:
             diagnostic = self.metal_wave_validate_value_argument(

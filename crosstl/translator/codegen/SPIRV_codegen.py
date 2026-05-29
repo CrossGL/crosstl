@@ -174,6 +174,9 @@ class VulkanSPIRVCodeGen:
         self.mesh_primitive_index_outputs = {}
         self.current_mesh_output_parameters = {}
         self.function_mesh_output_parameter_indices = {}
+        self.function_interface_variables = {}
+        self.function_interface_variables_by_name = {}
+        self.builtin_interface_variable_ids = set()
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -1563,6 +1566,8 @@ class VulkanSPIRVCodeGen:
         if function_name not in self.functions:
             # Handle built-in function
             return self.call_builtin_function(function_name, args)
+
+        self.merge_function_interface_variables_from_callee(function_name)
 
         function_id = self.functions[function_name]
         return_type, param_types = self.function_signatures[function_name]
@@ -4798,6 +4803,30 @@ class VulkanSPIRVCodeGen:
             self.process_mesh_set_primitive(args)
 
         return self.register_constant(0, uint_type)
+
+    def process_geometry_stream_function_call(
+        self, function_name: str, args: List
+    ) -> Optional[SpirvId]:
+        """Lower geometry stream-control calls to SPIR-V instructions."""
+        if self.current_execution_model != "Geometry":
+            self.emit(
+                f"; WARNING: SPIR-V geometry {function_name} is only valid in "
+                "geometry stages"
+            )
+            return None
+
+        if args:
+            self.emit(
+                f"; WARNING: SPIR-V geometry {function_name} requires no arguments"
+            )
+            return None
+
+        opcode = {
+            "EmitVertex": "OpEmitVertex",
+            "EndPrimitive": "OpEndPrimitive",
+        }[function_name]
+        self.emit(opcode)
+        return None
 
     def process_mesh_set_vertex(self, args: List):
         """Lower SetVertex(index, value) to a Position builtin output store."""
@@ -14984,17 +15013,19 @@ class VulkanSPIRVCodeGen:
                 var_id = self.local_variables[expr]
                 return self.get_variable_value(var_id)
             elif expr in self.global_variables:
-                return self.get_variable_value(self.global_variables[expr])
+                var_id = self.global_variables[expr]
+                self.mark_builtin_interface_variable(var_id)
+                return self.get_variable_value(var_id)
             elif expr in self.cbuffer_members:
                 member_pointer = self.cbuffer_member_pointer(expr)
                 if member_pointer is not None:
                     return self.get_variable_value(member_pointer)
             else:
-                builtin_component = self.process_dotted_compute_builtin(expr)
+                builtin_component = self.process_dotted_builtin(expr)
                 if builtin_component is not None:
                     return builtin_component
 
-                builtin = self.ensure_compute_builtin(expr)
+                builtin = self.ensure_builtin_variable(expr)
                 if builtin is not None:
                     return self.get_variable_value(builtin)
 
@@ -15039,13 +15070,15 @@ class VulkanSPIRVCodeGen:
                 var_id = self.local_variables[expr.name]
                 return self.get_variable_value(var_id)
             elif expr.name in self.global_variables:
-                return self.get_variable_value(self.global_variables[expr.name])
+                var_id = self.global_variables[expr.name]
+                self.mark_builtin_interface_variable(var_id)
+                return self.get_variable_value(var_id)
             elif expr.name in self.cbuffer_members:
                 member_pointer = self.cbuffer_member_pointer(expr.name)
                 if member_pointer is not None:
                     return self.get_variable_value(member_pointer)
             else:
-                builtin = self.ensure_compute_builtin(expr.name)
+                builtin = self.ensure_builtin_variable(expr.name)
                 if builtin is not None:
                     return self.get_variable_value(builtin)
 
@@ -15176,6 +15209,11 @@ class VulkanSPIRVCodeGen:
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
+
+            if callee_name in {"EmitVertex", "EndPrimitive"}:
+                return self.process_geometry_stream_function_call(
+                    callee_name, expr.args
+                )
 
             if (
                 isinstance(callee_name, str)
@@ -15371,13 +15409,76 @@ class VulkanSPIRVCodeGen:
         }
         return builtins.get(name)
 
-    def ensure_compute_builtin(self, name: str) -> Optional[SpirvId]:
-        if name in self.global_variables:
-            return self.global_variables[name]
+    def stage_builtin_info(self, name: str):
+        builtins = {
+            "gl_InvocationID": (
+                "int",
+                "InvocationId",
+                "Input",
+                {"Geometry", "TessellationControl"},
+            ),
+            "gl_PrimitiveID": (
+                "int",
+                "PrimitiveId",
+                "Input",
+                {
+                    "Fragment",
+                    "Geometry",
+                    "TessellationControl",
+                    "TessellationEvaluation",
+                },
+            ),
+            "gl_TessCoord": (
+                "vec3",
+                "TessCoord",
+                "Input",
+                {"TessellationEvaluation"},
+            ),
+        }
+        return builtins.get(name)
 
+    def mark_function_interface_variable(self, variable: SpirvId):
+        if self.current_function_id is None:
+            return
+
+        variables = self.function_interface_variables.setdefault(
+            self.current_function_id, []
+        )
+        if all(existing.id != variable.id for existing in variables):
+            variables.append(variable)
+
+        if self.current_function_name is not None:
+            named_variables = self.function_interface_variables_by_name.setdefault(
+                self.current_function_name, []
+            )
+            if all(existing.id != variable.id for existing in named_variables):
+                named_variables.append(variable)
+
+    def merge_function_interface_variables_from_callee(self, function_name: str):
+        for variable in self.function_interface_variables_by_name.get(
+            function_name, []
+        ):
+            self.mark_function_interface_variable(variable)
+
+    def mark_builtin_interface_variable(self, variable: SpirvId):
+        if variable.id in self.builtin_interface_variable_ids:
+            self.mark_function_interface_variable(variable)
+
+    def ensure_builtin_variable(self, name: str) -> Optional[SpirvId]:
+        builtin = self.ensure_compute_builtin(name)
+        if builtin is not None:
+            return builtin
+        return self.ensure_stage_builtin(name)
+
+    def ensure_compute_builtin(self, name: str) -> Optional[SpirvId]:
         info = self.compute_builtin_info(name)
         if info is None:
             return None
+
+        if name in self.global_variables:
+            builtin_id = self.global_variables[name]
+            self.mark_builtin_interface_variable(builtin_id)
+            return builtin_id
 
         type_name, builtin_name, storage_class = info
         if builtin_name.startswith("Subgroup"):
@@ -15391,6 +15492,33 @@ class VulkanSPIRVCodeGen:
             builtin_id = self.register_builtin_input(name, type_id, builtin_name)
 
         self.global_variables[name] = builtin_id
+        self.mark_builtin_interface_variable(builtin_id)
+        return builtin_id
+
+    def ensure_stage_builtin(self, name: str) -> Optional[SpirvId]:
+        info = self.stage_builtin_info(name)
+        if info is None:
+            return None
+
+        type_name, builtin_name, storage_class, execution_models = info
+        if (
+            self.current_execution_model is not None
+            and self.current_execution_model not in execution_models
+        ):
+            return None
+
+        if name in self.global_variables:
+            builtin_id = self.global_variables[name]
+            self.mark_builtin_interface_variable(builtin_id)
+            return builtin_id
+
+        type_id = self.map_crossgl_type(type_name)
+        if storage_class != "Input":
+            return None
+
+        builtin_id = self.register_builtin_input(name, type_id, builtin_name)
+        self.global_variables[name] = builtin_id
+        self.mark_builtin_interface_variable(builtin_id)
         return builtin_id
 
     def register_builtin_input(
@@ -15405,6 +15533,7 @@ class VulkanSPIRVCodeGen:
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         self.variable_value_types[id_value] = type_id
         self.inputs.append(spirv_id)
+        self.builtin_interface_variable_ids.add(id_value)
         return spirv_id
 
     def register_workgroup_size_builtin(
@@ -15424,12 +15553,12 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = type_id
         return spirv_id
 
-    def process_dotted_compute_builtin(self, name: str) -> Optional[SpirvId]:
+    def process_dotted_builtin(self, name: str) -> Optional[SpirvId]:
         if "." not in name:
             return None
 
         base_name, member_name = name.rsplit(".", 1)
-        builtin = self.ensure_compute_builtin(base_name)
+        builtin = self.ensure_builtin_variable(base_name)
         if builtin is None:
             return None
 
@@ -16035,8 +16164,15 @@ class VulkanSPIRVCodeGen:
         self, execution_model: str, function_id: SpirvId, name: str, stage=None
     ):
         """Emit SPIR-V entry-point and execution-mode declarations."""
-        interface_variables = list(
-            self.inputs + self.outputs + self.entry_point_private_variables
+        interface_variables = [
+            variable
+            for variable in (
+                self.inputs + self.outputs + self.entry_point_private_variables
+            )
+            if variable.id not in self.builtin_interface_variable_ids
+        ]
+        interface_variables.extend(
+            self.function_interface_variables.get(function_id.id, [])
         )
         if execution_model == "TaskEXT":
             task_payload = self.task_payload_interface_by_function.get(function_id.id)

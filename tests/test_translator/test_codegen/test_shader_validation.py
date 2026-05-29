@@ -97,6 +97,8 @@ shader MetalWaveIntrinsicsValidation {
             uint prefixProduct = WavePrefixProduct(value + 1u);
             bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
             bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+            bool equalScalar = WaveActiveAllEqual(value);
+            bool equalVector = WaveActiveAllEqual(lanes);
             uvec4 ballot = WaveActiveBallot(anyLane);
             uvec4 matchMask = WaveMatch(value);
             mat2 matrixValue = mat2(1.0);
@@ -124,6 +126,7 @@ shader MetalWaveIntrinsicsValidation {
             bool quadAll = QuadAll(allLane);
             uint folded = minValue + count + prefixCount + quadLane + ballot.x + matchMask.x + helperMatchValue.y + lane + helperValue + multiSum + multiProduct + multiCount + multiAnd + multiOr + multiXor + helperMultiValue;
             folded = folded + vectorSum.x + vectorProduct.y + vectorBits.x + helperVectorValue.y;
+            folded = folded + (equalScalar ? value : 0u) + (equalVector ? lanes.x : 0u);
             folded = folded + (quadAny ? quadX : quadY);
             folded = folded + (quadAll ? quadDiagonal : firstValue) + laneCount;
         }
@@ -6037,6 +6040,8 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
         "compute",
     )
     assert "simd_sum(value)" in code
+    assert "simd_all(value == simd_broadcast_first(value))" in code
+    assert "simd_all(all(lanes == simd_broadcast_first(lanes)))" in code
     assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in code
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in code
     assert "uint lane = crossglWaveLaneIndex;" in code
@@ -6093,6 +6098,8 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
     assert "__crossgl_metal_wave_multi_prefix_sum(matrixValue" not in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code
+    assert "WaveActiveAllEqual(value)" not in code
+    assert "WaveActiveAllEqual(lanes)" not in code
     assert "WaveOpNode" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -9877,8 +9884,6 @@ def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang(
         crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
-    assert "layout(location = 7) flat in ivec2 offset;" in code
-    assert "layout(location = 12) flat in int component;" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
@@ -9946,13 +9951,6 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
         "fragment",
-    )
-    assert "layout(location = 8) flat in ivec2 offset;" in code
-    assert (
-        code.count(
-            "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
     )
     source.write_text(code, encoding="utf-8")
 

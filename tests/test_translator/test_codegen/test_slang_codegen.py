@@ -10950,6 +10950,98 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
     assert ".GatherAlpha(sampleState" not in generated_code
 
 
+def test_texture_gather_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(sampler2d tex, vec2 uv) {
+                return textureGather(tex, uv);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                ivec2 offset = ivec2(1, 0);
+                int component = 2;
+                bool take = true;
+                vec4 validGather = textureGather(colorMap, uv);
+                float scalarGather = textureGather(colorMap, uv);
+                ivec2 vectorOffsetGather =
+                    textureGatherOffset(colorMap, uv, offset, 1);
+                acceptFloat(
+                    textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        offset,
+                        offset,
+                        offset,
+                        offset
+                    )
+                );
+                float scalarTernary =
+                    take ? textureGather(colorMap, uv, component) : 1.0;
+                float scalarArray[2] = {
+                    textureGatherOffset(colorMap, uv, offset),
+                    1.0
+                };
+                float missingOffset = textureGatherOffset(colorMap, uv);
+                float badComponent = textureGather(colorMap, uv, 4);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validGather = colorMap.Gather(uv);" in generated_code
+    assert (
+        "float scalarGather = /* unsupported Slang texture gather: "
+        "textureGather returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorOffsetGather = /* unsupported Slang texture gather: "
+        "textureGatherOffset returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang texture gather: textureGatherOffsets "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang texture gather: textureGather returns "
+        "float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang texture gather: "
+        "textureGather returns float4 but target expects float */ 0 : 1.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang texture gather: "
+        "textureGatherOffset returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingOffset = /* unsupported Slang texture gather: "
+        "textureGatherOffset requires offset and optional component arguments */ 0;"
+        in generated_code
+    )
+    assert (
+        "float badComponent = /* unsupported Slang texture gather: "
+        "textureGather component literal must be 0, 1, 2, or 3 */ 0;" in generated_code
+    )
+    assert "float scalarGather = colorMap.Gather(uv);" not in generated_code
+    assert "int2 vectorOffsetGather = colorMap.GatherGreen" not in generated_code
+    assert "acceptFloat(colorMap.Gather" not in generated_code
+    assert "float scalarTernary = (take ? (component == 0 ?" not in generated_code
+
+
 def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {

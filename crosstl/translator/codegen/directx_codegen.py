@@ -8605,6 +8605,39 @@ class HLSLCodeGen:
                     calls.append(getattr(node, "arguments", []))
         return calls
 
+    def hlsl_function_call_names(self, func):
+        names = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name:
+                names.append(name)
+        return names
+
+    def hlsl_function_and_reachable_helpers(self, func):
+        available_functions = self.current_hlsl_available_functions or {}
+        reachable = []
+        visited = set()
+
+        def visit(current):
+            if current is None:
+                return
+            current_id = id(current)
+            if current_id in visited:
+                return
+            visited.add(current_id)
+            reachable.append(current)
+
+            for name in self.hlsl_function_call_names(current):
+                helper = available_functions.get(name)
+                if helper is None or helper is current:
+                    continue
+                visit(helper)
+
+        visit(func)
+        return reachable
+
     def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
         literal_counts = []
@@ -8645,9 +8678,53 @@ class HLSLCodeGen:
             return getattr(expr, "operation", None) == "DispatchMesh"
         return False
 
-    def hlsl_statement_contains_dispatch_mesh(self, stmt):
+    def hlsl_function_contains_dispatch_mesh(self, func, visited=None):
+        if func is None:
+            return False
+        if visited is None:
+            visited = set()
+        func_id = id(func)
+        if func_id in visited:
+            return False
+        visited.add(func_id)
+
+        if self.hlsl_statement_contains_direct_dispatch_mesh(getattr(func, "body", [])):
+            return True
+
+        available_functions = self.current_hlsl_available_functions or {}
+        for name in self.hlsl_function_call_names(func):
+            helper = available_functions.get(name)
+            if helper is None or helper is func:
+                continue
+            if self.hlsl_function_contains_dispatch_mesh(helper, visited):
+                return True
+        return False
+
+    def hlsl_expression_is_dispatch_mesh_or_helper(self, expr):
+        if self.hlsl_expression_is_dispatch_mesh(expr):
+            return True
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        helper_name = self.function_call_name(expr)
+        helper = (self.current_hlsl_available_functions or {}).get(helper_name)
+        return self.hlsl_function_contains_dispatch_mesh(helper)
+
+    def hlsl_statement_contains_direct_dispatch_mesh(self, stmt):
         return any(
             self.hlsl_expression_is_dispatch_mesh(node) for node in self.walk_ast(stmt)
+        )
+
+    def hlsl_statement_contains_dispatch_mesh(self, stmt):
+        return any(
+            self.hlsl_expression_is_dispatch_mesh_or_helper(node)
+            for node in self.walk_ast(stmt)
+        )
+
+    def hlsl_dispatch_mesh_invocation_site_count(self, func):
+        return sum(
+            1
+            for node in self.walk_ast(getattr(func, "body", []))
+            if self.hlsl_expression_is_dispatch_mesh_or_helper(node)
         )
 
     def validate_hlsl_dispatch_mesh_control_flow(
@@ -8730,7 +8807,12 @@ class HLSLCodeGen:
         )
 
     def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
-        calls = self.hlsl_dispatch_mesh_calls(func)
+        reachable_functions = self.hlsl_function_and_reachable_helpers(func)
+        calls = [
+            args
+            for reachable_func in reachable_functions
+            for args in self.hlsl_dispatch_mesh_calls(reachable_func)
+        ]
         if not calls:
             return
 
@@ -8743,10 +8825,11 @@ class HLSLCodeGen:
                 )
             return
 
-        if len(calls) > 1:
-            raise ValueError(
-                f"DirectX {shader_type} stage must call DispatchMesh at most once"
-            )
+        for reachable_func in reachable_functions:
+            if self.hlsl_dispatch_mesh_invocation_site_count(reachable_func) > 1:
+                raise ValueError(
+                    f"DirectX {shader_type} stage must call DispatchMesh at most once"
+                )
 
         for args in calls:
             if len(args) not in {3, 4}:
@@ -8756,20 +8839,22 @@ class HLSLCodeGen:
                     "mesh payload argument"
                 )
             self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
-        self.validate_hlsl_dispatch_mesh_placement(func, shader_type)
+        for reachable_func in reachable_functions:
+            self.validate_hlsl_dispatch_mesh_placement(reachable_func, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):
         payload_types = set()
-        variable_types = self.hlsl_function_visible_variable_types(func)
-        for args in self.hlsl_dispatch_mesh_calls(func):
-            if len(args) < 4:
-                payload_types.add(None)
-                continue
+        for reachable_func in self.hlsl_function_and_reachable_helpers(func):
+            variable_types = self.hlsl_function_visible_variable_types(reachable_func)
+            for args in self.hlsl_dispatch_mesh_calls(reachable_func):
+                if len(args) < 4:
+                    payload_types.add(None)
+                    continue
 
-            payload_type = self.hlsl_expression_user_struct_type(
-                args[3], variable_types
-            )
-            payload_types.add(payload_type)
+                payload_type = self.hlsl_expression_user_struct_type(
+                    args[3], variable_types
+                )
+                payload_types.add(payload_type)
         return payload_types
 
     def hlsl_function_visible_variable_declarations(self, func):
@@ -8833,7 +8918,8 @@ class HLSLCodeGen:
         payload_types = self.hlsl_dispatch_mesh_payload_types_for_function(func)
         if not payload_types:
             return
-        self.validate_hlsl_dispatch_mesh_payload_storage(func)
+        for reachable_func in self.hlsl_function_and_reachable_helpers(func):
+            self.validate_hlsl_dispatch_mesh_payload_storage(reachable_func)
 
         mesh_payload_types = self.current_hlsl_mesh_payload_types
         for payload_type in payload_types:
@@ -9450,11 +9536,40 @@ class HLSLCodeGen:
 
     def hlsl_program_dispatch_mesh_payload_types(self, ast):
         payload_types = set()
+        global_functions_by_name = {
+            func.name: func
+            for func in getattr(ast, "functions", []) or []
+            if getattr(func, "name", None)
+        }
+        stages = getattr(ast, "stages", {}) or {}
+        previous_available_functions = self.current_hlsl_available_functions
         for stage_name in ("task", "amplification", "object"):
             for func in self.hlsl_stage_entry_functions(ast, stage_name):
-                payload_types.update(
-                    self.hlsl_dispatch_mesh_payload_types_for_function(func)
-                )
+                stage_functions_by_name = dict(global_functions_by_name)
+                for stage_type, stage in stages.items():
+                    if normalize_stage_name(stage_type) != stage_name:
+                        continue
+                    if getattr(stage, "entry_point", None) is not func:
+                        continue
+                    stage_functions_by_name.update(
+                        {
+                            helper.name: helper
+                            for helper in getattr(stage, "local_functions", []) or []
+                            if getattr(helper, "name", None)
+                        }
+                    )
+
+                self.current_hlsl_available_functions = {
+                    name: helper
+                    for name, helper in stage_functions_by_name.items()
+                    if helper is not func
+                }
+                try:
+                    payload_types.update(
+                        self.hlsl_dispatch_mesh_payload_types_for_function(func)
+                    )
+                finally:
+                    self.current_hlsl_available_functions = previous_available_functions
         return payload_types
 
     def hlsl_program_has_amplification_stage(self, ast):

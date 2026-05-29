@@ -6866,6 +6866,132 @@ def test_directx_mesh_payload_requires_amplification_dispatch_payload():
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_directx_dispatch_mesh_helper_reachable_calls_are_validated():
+    compute_helper_code = """
+    shader ComputeHelperDispatchMesh {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        compute {
+            void main() {
+                launch();
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="compute.*cannot call DispatchMesh"):
+        HLSLCodeGen().generate(crosstl.translator.parse(compute_helper_code))
+
+    loop_helper_code = """
+    shader LoopHelperDispatchMesh {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                for (int i = 0; i < 1; i++) {
+                    launch();
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*loop control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(loop_helper_code), "task")
+
+
+def test_directx_dispatch_mesh_helper_payloads_participate_in_pipeline_validation():
+    missing_payload_code = """
+    shader HelperDispatchMeshMissingPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void launch() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                launch();
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh call must pass a payload"):
+        HLSLCodeGen().generate(crosstl.translator.parse(missing_payload_code))
+
+    valid_helper_code = """
+    shader HelperDispatchMeshPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.meshlet = 7u;
+                launch();
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(valid_helper_code))
+
+    assert "void launch() {" in generated
+    assert "DispatchMesh(1, 1, 1, payload);" in generated
+    assert "in payload MeshPayload payload" in generated
+
+
 def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
     shader = """
     shader RayPayloadStillSemantic {

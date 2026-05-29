@@ -9332,11 +9332,22 @@ class SlangCodeGen:
         ]
         method = self.texture_gather_method(component_arg)
         if method is not None:
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_gather_call(func_name, expected_reason)
             return f"{texture_name}.{method}({', '.join(method_args)})"
         if isinstance(component_arg, LiteralNode):
             return self.unsupported_texture_gather_call(
                 func_name, "component literal must be 0, 1, 2, or 3"
             )
+
+        expected_reason = self.texture_result_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_gather_call(func_name, expected_reason)
 
         component = self.generate_expression(component_arg)
         return self.texture_gather_component_expression(
@@ -9401,8 +9412,10 @@ class SlangCodeGen:
         )
 
     def unsupported_texture_gather_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture gather: {func_name} {reason} */ float4(0.0)"
+            f"/* unsupported Slang texture gather: {func_name} {reason} */ "
+            f"{fallback}"
         )
 
     def generate_texture_compare(self, func_name, args):

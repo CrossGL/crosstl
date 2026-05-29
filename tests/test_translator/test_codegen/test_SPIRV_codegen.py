@@ -4539,6 +4539,131 @@ class TestVulkanSPIRVCodeGen:
         assert "Invocations 1" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_geometry_tessellation_stage_builtins_emit_interface_and_stream_ops(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GeometryTessellationBuiltins {
+            geometry {
+                layout(points) in;
+                layout(point, max_vertices = 1) out;
+
+                void main() @invocations(2) {
+                    int invocation = gl_InvocationID;
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main() {
+                    int invocation = gl_InvocationID;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main() {
+                    float u = gl_TessCoord.x;
+                    int primitive = gl_PrimitiveID;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        geometry_entry = re.search(
+            r'OpEntryPoint Geometry %\d+ "main"([^\n]*)', spv_code
+        )
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert geometry_entry is not None
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        invocation_id = spirv_named_variable(
+            spv_code, "gl_InvocationID", storage_class="Input"
+        )
+        tess_coord_id = spirv_named_variable(
+            spv_code, "gl_TessCoord", storage_class="Input"
+        )
+        primitive_id = spirv_named_variable(
+            spv_code, "gl_PrimitiveID", storage_class="Input"
+        )
+
+        assert f"OpDecorate {invocation_id} BuiltIn InvocationId" in spv_code
+        assert f"OpDecorate {tess_coord_id} BuiltIn TessCoord" in spv_code
+        assert f"OpDecorate {primitive_id} BuiltIn PrimitiveId" in spv_code
+        assert invocation_id in geometry_entry.group(1)
+        assert invocation_id in control_entry.group(1)
+        assert invocation_id not in evaluation_entry.group(1)
+        assert tess_coord_id not in geometry_entry.group(1)
+        assert tess_coord_id not in control_entry.group(1)
+        assert tess_coord_id in evaluation_entry.group(1)
+        assert primitive_id not in geometry_entry.group(1)
+        assert primitive_id not in control_entry.group(1)
+        assert primitive_id in evaluation_entry.group(1)
+        assert "OpEmitVertex" in spv_code
+        assert "OpEndPrimitive" in spv_code
+        assert "Unknown variable gl_InvocationID" not in spv_code
+        assert "Unknown variable gl_TessCoord" not in spv_code
+        assert "unknown function 'EmitVertex'" not in spv_code
+        assert "unknown function 'EndPrimitive'" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_geometry_stream_builtins_reject_invalid_stage_and_arity(self, tmp_path):
+        source_code = """
+        shader InvalidGeometryStreamBuiltins {
+            geometry {
+                layout(points) in;
+                layout(point, max_vertices = 1) out;
+
+                void main() {
+                    EmitVertex(1);
+                    EndPrimitive(1);
+                }
+            }
+
+            fragment {
+                void main() {
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V geometry EmitVertex requires no arguments"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EndPrimitive requires no arguments"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EmitVertex is only valid in geometry stages"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EndPrimitive is only valid in geometry stages"
+        ) in spv_code
+        assert "OpEmitVertex" not in spv_code
+        assert "OpEndPrimitive" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
         self, tmp_path
     ):

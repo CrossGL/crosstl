@@ -18981,7 +18981,7 @@ def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_matrix_constructor_bindings_use_matrix_types():
+def test_inferred_matrix_constructor_bindings_use_matrix_types(tmp_path):
     code = """
     void probe() {
         let transform = mat2(1.0, 0.0, 0.0, 1.0);
@@ -19010,6 +19010,7 @@ def test_inferred_matrix_constructor_bindings_use_matrix_types():
     assert "let transform: f32 = Mat2" not in generated_code
     assert "let affine: f32 = Mat3x4" not in generated_code
     assert "let precise: f32 = Mat2::<f64>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_matrix_binary_bindings_prefer_matrix_operands():

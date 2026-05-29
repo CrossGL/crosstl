@@ -4,7 +4,23 @@ from typing import List
 import pytest
 
 import crosstl.translator
-from crosstl.translator.ast import PrimitiveType, StructMemberNode, StructNode
+from crosstl.translator.ast import (
+    BlockNode,
+    ConstructorNode,
+    ExecutionModel,
+    FunctionNode,
+    IdentifierNode,
+    LiteralNode,
+    PrimitiveType,
+    ShaderNode,
+    ShaderStage,
+    StageNode,
+    StructMemberNode,
+    StructNode,
+    VariableNode,
+    VectorType,
+    WaveOpNode,
+)
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -162,6 +178,7 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
         compute {
             void main() {
                 uint value = 1u;
+                uvec2 lanes = uvec2(value, value + 1u);
                 uint sumValue = WaveActiveSum(value);
                 uint productValue = WaveActiveProduct(value + 1u);
                 uint minValue = WaveActiveMin(sumValue);
@@ -173,6 +190,8 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
                 uint prefixProduct = WavePrefixProduct(value + 1u);
                 bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
                 bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                bool equalScalar = WaveActiveAllEqual(value);
+                bool equalVector = WaveActiveAllEqual(lanes);
                 uvec4 ballot = WaveActiveBallot(anyLane);
                 uvec4 matchMask = WaveMatch(value);
                 uint count = WaveActiveCountBits(allLane);
@@ -221,6 +240,14 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     )
     assert "bool anyLane = simd_any(prefixSum > 0u);" in generated_code
     assert "bool allLane = simd_all(prefixProduct > 0u);" in generated_code
+    assert (
+        "bool equalScalar = simd_all(value == simd_broadcast_first(value));"
+        in generated_code
+    )
+    assert (
+        "bool equalVector = simd_all(all(lanes == simd_broadcast_first(lanes)));"
+        in generated_code
+    )
     assert "uint4 ballot = __crossgl_metal_wave_ballot(anyLane);" in generated_code
     assert (
         "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
@@ -254,9 +281,104 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
     assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
     assert "WaveActiveSum(value)" not in generated_code
+    assert "WaveActiveAllEqual(value)" not in generated_code
+    assert "WaveActiveAllEqual(lanes)" not in generated_code
     assert "WaveActiveBallot(anyLane)" not in generated_code
     assert "WaveMatch(value)" not in generated_code
     assert "WaveOpNode" not in generated_code
+
+
+def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics():
+    uint_type = PrimitiveType("uint")
+    bool_type = PrimitiveType("bool")
+    uint2_type = VectorType(uint_type, 2)
+    uint4_type = VectorType(uint_type, 4)
+    entry = FunctionNode(
+        "main",
+        PrimitiveType("void"),
+        [],
+        BlockNode(
+            [
+                VariableNode("value", uint_type, LiteralNode(1, uint_type)),
+                VariableNode(
+                    "lanes",
+                    uint2_type,
+                    ConstructorNode(
+                        uint2_type,
+                        [IdentifierNode("value"), IdentifierNode("value")],
+                    ),
+                ),
+                VariableNode(
+                    "ballot",
+                    uint4_type,
+                    WaveOpNode("WaveActiveBallot", [LiteralNode(True, bool_type)]),
+                ),
+                VariableNode(
+                    "sumValue",
+                    uint_type,
+                    WaveOpNode("WaveActiveSum", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "lane",
+                    uint_type,
+                    WaveOpNode("WaveGetLaneIndex", []),
+                ),
+                VariableNode(
+                    "equalScalar",
+                    bool_type,
+                    WaveOpNode("WaveActiveAllEqual", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "equalVector",
+                    bool_type,
+                    WaveOpNode("WaveActiveAllEqual", [IdentifierNode("lanes")]),
+                ),
+                VariableNode(
+                    "matchMask",
+                    uint4_type,
+                    WaveOpNode("WaveMatch", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "partitioned",
+                    uint_type,
+                    WaveOpNode(
+                        "WaveMultiPrefixSum",
+                        [IdentifierNode("value"), IdentifierNode("ballot")],
+                    ),
+                ),
+            ]
+        ),
+    )
+    shader = ShaderNode(
+        "MetalWaveOpIR",
+        ExecutionModel.COMPUTE_KERNEL,
+        stages={ShaderStage.COMPUTE: StageNode(ShaderStage.COMPUTE, entry)},
+    ).bind_parent_links()
+
+    generated_code = MetalCodeGen().generate_stage(shader, "compute")
+
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert "uint sumValue = simd_sum(value);" in generated_code
+    assert "uint lane = crossglWaveLaneIndex;" in generated_code
+    assert (
+        "bool equalScalar = simd_all(value == simd_broadcast_first(value));"
+        in generated_code
+    )
+    assert (
+        "bool equalVector = simd_all(all(lanes == simd_broadcast_first(lanes)));"
+        in generated_code
+    )
+    assert (
+        "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert (
+        "uint partitioned = __crossgl_metal_wave_multi_prefix_sum(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+    assert "WaveActiveAllEqual" not in generated_code
 
 
 def test_metal_wave_lane_builtins_use_compute_stage_parameters():
@@ -592,6 +714,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
                 uvec4 mask = uvec4(1u, 0u, 0u, 0u);
                 mat2 matrixValue = mat2(1.0);
                 uint missing = WaveActiveSum();
+                bool badEqualMatrix = WaveActiveAllEqual(matrixValue);
                 bool badAnyValue = WaveActiveAnyTrue(value);
                 uvec4 badBallotVector =
                     WaveActiveBallot(lanes == uvec2(1u, 2u));
@@ -614,6 +737,11 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     assert (
         "uint missing = /* unsupported Metal wave intrinsic: WaveActiveSum "
         "expects 1 arguments, got 0 */ 0u;" in generated_code
+    )
+    assert (
+        "bool badEqualMatrix = /* unsupported Metal wave intrinsic: "
+        "WaveActiveAllEqual value argument must be numeric scalar or vector, "
+        "got float2x2 */ false;" in generated_code
     )
     assert (
         "bool badAnyValue = /* unsupported Metal wave intrinsic: "
@@ -669,6 +797,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
         "quad lane index must be in the range 0 to 3, got 4 */ 0u;" in generated_code
     )
     assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveAllEqual(matrixValue)" not in generated_code
     assert "WaveActiveAnyTrue(value)" not in generated_code
     assert "WaveMatch(badAnyValue)" not in generated_code
     assert "WaveMultiPrefixSum(badAnyValue, mask)" not in generated_code
