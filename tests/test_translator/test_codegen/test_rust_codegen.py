@@ -20197,7 +20197,7 @@ def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types(tmp
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_generic_vector_constructors_emit_rust_names():
+def test_generic_vector_constructors_emit_rust_names(tmp_path):
     code = """
     shader main {
         compute {
@@ -20226,6 +20226,7 @@ def test_generic_vector_constructors_emit_rust_names():
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_let_vector_declarations_preserve_vector_type():
@@ -21212,7 +21213,7 @@ def test_match_guarded_literal_arm_emits_rust_guard():
     assert "value = 1;" in generated_code
 
 
-def test_generic_vector_composite_types_emit_rust_names():
+def test_generic_vector_composite_types_emit_rust_names(tmp_path):
     code = """
     shader GenericComposite {
         struct Packed {
@@ -21261,6 +21262,7 @@ def test_generic_vector_composite_types_emit_rust_names():
     )
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_array_access():

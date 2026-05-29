@@ -27,6 +27,7 @@ from crosstl.translator.ast import (
     PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReturnNode,
     SwizzleNode,
     SyncNode,
     TextureNode,
@@ -9927,6 +9928,108 @@ def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_specializations.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_function_body_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+
+    Box<int> makeBox(int v) {}
+    Pair<int> makePair(int a, int b) {}
+
+    int readPair(Pair<int> pair) {
+        Box<int> picked = pair.left;
+        return picked.value + pair.right.tag;
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+    pair_int = NamedType("Pair", [PrimitiveType("int")])
+
+    functions["makeBox"].body = BlockNode(
+        [
+            VariableNode(
+                "local",
+                box_int,
+                ConstructorNode(
+                    box_int,
+                    [
+                        IdentifierNode("v"),
+                        LiteralNode(7, PrimitiveType("int")),
+                    ],
+                ),
+            ),
+            ReturnNode(IdentifierNode("local")),
+        ]
+    )
+    functions["makePair"].body = BlockNode(
+        [
+            ReturnNode(
+                ConstructorNode(
+                    pair_int,
+                    [
+                        ConstructorNode(
+                            box_int,
+                            [
+                                IdentifierNode("a"),
+                                LiteralNode(1, PrimitiveType("int")),
+                            ],
+                        ),
+                        ConstructorNode(
+                            box_int,
+                            [
+                                IdentifierNode("b"),
+                                LiteralNode(2, PrimitiveType("int")),
+                            ],
+                        ),
+                    ],
+                )
+            )
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_function_bodies_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_function_body_ast())
+
+    assert "fn makeBox(v: Int32) -> Box[Int32]:" in generated_code
+    assert "    var local: Box[Int32] = Box[Int32](v, 7)" in generated_code
+    assert "    return local" in generated_code
+    assert "fn makePair(a: Int32, b: Int32) -> Pair[Int32]:" in generated_code
+    assert (
+        "    return Pair[Int32](Box[Int32](a, 1), Box[Int32](b, 2))" in generated_code
+    )
+    assert "fn readPair(pair: Pair[Int32]) -> Int32:" in generated_code
+    assert "    var picked: Box[Int32] = pair.left" in generated_code
+    assert "    return (picked.value + pair.right.tag)" in generated_code
+    assert "Box<int>" not in generated_code
+    assert "Pair<int>" not in generated_code
+
+
+def test_generic_user_struct_function_bodies_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_function_body_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_function_bodies.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],
