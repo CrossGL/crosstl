@@ -20016,7 +20016,7 @@ def test_mixed_scalar_ternary_branches_cast_to_result_type():
     assert "return (if ready { weight } else { index });" not in generated_code
 
 
-def test_vector_and_matrix_ternary_branches_cast_to_result_type():
+def test_vector_and_matrix_ternary_branches_cast_to_result_type(tmp_path):
     code = """
     vec2 chooseVec(bool ready, ivec2 pixel, vec2 amount) {
         vec2 declared = ready ? pixel : amount;
@@ -20082,9 +20082,10 @@ def test_vector_and_matrix_ternary_branches_cast_to_result_type():
     assert "{ let __cgl_mat_arg_" not in generated_code
     assert "if ready { pixel } else { amount }" not in generated_code
     assert "if ready { transform } else { preciseInput }" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_ternary_conditions_emit_lane_selectors():
+def test_bool_vector_ternary_conditions_emit_lane_selectors(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -20152,9 +20153,10 @@ def test_bool_vector_ternary_conditions_emit_lane_selectors():
     assert "(if mask { a } else { b })" not in generated_code
     assert "(if mask { 1.0 } else { 0.0 })" not in generated_code
     assert "(if makeMask() { makeA() } else { makeScalar() })" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types():
+def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types(tmp_path):
     code = """
     void infer(bool ready, ivec2 pixel, vec2 amount, mat2 transform, dmat2 preciseInput) {
         let inferredVec = ready ? pixel : amount;
@@ -20192,6 +20194,7 @@ def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types():
     )
     assert "let inferredVec: Vec2<i32>" not in generated_code
     assert "let inferredMat: Mat2<f32>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_generic_vector_constructors_emit_rust_names():

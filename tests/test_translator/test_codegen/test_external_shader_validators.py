@@ -128,6 +128,80 @@ shader ExternalValidatorTextureResources {
 """
 
 
+CROSSGL_SHADOW_TEXTURE_FRAGMENT_SHADER = """
+shader ExternalValidatorShadowTextures {
+    sampler2DShadow shadowMap @register(t1, space2);
+    sampler compareSampler @register(s0, space2);
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 projected @ TEXCOORD1;
+        float depth @ TEXCOORD2;
+    };
+
+    float sampleShadow(sampler2DShadow tex, sampler cmp, vec2 uv, float depth) {
+        return textureCompare(tex, cmp, uv, depth);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            ivec2 offset = ivec2(1, 0);
+            float base = textureCompare(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            float offsetCmp = textureCompareOffset(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth,
+                offset
+            );
+            float projected = textureCompareProj(
+                shadowMap,
+                compareSampler,
+                input.projected,
+                input.depth
+            );
+            float projectedOffset = textureCompareProjOffset(
+                shadowMap,
+                compareSampler,
+                input.projected,
+                input.depth,
+                offset
+            );
+            vec4 gathered = textureGatherCompare(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            vec4 gatheredOffset = textureGatherCompareOffset(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth,
+                offset
+            );
+            vec2 lodInfo = textureQueryLod(shadowMap, input.uv);
+            float helper = sampleShadow(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            float sum = base + offsetCmp + projected + projectedOffset
+                + gathered.x + gatheredOffset.y + lodInfo.x + lodInfo.y
+                + helper;
+            return vec4(sum, sum, sum, 1.0);
+        }
+    }
+}
+"""
+
+
 CROSSGL_TYPED_BUFFER_ATOMICS_COMPUTE_SHADER = """
 shader ExternalValidatorTypedBufferAtomics {
     struct Counter {
@@ -1499,6 +1573,70 @@ def test_generated_hlsl_texture_resource_intrinsics_compile_with_dxc(tmp_path):
         "textureGatherOffset(",
         "texelFetch(",
         "texelFetchOffset(",
+        "textureQueryLod(",
+    ]:
+        assert unsupported not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "shadow_textures.hlsl"
+    output_path = tmp_path / "shadow_textures.dxil"
+
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CROSSGL_SHADOW_TEXTURE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    for snippet in [
+        "Texture2D shadowMap : register(t1, space2);",
+        "SamplerComparisonState compareSampler : register(s0, space2);",
+        "SamplerState shadowMapQuerySampler : register(s2, space2);",
+        (
+            "float sampleShadow(Texture2D tex, SamplerComparisonState cmp, "
+            "float2 uv, float depth)"
+        ),
+        "tex.SampleCmp(cmp, uv, depth)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, offset)",
+        (
+            "shadowMap.SampleCmp(compareSampler, "
+            "input.projected.xy / input.projected.z, input.depth)"
+        ),
+        (
+            "shadowMap.SampleCmp(compareSampler, "
+            "input.projected.xy / input.projected.z, input.depth, offset)"
+        ),
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",
+        (
+            "shadowMap.CalculateLevelOfDetailUnclamped("
+            "shadowMapQuerySampler, input.uv)"
+        ),
+        "shadowMap.CalculateLevelOfDetail(shadowMapQuerySampler, input.uv)",
+    ]:
+        assert snippet in code
+    for unsupported in [
+        "textureCompare(",
+        "textureCompareOffset(",
+        "textureCompareProj(",
+        "textureCompareProjOffset(",
+        "textureGatherCompare(",
+        "textureGatherCompareOffset(",
         "textureQueryLod(",
     ]:
         assert unsupported not in code
