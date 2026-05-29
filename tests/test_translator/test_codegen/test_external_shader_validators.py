@@ -1897,6 +1897,64 @@ def test_generated_glsl_projected_gradient_offsets_validate_with_glslangvalidato
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 
 
+def test_generated_glsl_const_gather_offsets_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "const_gather_offsets.frag"
+    shader = """
+    shader ConstGatherOffsets {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            int component @ TEXCOORD2;
+        };
+
+        vec4 gatherColor(sampler2D tex, vec2 uv, int component) {
+            const ivec2 offsets[4] = {
+                ivec2(-1, -1),
+                ivec2(1, -1),
+                ivec2(-1, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherOffsets(tex, uv, offsets, component);
+        }
+
+        vec4 gatherShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth) {
+            const int left = -1;
+            const ivec2 offsets[4] = {
+                ivec2(left, -1),
+                ivec2(1, -1),
+                ivec2(left, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherCompareOffsets(tex, s, uv, depth, offsets);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherColor(colorMap, input.uv, input.component)
+                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    assert "textureGatherOffsets(" not in code
+    assert "textureGatherCompareOffsets(" not in code
+    assert "unsupported GLSL texture gather" not in code
+    assert "textureGatherOffset" in code
+
+    shader_path.write_text(code, encoding="utf-8")
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
 def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     tmp_path,
 ):

@@ -13269,6 +13269,72 @@ def test_opengl_texture_gather_compare_offsets_filter_sampler_arguments():
     )
 
 
+def test_opengl_texture_gather_offsets_accept_const_array_offsets():
+    shader = """
+    shader ConstGatherOffsets {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            int component @ TEXCOORD2;
+        };
+
+        vec4 gatherColor(sampler2D tex, vec2 uv, int component) {
+            const ivec2 offsets[4] = {
+                ivec2(-1, -1),
+                ivec2(1, -1),
+                ivec2(-1, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherOffsets(tex, uv, offsets, component);
+        }
+
+        vec4 gatherShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth) {
+            const int left = -1;
+            const ivec2 offsets[4] = {
+                ivec2(left, -1),
+                ivec2(1, -1),
+                ivec2(left, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherCompareOffsets(tex, s, uv, depth, offsets);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherColor(colorMap, input.uv, input.component)
+                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "sampler compareSampler" not in generated_code
+    assert "sampler s" not in generated_code
+    assert "const ivec2 offsets[4] = {" in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+    assert "textureGatherCompareOffsets(" not in generated_code
+    assert (
+        "/* unsupported GLSL texture gather: textureGatherOffsets "
+        "texel offsets must be compile-time integer constants */" not in generated_code
+    )
+    assert (
+        "/* unsupported GLSL texture gather compare: textureGatherCompareOffsets "
+        "texel offsets must be compile-time integer constants */" not in generated_code
+    )
+    assert "textureGatherOffset(tex, uv, offsets[0], 0).x" in generated_code
+    assert "textureGatherOffset(tex, uv, offsets[3], 3).w" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[0]).x" in generated_code
+    assert "textureGatherOffset(tex, uv, depth, offsets[3]).w" in generated_code
+
+
 def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     shader = """
     shader GatherOffsetMixed {

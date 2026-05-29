@@ -181,6 +181,7 @@ class VulkanSPIRVCodeGen:
         self.readonly_builtin_pointer_names = {}
         self.readonly_pointer_names = {}
         self.patch_parameter_metadata = {}
+        self.tessellation_output_patch_locations = {}
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -10695,7 +10696,12 @@ class VulkanSPIRVCodeGen:
         base_type_name = self.array_base_type_name(type_name)
         return self.is_resource_type_name(base_type_name)
 
-    def global_interface_location(self, node: VariableNode, storage_class: str) -> int:
+    def global_interface_location(
+        self,
+        node: VariableNode,
+        storage_class: str,
+        preferred_location: Optional[int] = None,
+    ) -> int:
         if storage_class == "Input":
             counter_name = "next_input_location"
             used_slots = self.used_input_locations
@@ -10714,6 +10720,18 @@ class VulkanSPIRVCodeGen:
             used_slots.update(slot_keys)
             return explicit_location
 
+        if preferred_location is not None:
+            slot_keys = self.interface_slot_keys(
+                node, storage_class, preferred_location
+            )
+            if used_slots & slot_keys:
+                raise ValueError(
+                    f"Duplicate SPIR-V {storage_class.lower()} location "
+                    f"{preferred_location}"
+                )
+            used_slots.update(slot_keys)
+            return preferred_location
+
         location = getattr(self, counter_name)
         slot_keys = self.interface_slot_keys(node, storage_class, location)
         while used_slots & slot_keys:
@@ -10722,6 +10740,9 @@ class VulkanSPIRVCodeGen:
         used_slots.update(slot_keys)
         setattr(self, counter_name, location + 1)
         return location
+
+    def interface_location_scope(self):
+        return self.current_execution_model or self.current_function_name or "module"
 
     def explicit_location_attribute(self, node: VariableNode) -> Optional[int]:
         return self.explicit_interface_integer_attribute(node, "location")
@@ -11194,13 +11215,47 @@ class VulkanSPIRVCodeGen:
         )
         storage_class = patch_info["storage_class"]
         variable = self.create_variable(array_type, storage_class, patch_info["name"])
-        location = self.global_interface_location(param, storage_class)
+        location = self.global_interface_location(
+            param,
+            storage_class,
+            self.matching_tessellation_output_patch_location(patch_info),
+        )
         self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
         self.decorate_global_interface_variable(param, variable)
         self.patch_parameter_metadata[variable.id] = patch_info
+        self.record_tessellation_output_patch_location(patch_info, location)
         if storage_class == "Input":
             self.readonly_pointer_names[variable.id] = patch_info["name"]
         return variable
+
+    def tessellation_patch_location_key(self, patch_info: dict) -> tuple:
+        return (patch_info.get("element_type_name"), patch_info.get("control_points"))
+
+    def record_tessellation_output_patch_location(
+        self, patch_info: dict, location: int
+    ):
+        if (
+            self.current_execution_model != "TessellationControl"
+            or patch_info.get("patch_type") != "OutputPatch"
+            or patch_info.get("storage_class") != "Output"
+        ):
+            return
+        self.tessellation_output_patch_locations[
+            self.tessellation_patch_location_key(patch_info)
+        ] = location
+
+    def matching_tessellation_output_patch_location(
+        self, patch_info: dict
+    ) -> Optional[int]:
+        if (
+            self.current_execution_model != "TessellationEvaluation"
+            or patch_info.get("patch_type") != "OutputPatch"
+            or patch_info.get("storage_class") != "Input"
+        ):
+            return None
+        return self.tessellation_output_patch_locations.get(
+            self.tessellation_patch_location_key(patch_info)
+        )
 
     def mesh_output_parameter_info(self, param, execution_model: Optional[str]):
         if execution_model != "MeshEXT" or not self.is_mesh_output_parameter(param):
@@ -11268,8 +11323,9 @@ class VulkanSPIRVCodeGen:
             )
 
         index = self.explicit_interface_integer_attribute(node, "index") or 0
+        scope = self.interface_location_scope()
         return {
-            (location, index, component)
+            (scope, location, index, component)
             for component in range(component_start, component_start + component_width)
         }
 

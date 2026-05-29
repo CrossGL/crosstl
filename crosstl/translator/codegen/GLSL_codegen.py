@@ -7,6 +7,7 @@ from ..ast import (
     AssignmentNode,
     ArrayNode,
     ArrayAccessNode,
+    ArrayLiteralNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
@@ -17,11 +18,13 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     IfNode,
+    LiteralNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
     PreprocessorNode,
+    PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
     RangeNode,
@@ -766,8 +769,10 @@ class GLSLCodeGen:
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
         self.literal_int_vector_constants = {}
+        self.literal_int_vector_array_constants = {}
         self.current_compile_time_int_constants = {}
         self.current_compile_time_int_vector_constants = {}
+        self.current_compile_time_int_vector_array_constants = {}
         self.current_stage_output = None
         self.current_stage_inputs = {}
         self.current_stage_outputs = {}
@@ -1497,9 +1502,19 @@ class GLSLCodeGen:
                 self.literal_int_constants,
             )
         )
+        self.literal_int_vector_array_constants = (
+            self.collect_literal_int_vector_array_constants_from_variables(
+                getattr(ast, "global_variables", []),
+                self.literal_int_constants,
+                self.literal_int_vector_constants,
+            )
+        )
         self.current_compile_time_int_constants = dict(self.literal_int_constants)
         self.current_compile_time_int_vector_constants = dict(
             self.literal_int_vector_constants
+        )
+        self.current_compile_time_int_vector_array_constants = dict(
+            self.literal_int_vector_array_constants
         )
         self.current_stage_output = None
         self.current_stage_inputs = {}
@@ -4409,6 +4424,9 @@ class GLSLCodeGen:
         previous_compile_time_int_vector_constants = (
             self.current_compile_time_int_vector_constants
         )
+        previous_compile_time_int_vector_array_constants = (
+            self.current_compile_time_int_vector_array_constants
+        )
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = {
             **texture_parameters,
@@ -4459,10 +4477,14 @@ class GLSLCodeGen:
         self.current_compile_time_int_vector_constants = dict(
             self.literal_int_vector_constants
         )
+        self.current_compile_time_int_vector_array_constants = dict(
+            self.literal_int_vector_array_constants
+        )
         for param in param_list:
             name = getattr(param, "name", None)
             self.current_compile_time_int_constants.pop(name, None)
             self.current_compile_time_int_vector_constants.pop(name, None)
+            self.current_compile_time_int_vector_array_constants.pop(name, None)
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -4493,6 +4515,9 @@ class GLSLCodeGen:
         self.current_compile_time_int_constants = previous_compile_time_int_constants
         self.current_compile_time_int_vector_constants = (
             previous_compile_time_int_vector_constants
+        )
+        self.current_compile_time_int_vector_array_constants = (
+            previous_compile_time_int_vector_array_constants
         )
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
@@ -7509,6 +7534,11 @@ class GLSLCodeGen:
             if expr.name in self.current_identifier_aliases:
                 return self.current_identifier_aliases[expr.name]
             return self.current_stage_parameter_aliases.get(expr.name, expr.name)
+        elif isinstance(expr, ArrayLiteralNode):
+            elements = ", ".join(
+                self.generate_expression(element) for element in expr.elements
+            )
+            return f"{{ {elements} }}"
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if (
@@ -9414,8 +9444,13 @@ class GLSLCodeGen:
 
     def texture_gather_offsets_args(self, extra_args):
         if len(extra_args) in {1, 2} and self.is_array_expression(extra_args[0]):
-            offsets_name = self.generate_expression(extra_args[0])
-            offset_args = [f"{offsets_name}[{index}]" for index in range(4)]
+            offset_args = [
+                ArrayAccessNode(
+                    extra_args[0],
+                    LiteralNode(index, PrimitiveType("int")),
+                )
+                for index in range(4)
+            ]
             component_arg = extra_args[1] if len(extra_args) == 2 else None
             return offset_args, component_arg
 
@@ -10045,9 +10080,46 @@ class GLSLCodeGen:
             return self.current_compile_time_int_vector_constants
         return self.literal_int_vector_constants
 
+    def glsl_compile_time_int_vector_array_constants(self):
+        if self.current_compile_time_int_vector_array_constants is not None:
+            return self.current_compile_time_int_vector_array_constants
+        return self.literal_int_vector_array_constants
+
     def glsl_integer_vector_literal_value(
-        self, expr, int_constants=None, vector_constants=None
+        self,
+        expr,
+        int_constants=None,
+        vector_constants=None,
+        vector_array_constants=None,
     ):
+        int_constants = (
+            self.glsl_compile_time_int_constants()
+            if int_constants is None
+            else int_constants
+        )
+        if isinstance(expr, ArrayAccessNode):
+            vector_array_constants = (
+                self.glsl_compile_time_int_vector_array_constants()
+                if vector_array_constants is None
+                else vector_array_constants
+            )
+            array_name = self.expression_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+            values = vector_array_constants.get(array_name)
+            index = self.literal_int_value(
+                getattr(expr, "index", getattr(expr, "index_expr", None)),
+                int_constants,
+            )
+            if (
+                values is not None
+                and isinstance(index, int)
+                and not isinstance(index, bool)
+                and 0 <= index < len(values)
+            ):
+                return values[index]
+            return None
+
         vector_constants = (
             self.glsl_compile_time_int_vector_constants()
             if vector_constants is None
@@ -10075,11 +10147,6 @@ class GLSLCodeGen:
         if not arguments:
             return None
 
-        int_constants = (
-            self.glsl_compile_time_int_constants()
-            if int_constants is None
-            else int_constants
-        )
         values = []
         for argument in arguments:
             literal_argument = self.literal_int_value(argument, int_constants)
@@ -10118,16 +10185,80 @@ class GLSLCodeGen:
                 vector_constants[name] = value
         return vector_constants
 
+    def glsl_integer_vector_array_literal_value(
+        self, expr, int_constants=None, vector_constants=None
+    ):
+        if not isinstance(expr, ArrayLiteralNode):
+            return None
+
+        int_constants = (
+            self.glsl_compile_time_int_constants()
+            if int_constants is None
+            else int_constants
+        )
+        vector_constants = (
+            self.glsl_compile_time_int_vector_constants()
+            if vector_constants is None
+            else vector_constants
+        )
+        values = []
+        for element in expr.elements:
+            value = self.glsl_integer_vector_literal_value(
+                element,
+                int_constants,
+                vector_constants,
+            )
+            if value is None:
+                return None
+            values.append(value)
+        return tuple(values)
+
+    def collect_literal_int_vector_array_constants_from_variables(
+        self, variables, int_constants, vector_constants
+    ):
+        vector_array_constants = {}
+        for variable in variables or []:
+            name = getattr(variable, "name", None)
+            if not name or "const" not in getattr(variable, "qualifiers", []):
+                continue
+
+            var_type = getattr(variable, "var_type", getattr(variable, "vtype", None))
+            if "ArrayType" not in var_type.__class__.__name__:
+                continue
+            element_type = self.type_name_string(
+                getattr(var_type, "element_type", None)
+            )
+            if element_type not in self.glsl_integer_vector_type_names():
+                continue
+
+            value = self.glsl_integer_vector_array_literal_value(
+                getattr(variable, "initial_value", None),
+                int_constants,
+                vector_constants,
+            )
+            if value is None:
+                continue
+
+            size = self.literal_int_value(
+                getattr(var_type, "size", None), int_constants
+            )
+            if size is not None and len(value) != size:
+                continue
+            vector_array_constants[name] = value
+        return vector_array_constants
+
     def update_compile_time_offset_constants(self, variable, var_type):
         name = getattr(variable, "name", None)
         if not name:
             return
         self.current_compile_time_int_constants.pop(name, None)
         self.current_compile_time_int_vector_constants.pop(name, None)
+        self.current_compile_time_int_vector_array_constants.pop(name, None)
         if "const" not in getattr(variable, "qualifiers", []):
             return
 
         initial_value = getattr(variable, "initial_value", None)
+        raw_var_type = var_type
         var_type = self.type_name_string(var_type)
         scalar_integer_types = {"int", "uint"}
         if var_type in scalar_integer_types:
@@ -10139,7 +10270,27 @@ class GLSLCodeGen:
             return
 
         if var_type not in self.glsl_integer_vector_type_names():
+            if "[" not in str(var_type):
+                return
+            base_type, _ = split_array_type_suffix(var_type)
+            if base_type not in self.glsl_integer_vector_type_names():
+                return
+            value = self.glsl_integer_vector_array_literal_value(
+                initial_value,
+                self.current_compile_time_int_constants,
+                self.current_compile_time_int_vector_constants,
+            )
+            if value is None:
+                return
+            size = self.literal_int_value(
+                getattr(raw_var_type, "size", None),
+                self.current_compile_time_int_constants,
+            )
+            if size is not None and len(value) != size:
+                return
+            self.current_compile_time_int_vector_array_constants[name] = value
             return
+
         value = self.glsl_integer_vector_literal_value(
             initial_value,
             self.current_compile_time_int_constants,

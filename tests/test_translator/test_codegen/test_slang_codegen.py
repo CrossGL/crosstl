@@ -9330,6 +9330,119 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
     assert "buffer_store(" not in generated_code
 
 
+def test_byte_address_load_calls_validate_target_result_types():
+    code = """
+    shader SlangByteAddressLoadTargetContexts {
+        ByteAddressBuffer rawInput @binding(25);
+        RWByteAddressBuffer rawRW @binding(26);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint2 passUint2(uint2 value) {
+            return value;
+        }
+
+        float returnBlockedFloat(uint offset) {
+            return rawInput.Load(offset);
+        }
+
+        uint4 returnBlockedVector(uint offset) {
+            return rawInput.Load2(offset);
+        }
+
+        compute {
+            void main(uint offset) {
+                uint scalar = rawInput.Load(offset);
+                uint helperScalar = buffer_load(rawInput, offset + 4u);
+                uint2 pair = rawInput.Load2(offset + 8u);
+                uint3 triple = rawRW.Load3(offset + 16u);
+                uint4 quad = rawInput.Load4(offset + 32u);
+                float castScalar = asfloat(rawInput.Load(offset + 48u));
+                vec2 castPair = asfloat(rawInput.Load2(offset + 52u));
+                ivec3 signedTriple = asint(rawRW.Load3(offset + 60u));
+                float invalidFloat = rawInput.Load(offset + 72u);
+                uint2 invalidVectorFromHelper =
+                    buffer_load(rawInput, offset + 76u);
+                uint invalidScalarFromVector =
+                    rawInput.Load2(offset + 80u);
+                vec2 invalidFloatVector = rawInput.Load2(offset + 84u);
+                vec2 invalidBinary =
+                    rawInput.Load2(offset + 88u) + vec2(1.0);
+                mat2 invalidMatrix = rawInput.Load2(offset + 92u);
+                passUint(rawInput.Load3(offset + 108u));
+                passUint2(buffer_load(rawInput, offset + 112u));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint scalar = rawInput.Load(offset);" in generated_code
+    assert "uint helperScalar = rawInput.Load(offset + 4u);" in generated_code
+    assert "uint2 pair = rawInput.Load2(offset + 8u);" in generated_code
+    assert "uint3 triple = rawRW.Load3(offset + 16u);" in generated_code
+    assert "uint4 quad = rawInput.Load4(offset + 32u);" in generated_code
+    assert "float castScalar = asfloat(rawInput.Load(offset + 48u));" in generated_code
+    assert "float2 castPair = asfloat(rawInput.Load2(offset + 52u));" in generated_code
+    assert "int3 signedTriple = asint(rawRW.Load3(offset + 60u));" in generated_code
+    assert (
+        "float invalidFloat = /* unsupported Slang byte-address buffer: Load "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "uint2 invalidVectorFromHelper = /* unsupported Slang byte-address "
+        "buffer: buffer_load returns uint but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "uint invalidScalarFromVector = /* unsupported Slang byte-address "
+        "buffer: Load2 returns uint2 but target expects uint */ 0u;" in generated_code
+    )
+    assert (
+        "float2 invalidFloatVector = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2 */ float2(0.0);"
+        in generated_code
+    )
+    assert (
+        "float2 invalidBinary = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2 */ float2(0.0) + "
+        "float2(1.0);" in generated_code
+    )
+    assert (
+        "float2x2 invalidMatrix = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2x2 */ float2x2(0.0);"
+        in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: Load3 returns "
+        "uint3 but target expects uint */ 0u);" in generated_code
+    )
+    assert (
+        "passUint2(/* unsupported Slang byte-address buffer: buffer_load "
+        "returns uint but target expects uint2 */ uint2(0u));" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: Load returns uint "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: Load2 returns uint2 "
+        "but target expects uint4 */ uint4(0u);" in generated_code
+    )
+    assert "float invalidFloat = rawInput.Load" not in generated_code
+    assert "uint invalidScalarFromVector = rawInput.Load2" not in generated_code
+    assert "float2 invalidFloatVector = rawInput.Load2" not in generated_code
+    assert "float2x2 invalidMatrix = rawInput.Load2" not in generated_code
+    assert "passUint(rawInput.Load3" not in generated_code
+    assert "passUint2(rawInput.Load" not in generated_code
+    assert "return rawInput.Load" not in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "None(" not in generated_code
+
+
 def test_byte_address_store_calls_reject_value_contexts():
     code = """
     shader SlangByteAddressStoreValueContexts {

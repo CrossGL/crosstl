@@ -8216,9 +8216,12 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        loop_exit_nodes=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
 
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
@@ -8228,6 +8231,9 @@ class HLSLCodeGen:
             switch_node, case_entries
         )
         path_results = []
+        case_loop_exit_nodes = tuple(
+            exit_node for exit_node in loop_exit_nodes if exit_node is not BreakNode
+        )
         for start_index in start_indices:
             path_results.append(
                 self.validate_hlsl_mesh_output_write_sequence_result(
@@ -8237,6 +8243,7 @@ class HLSLCodeGen:
                     declared_counts,
                     set_count_literals,
                     active_helper_calls,
+                    case_loop_exit_nodes,
                 )
             )
 
@@ -8449,9 +8456,12 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        loop_exit_nodes=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
 
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
@@ -8464,6 +8474,7 @@ class HLSLCodeGen:
                         declared_counts,
                         set_count_literals,
                         active_helper_calls,
+                        loop_exit_nodes,
                     )
                 )
                 if not can_continue:
@@ -8479,6 +8490,7 @@ class HLSLCodeGen:
                         declared_counts,
                         set_count_literals,
                         active_helper_calls,
+                        loop_exit_nodes,
                     )
                 )
                 if not can_continue:
@@ -8494,6 +8506,7 @@ class HLSLCodeGen:
                         declared_counts,
                         set_count_literals,
                         active_helper_calls,
+                        loop_exit_nodes,
                     )
                 )
                 if not can_continue:
@@ -8508,6 +8521,7 @@ class HLSLCodeGen:
                     declared_counts,
                     set_count_literals,
                     active_helper_calls,
+                    (BreakNode, ContinueNode),
                 )
                 continue
 
@@ -8538,6 +8552,8 @@ class HLSLCodeGen:
 
             if isinstance(stmt, ReturnNode):
                 return counts_seen, False
+            if loop_exit_nodes and isinstance(stmt, loop_exit_nodes):
+                return counts_seen, False
 
         return counts_seen, True
 
@@ -8549,7 +8565,11 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls,
+        loop_exit_nodes=None,
     ):
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
+
         then_statements = self.hlsl_statement_body_items(
             getattr(if_node, "then_branch", getattr(if_node, "if_body", None))
         )
@@ -8567,6 +8587,7 @@ class HLSLCodeGen:
                 declared_counts,
                 set_count_literals,
                 active_helper_calls,
+                loop_exit_nodes,
             )
 
         if condition_value is False:
@@ -8579,6 +8600,7 @@ class HLSLCodeGen:
                 declared_counts,
                 set_count_literals,
                 active_helper_calls,
+                loop_exit_nodes,
             )
 
         branch_results = [
@@ -8589,6 +8611,7 @@ class HLSLCodeGen:
                 declared_counts,
                 set_count_literals,
                 active_helper_calls,
+                loop_exit_nodes,
             )
         ]
         if else_branch is not None:
@@ -8600,6 +8623,7 @@ class HLSLCodeGen:
                     declared_counts,
                     set_count_literals,
                     active_helper_calls,
+                    loop_exit_nodes,
                 )
             )
         else:

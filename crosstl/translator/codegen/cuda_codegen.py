@@ -3385,6 +3385,55 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         pointee_type = self.struct_member_lookup_type(indirect_info["pointee_type"])
         return pointee_type in self.struct_member_types
 
+    def collect_query_return_local_alias_sources(self, statements):
+        """Collect simple local aliases before a traceable resource return."""
+        local_alias_types = {}
+        local_alias_sources = {}
+        assigned_names = set()
+
+        for statement in statements:
+            if isinstance(statement, VariableNode):
+                var_type = self.get_variable_node_type(statement)
+                if not self.is_query_return_alias_type(var_type):
+                    return None
+                name = getattr(statement, "name", None)
+                if not name or name in local_alias_types:
+                    return None
+
+                local_alias_types[name] = var_type
+                initial_value = getattr(
+                    statement,
+                    "initial_value",
+                    getattr(statement, "value", None),
+                )
+                if initial_value is not None:
+                    local_alias_sources[name] = initial_value
+                    assigned_names.add(name)
+                continue
+
+            assignment = statement
+            if isinstance(statement, ExpressionStatementNode):
+                assignment = getattr(statement, "expression", None)
+            if not isinstance(assignment, AssignmentNode):
+                return None
+            if getattr(assignment, "operator", "=") != "=":
+                return None
+
+            target = getattr(assignment, "target", None)
+            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+                return None
+            target_name = self.get_expression_name(target)
+            if target_name not in local_alias_types or target_name in assigned_names:
+                return None
+
+            value = getattr(assignment, "value", None)
+            if value is None:
+                return None
+            local_alias_sources[target_name] = value
+            assigned_names.add(target_name)
+
+        return local_alias_sources
+
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
         return_sources = {}
@@ -3418,27 +3467,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if not statements or not isinstance(statements[-1], ReturnNode):
                 continue
 
-            local_alias_sources = {}
-            supported_return_body = True
-            for statement in statements[:-1]:
-                if not isinstance(statement, VariableNode):
-                    supported_return_body = False
-                    break
-                var_type = self.get_variable_node_type(statement)
-                if not self.is_query_return_alias_type(var_type):
-                    supported_return_body = False
-                    break
-                name = getattr(statement, "name", None)
-                initial_value = getattr(
-                    statement,
-                    "initial_value",
-                    getattr(statement, "value", None),
-                )
-                if not name or initial_value is None:
-                    supported_return_body = False
-                    break
-                local_alias_sources[name] = initial_value
-            if not supported_return_body:
+            local_alias_sources = self.collect_query_return_local_alias_sources(
+                statements[:-1]
+            )
+            if local_alias_sources is None:
                 continue
 
             return_expr = getattr(statements[-1], "value", None)

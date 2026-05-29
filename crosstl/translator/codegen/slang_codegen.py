@@ -5382,6 +5382,14 @@ class SlangCodeGen:
         finally:
             self.current_expression_expected_type = previous_expected_type
 
+    def generate_expression_without_expected(self, expr):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = None
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
+
     def type_name_string(self, type_name):
         if type_name is None:
             return None
@@ -5722,9 +5730,10 @@ class SlangCodeGen:
                     self.image_resource_type(expr.args[0])
                 )
             if func_name == "buffer_load" and getattr(expr, "args", None):
-                return self.structured_buffer_element_type(
-                    self.structured_buffer_resource_type(expr.args[0])
-                )
+                buffer_type = self.structured_buffer_resource_type(expr.args[0])
+                if self.is_byte_address_buffer_resource_type(buffer_type):
+                    return "uint"
+                return self.structured_buffer_element_type(buffer_type)
             if func_name == "buffer_consume" and getattr(expr, "args", None):
                 return self.structured_buffer_element_type(
                     self.structured_buffer_resource_type(expr.args[0])
@@ -6004,6 +6013,13 @@ class SlangCodeGen:
                 return f"{self.convert_type(callee)}({args})"
             if isinstance(callee, str) and callee in self.user_function_names:
                 args = self.generate_user_function_arguments(callee, node.args)
+            elif isinstance(callee, str) and callee in {"asfloat", "asint", "asuint"}:
+                args = ", ".join(
+                    [
+                        self.generate_expression_without_expected(arg)
+                        for arg in node.args
+                    ]
+                )
             else:
                 args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
@@ -7933,6 +7949,26 @@ class SlangCodeGen:
     def atomic_result_diagnostic_fallback_type(self, result_type):
         return self.atomic_result_expected_type() or result_type
 
+    def byte_address_load_expected_type(self):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type in {"auto", "void"}:
+            return None
+        return expected_type
+
+    def byte_address_load_expected_type_unsupported_reason(
+        self, operation, result_type
+    ):
+        expected_type = self.byte_address_load_expected_type()
+        result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def byte_address_load_diagnostic_fallback_type(self, result_type):
+        return self.byte_address_load_expected_type() or result_type
+
     def zero_value_for_type(self, type_name):
         type_name = self.convert_type(type_name)
         base_type, array_suffix = split_array_type_suffix(type_name)
@@ -8000,6 +8036,15 @@ class SlangCodeGen:
                 element_type,
             )
         if self.is_byte_address_buffer_resource_type(buffer_type):
+            target_reason = self.byte_address_load_expected_type_unsupported_reason(
+                "buffer_load", "uint"
+            )
+            if target_reason is not None:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_load",
+                    target_reason,
+                    self.byte_address_load_diagnostic_fallback_type("uint"),
+                )
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             return f"{buffer}.Load({index})"
@@ -8216,6 +8261,16 @@ class SlangCodeGen:
                     member,
                     "requires readable byte-address buffer receiver",
                     result_type or "uint",
+                )
+            result_type = self.byte_address_member_call_result_type(func_expr) or "uint"
+            target_reason = self.byte_address_load_expected_type_unsupported_reason(
+                member, result_type
+            )
+            if target_reason is not None:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    target_reason,
+                    self.byte_address_load_diagnostic_fallback_type(result_type),
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)

@@ -6834,6 +6834,108 @@ def test_directx_mesh_output_writes_track_switch_early_return_dominance():
         )
 
 
+def test_directx_mesh_output_writes_ignore_unreachable_loop_exit_writes():
+    loop_exit_code = """
+    shader MeshOutputWriteSkippedByLoopExit {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    if (true) {
+                        break;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                for (int j = 0; j < 1; j++) {
+                    if (true) {
+                        continue;
+                    }
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(loop_exit_code), "mesh"
+    )
+    assert "break;" in generated
+    assert "continue;" in generated
+    assert "SetMeshOutputCounts(3, 1);" in generated
+
+    reachable_write_code = """
+    shader MeshOutputWriteReachableAfterLoopContinueBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    if (selector == 0u) {
+                        continue;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(reachable_write_code), "mesh"
+        )
+
+    switch_break_still_reaches_write_code = """
+    shader MeshOutputSwitchBreakStillReachesLoopWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    switch (selector) {
+                        case 0:
+                            break;
+                        default:
+                            break;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(switch_break_still_reaches_write_code), "mesh"
+        )
+
+
 def test_directx_mesh_output_writes_validate_literal_bounds():
     declared_bound_code = """
     shader MeshOutputWriteDeclaredBound {

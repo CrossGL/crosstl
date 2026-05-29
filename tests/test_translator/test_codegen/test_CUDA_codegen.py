@@ -6990,6 +6990,115 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_image_access_returned_struct_pointer_assignment_aliases_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks returned image metadata through assigned pointer locals."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        struct OuterBundle {
+            ImageBundle* bundlePtr;
+        };
+
+        shader ImageAccessReturnedStructPointerAssignmentAliases {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            fn chooseOuter(OuterBundle* outer) -> OuterBundle* {
+                return outer;
+            }
+
+            image2D chooseAssignedWrite(ImageBundle* bundle) {
+                ImageBundle* selected;
+                selected = chooseBundle(bundle);
+                return selected->writeImage;
+            }
+
+            image2D chooseAssignedChainedRead(ImageBundle* bundle) {
+                ImageBundle* selected;
+                ImageBundle* forwarded;
+                selected = chooseBundle(bundle);
+                forwarded = selected;
+                return forwarded->readImage;
+            }
+
+            uimage2D chooseAssignedOuterCounter(OuterBundle* outer, int slot) {
+                OuterBundle* selectedOuter;
+                ImageBundle* selectedBundle;
+                selectedOuter = chooseOuter(outer);
+                selectedBundle = selectedOuter->bundlePtr;
+                return selectedBundle->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* bundle,
+                    OuterBundle* outer,
+                    ivec2 pixel,
+                    int slot
+                ) {
+                    vec4 blockedRead =
+                        imageLoad(chooseAssignedWrite(bundle), pixel);
+                    imageStore(
+                        chooseAssignedChainedRead(bundle),
+                        pixel,
+                        blockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseAssignedOuterCounter(outer, slot),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed = imageLoad(
+                        chooseAssignedChainedRead(bundle),
+                        pixel
+                    );
+                    imageStore(chooseAssignedWrite(bundle), pixel, allowed);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 1
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 1
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseAssignedChainedRead(bundle), pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, chooseAssignedWrite(bundle), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseAssignedWrite(bundle)" not in cuda_code
+        assert (
+            "surf2Dwrite(blockedRead, chooseAssignedChainedRead(bundle)"
+            not in cuda_code
+        )
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_image_access_returned_local_aliases_emit_cuda_diagnostics(self):
         """Test CUDA preserves storage-image access metadata through returns."""
         source_code = """

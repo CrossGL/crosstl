@@ -4848,7 +4848,7 @@ class TestVulkanSPIRVCodeGen:
         assert output_patch not in evaluation_entry.group(1)
         assert f"OpDecorate {input_patch} Location 0" in spv_code
         assert f"OpDecorate {output_patch} Location 0" in spv_code
-        assert f"OpDecorate {evaluation_patch} Location 1" in spv_code
+        assert f"OpDecorate {evaluation_patch} Location 0" in spv_code
 
         for variable_id, storage_class in (
             (input_patch, "Input"),
