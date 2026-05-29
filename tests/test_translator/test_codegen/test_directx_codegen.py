@@ -16921,6 +16921,114 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
     assert "textureGather(" not in generated_code
 
 
+def test_directx_unsupported_dimension_texture_gather_offsets_emit_diagnostics_without_samplers():
+    shader = """
+    shader UnsupportedDimensionGatherOffsets {
+        sampler1D lineMap;
+        sampler3D volumeMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec3 volumeUv @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            int component @ TEXCOORD3;
+        };
+
+        vec4 gatherLine(
+            sampler1D tex,
+            sampler s,
+            float u,
+            ivec2 offset,
+            int component
+        ) {
+            return textureGatherOffset(tex, s, u, offset, component);
+        }
+
+        vec4 gatherVolume(
+            sampler3D tex,
+            sampler s,
+            vec3 volumeUv,
+            ivec2 offset,
+            int component
+        ) {
+            return textureGatherOffsets(
+                tex,
+                s,
+                volumeUv,
+                offset,
+                offset,
+                offset,
+                offset,
+                component
+            );
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherLine(
+                    lineMap,
+                    linearSampler,
+                    input.u,
+                    input.offset,
+                    input.component
+                ) + gatherVolume(
+                    volumeMap,
+                    linearSampler,
+                    input.volumeUv,
+                    input.offset,
+                    input.component
+                ) + textureGatherOffset(
+                    lineMap,
+                    input.u,
+                    input.offset,
+                    input.component
+                ) + textureGatherOffsets(
+                    volumeMap,
+                    input.volumeUv,
+                    input.offset,
+                    input.offset,
+                    input.offset,
+                    input.offset,
+                    input.component
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    offset_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGatherOffset offsets "
+        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    offsets_diagnostic = (
+        "/* unsupported DirectX texture gather: textureGatherOffsets offsets "
+        "require 2D or 2D-array textures */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "Texture3D volumeMap : register(t1);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "SamplerState lineMapSampler" not in generated_code
+    assert "SamplerState volumeMapSampler" not in generated_code
+    assert (
+        "float4 gatherLine(Texture1D tex, SamplerState s, float u, int2 offset, int component)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, int2 offset, int component)"
+        in generated_code
+    )
+    assert generated_code.count(offset_diagnostic) == 2
+    assert generated_code.count(offsets_diagnostic) == 2
+    assert ".Gather" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherOffsets(" not in generated_code
+
+
 def test_directx_unsupported_dimension_texture_gather_compare_emits_diagnostics_without_samplers():
     shader = """
     shader UnsupportedDimensionGatherCompare {

@@ -9598,6 +9598,83 @@ class TestVulkanSPIRVCodeGen:
             "got readonly"
         ) in spv_code
 
+    def test_storage_image_local_aliases_preserve_access_diagnostics(self, tmp_path):
+        source_code = """
+        shader StorageImageAliases {
+            image2D source @rgba32f @readonly;
+            image2D target @rgba32f @writeonly;
+            image2D sourceArray @rgba32f @readonly[2];
+            image2D targetArray @rgba32f @writeonly[2];
+            uimage2D counters @r32ui @readonly;
+
+            vec4 readPixel(image2D image @rgba32f, ivec2 pixel) {
+                return imageLoad(image, pixel);
+            }
+
+            void writePixel(image2D image @rgba32f, ivec2 pixel, vec4 value) {
+                imageStore(image, pixel, value);
+            }
+
+            uint addCounter(uimage2D image @r32ui, ivec2 pixel) {
+                return imageAtomicAdd(image, pixel, 1u);
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 valid = imageLoad(source, pixel);
+                    imageStore(target, pixel, valid);
+
+                    image2D writeAlias = target;
+                    image2D readAlias = source;
+                    let arrayWriteAlias = targetArray[1];
+                    let arrayReadAlias = sourceArray[0];
+                    uimage2D counterAlias = counters;
+
+                    vec4 rejectedLoad = imageLoad(writeAlias, pixel);
+                    vec4 rejectedArrayLoad = imageLoad(arrayWriteAlias, pixel);
+                    imageStore(readAlias, pixel, rejectedLoad);
+                    imageStore(arrayReadAlias, pixel, rejectedArrayLoad);
+                    uint rejectedAtomic = imageAtomicAdd(counterAlias, pixel, 1u);
+
+                    vec4 helperRead = readPixel(writeAlias, pixel);
+                    writePixel(readAlias, pixel, helperRead);
+                    uint helperAtomic = addCounter(counterAlias, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            spv_code.count("WARNING: imageLoad requires a readable storage image") == 2
+        )
+        assert (
+            spv_code.count("WARNING: imageStore requires a writable storage image") == 2
+        )
+        assert "WARNING: imageAtomicAdd requires a read-write storage image" in spv_code
+        assert (
+            "WARNING: function call 'readPixel' requires read-capable "
+            "storage image access for argument writeAlias passed to parameter image: "
+            "got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writePixel' requires write-capable "
+            "storage image access for argument readAlias passed to parameter image: "
+            "got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'addCounter' requires read-write "
+            "storage image access for argument counterAlias passed to parameter image: "
+            "got readonly"
+        ) in spv_code
+        assert "SPIR-V descriptor resource 'writeAlias'" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_image_operations_reject_malformed_operand_shapes(self, tmp_path):
         source_code = """
         shader StorageImageMalformedOperands {

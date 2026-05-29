@@ -22931,6 +22931,52 @@ def test_metal_resource_array_local_aliases_preserve_element_metadata():
     )
 
 
+def test_metal_struct_member_resource_array_local_aliases_preserve_sampler_metadata():
+    shader = """
+    shader StructMemberTextureArrayLocalAliases {
+        struct TexturePack {
+            sampler2D textures[4];
+            sampler texturesSampler[4];
+        };
+
+        vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+            let texAlias = pack.textures;
+            let chainedAlias = texAlias;
+            return texture(chainedAlias[layer], uv);
+        }
+
+        vec4 sampleLayer(TexturePack pack, int layer, vec2 uv) {
+            let layerAlias = pack.textures[layer];
+            return texture(layerAlias, uv);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                TexturePack pack;
+                return samplePack(pack, 2, vec2(0.5, 0.25)) +
+                    sampleLayer(pack, 1, vec2(0.25, 0.75));
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texture2d<float>, 4> textures;" in generated_code
+    assert "array<sampler, 4> texturesSampler;" in generated_code
+    assert "array<texture2d<float>, 4> texAlias = pack.textures;" in generated_code
+    assert "array<texture2d<float>, 4> chainedAlias = texAlias;" in generated_code
+    assert "chainedAlias[layer].sample(pack.texturesSampler[layer], uv)" in (
+        generated_code
+    )
+    assert "texture2d<float> layerAlias = pack.textures[layer];" in generated_code
+    assert "layerAlias.sample(pack.texturesSampler[layer], uv)" in generated_code
+    assert "texture2d<float> texAlias = pack.textures;" not in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+
+
 def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
     shader = """
     shader ImplicitSamplerArrayElements {

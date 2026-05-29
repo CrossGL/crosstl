@@ -111,6 +111,7 @@ class VulkanSPIRVCodeGen:
         self.required_capabilities = set()
         self.global_variables = {}
         self.local_variables = {}
+        self.resource_alias_variables = set()
         self.variable_value_types = {}
         self.value_types = {}
         self.constants = {}
@@ -8115,6 +8116,21 @@ class VulkanSPIRVCodeGen:
 
         return self.resource_metadata_for_value(pointer_id)
 
+    def propagate_resource_access_metadata(
+        self, source_pointer: SpirvId, access_pointer: SpirvId, access_type: SpirvId
+    ):
+        target_metadata = self.resource_type_metadata.get(access_type.id)
+        if target_metadata is None:
+            return
+
+        source_metadata = self.resource_metadata_for_pointer(source_pointer)
+        if source_metadata is None or source_metadata.get(
+            "kind"
+        ) != target_metadata.get("kind"):
+            source_metadata = target_metadata
+
+        self.resource_type_metadata[access_pointer.id] = source_metadata
+
     def attribute_value_to_string(self, value):
         if value is None:
             return None
@@ -9352,6 +9368,7 @@ class VulkanSPIRVCodeGen:
         self.current_return_type = previous_return_type
         self.local_variables.clear()
         self.precise_local_variables.clear()
+        self.resource_alias_variables.clear()
         return function_id
 
     def process_statements(self, statements):
@@ -9411,6 +9428,11 @@ class VulkanSPIRVCodeGen:
         """Process a local CrossGL variable declaration."""
         var_type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         var_type_name = self.type_name_from_value(var_type_source)
+        if self.process_local_resource_alias_declaration(
+            node, var_type_source, var_type_name
+        ):
+            return
+
         if self.local_variable_requires_descriptor_storage(node, var_type_name):
             raise ValueError(
                 f"SPIR-V descriptor resource '{node.name}' cannot be declared "
@@ -9441,6 +9463,33 @@ class VulkanSPIRVCodeGen:
                 )
             if rhs_value is not None:
                 self.store_to_variable(var_id, rhs_value)
+
+    def process_local_resource_alias_declaration(
+        self, node: VariableNode, var_type_source, var_type_name: str
+    ) -> bool:
+        initial_value = getattr(node, "initial_value", None)
+        if initial_value is None:
+            return False
+
+        source_pointer = self.variable_pointer_from_expression(initial_value)
+        if source_pointer is None:
+            return False
+
+        source_metadata = self.resource_metadata_for_pointer(source_pointer)
+        if source_metadata is None:
+            return False
+
+        if var_type_source is not None:
+            base_type_name = self.array_base_type_name(var_type_name)
+            if not (
+                self.is_resource_type_name(base_type_name)
+                or self.is_acceleration_structure_type_name(base_type_name)
+            ):
+                return False
+
+        self.local_variables[node.name] = source_pointer
+        self.resource_alias_variables.add(node.name)
+        return True
 
     def local_variable_requires_descriptor_storage(
         self, node: VariableNode, type_name: str
@@ -11544,6 +11593,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access
         return None
 
@@ -11583,6 +11635,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -11604,6 +11659,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_resource_access_metadata(
+                array_variable, access, element_type
+            )
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
@@ -11611,6 +11669,7 @@ class VulkanSPIRVCodeGen:
         access = self.access_chain(array, [index], ptr_type)
         self.variable_value_types[access.id] = element_type
         self.propagate_storage_buffer_access_metadata(array, access)
+        self.propagate_resource_access_metadata(array, access, element_type)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -11648,6 +11707,13 @@ class VulkanSPIRVCodeGen:
             target = target.name
 
         if isinstance(target, str):
+            if target in self.resource_alias_variables:
+                self.emit(
+                    f"; WARNING: cannot assign to SPIR-V descriptor resource alias "
+                    f"{target}"
+                )
+                return
+
             var_id = self.ensure_assignable_pointer_for_name(target)
             if var_id is None:
                 var_type = self.primitive_types["float"]

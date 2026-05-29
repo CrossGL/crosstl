@@ -3233,6 +3233,9 @@ class MetalCodeGen:
     def texture_argument_resource_array_size(self, texture_arg):
         if isinstance(texture_arg, ArrayAccessNode):
             return None
+        member_array_size = self.struct_member_resource_array_size(texture_arg)
+        if member_array_size is not None:
+            return member_array_size
         texture_name = self.expression_name(texture_arg)
         if not texture_name:
             return None
@@ -11415,6 +11418,11 @@ class MetalCodeGen:
 
         source_arg = self.texture_alias_sampler_source(texture_name)
         if source_arg is not None:
+            member_sampler = self.struct_member_paired_sampler_expression(
+                source_arg, texture_arg
+            )
+            if member_sampler is not None:
+                return member_sampler
             source_name = self.expression_name(source_arg)
             source_sampler_name = f"{source_name}Sampler" if source_name else None
             if source_sampler_name in self.sampler_variable_names():
@@ -11442,6 +11450,30 @@ class MetalCodeGen:
             seen.add(source_name)
             source_arg = next_source_arg
         return None
+
+    def struct_member_paired_sampler_expression(self, source_arg, texture_arg=None):
+        member_expr = self.member_access_source_expression(source_arg)
+        if member_expr is None:
+            return None
+
+        sampler_member = f"{member_expr.member}Sampler"
+        sampler_node = self.struct_member_named_node(member_expr.object, sampler_member)
+        if sampler_node is None or not self.struct_member_is_sampler_resource(
+            sampler_node
+        ):
+            return None
+
+        object_expr = self.generate_expression(member_expr.object)
+        sampler_expr = f"{object_expr}.{sampler_member}"
+        index = self.array_access_index_expression(
+            source_arg
+        ) or self.array_access_index_expression(texture_arg)
+        if (
+            index is not None
+            and self.struct_member_array_size(sampler_node) is not None
+        ):
+            return f"{sampler_expr}[{index}]"
+        return sampler_expr
 
     def array_access_index_expression(self, expr):
         if not isinstance(expr, ArrayAccessNode):
@@ -11519,14 +11551,25 @@ class MetalCodeGen:
             return None
         return self.map_resource_type_with_format(raw_type, member)
 
+    def struct_member_resource_array_size(self, texture_arg):
+        member = self.struct_resource_member_node(texture_arg)
+        if member is None:
+            return None
+        return self.struct_member_array_size(member)
+
     def struct_resource_member_node(self, texture_arg):
-        expr = texture_arg
-        while isinstance(expr, ArrayAccessNode):
-            expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        expr = self.member_access_source_expression(texture_arg)
         if not isinstance(expr, MemberAccessNode):
             return None
+        return self.struct_member_named_node(expr.object, str(expr.member))
 
-        object_type = self.expression_result_type(expr.object)
+    def member_access_source_expression(self, expr):
+        while isinstance(expr, ArrayAccessNode):
+            expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        return expr if isinstance(expr, MemberAccessNode) else None
+
+    def struct_member_named_node(self, object_expr, member_name):
+        object_type = self.expression_result_type(object_expr)
         if object_type is None:
             return None
         object_type = self.pointer_pointee_type_name(object_type) or object_type
@@ -11534,11 +11577,41 @@ class MetalCodeGen:
         if struct_node is None:
             return None
 
-        member_name = str(expr.member)
         for member in getattr(struct_node, "members", []) or []:
             if getattr(member, "name", None) == member_name:
                 return member
         return None
+
+    def struct_member_array_size(self, member):
+        if isinstance(member, ArrayNode):
+            return (
+                self.safe_expression_to_string(member.size)
+                if member.size is not None
+                else ""
+            )
+
+        raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+        if self.is_array_type_node(raw_type):
+            return (
+                self.safe_expression_to_string(raw_type.size)
+                if raw_type.size is not None
+                else ""
+            )
+
+        raw_type_name = self.type_name_string(raw_type)
+        if raw_type_name and "[" in raw_type_name and "]" in raw_type_name:
+            _, array_size = parse_array_type(raw_type_name)
+            return array_size or ""
+        return None
+
+    def struct_member_is_sampler_resource(self, member):
+        if isinstance(member, ArrayNode):
+            raw_type = getattr(member, "element_type", getattr(member, "vtype", None))
+        else:
+            raw_type = getattr(member, "member_type", getattr(member, "vtype", None))
+            if self.is_array_type_node(raw_type):
+                raw_type = raw_type.element_type
+        return self.is_sampler_type(self.type_name_string(raw_type))
 
     def texture_argument_resource_type(self, texture_arg):
         texture_type = self.texture_resource_type(texture_arg)

@@ -1052,6 +1052,35 @@ shader ResourceImageArrayLocalAliasValidation {
 """
 
 
+STRUCT_MEMBER_TEXTURE_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
+shader StructMemberTextureArrayLocalAliasValidation {
+    struct TexturePack {
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+    };
+
+    vec4 samplePack(TexturePack pack, int layer, vec2 uv) {
+        let texAlias = pack.textures;
+        let chainedAlias = texAlias;
+        return texture(chainedAlias[layer], uv);
+    }
+
+    vec4 sampleLayer(TexturePack pack, int layer, vec2 uv) {
+        let layerAlias = pack.textures[layer];
+        return texture(layerAlias, uv);
+    }
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            TexturePack pack;
+            return samplePack(pack, 2, vec2(0.5, 0.25)) +
+                sampleLayer(pack, 1, vec2(0.25, 0.75));
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
 shader SampledTextureArrayConstIndexValidation {
     const int COUNT = 4;
@@ -5665,6 +5694,34 @@ def test_generated_metal_resource_array_local_aliases_compile_with_metal(tmp_pat
             "-o",
             str(compute_output),
         ]
+    )
+
+
+def test_generated_metal_struct_member_resource_array_local_aliases_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_struct_member_resource_array_local_alias.metal"
+    output = tmp_path / "fragment_struct_member_resource_array_local_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            STRUCT_MEMBER_TEXTURE_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    assert "array<texture2d<float>, 4> texAlias = pack.textures;" in code
+    assert "array<texture2d<float>, 4> chainedAlias = texAlias;" in code
+    assert "chainedAlias[layer].sample(pack.texturesSampler[layer], uv)" in code
+    assert "texture2d<float> layerAlias = pack.textures[layer];" in code
+    assert "layerAlias.sample(pack.texturesSampler[layer], uv)" in code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
     )
 
 
