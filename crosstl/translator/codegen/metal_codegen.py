@@ -6190,7 +6190,7 @@ class MetalCodeGen:
         return code
 
     def generate_ray_tracing_op_expression(self, expr):
-        raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)
+        raw_args = self.normalized_metal_intrinsic_args(expr.arguments)
         rendered_args = [self.generate_expression(arg) for arg in raw_args]
         if expr.operation == "TraceRay":
             trace_ray = self.generate_metal_trace_ray(raw_args, rendered_args)
@@ -6227,7 +6227,7 @@ class MetalCodeGen:
 
         return f"{expr.operation}({', '.join(rendered_args)})"
 
-    def normalized_metal_ray_tracing_args(self, args):
+    def normalized_metal_intrinsic_args(self, args):
         normalized = []
         index = 0
         while index < len(args):
@@ -7507,19 +7507,20 @@ class MetalCodeGen:
         return f"({base_index}) + {offset}"
 
     def generate_mesh_op_expression(self, expr):
+        arguments = self.normalized_metal_intrinsic_args(expr.arguments)
         if (
             expr.operation == "SetMeshOutputCounts"
             and self.current_metal_mesh_output_parameter
-            and len(expr.arguments) >= 2
+            and len(arguments) >= 2
         ):
-            primitive_count = self.generate_expression(expr.arguments[1])
+            primitive_count = self.generate_expression(arguments[1])
             return (
                 f"{self.current_metal_mesh_output_parameter}"
                 f".set_primitive_count({primitive_count})"
             )
         if expr.operation == "DispatchMesh":
             if (
-                len(expr.arguments) == 4
+                len(arguments) == 4
                 and self.current_metal_mesh_payload_parameter is None
             ):
                 return (
@@ -7534,39 +7535,37 @@ class MetalCodeGen:
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 4
+            and len(arguments) == 4
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(
-                expr.arguments[:3]
-            )
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments[:3])
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments[:3])
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments[:3])
                 )
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
-                expr.arguments[3]
+                arguments[3]
             )
             return "\n".join([payload_assignment, grid_assignment])
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 3
+            and len(arguments) == 3
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments)
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments)
                 )
             return grid_assignment
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 1
+            and len(arguments) == 1
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments)
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments)
                 )
             return grid_assignment
         return None
@@ -10703,10 +10702,11 @@ class MetalCodeGen:
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
             if not isinstance(node, MeshOpNode):
                 continue
-            if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+            arguments = self.normalized_metal_intrinsic_args(node.arguments)
+            if node.operation != "DispatchMesh" or len(arguments) != 4:
                 continue
             payload_type = self.metal_dispatch_mesh_payload_type(
-                node.arguments[3], declared_types
+                arguments[3], declared_types
             )
             if payload_type is not None:
                 payload_types.add(payload_type)
@@ -10799,10 +10799,8 @@ class MetalCodeGen:
         for node in self.iter_ast_nodes(getattr(func, "body", None)):
             if not isinstance(node, MeshOpNode) or node.operation != operation:
                 continue
-            if (
-                argument_counts is not None
-                and len(node.arguments) not in argument_counts
-            ):
+            arguments = self.normalized_metal_intrinsic_args(node.arguments)
+            if argument_counts is not None and len(arguments) not in argument_counts:
                 continue
             return True
         return False
