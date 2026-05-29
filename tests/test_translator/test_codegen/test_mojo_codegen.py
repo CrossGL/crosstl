@@ -8590,6 +8590,130 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
     assert "imageStore(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct BufferBox {
+                RWStructuredBuffer<int> values;
+            };
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidForUpdateStore(int count, uint index, int value) {
+                BufferBox payload = BufferBox(values);
+                for (
+                    int i = 0;
+                    i < count;
+                    payload = BufferBox(readValues)
+                ) {
+                    i++;
+                }
+                payload.values.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            struct BufferBox {
+                RWStructuredBuffer<int> values;
+            };
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidForContinueStore(
+                bool skip,
+                int count,
+                uint index,
+                int value
+            ) {
+                BufferBox payload = BufferBox(values);
+                for (
+                    int i = 0;
+                    i < count;
+                    payload = BufferBox(readValues)
+                ) {
+                    if (skip) {
+                        continue;
+                    }
+                    i++;
+                }
+                payload.values.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            struct BufferBox {
+                RWStructuredBuffer<int> values;
+            };
+            writeonly RWStructuredBuffer<int> writeValues;
+            RWStructuredBuffer<int> values;
+
+            int invalidWhileContinueLoad(bool skip, int count, uint index) {
+                BufferBox payload = BufferBox(writeValues);
+                while (count > 0) {
+                    if (skip) {
+                        count--;
+                        continue;
+                    }
+                    payload = BufferBox(values);
+                    count--;
+                }
+                return payload.values.Load(index);
+            }
+            """,
+            r"Load.*writeValues.*writeonly",
+        ),
+        (
+            """
+            struct RawBox {
+                RWByteAddressBuffer raw;
+            };
+            readonly RWByteAddressBuffer readRaw;
+            RWByteAddressBuffer rawBytes;
+
+            void invalidRawForUpdateStore(int count, uint offset, uint4 value) {
+                RawBox payload = RawBox(rawBytes);
+                for (int i = 0; i < count; payload = RawBox(readRaw)) {
+                    i++;
+                }
+                payload.raw.Store4(offset, value);
+            }
+            """,
+            r"Store4.*readRaw.*readonly",
+        ),
+        (
+            """
+            struct RawBox {
+                RWByteAddressBuffer raw;
+            };
+            writeonly RWByteAddressBuffer writeRaw;
+            RWByteAddressBuffer rawBytes;
+
+            uint invalidRawWhileLoad(int count, uint offset) {
+                RawBox payload = RawBox(writeRaw);
+                while (count > 0) {
+                    payload = RawBox(rawBytes);
+                    count--;
+                }
+                return payload.raw.Load(offset);
+            }
+            """,
+            r"Load.*writeRaw.*writeonly",
+        ),
+    ],
+)
+def test_loop_carried_buffer_resource_alias_access_qualifiers_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;

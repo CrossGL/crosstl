@@ -4727,13 +4727,14 @@ def test_metal_trace_ray_rejects_non_acceleration_structure_argument():
     assert "intersect(__crossgl_ray_0, payload" not in generated
 
 
-def test_metal_trace_ray_requires_acceleration_structure_array_element():
+def test_metal_acceleration_structure_arrays_emit_compile_safe_diagnostics():
     code = """
     shader rt {
         accelerationStructureEXT topLevelAS[2] @binding(0);
+        primitive_acceleration_structure primitiveAS[2] @binding(3);
 
         ray_generation {
-            void main() {
+            void main(accelerationStructureEXT paramAS[2] @binding(5)) {
                 TraceRay(
                     topLevelAS,
                     0,
@@ -4761,6 +4762,34 @@ def test_metal_trace_ray_requires_acceleration_structure_array_element():
                     1000.0,
                     0
                 );
+
+                TraceRay(
+                    primitiveAS[0],
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+
+                TraceRay(
+                    paramAS[0],
+                    0,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
             }
         }
     }
@@ -4768,15 +4797,36 @@ def test_metal_trace_ray_requires_acceleration_structure_array_element():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "unsupported Metal ray tracing intrinsic: TraceRay acceleration "
-        "structure - acceleration structure argument 'topLevelAS' has pointer "
-        "or array type; TraceRay requires an acceleration_structure element"
+        "unsupported Metal ray tracing resource: arrays of "
+        "acceleration_structure are not valid Metal buffer parameters "
+        "(topLevelAS)"
     ) in generated
     assert (
-        "__crossgl_intersector_1.intersect(__crossgl_ray_0, topLevelAS[1], 255);"
-        in generated
-    )
-    assert "intersect(__crossgl_ray_0, topLevelAS, 255)" not in generated
+        "unsupported Metal ray tracing resource: arrays of "
+        "acceleration_structure are not valid Metal buffer parameters "
+        "(primitiveAS)"
+    ) in generated
+    assert (
+        "unsupported Metal ray tracing resource: arrays of "
+        "acceleration_structure are not valid Metal buffer parameters "
+        "(paramAS)"
+    ) in generated
+    assert (
+        "acceleration structure argument 'topLevelAS' uses an "
+        "acceleration_structure array"
+    ) in generated
+    assert (
+        "acceleration structure argument 'primitiveAS' uses an "
+        "acceleration_structure array"
+    ) in generated
+    assert (
+        "acceleration structure argument 'paramAS' uses an "
+        "acceleration_structure array"
+    ) in generated
+    assert "array<instance_acceleration_structure" not in generated
+    assert "array<primitive_acceleration_structure" not in generated
+    assert ".intersect(" not in generated
+    assert "TraceRay(" not in generated
 
 
 def test_metal_trace_ray_uses_single_intersection_function_table():

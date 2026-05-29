@@ -3914,6 +3914,74 @@ shader MetalRayTracingInvalidAccelerationStructureValidation {
 """
 
 
+METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_DIAGNOSTIC_SHADER = """
+shader MetalRayAccelerationStructureArrayDiagnosticValidation {
+    accelerationStructureEXT topLevelAS[2] @binding(0);
+    primitive_acceleration_structure primitiveAS[2] @binding(3);
+
+    ray_generation {
+        void main(accelerationStructureEXT paramAS[2] @binding(5)) {
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                0
+            );
+
+            TraceRay(
+                topLevelAS[1],
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                0
+            );
+
+            TraceRay(
+                primitiveAS[0],
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                0
+            );
+
+            TraceRay(
+                paramAS[0],
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                vec3(0.0),
+                0.001,
+                vec3(0.0, 0.0, 1.0),
+                1000.0,
+                0
+            );
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER = """
 shader MetalRayTracingPayloadDiagnosticValidation {
     struct Payload {
@@ -7767,6 +7835,46 @@ def test_generated_metal_ray_invalid_acceleration_structure_compiles_with_metal3
         "TraceRay requires an acceleration_structure resource"
     ) in code
     assert "intersect(__crossgl_ray_0, payload" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_acceleration_structure_array_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_acceleration_structure_array_diagnostics.metal"
+    output = tmp_path / "ray_acceleration_structure_array_diagnostics.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(
+            METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_DIAGNOSTIC_SHADER
+        )
+    )
+    assert (
+        "arrays of acceleration_structure are not valid Metal buffer parameters" in code
+    )
+    assert "acceleration structure argument 'topLevelAS' uses an" in code
+    assert "acceleration structure argument 'primitiveAS' uses an" in code
+    assert "acceleration structure argument 'paramAS' uses an" in code
+    assert "array<instance_acceleration_structure" not in code
+    assert "array<primitive_acceleration_structure" not in code
+    assert ".intersect(" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

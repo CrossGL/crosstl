@@ -473,6 +473,7 @@ class MetalCodeGen:
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
+        self.unsupported_metal_acceleration_structure_array_variables = {}
         self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
@@ -885,6 +886,7 @@ class MetalCodeGen:
         self.acceleration_structure_variables = []
         self.visible_function_table_variables = []
         self.intersection_function_table_variables = []
+        self.unsupported_metal_acceleration_structure_array_variables = {}
         self.unsupported_metal_ray_function_table_array_variables = {}
         self.sampler_variables = []
         self.structured_buffer_variables = []
@@ -1426,6 +1428,17 @@ class MetalCodeGen:
                     var_name,
                 )
                 mapped_type = self.map_resource_type_with_format(vtype, node)
+                if array_size is not None:
+                    self.unsupported_metal_acceleration_structure_array_variables[
+                        var_name
+                    ] = mapped_type
+                    code += (
+                        self.unsupported_metal_acceleration_structure_array_diagnostic(
+                            var_name
+                        )
+                    )
+                    buffer_register = max(buffer_register, binding + resource_count)
+                    continue
                 self.acceleration_structure_variables.append(
                     (node, binding, mapped_type, array_size)
                 )
@@ -2070,6 +2083,9 @@ class MetalCodeGen:
         previous_unsupported_metal_ray_function_table_array_variables = dict(
             self.unsupported_metal_ray_function_table_array_variables
         )
+        previous_unsupported_metal_acceleration_structure_array_variables = dict(
+            self.unsupported_metal_acceleration_structure_array_variables
+        )
         previous_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
@@ -2189,6 +2205,22 @@ class MetalCodeGen:
                 unsupported_metal_ray_function_table_parameter_diagnostics.append(
                     self.unsupported_metal_ray_function_table_array_diagnostic(
                         table_array_kind, p.name
+                    ).rstrip()
+                )
+                continue
+
+            acceleration_structure_array = (
+                self.metal_acceleration_structure_array_parameter_kind(
+                    raw_param_type, p
+                )
+            )
+            if acceleration_structure_array is not None:
+                self.unsupported_metal_acceleration_structure_array_variables[
+                    p.name
+                ] = acceleration_structure_array
+                unsupported_metal_ray_function_table_parameter_diagnostics.append(
+                    self.unsupported_metal_acceleration_structure_array_diagnostic(
+                        p.name
                     ).rstrip()
                 )
                 continue
@@ -2372,6 +2404,9 @@ class MetalCodeGen:
             )
             self.unsupported_metal_ray_function_table_array_variables = (
                 previous_unsupported_metal_ray_function_table_array_variables
+            )
+            self.unsupported_metal_acceleration_structure_array_variables = (
+                previous_unsupported_metal_acceleration_structure_array_variables
             )
             self.current_glsl_buffer_block_parameter_failures = (
                 previous_glsl_buffer_block_parameter_failures
@@ -2643,6 +2678,9 @@ class MetalCodeGen:
         )
         self.unsupported_metal_ray_function_table_array_variables = (
             previous_unsupported_metal_ray_function_table_array_variables
+        )
+        self.unsupported_metal_acceleration_structure_array_variables = (
+            previous_unsupported_metal_acceleration_structure_array_variables
         )
         self.current_glsl_buffer_block_parameter_failures = (
             previous_glsl_buffer_block_parameter_failures
@@ -5080,6 +5118,11 @@ class MetalCodeGen:
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
             if unsupported_value is not None:
                 return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_acceleration_structure_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
             if hasattr(expr, "name"):
                 return enum_value_expression(self, expr.name)
             else:
@@ -5115,6 +5158,11 @@ class MetalCodeGen:
             return f"{query}.{expr.operation}({args})"
         elif isinstance(expr, ArrayAccessNode):
             unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
+            if unsupported_value is not None:
+                return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_acceleration_structure_array_expression(expr)
+            )
             if unsupported_value is not None:
                 return unsupported_value
             unsupported_value = (
@@ -6448,6 +6496,21 @@ class MetalCodeGen:
             or "<expr>"
         )
 
+        unsupported_array = self.unsupported_metal_acceleration_structure_array_reason(
+            raw_arg
+        )
+        if unsupported_array is not None:
+            return {
+                "argument": None,
+                "type": None,
+                "reason": (
+                    "acceleration structure argument "
+                    f"'{display_name}' uses an acceleration_structure array; "
+                    f"{unsupported_array}; TraceRay requires a single "
+                    "acceleration_structure resource"
+                ),
+            }
+
         result_type = self.expression_result_type(raw_arg)
         if result_type is not None:
             return self.metal_trace_ray_acceleration_structure_argument_from_type(
@@ -6766,6 +6829,40 @@ class MetalCodeGen:
 
     def unsupported_metal_ray_tracing_intrinsic(self, operation, reason):
         return f"/* unsupported Metal ray tracing intrinsic: {operation} - {reason} */"
+
+    def unsupported_metal_acceleration_structure_array_diagnostic(self, name):
+        return (
+            "/* unsupported Metal ray tracing resource: arrays of "
+            "acceleration_structure are not valid Metal buffer parameters "
+            f"({name}) */\n"
+        )
+
+    def unsupported_metal_acceleration_structure_array_reason(self, expr):
+        resource_name = self.expression_name(expr)
+        if (
+            resource_name
+            not in self.unsupported_metal_acceleration_structure_array_variables
+        ):
+            return None
+        return (
+            "arrays of acceleration_structure are not valid Metal buffer "
+            f"parameters ({resource_name})"
+        )
+
+    def unsupported_metal_acceleration_structure_array_expression(self, expr):
+        reason = self.unsupported_metal_acceleration_structure_array_reason(expr)
+        if reason is None:
+            return None
+        return f"0 /* unsupported Metal ray tracing resource: {reason} */"
+
+    def metal_acceleration_structure_array_parameter_kind(self, vtype, node=None):
+        if not self.is_acceleration_structure_type(vtype):
+            return None
+        array_resource = self.resource_array_parameter(vtype, node)
+        if array_resource is None:
+            return None
+        resource_type, _array_size = array_resource
+        return resource_type
 
     def unsupported_metal_ray_function_table_array_diagnostic(self, table_kind, name):
         return (

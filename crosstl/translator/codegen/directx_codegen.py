@@ -7922,6 +7922,38 @@ class HLSLCodeGen:
         in_thread_varying_branch=False,
     ):
         for stmt in statements:
+            if isinstance(stmt, SwitchNode):
+                contains_output_count = (
+                    self.hlsl_statement_contains_set_mesh_output_counts(stmt)
+                )
+                if contains_output_count and in_loop:
+                    raise ValueError(
+                        "DirectX mesh SetMeshOutputCounts must not be called from "
+                        "loop control flow"
+                    )
+
+                condition = getattr(stmt, "expression", None)
+                branch_is_thread_varying = (
+                    in_thread_varying_branch
+                    or self.hlsl_condition_uses_thread_varying_name(
+                        condition, thread_varying_names
+                    )
+                )
+                if contains_output_count and branch_is_thread_varying:
+                    raise ValueError(
+                        "DirectX mesh SetMeshOutputCounts must not be called from "
+                        "thread-varying control flow"
+                    )
+
+                for case in self.hlsl_switch_case_entries(stmt):
+                    self.validate_hlsl_set_mesh_output_counts_control_flow(
+                        self.hlsl_switch_case_body_items(case),
+                        thread_varying_names,
+                        in_loop,
+                        branch_is_thread_varying,
+                    )
+                continue
+
             contains_output_count = self.hlsl_statement_contains_set_mesh_output_counts(
                 stmt
             )
@@ -8065,6 +8097,93 @@ class HLSLCodeGen:
         if isinstance(body, list):
             return body
         return [body]
+
+    def hlsl_switch_case_entries(self, switch_node):
+        entries = list(
+            getattr(switch_node, "ordered_cases", None)
+            or getattr(switch_node, "cases", [])
+            or []
+        )
+        default_case = getattr(switch_node, "default_case", None)
+        has_default = any(getattr(case, "value", None) is None for case in entries)
+        if default_case is not None and not has_default:
+            entries.append(default_case)
+        return entries
+
+    def hlsl_switch_case_body_items(self, case):
+        if case is None:
+            return []
+        if isinstance(case, list):
+            return case
+        return self.hlsl_statement_body_items(
+            getattr(case, "statements", getattr(case, "body", case))
+        )
+
+    def hlsl_switch_case_terminates(self, case):
+        body = self.hlsl_switch_case_body_items(case)
+        return bool(body) and isinstance(
+            body[-1], (BreakNode, ContinueNode, ReturnNode)
+        )
+
+    def hlsl_switch_fallthrough_path_body(self, case_entries, start_index):
+        path_body = []
+        for case in case_entries[start_index:]:
+            path_body.extend(self.hlsl_switch_case_body_items(case))
+            if self.hlsl_switch_case_terminates(case):
+                break
+        return path_body
+
+    def hlsl_switch_possible_start_indices(self, switch_node, case_entries):
+        selector_value = self.hlsl_integer_constant_value(
+            getattr(switch_node, "expression", None)
+        )
+        default_index = None
+        for index, case in enumerate(case_entries):
+            case_value = getattr(case, "value", None)
+            if case_value is None:
+                default_index = index
+                continue
+            literal_value = self.hlsl_integer_constant_value(case_value)
+            if selector_value is not None and literal_value == selector_value:
+                return [index], True
+
+        if selector_value is not None:
+            if default_index is None:
+                return [], True
+            return [default_index], True
+
+        return list(range(len(case_entries))), default_index is not None
+
+    def validate_hlsl_mesh_output_write_switch(
+        self,
+        switch_node,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+    ):
+        case_entries = self.hlsl_switch_case_entries(switch_node)
+        if not case_entries:
+            return set_mesh_output_counts_seen
+
+        start_indices, covers_all_paths = self.hlsl_switch_possible_start_indices(
+            switch_node, case_entries
+        )
+        path_results = []
+        for start_index in start_indices:
+            path_results.append(
+                self.validate_hlsl_mesh_output_write_sequence(
+                    self.hlsl_switch_fallthrough_path_body(case_entries, start_index),
+                    set_mesh_output_counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                )
+            )
+
+        if covers_all_paths and path_results and all(path_results):
+            return True
+        return set_mesh_output_counts_seen
 
     def hlsl_assignment_from_statement(self, stmt):
         if isinstance(stmt, AssignmentNode):
@@ -8228,6 +8347,16 @@ class HLSLCodeGen:
                         declared_counts,
                         set_count_literals,
                     )
+                continue
+
+            if isinstance(stmt, SwitchNode):
+                counts_seen = self.validate_hlsl_mesh_output_write_switch(
+                    stmt,
+                    counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                )
                 continue
 
             if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):

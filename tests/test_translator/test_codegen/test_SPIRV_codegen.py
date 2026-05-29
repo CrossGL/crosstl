@@ -4347,6 +4347,198 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_geometry_stage_layouts_emit_execution_modes(self, tmp_path):
+        source_code = """
+        shader GeometryExecutionModes {
+            geometry {
+                layout(lines_adjacency, invocations = 2) in;
+                layout(triangle_strip, max_vertices = 4) out;
+
+                void main() {
+                    float x = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        entry_match = re.search(r'OpEntryPoint Geometry %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+
+        assert "OpCapability Geometry" in spv_code
+        assert f"OpExecutionMode %{entry_id} InputLinesAdjacency" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputTriangleStrip" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputVertices 4" in spv_code
+        assert f"OpExecutionMode %{entry_id} Invocations 2" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_stage_layouts_emit_execution_modes(self, tmp_path):
+        source_code = """
+        shader TessellationExecutionModes {
+            tessellation_control {
+                layout(vertices = 4) out;
+
+                void main() {
+                    float x = 1.0;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(quads, fractional_even_spacing, cw, point_mode) in;
+
+                void main() {
+                    float y = 2.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_match = re.search(
+            r'OpEntryPoint TessellationControl %(\d+) "main"', spv_code
+        )
+        eval_match = re.search(
+            r'OpEntryPoint TessellationEvaluation %(\d+) "main"', spv_code
+        )
+        assert control_match is not None
+        assert eval_match is not None
+        control_id = control_match.group(1)
+        eval_id = eval_match.group(1)
+
+        assert "OpCapability Tessellation" in spv_code
+        assert f"OpExecutionMode %{control_id} OutputVertices 4" in spv_code
+        assert f"OpExecutionMode %{eval_id} Quads" in spv_code
+        assert f"OpExecutionMode %{eval_id} SpacingFractionalEven" in spv_code
+        assert f"OpExecutionMode %{eval_id} VertexOrderCw" in spv_code
+        assert f"OpExecutionMode %{eval_id} PointMode" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_stage_attributes_feed_evaluation_execution_modes(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationAttributeExecutionModes {
+            tessellation_control {
+                void main()
+                    @domain(tri)
+                    @partitioning(fractional_odd)
+                    @outputtopology(triangle_cw)
+                    @outputcontrolpoints(3) {
+                }
+            }
+
+            tessellation_evaluation {
+                void main() @domain(tri) {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_match = re.search(
+            r'OpEntryPoint TessellationControl %(\d+) "main"', spv_code
+        )
+        eval_match = re.search(
+            r'OpEntryPoint TessellationEvaluation %(\d+) "main"', spv_code
+        )
+        assert control_match is not None
+        assert eval_match is not None
+        control_id = control_match.group(1)
+        eval_id = eval_match.group(1)
+
+        assert f"OpExecutionMode %{control_id} OutputVertices 3" in spv_code
+        assert f"OpExecutionMode %{eval_id} Triangles" in spv_code
+        assert f"OpExecutionMode %{eval_id} SpacingFractionalOdd" in spv_code
+        assert f"OpExecutionMode %{eval_id} VertexOrderCw" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_geometry_tessellation_execution_modes_reject_invalid_metadata(
+        self, tmp_path
+    ):
+        source_code = """
+        shader InvalidExecutionModes {
+            geometry {
+                void main() @outputtopology(hex) @max_vertices(0) @invocations(-2) {
+                }
+            }
+
+            tessellation_control {
+                void main() @outputcontrolpoints(0) {
+                }
+            }
+
+            tessellation_evaluation {
+                void main() @domain(hex) @partitioning(random) {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        geometry_match = re.search(r'OpEntryPoint Geometry %(\d+) "main"', spv_code)
+        control_match = re.search(
+            r'OpEntryPoint TessellationControl %(\d+) "main"', spv_code
+        )
+        eval_match = re.search(
+            r'OpEntryPoint TessellationEvaluation %(\d+) "main"', spv_code
+        )
+        assert geometry_match is not None
+        assert control_match is not None
+        assert eval_match is not None
+        geometry_id = geometry_match.group(1)
+        control_id = control_match.group(1)
+        eval_id = eval_match.group(1)
+
+        assert (
+            "; WARNING: SPIR-V geometry OutputVertices must be a positive "
+            "integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry Invocations must be a positive "
+            "integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry outputtopology must be point, "
+            "line_strip, or triangle_strip; using points: hex"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation_control OutputVertices must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation domain must be triangle, quads, "
+            "or isolines; using triangles: hex"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation partitioning must be integer, "
+            "fractional_even, or fractional_odd; using equal spacing: random"
+        ) in spv_code
+        assert f"OpExecutionMode %{geometry_id} InputPoints" in spv_code
+        assert f"OpExecutionMode %{geometry_id} OutputPoints" in spv_code
+        assert f"OpExecutionMode %{geometry_id} OutputVertices 1" in spv_code
+        assert f"OpExecutionMode %{control_id} OutputVertices 1" in spv_code
+        assert f"OpExecutionMode %{eval_id} Triangles" in spv_code
+        assert f"OpExecutionMode %{eval_id} SpacingEqual" in spv_code
+        assert f"OpExecutionMode %{eval_id} VertexOrderCcw" in spv_code
+        assert "Invocations 1" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
         self, tmp_path
     ):
