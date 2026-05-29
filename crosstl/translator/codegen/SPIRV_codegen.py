@@ -178,6 +178,8 @@ class VulkanSPIRVCodeGen:
         self.function_interface_variables_by_name = {}
         self.builtin_interface_variable_ids = set()
         self.readonly_builtin_pointer_names = {}
+        self.readonly_pointer_names = {}
+        self.patch_parameter_metadata = {}
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -692,6 +694,13 @@ class VulkanSPIRVCodeGen:
                 f"{readonly_builtin_name}"
             )
             return
+        readonly_pointer_name = self.readonly_pointer_names.get(variable_id.id)
+        if readonly_pointer_name is not None:
+            self.emit(
+                f"; WARNING: cannot assign to read-only SPIR-V pointer "
+                f"{readonly_pointer_name}"
+            )
+            return
 
         metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if metadata is not None and metadata.get("readonly"):
@@ -1164,6 +1173,8 @@ class VulkanSPIRVCodeGen:
                 "_access_path": "member",
             }
         self.propagate_storage_buffer_access_metadata(base_pointer, access)
+        self.propagate_readonly_builtin_pointer_name(base_pointer, access)
+        self.propagate_readonly_pointer_name(base_pointer, access)
         return access
 
     def create_function(
@@ -8827,6 +8838,11 @@ class VulkanSPIRVCodeGen:
             col_type = self.register_vector_type(component_type, row_count)
             return self.register_matrix_type(col_type, col_count)
 
+        patch_info = self.patch_type_info_from_name(type_str)
+        if patch_info is not None:
+            element_type = self.map_crossgl_type(patch_info["element_type_name"])
+            return self.register_array_type(element_type, patch_info["control_points"])
+
         if type_str == "str":
             return self.register_primitive_type("int")
 
@@ -8908,13 +8924,15 @@ class VulkanSPIRVCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if isinstance(type_node, LiteralNode):
+            return str(type_node.value)
         if type_node.__class__.__name__ == "ArrayType":
             element_type = self.convert_type_node_to_string(type_node.element_type)
             size = self.format_array_size(type_node.size)
             return (
                 f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
             )
-        if hasattr(type_node, "name"):
+        if hasattr(type_node, "name") and type_node.name is not None:
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(
@@ -10227,6 +10245,7 @@ class VulkanSPIRVCodeGen:
         param_types = []
         param_value_types = []
         resource_array_param_indices = set()
+        patch_interface_parameters = []
         param_type_hints = self.function_resource_array_type_hints.get(
             function_node.name, {}
         )
@@ -10242,6 +10261,7 @@ class VulkanSPIRVCodeGen:
         mesh_parameter_execution_model = execution_model_hint
         if mesh_parameter_execution_model is None and has_mesh_output_parameters:
             mesh_parameter_execution_model = "MeshEXT"
+        is_entry_point = self.function_is_entry_point(function_node, stage)
         mesh_output_parameter_indices = set()
 
         for source_param_index, param in enumerate(parameters):
@@ -10255,6 +10275,13 @@ class VulkanSPIRVCodeGen:
             if mesh_output_info is not None:
                 mesh_output_parameters[param_name] = mesh_output_info
                 mesh_output_parameter_indices.add(source_param_index)
+                continue
+
+            patch_info = self.patch_parameter_info(
+                param, execution_model_hint, is_entry_point
+            )
+            if patch_info is not None:
+                patch_interface_parameters.append((param, patch_info))
                 continue
 
             if param_name in param_type_hints:
@@ -10315,6 +10342,12 @@ class VulkanSPIRVCodeGen:
                 function_node
             )
         self.current_mesh_output_parameters = mesh_output_parameters
+        for param, patch_info in patch_interface_parameters:
+            patch_variable = self.register_patch_parameter_interface_variable(
+                param, patch_info
+            )
+            self.local_variables[patch_info["name"]] = patch_variable
+            self.mark_function_interface_variable(patch_variable)
 
         self.process_statements(function_node.body)
 
@@ -10813,6 +10846,105 @@ class VulkanSPIRVCodeGen:
             return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
         return bool(qualifiers & {"out", "inout"})
+
+    def patch_type_info_from_name(self, type_name: str) -> Optional[dict]:
+        base_name, generic_args = generic_type_parts(type_name)
+        if base_name not in {"InputPatch", "OutputPatch"}:
+            return None
+
+        element_type_name = generic_args[0] if generic_args else "float"
+        count_arg = generic_args[1] if len(generic_args) > 1 else None
+        control_points = self.patch_control_point_count(count_arg, f"{base_name}<T, N>")
+        return {
+            "patch_type": base_name,
+            "element_type_name": element_type_name,
+            "control_points": control_points,
+        }
+
+    def patch_control_point_count(self, value, context: str) -> int:
+        control_points = self.literal_int_argument(value)
+        if control_points is None or control_points <= 0:
+            self.emit(
+                f"; WARNING: SPIR-V tessellation patch type {context} requires a "
+                "positive integer control-point count; using 1"
+            )
+            return 1
+        return control_points
+
+    def patch_parameter_storage_class(
+        self, patch_type: str, execution_model: Optional[str]
+    ) -> Optional[str]:
+        if execution_model == "TessellationControl":
+            return "Input" if patch_type == "InputPatch" else "Output"
+        if execution_model == "TessellationEvaluation":
+            return "Input"
+        return None
+
+    def function_is_entry_point(self, function_node, stage=None) -> bool:
+        if stage is not None:
+            return getattr(stage, "entry_point", None) is function_node
+        qualifier = self.get_function_qualifier(function_node)
+        return function_node.name == "main" or qualifier in {
+            "vertex",
+            "fragment",
+            "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "object",
+            "amplification",
+        }
+
+    def patch_parameter_info(
+        self,
+        param,
+        execution_model: Optional[str],
+        entry_point: bool,
+    ) -> Optional[dict]:
+        if not entry_point:
+            return None
+
+        param_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        patch_info = self.patch_type_info_from_name(
+            self.type_name_from_value(param_type)
+        )
+        if patch_info is None:
+            return None
+
+        storage_class = self.patch_parameter_storage_class(
+            patch_info["patch_type"], execution_model
+        )
+        param_name = getattr(param, "name", "patch")
+        if storage_class is None:
+            self.emit(
+                f"; WARNING: SPIR-V {patch_info['patch_type']} parameter "
+                f"{param_name} is only valid in tessellation entry points"
+            )
+            return None
+
+        return {
+            **patch_info,
+            "name": param_name,
+            "storage_class": storage_class,
+        }
+
+    def register_patch_parameter_interface_variable(self, param, patch_info: dict):
+        self.require_capability("Tessellation")
+        element_type = self.map_crossgl_type(patch_info["element_type_name"])
+        array_type = self.register_array_type(
+            element_type, patch_info["control_points"]
+        )
+        storage_class = patch_info["storage_class"]
+        variable = self.create_variable(array_type, storage_class, patch_info["name"])
+        location = self.global_interface_location(param, storage_class)
+        self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
+        self.decorate_global_interface_variable(param, variable)
+        self.patch_parameter_metadata[variable.id] = patch_info
+        if storage_class == "Input":
+            self.readonly_pointer_names[variable.id] = patch_info["name"]
+        return variable
 
     def mesh_output_parameter_info(self, param, execution_model: Optional[str]):
         if execution_model != "MeshEXT" or not self.is_mesh_output_parameter(param):
@@ -13607,6 +13739,10 @@ class VulkanSPIRVCodeGen:
             array_variable = self.assignable_pointer_from_expression(expr.array)
             if array_variable is None:
                 return None
+            if not self.validate_tessellation_patch_parameter_index(
+                array_variable, index, expr.index
+            ):
+                return None
 
             structured_access = self.structured_buffer_element_pointer(
                 array_variable, index
@@ -13633,6 +13769,7 @@ class VulkanSPIRVCodeGen:
                 array_variable, access, element_type
             )
             self.propagate_readonly_builtin_pointer_name(array_variable, access)
+            self.propagate_readonly_pointer_name(array_variable, access)
             return access
         return None
 
@@ -13647,14 +13784,13 @@ class VulkanSPIRVCodeGen:
     def tessellation_patch_builtin_size(self, name: Optional[str]) -> Optional[int]:
         return {"gl_TessLevelOuter": 4, "gl_TessLevelInner": 2}.get(name or "")
 
-    def validate_tessellation_patch_builtin_index(
-        self, array_expr, index: SpirvId, index_expr=None
+    def validate_tessellation_integer_index(
+        self,
+        diagnostic_subject: str,
+        size: int,
+        index: SpirvId,
+        index_expr=None,
     ) -> bool:
-        name = self.direct_expression_name(array_expr)
-        size = self.tessellation_patch_builtin_size(name)
-        if size is None:
-            return True
-
         index_type = self.value_types.get(
             index.id
         ) or self.find_registered_type_by_base(index.type.base_type)
@@ -13665,7 +13801,7 @@ class VulkanSPIRVCodeGen:
         )
         if index_type_name not in {"int", "uint"}:
             self.emit(
-                f"; WARNING: SPIR-V tessellation patch builtin {name} component "
+                f"; WARNING: {diagnostic_subject} "
                 f"index requires a scalar integer value, got {index.type.base_type}"
             )
             return False
@@ -13673,12 +13809,41 @@ class VulkanSPIRVCodeGen:
         literal_index = self.literal_int_argument(index_expr)
         if literal_index is not None and not 0 <= literal_index < size:
             self.emit(
-                f"; WARNING: SPIR-V tessellation patch builtin {name} component "
+                f"; WARNING: {diagnostic_subject} "
                 f"index {literal_index} out of range; valid range is 0..{size - 1}"
             )
             return False
 
         return True
+
+    def validate_tessellation_patch_builtin_index(
+        self, array_expr, index: SpirvId, index_expr=None
+    ) -> bool:
+        name = self.direct_expression_name(array_expr)
+        size = self.tessellation_patch_builtin_size(name)
+        if size is None:
+            return True
+
+        return self.validate_tessellation_integer_index(
+            f"SPIR-V tessellation patch builtin {name} component",
+            size,
+            index,
+            index_expr,
+        )
+
+    def validate_tessellation_patch_parameter_index(
+        self, array_variable: SpirvId, index: SpirvId, index_expr=None
+    ) -> bool:
+        metadata = self.patch_parameter_metadata.get(array_variable.id)
+        if metadata is None:
+            return True
+
+        return self.validate_tessellation_integer_index(
+            f"SPIR-V tessellation patch parameter {metadata['name']} " "control-point",
+            metadata["control_points"],
+            index,
+            index_expr,
+        )
 
     def propagate_readonly_builtin_pointer_name(
         self, source_pointer: SpirvId, target_pointer: SpirvId
@@ -13686,6 +13851,13 @@ class VulkanSPIRVCodeGen:
         builtin_name = self.readonly_builtin_pointer_names.get(source_pointer.id)
         if builtin_name is not None:
             self.readonly_builtin_pointer_names[target_pointer.id] = builtin_name
+
+    def propagate_readonly_pointer_name(
+        self, source_pointer: SpirvId, target_pointer: SpirvId
+    ):
+        pointer_name = self.readonly_pointer_names.get(source_pointer.id)
+        if pointer_name is not None:
+            self.readonly_pointer_names[target_pointer.id] = pointer_name
 
     def create_array_element_access(self, array_expr, index: SpirvId, index_expr=None):
         if not self.validate_tessellation_patch_builtin_index(
@@ -13709,6 +13881,11 @@ class VulkanSPIRVCodeGen:
             return None, None
 
         if array_variable is not None:
+            if not self.validate_tessellation_patch_parameter_index(
+                array_variable, index, index_expr
+            ):
+                return None, None
+
             structured_access = self.structured_buffer_element_pointer(
                 array_variable, index
             )
@@ -13736,6 +13913,7 @@ class VulkanSPIRVCodeGen:
                 array_variable, access, element_type
             )
             self.propagate_readonly_builtin_pointer_name(array_variable, access)
+            self.propagate_readonly_pointer_name(array_variable, access)
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -13764,6 +13942,7 @@ class VulkanSPIRVCodeGen:
                 array_variable, access, element_type
             )
             self.propagate_readonly_builtin_pointer_name(array_variable, access)
+            self.propagate_readonly_pointer_name(array_variable, access)
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
@@ -13776,6 +13955,7 @@ class VulkanSPIRVCodeGen:
         )
         self.propagate_resource_access_metadata(array, access, element_type)
         self.propagate_readonly_builtin_pointer_name(array, access)
+        self.propagate_readonly_pointer_name(array, access)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -15174,7 +15354,9 @@ class VulkanSPIRVCodeGen:
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            access, element_type = self.create_array_element_access(expr.array, index)
+            access, element_type = self.create_array_element_access(
+                expr.array, index, expr.index
+            )
 
             if access is None or element_type is None:
                 self.emit(

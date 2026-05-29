@@ -6772,6 +6772,122 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
         assert "imageAtomicCompSwap(" not in cuda_code
 
+    def test_image_access_returned_struct_pointer_members_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks access metadata through returned struct pointers."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+            uimage2D rwCounters[4] @access(read_write) @r32ui;
+        };
+
+        struct OuterBundle {
+            ImageBundle* bundlePtr;
+        };
+
+        shader ImageAccessReturnedStructPointers {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            fn chooseOuterBundle(OuterBundle* outer) -> ImageBundle* {
+                return outer->bundlePtr;
+            }
+
+            image2D chooseNestedWrite(ImageBundle* bundle) {
+                return chooseBundle(bundle)->writeImage;
+            }
+
+            image2D chooseNestedRead(ImageBundle* bundle) {
+                return chooseBundle(bundle)->readImage;
+            }
+
+            uimage2D chooseNestedReadCounter(ImageBundle* bundle, int slot) {
+                return chooseBundle(bundle)->readCounters[slot];
+            }
+
+            uimage2D chooseOuterReadCounter(OuterBundle* outer, int slot) {
+                return outer->bundlePtr->readCounters[slot];
+            }
+
+            uimage2D chooseOuterChainReadCounter(OuterBundle* outer, int slot) {
+                return chooseOuterBundle(outer)->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* bundle,
+                    OuterBundle* outer,
+                    ivec2 pixel,
+                    int slot
+                ) {
+                    vec4 directBlocked =
+                        imageLoad(chooseBundle(bundle)->writeImage, pixel);
+                    vec4 returnedBlocked =
+                        imageLoad(chooseNestedWrite(bundle), pixel);
+                    imageStore(
+                        chooseNestedRead(bundle),
+                        pixel,
+                        returnedBlocked
+                    );
+                    uint nestedAtomic =
+                        imageAtomicAdd(
+                            chooseNestedReadCounter(bundle, slot),
+                            pixel,
+                            1
+                        );
+                    uint outerAtomic =
+                        imageAtomicAdd(
+                            chooseOuterReadCounter(outer, slot),
+                            pixel,
+                            1
+                        );
+                    uint outerChainAtomic =
+                        imageAtomicAdd(
+                            chooseOuterChainReadCounter(outer, slot),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed = imageLoad(chooseNestedRead(bundle), pixel);
+                    imageStore(chooseNestedWrite(bundle), pixel, allowed);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 2
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 3
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseNestedRead(bundle), pixel.x * sizeof(float4), pixel.y);"
+            in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, chooseNestedWrite(bundle), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseNestedWrite(bundle)" not in cuda_code
+        assert "surf2Dwrite(returnedBlocked, chooseNestedRead(bundle)" not in cuda_code
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_image_access_returned_local_aliases_emit_cuda_diagnostics(self):
         """Test CUDA preserves storage-image access metadata through returns."""
         source_code = """

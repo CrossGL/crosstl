@@ -1701,8 +1701,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetStreamPriorityRange":
             if len(args) >= 2:
-                least_output = self.format_runtime_pointer_target(node.args[0])
-                greatest_output = self.format_runtime_pointer_target(node.args[1])
+                least_output = self.format_runtime_raw_output_target(node.args[0])
+                greatest_output = self.format_runtime_raw_output_target(node.args[1])
                 least_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 greatest_output_name = self.get_runtime_pointer_target_name(
                     node.args[1]
@@ -1721,7 +1721,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipStreamGetFlags":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[1])
                 output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1730,7 +1730,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP get stream flags: stream: {args[0]}, output: {output}"]
         elif name == "hipStreamGetPriority":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[1])
                 output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1851,7 +1851,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP event synchronize: {args[0]}"]
         elif name == "hipEventElapsedTime":
             if len(node.args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(

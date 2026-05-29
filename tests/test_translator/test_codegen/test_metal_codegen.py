@@ -11480,6 +11480,133 @@ def test_metal_transitively_threads_global_texture_parameter():
     assert "return shade(input.uv, colorMap);" in generated_code
 
 
+def test_metal_resource_array_elements_pass_to_scalar_helper_parameters():
+    code = """
+    shader ResourceArrayElementHelperScope {
+        sampler2D textures[4];
+        sampler samplers[4];
+        image2D images @rgba32f[4];
+
+        vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {
+            return texture(tex, samp, uv);
+        }
+
+        vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {
+            return texture(texs[layer], samps[layer], uv);
+        }
+
+        vec4 readOne(image2D image @rgba32f, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main(uvec3 gid @gl_GlobalInvocationID) {
+                int layer = int(gid.x);
+                vec4 sampled = sampleOne(textures[layer], samplers[layer], vec2(0.5));
+                vec4 sampledArray = sampleArray(textures, samplers, layer, vec2(0.25));
+                vec4 stored = readOne(images[layer], ivec2(0, 0));
+                imageStore(images[layer], ivec2(1, 0), sampled + sampledArray + stored);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(code)
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float4 sampleOne(texture2d<float> tex, sampler samp, float2 uv)" in (
+        generated_code
+    )
+    assert (
+        "float4 sampleArray(array<texture2d<float>, 4> texs, "
+        "array<sampler, 4> samps, int layer, float2 uv)"
+    ) in generated_code
+    assert (
+        "float4 readOne(texture2d<float, access::read_write> image, int2 pixel)"
+        in generated_code
+    )
+    assert "sampleOne(textures[layer], samplers[layer], float2(0.5))" in generated_code
+    assert "sampleArray(textures, samplers, layer, float2(0.25))" in generated_code
+    assert "readOne(images[layer], int2(0, 0))" in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "vec4 value = sampleOne(textures, samplers[0], vec2(0.5));",
+            "resource parameter tex of type texture2d<float>: "
+            "argument textures has array<texture2d<float>, 4>",
+        ),
+        (
+            "vec4 value = sampleOne(textures[0], samplers, vec2(0.5));",
+            "resource parameter samp of type sampler: "
+            "argument samplers has array<sampler, 4>",
+        ),
+        (
+            "vec4 value = sampleArray(singleTexture, samplers, 0, vec2(0.5));",
+            "resource parameter texs of type array<texture2d<float>, 4>: "
+            "argument singleTexture has texture2d<float>",
+        ),
+        (
+            "vec4 value = sampleArray(textures, singleSampler, 0, vec2(0.5));",
+            "resource parameter samps of type array<sampler, 4>: "
+            "argument singleSampler has sampler",
+        ),
+        (
+            "vec4 value = readOne(images, ivec2(0, 0));",
+            "resource parameter image of type texture2d<float, access::read_write>: "
+            "argument images has array<texture2d<float, access::read_write>, 4>",
+        ),
+        (
+            "vec4 value = readArray(singleImage, 0, ivec2(0, 0));",
+            "resource parameter imgs of type "
+            "array<texture2d<float, access::read_write>, 4>: "
+            "argument singleImage has texture2d<float, access::read_write>",
+        ),
+    ],
+)
+def test_metal_resource_helper_calls_reject_array_scalar_mismatches(call, match):
+    code = f"""
+    shader ResourceArrayHelperMismatch {{
+        sampler2D textures[4];
+        sampler2D singleTexture;
+        sampler samplers[4];
+        sampler singleSampler;
+        image2D images @rgba32f[4];
+        image2D singleImage @rgba32f;
+
+        vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {{
+            return texture(tex, samp, uv);
+        }}
+
+        vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {{
+            return texture(texs[layer], samps[layer], uv);
+        }}
+
+        vec4 readOne(image2D image @rgba32f, ivec2 pixel) {{
+            return imageLoad(image, pixel);
+        }}
+
+        vec4 readArray(image2D imgs[4] @rgba32f, int layer, ivec2 pixel) {{
+            return imageLoad(imgs[layer], pixel);
+        }}
+
+        compute {{
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate_stage(ast, "compute")
+
+
 def test_metal_ambiguous_cbuffer_member_reference_errors():
     code = """
     shader CBufferScope {

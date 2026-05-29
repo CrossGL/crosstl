@@ -1148,6 +1148,37 @@ shader ResourceImageArrayLocalAliasValidation {
 """
 
 
+METAL_RESOURCE_ARRAY_ELEMENT_HELPER_COMPUTE_SHADER = """
+shader MetalResourceArrayElementHelperValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+    image2D images @rgba32f[4];
+
+    vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {
+        return texture(tex, samp, uv);
+    }
+
+    vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {
+        return texture(texs[layer], samps[layer], uv);
+    }
+
+    vec4 readOne(image2D image @rgba32f, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    compute {
+        void main(uvec3 gid @ gl_GlobalInvocationID) {
+            int layer = int(gid.x & 3u);
+            vec4 sampled = sampleOne(textures[layer], samplers[layer], vec2(0.5));
+            vec4 sampledArray = sampleArray(textures, samplers, layer, vec2(0.25));
+            vec4 stored = readOne(images[layer], ivec2(0, 0));
+            imageStore(images[layer], ivec2(1, 0), sampled + sampledArray + stored);
+        }
+    }
+}
+"""
+
+
 SAMPLER_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
 shader SamplerArrayLocalAliasValidation {
     sampler2D textures[4];
@@ -6272,6 +6303,30 @@ def test_generated_metal_resource_array_local_aliases_compile_with_metal(tmp_pat
             "-o",
             str(compute_output),
         ]
+    )
+
+
+def test_generated_metal_resource_array_element_helpers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_resource_array_element_helpers.metal"
+    output = tmp_path / "compute_resource_array_element_helpers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_RESOURCE_ARRAY_ELEMENT_HELPER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "sampleOne(textures[layer], samplers[layer], float2(0.5))" in code
+    assert "sampleArray(textures, samplers, layer, float2(0.25))" in code
+    assert "readOne(images[layer], int2(0, 0))" in code
+    assert "array<texture2d<float>, 4> texs" in code
+    assert "array<sampler, 4> samps" in code
+    assert "array<texture2d<float, access::read_write>, 4> images" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
     )
 
 

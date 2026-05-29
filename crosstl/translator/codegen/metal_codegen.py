@@ -1,5 +1,6 @@
 """CrossGL-to-Metal code generator."""
 
+import ast as py_ast
 from hashlib import sha1
 
 from ..ast import (
@@ -3957,6 +3958,22 @@ class MetalCodeGen:
         for sampler_variable, _, array_size in self.sampler_variables:
             if getattr(sampler_variable, "name", None) == sampler_name:
                 return array_size
+        return None
+
+    def sampler_argument_resource_type(self, sampler_arg):
+        sampler_name = self.expression_name(sampler_arg)
+        if sampler_name in self.sampler_variable_names():
+            return "sampler"
+
+        arg_type = self.expression_result_type(sampler_arg)
+        array_element_type = self.metal_array_element_type(arg_type)
+        if self.is_sampler_type(arg_type) or self.is_sampler_type(array_element_type):
+            return "sampler"
+
+        if self.struct_member_is_sampler_resource(
+            self.struct_resource_member_node(sampler_arg)
+        ):
+            return "sampler"
         return None
 
     def record_local_texture_alias_sampler_source(self, node):
@@ -13396,9 +13413,16 @@ class MetalCodeGen:
 
     def function_argument_resource_type(self, arg):
         resource_type = self.texture_argument_resource_type(arg)
+        if resource_type is not None:
+            array_size = self.texture_argument_resource_array_size(arg)
+            if array_size is not None:
+                return self.metal_array_resource_type(resource_type, array_size)
+            return resource_type
+
+        resource_type = self.sampler_argument_resource_type(arg)
         if resource_type is None:
             return None
-        array_size = self.texture_argument_resource_array_size(arg)
+        array_size = self.sampler_argument_resource_array_size(arg)
         if array_size is not None:
             return self.metal_array_resource_type(resource_type, array_size)
         return resource_type
@@ -13409,18 +13433,68 @@ class MetalCodeGen:
             element_type, array_size = array_resource
             return self.metal_array_resource_type(
                 self.normalize_function_resource_compatibility_type(element_type),
-                array_size,
+                self.normalize_function_resource_array_size(array_size),
             )
         if self.is_storage_image_resource(resource_type):
             return self.storage_image_access_agnostic_type(resource_type)
         return self.resource_base_type(resource_type)
 
-    def resource_type_mentions_multisample_storage_image(self, resource_type):
+    def normalize_function_resource_array_size(self, array_size):
+        literal_size = self.literal_int_resource_array_size(array_size)
+        if literal_size is not None:
+            return str(literal_size)
+        return str(array_size or "")
+
+    def literal_int_resource_array_size(self, array_size):
+        value = self.literal_int_value(array_size, self.literal_int_constants)
+        if value is not None:
+            return value
+
+        if not isinstance(array_size, str):
+            return None
+        try:
+            parsed = py_ast.parse(array_size, mode="eval")
+        except SyntaxError:
+            return None
+        return self.literal_int_python_expression_value(parsed.body)
+
+    def literal_int_python_expression_value(self, expr):
+        if isinstance(expr, py_ast.Constant) and isinstance(expr.value, int):
+            return expr.value
+        if isinstance(expr, py_ast.Name):
+            return self.literal_int_constants.get(expr.id)
+        if isinstance(expr, py_ast.UnaryOp):
+            operand = self.literal_int_python_expression_value(expr.operand)
+            if operand is None:
+                return None
+            if isinstance(expr.op, py_ast.UAdd):
+                return operand
+            if isinstance(expr.op, py_ast.USub):
+                return -operand
+            return None
+        if isinstance(expr, py_ast.BinOp):
+            left = self.literal_int_python_expression_value(expr.left)
+            right = self.literal_int_python_expression_value(expr.right)
+            if left is None or right is None:
+                return None
+            if isinstance(expr.op, py_ast.Add):
+                return left + right
+            if isinstance(expr.op, py_ast.Sub):
+                return left - right
+            if isinstance(expr.op, py_ast.Mult):
+                return left * right
+        return None
+
+    def resource_type_requires_function_resource_compatibility(self, resource_type):
         array_resource = self.split_metal_array_resource_type(resource_type)
         if array_resource is not None:
             element_type, _ = array_resource
-            return self.resource_type_mentions_multisample_storage_image(element_type)
-        return self.is_multisample_storage_image_resource(resource_type)
+            return self.resource_type_requires_function_resource_compatibility(
+                element_type
+            )
+
+        base_type = self.resource_base_type(resource_type)
+        return self.is_sampler_type(base_type) or str(base_type).startswith("texture")
 
     def validate_function_resource_argument_types(self, func_name, args):
         parameter_nodes = self.function_parameter_nodes.get(func_name)
@@ -13435,9 +13509,8 @@ class MetalCodeGen:
                 continue
 
             actual_type = self.function_argument_resource_type(args[index])
-            if not (
-                self.resource_type_mentions_multisample_storage_image(expected_type)
-                or self.resource_type_mentions_multisample_storage_image(actual_type)
+            if not self.resource_type_requires_function_resource_compatibility(
+                expected_type
             ):
                 continue
 

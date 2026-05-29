@@ -3658,8 +3658,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         object_name = self.get_expression_name(object_node)
-        if not object_name:
-            return None
 
         object_kind = None
         object_type = None
@@ -3678,7 +3676,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             object_type = global_variable_types[object_name]
             descriptor["object_name"] = object_name
         else:
-            return None
+            object_kind = "expression"
+            object_type = self.query_return_expression_type(
+                object_node,
+                param_types,
+                global_variable_types,
+            )
+        if isinstance(member_expr, PointerAccessNode):
+            pointer_info = self.cuda_indirect_type_info(object_type)
+            if pointer_info is None:
+                return None
+            object_type = pointer_info["pointee_type"]
 
         object_type = self.struct_member_lookup_type(object_type)
         member_type = self.struct_member_types.get(object_type, {}).get(member_name)
@@ -3693,6 +3701,62 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         descriptor["object_kind"] = object_kind
         descriptor["object_type"] = object_type
         return descriptor
+
+    def query_return_expression_type(
+        self,
+        expr,
+        param_types,
+        global_variable_types,
+    ):
+        """Infer expression types for returned-resource tracing without scope."""
+        expr_name = self.get_expression_name(expr)
+        if expr_name in param_types:
+            return param_types[expr_name]
+        if expr_name in global_variable_types:
+            return global_variable_types[expr_name]
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = getattr(expr, "pointer_expr", None)
+            pointer_type = self.query_return_expression_type(
+                pointer_expr,
+                param_types,
+                global_variable_types,
+            )
+            pointer_info = self.cuda_indirect_type_info(pointer_type)
+            if pointer_info is None:
+                return None
+            object_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+            return self.struct_member_types.get(object_type, {}).get(
+                getattr(expr, "member", "")
+            )
+
+        if isinstance(expr, MemberAccessNode):
+            object_node = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", None),
+            )
+            object_type = self.struct_member_lookup_type(
+                self.query_return_expression_type(
+                    object_node,
+                    param_types,
+                    global_variable_types,
+                )
+            )
+            return self.struct_member_types.get(object_type, {}).get(
+                getattr(expr, "member", "")
+            )
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            array_type = self.query_return_expression_type(
+                array_expr,
+                param_types,
+                global_variable_types,
+            )
+            return self.array_access_element_type(array_type)
+
+        return self.expression_result_type(expr)
 
     def inline_query_return_source_descriptor(
         self,

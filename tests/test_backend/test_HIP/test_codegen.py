@@ -6816,6 +6816,64 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_stream_event_array_outputs_clear_stale_metadata(self):
+        """Test stream/event scalar array outputs clear prior query metadata."""
+        code = """
+        void queryStreamEventArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipStream_t stream,
+            hipEvent_t start,
+            hipEvent_t stop,
+            int* priorities,
+            unsigned int* flagsOut,
+            float* times,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&priorities, &staleSize, devicePtr);
+            hipDeviceGetStreamPriorityRange(&priorities[0], &priorities[1]);
+            out[0] = priorities[0];
+            out[1] = priorities[1];
+
+            hipMemGetAddressRange((void**)&flagsOut, &staleSize, devicePtr);
+            hipStreamGetFlags(stream, &flagsOut[0]);
+            out[2] = flagsOut[0];
+
+            hipMemGetAddressRange((void**)&priorities, &staleSize, devicePtr);
+            hipStreamGetPriority(stream, &priorities[2]);
+            out[3] = priorities[2];
+
+            hipMemGetAddressRange((void**)&times, &staleSize, devicePtr);
+            hipEventElapsedTime(&times[0], start, stop);
+            float manualTime = times[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get stream priority range: least output: priorities[0], "
+            "greatest output: priorities[1]"
+        ) in result
+        assert "out[0] = priorities[0];" in result
+        assert "out[1] = priorities[1];" in result
+        assert "// HIP get stream flags: stream: stream, output: flagsOut[0]" in result
+        assert "out[2] = flagsOut[0];" in result
+        assert (
+            "// HIP get stream priority: stream: stream, output: priorities[2]"
+            in result
+        )
+        assert "out[3] = priorities[2];" in result
+        assert "// HIP event elapsed time: start -> stop, output: times[0]" in result
+        assert "var manualTime: f32 = times[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_occupancy_output_reads_emit_metadata_expressions(self):
         """Test HIP occupancy scalar outputs lower to explicit metadata."""
         code = """

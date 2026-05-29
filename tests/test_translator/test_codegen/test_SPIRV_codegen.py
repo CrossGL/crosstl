@@ -4778,6 +4778,181 @@ class TestVulkanSPIRVCodeGen:
         assert "Unknown variable gl_TessLevelInner" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_patch_parameters_emit_stage_specific_interfaces(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationPatchParameters {
+            struct HSInput {
+                vec4 position;
+                vec2 uv;
+            };
+
+            struct HSOutput {
+                vec4 position;
+                vec2 uv;
+            };
+
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main(
+                    InputPatch<HSInput, 3> inputPatch,
+                    OutputPatch<HSOutput, 3> outputPatch
+                ) @outputcontrolpoints(3) {
+                    outputPatch[gl_InvocationID].position =
+                        inputPatch[gl_InvocationID].position;
+                    outputPatch[gl_InvocationID].uv = inputPatch[0].uv;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main(OutputPatch<HSOutput, 3> patch) @domain(tri) {
+                    vec4 position = patch[0].position;
+                    vec2 uv = patch[1].uv;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        input_patch = spirv_named_variable(
+            spv_code, "inputPatch", storage_class="Input"
+        )
+        output_patch = spirv_named_variable(
+            spv_code, "outputPatch", storage_class="Output"
+        )
+        evaluation_patch = spirv_named_variable(
+            spv_code, "patch", storage_class="Input"
+        )
+
+        assert input_patch in control_entry.group(1)
+        assert output_patch in control_entry.group(1)
+        assert evaluation_patch not in control_entry.group(1)
+        assert evaluation_patch in evaluation_entry.group(1)
+        assert input_patch not in evaluation_entry.group(1)
+        assert output_patch not in evaluation_entry.group(1)
+        assert f"OpDecorate {input_patch} Location 0" in spv_code
+        assert f"OpDecorate {output_patch} Location 0" in spv_code
+        assert f"OpDecorate {evaluation_patch} Location 1" in spv_code
+
+        for variable_id, storage_class in (
+            (input_patch, "Input"),
+            (output_patch, "Output"),
+            (evaluation_patch, "Input"),
+        ):
+            pointer_type = re.search(
+                rf"{re.escape(variable_id)} = OpVariable (%\d+) {storage_class}",
+                spv_code,
+            ).group(1)
+            array_type = re.search(
+                rf"{re.escape(pointer_type)} = OpTypePointer "
+                rf"{storage_class} (%\d+)",
+                spv_code,
+            ).group(1)
+            size_id = re.search(
+                rf"{re.escape(array_type)} = OpTypeArray %\d+ (%\d+)",
+                spv_code,
+            ).group(1)
+            assert re.search(rf"{re.escape(size_id)} = OpConstant %\d+ 3\b", spv_code)
+
+        assert not spirv_named_parameters(spv_code, "inputPatch")
+        assert not spirv_named_parameters(spv_code, "outputPatch")
+        assert not spirv_named_parameters(spv_code, "patch")
+        assert "Unknown type InputPatch" not in spv_code
+        assert "Unknown type OutputPatch" not in spv_code
+        assert "Unknown variable inputPatch" not in spv_code
+        assert "Unknown variable outputPatch" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patch_parameters_reject_invalid_contexts(self, tmp_path):
+        source_code = """
+        shader InvalidTessellationPatchParameters {
+            struct HSInput {
+                vec4 position;
+            };
+
+            struct HSOutput {
+                vec4 position;
+            };
+
+            tessellation_control {
+                layout(vertices = 2) out;
+
+                void main(
+                    InputPatch<HSInput, 2> inputPatch,
+                    OutputPatch<HSOutput, 2> outputPatch
+                ) @outputcontrolpoints(2) {
+                    outputPatch[2].position = vec4(1.0);
+                    outputPatch[1.0].position = vec4(1.0);
+                    inputPatch[0].position = vec4(1.0);
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main(OutputPatch<HSOutput, 2> patch) @domain(tri) {
+                    patch[0].position = vec4(1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "control-point index 2 out of range; valid range is 0..1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "control-point index requires a scalar integer value, got float"
+        ) in spv_code
+        assert (
+            "; WARNING: cannot assign to read-only SPIR-V pointer inputPatch"
+        ) in spv_code
+        assert (
+            "; WARNING: cannot assign to read-only SPIR-V pointer patch"
+        ) in spv_code
+
+        input_pointer_types = set(
+            re.findall(r"(%\d+) = OpTypePointer Input \S+", spv_code)
+        )
+        input_accesses = {
+            access_id
+            for access_id, pointer_type in re.findall(
+                r"(%\d+) = OpAccessChain (%\d+) ", spv_code
+            )
+            if pointer_type in input_pointer_types
+        }
+        assert input_accesses
+        for access_id in input_accesses:
+            assert f"OpStore {access_id} " not in spv_code
+
+        assert "Unknown type InputPatch" not in spv_code
+        assert "Unknown type OutputPatch" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_geometry_stream_builtins_reject_invalid_stage_and_arity(self, tmp_path):
         source_code = """
         shader InvalidGeometryStreamBuiltins {
