@@ -783,7 +783,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 449
+        "test_count": 452
       },
       "translator_codegen": {
         "exists": true,

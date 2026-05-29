@@ -4637,6 +4637,177 @@ def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_pat
     assert result.returncode == 0, result.stderr
 
 
+def _generic_payload_enum_resource_query_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct QueryResources {
+        sampler2D textures[2];
+        sampler2DMS msTextures[2];
+        readonly image2D images[2];
+        readonly image2DMS msImages[2];
+        sampler state;
+    };
+
+    ivec2 queryTextureSize(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureSize(resources.textures[slot], 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryTextureLevels(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureQueryLevels(resources.textures[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    int queryTextureSamples(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => textureSamples(resources.msTextures[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    ivec2 queryImageSize(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => imageSize(resources.images[slot]),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryImageSamples(Result<QueryResources, int> value, int slot) {
+        return match value {
+            Result::Ok(resources) => imageSamples(resources.msImages[slot]),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchTextureSample(
+        Result<QueryResources, int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(resources) => texelFetch(
+                resources.msTextures[slot],
+                pixel,
+                sampleIndex
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec2 queryTextureLod(
+        Result<QueryResources, int> value,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(resources) => textureQueryLod(
+                resources.textures[slot],
+                resources.state,
+                uv
+            ),
+            Result::Err(_) => vec2(0.0)
+        };
+    }
+
+    ivec2 queryArrayTextureSize(
+        Result<QueryResources[2], int> value,
+        int index,
+        int slot
+    ) {
+        return match value {
+            Result::Ok(sets) => textureSize(sets[index].textures[slot], 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    int queryArrayImageSamples(
+        Result<QueryResources[2], int> value,
+        int index,
+        int slot
+    ) {
+        return match value {
+            Result::Ok(sets) => imageSamples(sets[index].msImages[slot]),
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
+    )
+
+    assert "struct Result_QueryResources_int:" in generated_code
+    assert "var Ok_0: QueryResources" in generated_code
+    assert "struct Result_QueryResources_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[QueryResources, 2]" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "texture_size(value.Ok_0.textures[int(slot)], 0)" in generated_code
+    assert "texture_query_levels(value.Ok_0.textures[int(slot)])" in generated_code
+    assert "texture_samples(value.Ok_0.msTextures[int(slot)])" in generated_code
+    assert "image_size(value.Ok_0.images[int(slot)])" in generated_code
+    assert "image_samples(value.Ok_0.msImages[int(slot)])" in generated_code
+    assert (
+        "texel_fetch(value.Ok_0.msTextures[int(slot)], pixel, sampleIndex)"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_query_lod_Texture2D_SIMD_DType_float32_2("
+        "value.Ok_0.textures[int(slot)], uv)" in generated_code
+    )
+    assert (
+        "texture_size(value.Ok_0[int(index)].textures[int(slot)], 0)" in generated_code
+    )
+    assert "image_samples(value.Ok_0[int(index)].msImages[int(slot)])" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSize(" not in generated_code
+    assert "imageSamples(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+
+
+def test_generic_payload_enum_resource_query_bindings_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_resource_query_source()))
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_resource_query_bindings.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     ("source", "pattern"),
     [
@@ -4720,6 +4891,83 @@ def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_pat
     ],
 )
 def test_generic_payload_enum_resource_struct_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                sampler2DMS msTextures[2];
+            };
+            int invalidLevels(Result<QueryResources, int> value, int slot) {
+                return match value {
+                    Result::Ok(resources) => textureQueryLevels(
+                        resources.msTextures[slot]
+                    ),
+                    Result::Err(err) => err
+                };
+            }
+            """,
+            r"texture_query_levels.*non-multisample texture required: Texture2DMS",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                image2D images[2];
+            };
+            int invalidSamples(Result<QueryResources, int> value, int slot) {
+                return match value {
+                    Result::Ok(resources) => imageSamples(resources.images[slot]),
+                    Result::Err(err) => err
+                };
+            }
+            """,
+            r"image_samples.*multisample image required: Image2D",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct QueryResources {
+                sampler2DShadow shadows[2];
+                sampler state;
+            };
+            vec2 invalidQueryLod(
+                Result<QueryResources, int> value,
+                int slot,
+                vec2 uv
+            ) {
+                return match value {
+                    Result::Ok(resources) => textureQueryLod(
+                        resources.shadows[slot],
+                        resources.state,
+                        uv
+                    ),
+                    Result::Err(_) => vec2(0.0)
+                };
+            }
+            """,
+            r"texture_query_lod.*non-shadow texture required: Texture2DShadow",
+        ),
+    ],
+)
+def test_generic_payload_enum_resource_query_diagnostics_for_mojo_codegen(
     source, pattern
 ):
     with pytest.raises(ValueError, match=pattern):

@@ -20698,7 +20698,7 @@ def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_stage_local_uniform_statics_are_emitted_once():
+def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
     code = """
     shader StageUniforms {
         vertex {
@@ -20741,6 +20741,7 @@ def test_stage_local_uniform_statics_are_emitted_once():
     assert "static MAIN_TEXTURE: sampler2D" not in generated_code
     assert "(*SHARED_TRANSFORM * Vec4::<f32>::new" in generated_code
     assert "sample(*MAIN_TEXTURE, uv)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():
