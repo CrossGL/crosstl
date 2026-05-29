@@ -320,6 +320,133 @@ class CharTypeMapper:
 class MetalCodeGen:
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
+    METAL_WAVE_INTRINSIC_ARITIES = {
+        "WaveGetLaneCount": 0,
+        "WaveGetLaneIndex": 0,
+        "WaveIsFirstLane": 0,
+        "WaveActiveSum": 1,
+        "WaveActiveProduct": 1,
+        "WaveActiveBitAnd": 1,
+        "WaveActiveBitOr": 1,
+        "WaveActiveBitXor": 1,
+        "WaveActiveMin": 1,
+        "WaveActiveMax": 1,
+        "WaveActiveAllTrue": 1,
+        "WaveActiveAnyTrue": 1,
+        "WaveActiveAllEqual": 1,
+        "WaveActiveCountBits": 1,
+        "WaveActiveBallot": 1,
+        "WaveReadLaneAt": 2,
+        "WaveReadLaneFirst": 1,
+        "WavePrefixSum": 1,
+        "WavePrefixProduct": 1,
+        "WavePrefixCountBits": 1,
+        "WaveMatch": 1,
+        "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
+        "WaveMultiPrefixProduct": 2,
+        "WaveMultiPrefixBitAnd": 2,
+        "WaveMultiPrefixBitOr": 2,
+        "WaveMultiPrefixBitXor": 2,
+        "QuadReadAcrossX": 1,
+        "QuadReadAcrossY": 1,
+        "QuadReadAcrossDiagonal": 1,
+        "QuadReadLaneAt": 2,
+        "QuadAny": 1,
+        "QuadAll": 1,
+    }
+    METAL_WAVE_DIRECT_MAPPINGS = {
+        "WaveActiveSum": "simd_sum",
+        "WaveActiveProduct": "simd_product",
+        "WaveActiveBitAnd": "simd_and",
+        "WaveActiveBitOr": "simd_or",
+        "WaveActiveBitXor": "simd_xor",
+        "WaveActiveMin": "simd_min",
+        "WaveActiveMax": "simd_max",
+        "WaveActiveAllTrue": "simd_all",
+        "WaveActiveAnyTrue": "simd_any",
+        "WaveReadLaneFirst": "simd_broadcast_first",
+        "WavePrefixSum": "simd_prefix_exclusive_sum",
+        "WavePrefixProduct": "simd_prefix_exclusive_product",
+        "QuadAny": "quad_any",
+        "QuadAll": "quad_all",
+    }
+    METAL_WAVE_UNSUPPORTED_OPERATIONS = {
+        "WaveGetLaneIndex": "requires a stage-provided thread_index_in_simdgroup value",
+        "WaveGetLaneCount": "requires a stage-provided threads_per_simdgroup value",
+        "WaveMatch": "has no uint4-compatible Metal simdgroup mask lowering yet",
+        "WaveMultiPrefixSum": "has no Metal partitioned prefix equivalent",
+        "WaveMultiPrefixCountBits": "has no Metal partitioned prefix equivalent",
+        "WaveMultiPrefixProduct": "has no Metal partitioned prefix equivalent",
+        "WaveMultiPrefixBitAnd": "has no Metal partitioned prefix equivalent",
+        "WaveMultiPrefixBitOr": "has no Metal partitioned prefix equivalent",
+        "WaveMultiPrefixBitXor": "has no Metal partitioned prefix equivalent",
+    }
+    METAL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveBallot",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "QuadAny",
+        "QuadAll",
+    }
+    METAL_WAVE_NUMERIC_VALUE_INTRINSICS = {
+        "WaveActiveSum",
+        "WaveActiveProduct",
+        "WaveActiveMin",
+        "WaveActiveMax",
+        "WavePrefixSum",
+        "WavePrefixProduct",
+    }
+    METAL_WAVE_INTEGER_VALUE_INTRINSICS = {
+        "WaveActiveBitAnd",
+        "WaveActiveBitOr",
+        "WaveActiveBitXor",
+    }
+    METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS = {
+        "WaveReadLaneAt",
+        "WaveReadLaneFirst",
+        "WaveActiveAllEqual",
+        "QuadReadAcrossX",
+        "QuadReadAcrossY",
+        "QuadReadAcrossDiagonal",
+        "QuadReadLaneAt",
+    }
+    METAL_WAVE_UINT_RESULT_INTRINSICS = {
+        "WaveGetLaneCount",
+        "WaveGetLaneIndex",
+        "WaveActiveCountBits",
+        "WavePrefixCountBits",
+        "WaveMultiPrefixCountBits",
+    }
+    METAL_WAVE_BOOL_RESULT_INTRINSICS = {
+        "WaveIsFirstLane",
+        "WaveActiveAllTrue",
+        "WaveActiveAnyTrue",
+        "WaveActiveAllEqual",
+        "QuadAny",
+        "QuadAll",
+    }
+    METAL_WAVE_UINT4_RESULT_INTRINSICS = {
+        "WaveActiveBallot",
+        "WaveMatch",
+    }
+    METAL_WAVE_VALUE_RESULT_INTRINSICS = (
+        METAL_WAVE_NUMERIC_VALUE_INTRINSICS
+        | METAL_WAVE_INTEGER_VALUE_INTRINSICS
+        | METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS
+        | {
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }
+    )
+    METAL_WAVE_NUMERIC_COMPONENT_TYPES = {"float", "half", "int", "uint"}
+    METAL_WAVE_INTEGER_COMPONENT_TYPES = {"int", "uint"}
+
     def __init__(self):
         """Initialize Metal type maps and per-generation resource state."""
         self.current_shader = None
@@ -388,6 +515,7 @@ class MetalCodeGen:
         self.glsl_buffer_block_struct_names = set()
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
+        self.required_metal_wave_ballot_helper = False
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -918,6 +1046,7 @@ class MetalCodeGen:
         self.current_expression_expected_type = None
         self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
+        self.required_metal_wave_ballot_helper = False
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -1577,6 +1706,7 @@ class MetalCodeGen:
 
         code += self.generate_image_atomic_compare_helpers()
         code += self.generate_buffer_atomic_compare_helpers()
+        code += self.generate_metal_wave_helpers()
         code += self.generate_glsl_buffer_aggregate_load_helpers()
         code += functions_code
         return code
@@ -3890,6 +4020,17 @@ class MetalCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
+            operator = self.map_operator(getattr(expr, "op", ""))
+            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
+                for candidate_type in (left_type, right_type):
+                    mapped_type = self.map_type(candidate_type)
+                    component_type = self.vector_component_type(mapped_type)
+                    if component_type is None:
+                        continue
+                    width = mapped_type[-1] if mapped_type[-1:].isdigit() else ""
+                    if width:
+                        return f"bool{width}"
+                return "bool"
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -3982,10 +4123,14 @@ class MetalCodeGen:
             ) or infer_struct_constructor_type(self, expr)
         if isinstance(expr, MatchNode):
             return infer_match_expression_result_type(self, expr)
+        if isinstance(expr, WaveOpNode):
+            return self.metal_wave_result_type(expr.operation, expr.arguments)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
             func_name = getattr(func_expr, "name", func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
+            if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
+                return self.metal_wave_result_type(func_name, args)
             numeric_result_type = numeric_trait_method_result_type(self, expr)
             if numeric_result_type:
                 return numeric_result_type
@@ -4590,8 +4735,7 @@ class MetalCodeGen:
             operand = self.generate_expression(expr.operand)
             return f"{self.map_operator(expr.op)}{operand}"
         elif isinstance(expr, WaveOpNode):
-            args = ", ".join(self.generate_expression(arg) for arg in expr.arguments)
-            return f"{expr.operation}({args})"
+            return self.generate_metal_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, MeshOpNode):
@@ -4684,6 +4828,10 @@ class MetalCodeGen:
             )
             if synchronization_call is not None:
                 return synchronization_call
+
+            wave_call = self.generate_metal_wave_operation(func_name, expr.args)
+            if wave_call is not None:
+                return wave_call
 
             atomic_call = self.generate_atomic_function_call(func_name, expr.args)
             if atomic_call is not None:
@@ -5025,6 +5173,216 @@ class MetalCodeGen:
                 "mem_flags::mem_threadgroup | mem_flags::mem_texture)"
             ),
         }.get(func_name)
+
+    def generate_metal_wave_op_expression(self, node):
+        return self.generate_metal_wave_operation(node.operation, node.arguments)
+
+    def generate_metal_wave_operation(self, operation, arguments):
+        expected_arity = self.METAL_WAVE_INTRINSIC_ARITIES.get(operation)
+        if expected_arity is None:
+            return None
+
+        actual_arity = len(arguments)
+        if actual_arity != expected_arity:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                f"expects {expected_arity} arguments, got {actual_arity}",
+            )
+
+        unsupported_reason = self.METAL_WAVE_UNSUPPORTED_OPERATIONS.get(operation)
+        if unsupported_reason is not None:
+            return self.metal_wave_diagnostic_expression(
+                operation, arguments, unsupported_reason
+            )
+
+        type_diagnostic = self.metal_wave_type_diagnostic(operation, arguments)
+        if type_diagnostic is not None:
+            return type_diagnostic
+
+        if operation == "WaveIsFirstLane":
+            return "simd_is_first()"
+        if operation == "WaveActiveCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"uint(popcount(simd_vote::vote_t(simd_ballot({predicate}))))"
+        if operation == "WavePrefixCountBits":
+            predicate = self.generate_expression(arguments[0])
+            return f"simd_prefix_exclusive_sum(({predicate}) ? 1u : 0u)"
+        if operation == "WaveActiveBallot":
+            self.required_metal_wave_ballot_helper = True
+            predicate = self.generate_expression(arguments[0])
+            return f"__crossgl_metal_wave_ballot({predicate})"
+        if operation == "WaveReadLaneAt":
+            value = self.generate_expression(arguments[0])
+            lane = self.generate_expression(arguments[1])
+            return f"simd_broadcast({value}, ushort({lane}))"
+        if operation == "QuadReadLaneAt":
+            value = self.generate_expression(arguments[0])
+            lane = self.generate_expression(arguments[1])
+            return f"quad_broadcast({value}, ushort({lane}))"
+        if operation == "QuadReadAcrossX":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(1))"
+        if operation == "QuadReadAcrossY":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(2))"
+        if operation == "QuadReadAcrossDiagonal":
+            value = self.generate_expression(arguments[0])
+            return f"quad_shuffle_xor({value}, ushort(3))"
+
+        mapped = self.METAL_WAVE_DIRECT_MAPPINGS.get(operation)
+        if mapped is None:
+            return self.metal_wave_diagnostic_expression(
+                operation, arguments, "is not recognized by the Metal backend"
+            )
+        args = ", ".join(self.generate_expression(arg) for arg in arguments)
+        return f"{mapped}({args})"
+
+    def metal_wave_result_type(self, operation, arguments):
+        if operation in self.METAL_WAVE_UINT_RESULT_INTRINSICS:
+            return "uint"
+        if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "bool"
+        if operation in self.METAL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4"
+        if operation in self.METAL_WAVE_VALUE_RESULT_INTRINSICS and arguments:
+            return self.expression_result_type(arguments[0])
+        return None
+
+    def metal_wave_argument_mapped_type(self, argument):
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return None, None, None
+        mapped_type = self.map_type(argument_type)
+        component_type = self.vector_component_type(mapped_type)
+        return mapped_type, component_type, split_array_type_suffix(mapped_type)[1]
+
+    def metal_wave_validate_predicate_argument(self, operation, argument):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or mapped_type != "bool":
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                ("predicate argument must be scalar bool, got " f"{mapped_type}"),
+            )
+        return None
+
+    def metal_wave_validate_value_argument(
+        self, operation, argument, allowed_components, description
+    ):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or component_type not in allowed_components:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be {description}, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_lane_argument(self, operation, argument, role):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if array_suffix or mapped_type not in {"int", "uint"}:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"{role} must be scalar int or uint, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_quad_lane_range(self, operation, argument):
+        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        if lane_index is None:
+            return None
+        if not 0 <= lane_index <= 3:
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"quad lane index must be in the range 0 to 3, got {lane_index}",
+            )
+        return None
+
+    def metal_wave_type_diagnostic(self, operation, arguments):
+        if operation in self.METAL_WAVE_BOOL_ARGUMENT_INTRINSICS:
+            return self.metal_wave_validate_predicate_argument(operation, arguments[0])
+        if operation in self.METAL_WAVE_NUMERIC_VALUE_INTRINSICS:
+            return self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
+            )
+        if operation in self.METAL_WAVE_INTEGER_VALUE_INTRINSICS:
+            return self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar or vector",
+            )
+        if operation in self.METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS:
+            diagnostic = self.metal_wave_validate_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric or integer scalar or vector",
+            )
+            if diagnostic is not None:
+                return diagnostic
+
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            diagnostic = self.metal_wave_validate_lane_argument(
+                operation, arguments[1], "lane index"
+            )
+            if diagnostic is not None:
+                return diagnostic
+            if operation == "QuadReadLaneAt":
+                return self.metal_wave_validate_quad_lane_range(operation, arguments[1])
+        return None
+
+    def metal_wave_default_value(self, operation, arguments):
+        result_type = (
+            self.current_expression_expected_type
+            or self.metal_wave_result_type(operation, arguments)
+        )
+        if result_type:
+            return self.diagnostic_zero_value_for_type(result_type)
+        if operation in self.METAL_WAVE_BOOL_RESULT_INTRINSICS:
+            return "false"
+        if operation in self.METAL_WAVE_UINT4_RESULT_INTRINSICS:
+            return "uint4(0)"
+        return "0u"
+
+    def metal_wave_diagnostic_expression(self, operation, arguments, reason):
+        return (
+            f"/* unsupported Metal wave intrinsic: {operation} {reason} */ "
+            f"{self.metal_wave_default_value(operation, arguments)}"
+        )
+
+    def generate_metal_wave_helpers(self):
+        if not self.required_metal_wave_ballot_helper:
+            return ""
+        return (
+            "uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
+            "    simd_vote::vote_t mask = simd_vote::vote_t(simd_ballot(predicate));\n"
+            "    return uint4(\n"
+            "        uint(mask & simd_vote::vote_t(0xffffffffu)),\n"
+            "        uint((mask >> simd_vote::vote_t(32u)) & "
+            "simd_vote::vote_t(0xffffffffu)),\n"
+            "        0u,\n"
+            "        0u);\n"
+            "}\n\n"
+        )
 
     def generate_ray_tracing_op_expression(self, expr):
         raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)

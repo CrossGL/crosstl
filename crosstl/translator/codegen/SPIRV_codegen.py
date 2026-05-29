@@ -11894,6 +11894,91 @@ class VulkanSPIRVCodeGen:
     def byte_address_method_store_width(self, method_name: str) -> Optional[int]:
         return {"Store": 1, "Store2": 2, "Store3": 3, "Store4": 4}.get(method_name)
 
+    def byte_address_method_interlocked_info(self, method_name: str):
+        return {
+            "InterlockedAdd": {
+                "opcode": "OpAtomicIAdd",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedAnd": {
+                "opcode": "OpAtomicAnd",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedOr": {
+                "opcode": "OpAtomicOr",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedXor": {
+                "opcode": "OpAtomicXor",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedMin": {
+                "opcode": "OpAtomicUMin",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedMax": {
+                "opcode": "OpAtomicUMax",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedExchange": {
+                "opcode": "OpAtomicExchange",
+                "value_roles": ("value",),
+                "min_args": 2,
+                "max_args": 3,
+                "required": "byte offset and value operands",
+                "accepted": "byte offset, value, and optional original operands",
+                "original_index": 2,
+            },
+            "InterlockedCompareExchange": {
+                "opcode": "OpAtomicCompareExchange",
+                "value_roles": ("compare", "value"),
+                "min_args": 4,
+                "max_args": 4,
+                "required": "byte offset, compare, value, and original operands",
+                "accepted": "byte offset, compare, value, and original operands",
+                "original_index": 3,
+            },
+            "InterlockedCompareStore": {
+                "opcode": "OpAtomicCompareExchange",
+                "value_roles": ("compare", "value"),
+                "min_args": 3,
+                "max_args": 3,
+                "required": "byte offset, compare, and value operands",
+                "accepted": "byte offset, compare, and value operands",
+                "original_index": None,
+            },
+        }.get(method_name)
+
     def byte_address_helper_load_width(self, function_name: str) -> Optional[int]:
         return {"buffer_load2": 2, "buffer_load3": 3, "buffer_load4": 4}.get(
             function_name
@@ -11914,6 +11999,114 @@ class VulkanSPIRVCodeGen:
         return self.default_value_for_type(
             self.byte_address_value_type(component_count)
         )
+
+    def byte_address_interlocked_default_value(self) -> SpirvId:
+        return self.default_value_for_type(self.register_primitive_type("uint"))
+
+    def byte_address_interlocked_uint_operand(
+        self, expr, diagnostic_name: str, role: str
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand could not be evaluated"
+            )
+            return None
+
+        value_type = self.value_types.get(
+            value.id
+        ) or self.find_registered_type_by_base(value.type.base_type)
+        if value_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand type could not be "
+                "determined"
+            )
+            return None
+
+        if self.vector_type_info_from_type(value_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            )
+            return None
+        if self.matrix_type_info_from_type(value_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} {role} operand must be a scalar integer"
+            )
+            return None
+
+        type_name = self.normalize_primitive_name(value_type.type.base_type)
+        if type_name not in {"int", "uint"}:
+            self.emit(f"; WARNING: {diagnostic_name} {role} operand must be an integer")
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("uint"))
+
+    def byte_address_interlocked_original_pointer(
+        self, expr, diagnostic_name: str
+    ) -> Optional[SpirvId]:
+        original_pointer = self.assignable_pointer_from_expression(expr)
+        if original_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be an "
+                "assignable scalar uint target"
+            )
+            return None
+
+        original_type = self.pointer_pointee_type(original_pointer)
+        if original_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand type could not be "
+                "determined"
+            )
+            return None
+
+        if self.vector_type_info_from_type(original_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+        if self.matrix_type_info_from_type(original_type) is not None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+
+        type_name = self.normalize_primitive_name(original_type.type.base_type)
+        if type_name != "uint":
+            self.emit(
+                f"; WARNING: {diagnostic_name} original operand must be scalar uint"
+            )
+            return None
+
+        return original_pointer
+
+    def emit_byte_address_interlocked_atomic(
+        self,
+        opcode: str,
+        target_pointer: SpirvId,
+        value_operands: List[SpirvId],
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+
+        if opcode == "OpAtomicCompareExchange":
+            compare_id, value_id = value_operands
+            self.emit(
+                f"%{id_value} = OpAtomicCompareExchange %{uint_type.id} "
+                f"%{target_pointer.id} %{scope.id} %{semantics.id} %{semantics.id} "
+                f"%{value_id.id} %{compare_id.id}"
+            )
+        else:
+            value_id = value_operands[0]
+            self.emit(
+                f"%{id_value} = {opcode} %{uint_type.id} %{target_pointer.id} "
+                f"%{scope.id} %{semantics.id} %{value_id.id}"
+            )
+
+        self.value_types[id_value] = uint_type
+        return SpirvId(id_value, uint_type.type)
 
     def byte_address_buffer_element_index_from_value(
         self, byte_offset: SpirvId
@@ -12091,6 +12284,68 @@ class VulkanSPIRVCodeGen:
         )
         return None
 
+    def process_byte_address_buffer_interlocked_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        method_name: str,
+        args,
+    ) -> SpirvId:
+        diagnostic_name = f"RWByteAddressBuffer.{method_name}"
+        info = self.byte_address_method_interlocked_info(method_name)
+        if info is None:
+            return self.byte_address_interlocked_default_value()
+
+        if len(args) < info["min_args"]:
+            self.emit(f"; WARNING: {diagnostic_name} requires {info['required']}")
+            return self.byte_address_interlocked_default_value()
+        if len(args) > info["max_args"]:
+            self.emit(f"; WARNING: {diagnostic_name} accepts only {info['accepted']}")
+            return self.byte_address_interlocked_default_value()
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            return self.byte_address_interlocked_default_value()
+
+        element_index = self.byte_address_buffer_element_index(args[0])
+        if element_index is None:
+            return self.byte_address_interlocked_default_value()
+
+        value_operands = []
+        for role_index, role in enumerate(info["value_roles"], start=1):
+            value_operand = self.byte_address_interlocked_uint_operand(
+                args[role_index], diagnostic_name, role
+            )
+            if value_operand is None:
+                return self.byte_address_interlocked_default_value()
+            value_operands.append(value_operand)
+
+        original_pointer = None
+        original_index = info["original_index"]
+        if original_index is not None and len(args) > original_index:
+            original_pointer = self.byte_address_interlocked_original_pointer(
+                args[original_index], diagnostic_name
+            )
+            if original_pointer is None:
+                return self.byte_address_interlocked_default_value()
+
+        target_pointer = self.structured_buffer_element_pointer(
+            buffer_pointer, element_index
+        )
+        if target_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a byte-address buffer element"
+            )
+            return self.byte_address_interlocked_default_value()
+
+        atomic_result = self.emit_byte_address_interlocked_atomic(
+            info["opcode"], target_pointer, value_operands
+        )
+
+        if original_pointer is not None:
+            self.store_to_variable(original_pointer, atomic_result)
+
+        return atomic_result
+
     def process_byte_address_buffer_method_call(
         self, expr: FunctionCallNode
     ) -> Tuple[bool, Optional[SpirvId]]:
@@ -12101,7 +12356,8 @@ class VulkanSPIRVCodeGen:
         method_name = getattr(callee_expr, "member", None)
         load_width = self.byte_address_method_load_width(method_name)
         store_width = self.byte_address_method_store_width(method_name)
-        if load_width is None and store_width is None:
+        interlocked_info = self.byte_address_method_interlocked_info(method_name)
+        if load_width is None and store_width is None and interlocked_info is None:
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -12113,6 +12369,11 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if interlocked_info is not None:
+            return True, self.process_byte_address_buffer_interlocked_call(
+                buffer_pointer, metadata, method_name, args
+            )
+
         if load_width is not None:
             diagnostic_name = f"ByteAddressBuffer.{method_name}"
             if len(args) < 1:

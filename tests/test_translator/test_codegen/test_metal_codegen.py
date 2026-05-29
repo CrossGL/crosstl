@@ -156,6 +156,139 @@ def test_metal_user_defined_synchronization_names_are_not_lowered():
     assert "threadgroup_barrier(" not in generated_code
 
 
+def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
+    shader = """
+    shader MetalWaveIntrinsics {
+        compute {
+            void main() {
+                uint value = 1u;
+                uint sumValue = WaveActiveSum(value);
+                uint productValue = WaveActiveProduct(value + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                uint andValue = WaveActiveBitAnd(maxValue);
+                uint orValue = WaveActiveBitOr(andValue);
+                uint xorValue = WaveActiveBitXor(orValue);
+                uint prefixSum = WavePrefixSum(xorValue);
+                uint prefixProduct = WavePrefixProduct(value + 1u);
+                bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+                bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                uvec4 ballot = WaveActiveBallot(anyLane);
+                uint count = WaveActiveCountBits(allLane);
+                uint prefixCount = WavePrefixCountBits(anyLane);
+                uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+                uint firstValue = WaveReadLaneFirst(broadcast);
+                uint quadX = QuadReadAcrossX(firstValue);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
+                bool quadAny = QuadAny(anyLane);
+                bool quadAll = QuadAll(allLane);
+                uint lane = WaveGetLaneIndex();
+                uint multi = WaveMultiPrefixSum(value, ballot);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint4 __crossgl_metal_wave_ballot(bool predicate)" in generated_code
+    assert "uint sumValue = simd_sum(value);" in generated_code
+    assert "uint productValue = simd_product(value + 1u);" in generated_code
+    assert "uint minValue = simd_min(sumValue);" in generated_code
+    assert "uint maxValue = simd_max(productValue);" in generated_code
+    assert "uint andValue = simd_and(maxValue);" in generated_code
+    assert "uint orValue = simd_or(andValue);" in generated_code
+    assert "uint xorValue = simd_xor(orValue);" in generated_code
+    assert "uint prefixSum = simd_prefix_exclusive_sum(xorValue);" in generated_code
+    assert (
+        "uint prefixProduct = simd_prefix_exclusive_product(value + 1u);"
+        in generated_code
+    )
+    assert "bool anyLane = simd_any(prefixSum > 0u);" in generated_code
+    assert "bool allLane = simd_all(prefixProduct > 0u);" in generated_code
+    assert "uint4 ballot = __crossgl_metal_wave_ballot(anyLane);" in generated_code
+    assert (
+        "uint count = uint(popcount(simd_vote::vote_t(simd_ballot(allLane))));"
+        in generated_code
+    )
+    assert (
+        "uint prefixCount = simd_prefix_exclusive_sum((anyLane) ? 1u : 0u);"
+        in generated_code
+    )
+    assert "uint broadcast = simd_broadcast(prefixSum, ushort(0u));" in (generated_code)
+    assert "uint firstValue = simd_broadcast_first(broadcast);" in generated_code
+    assert "uint quadX = quad_shuffle_xor(firstValue, ushort(1));" in generated_code
+    assert "uint quadY = quad_shuffle_xor(quadX, ushort(2));" in generated_code
+    assert "uint quadDiagonal = quad_shuffle_xor(quadY, ushort(3));" in (generated_code)
+    assert "uint quadLane = quad_broadcast(quadDiagonal, ushort(0u));" in (
+        generated_code
+    )
+    assert "bool quadAny = quad_any(anyLane);" in generated_code
+    assert "bool quadAll = quad_all(allLane);" in generated_code
+    assert (
+        "uint lane = /* unsupported Metal wave intrinsic: WaveGetLaneIndex "
+        "requires a stage-provided thread_index_in_simdgroup value */ 0u;"
+        in generated_code
+    )
+    assert (
+        "uint multi = /* unsupported Metal wave intrinsic: WaveMultiPrefixSum "
+        "has no Metal partitioned prefix equivalent */ 0u;" in generated_code
+    )
+    assert "WaveActiveSum(value)" not in generated_code
+    assert "WaveActiveBallot(anyLane)" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
+def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
+    shader = """
+    shader InvalidMetalWaveIntrinsics {
+        compute {
+            void main() {
+                uint value = 1u;
+                uvec2 lanes = uvec2(1u, 2u);
+                uint missing = WaveActiveSum();
+                bool badAnyValue = WaveActiveAnyTrue(value);
+                uvec4 badBallotVector =
+                    WaveActiveBallot(lanes == uvec2(1u, 2u));
+                uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
+                uint badQuad = QuadReadLaneAt(value, 4u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "uint missing = /* unsupported Metal wave intrinsic: WaveActiveSum "
+        "expects 1 arguments, got 0 */ 0u;" in generated_code
+    )
+    assert (
+        "bool badAnyValue = /* unsupported Metal wave intrinsic: "
+        "WaveActiveAnyTrue predicate argument must be scalar bool, got uint */ "
+        "false;" in generated_code
+    )
+    assert (
+        "uint4 badBallotVector = /* unsupported Metal wave intrinsic: "
+        "WaveActiveBallot predicate argument must be scalar bool, got bool2 */ "
+        "uint4(0);" in generated_code
+    )
+    assert (
+        "uint badLane = /* unsupported Metal wave intrinsic: WaveReadLaneAt "
+        "lane index must be scalar int or uint, got float2 */ 0u;" in generated_code
+    )
+    assert (
+        "uint badQuad = /* unsupported Metal wave intrinsic: QuadReadLaneAt "
+        "quad lane index must be in the range 0 to 3, got 4 */ 0u;" in generated_code
+    )
+    assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveAnyTrue(value)" not in generated_code
+    assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
 def test_metal_shared_local_variables_use_threadgroup_address_space():
     shader = """
     shader SharedLocalStorage {

@@ -5817,6 +5817,8 @@ class GLSLCodeGen:
 
     def glsl_variable_layout_prefix(self, node):
         layout_parts = []
+        seen_layout_parts = {}
+        node_name = self.resource_node_name(node, "<unnamed>")
         for attr in getattr(node, "attributes", []) or []:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
@@ -5831,6 +5833,13 @@ class GLSLCodeGen:
                 arguments = getattr(attr, "arguments", []) or []
                 if arguments:
                     continue
+                previous = seen_layout_parts.get(normalized)
+                if previous is not None:
+                    raise ValueError(
+                        "Duplicate OpenGL layout metadata for "
+                        f"'{node_name}': {normalized}"
+                    )
+                seen_layout_parts[normalized] = normalized
                 layout_parts.append(normalized)
                 continue
             if normalized not in self.GLSL_LAYOUT_ATTRIBUTE_NAMES:
@@ -5838,9 +5847,22 @@ class GLSLCodeGen:
             arguments = getattr(attr, "arguments", []) or []
             if len(arguments) != 1:
                 continue
-            layout_parts.append(
+            layout_part = (
                 f"{normalized} = {self.attribute_value_to_string(arguments[0])}"
             )
+            previous = seen_layout_parts.get(normalized)
+            if previous == layout_part:
+                raise ValueError(
+                    "Duplicate OpenGL layout metadata for "
+                    f"'{node_name}': {layout_part}"
+                )
+            if previous is not None:
+                raise ValueError(
+                    "Conflicting OpenGL layout metadata for "
+                    f"'{node_name}': {previous} differs from {layout_part}"
+                )
+            seen_layout_parts[normalized] = layout_part
+            layout_parts.append(layout_part)
         if not layout_parts:
             return ""
         return f"layout({', '.join(layout_parts)}) "
@@ -11868,11 +11890,31 @@ class GLSLCodeGen:
         if not choices:
             return None
 
+        node_name = self.resource_node_name(node, "<unnamed>")
+        seen_by_attribute = {}
+        for attr_name, source, binding in choices:
+            description = self.explicit_resource_binding_choice_description(
+                attr_name, source, binding
+            )
+            previous = seen_by_attribute.get(attr_name)
+            if previous is not None:
+                previous_description, previous_binding = previous
+                if binding == previous_binding:
+                    raise ValueError(
+                        "Duplicate OpenGL resource binding metadata for "
+                        f"'{node_name}': {description}"
+                    )
+                raise ValueError(
+                    "Conflicting OpenGL resource binding metadata for "
+                    f"'{node_name}': {previous_description} differs from "
+                    f"{description}"
+                )
+            seen_by_attribute[attr_name] = (description, binding)
+
         first_name, first_source, first_binding = choices[0]
         first_description = self.explicit_resource_binding_choice_description(
             first_name, first_source, first_binding
         )
-        node_name = self.resource_node_name(node, "<unnamed>")
         for attr_name, source, binding in choices[1:]:
             if binding != first_binding:
                 current_description = self.explicit_resource_binding_choice_description(

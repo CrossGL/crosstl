@@ -56,6 +56,42 @@ shader MetalFunctionConstantValidation {
 """
 
 
+METAL_WAVE_INTRINSICS_COMPUTE_SHADER = """
+shader MetalWaveIntrinsicsValidation {
+    compute {
+        void main() {
+            uint value = 1u;
+            uint sumValue = WaveActiveSum(value);
+            uint productValue = WaveActiveProduct(value + 1u);
+            uint minValue = WaveActiveMin(sumValue);
+            uint maxValue = WaveActiveMax(productValue);
+            uint andValue = WaveActiveBitAnd(maxValue);
+            uint orValue = WaveActiveBitOr(andValue);
+            uint xorValue = WaveActiveBitXor(orValue);
+            uint prefixSum = WavePrefixSum(xorValue);
+            uint prefixProduct = WavePrefixProduct(value + 1u);
+            bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
+            bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+            uvec4 ballot = WaveActiveBallot(anyLane);
+            uint count = WaveActiveCountBits(allLane);
+            uint prefixCount = WavePrefixCountBits(anyLane);
+            uint broadcast = WaveReadLaneAt(prefixSum, 0u);
+            uint firstValue = WaveReadLaneFirst(broadcast);
+            uint quadX = QuadReadAcrossX(firstValue);
+            uint quadY = QuadReadAcrossY(quadX);
+            uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+            uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
+            bool quadAny = QuadAny(anyLane);
+            bool quadAll = QuadAll(allLane);
+            uint folded = minValue + count + prefixCount + quadLane + ballot.x;
+            folded = folded + (quadAny ? quadX : quadY);
+            folded = folded + (quadAll ? quadDiagonal : firstValue);
+        }
+    }
+}
+"""
+
+
 FRAGMENT_STRUCT_INPUT_SHADER = """
 shader FragmentStructInputValidation {
     struct VSOutput {
@@ -5873,6 +5909,29 @@ def test_generated_metal_function_constants_compile_with_metal(tmp_path):
     assert "constant uint flags [[function_constant(3)]];" in code
     assert "function constant default: 'flags'" not in code
     assert "bool useFast;" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "wave_intrinsics.metal"
+    output = tmp_path / "wave_intrinsics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_WAVE_INTRINSICS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "simd_sum(value)" in code
+    assert "__crossgl_metal_wave_ballot(anyLane)" in code
+    assert "quad_shuffle_xor(firstValue, ushort(1))" in code
+    assert "WaveActiveSum(value)" not in code
+    assert "WaveOpNode" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

@@ -1672,6 +1672,76 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
     [
         (
             """
+            shader DuplicateTextureBinding {
+                sampler2D tex @binding(1) @binding(1);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'tex': binding 1",
+        ),
+        (
+            """
+            shader DuplicateStageTextureBinding {
+                fragment {
+                    vec4 main(sampler2D tex @texture(2) @texture(2))
+                        @gl_FragColor
+                    {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'tex': "
+            "texture 2 binding 2",
+        ),
+        (
+            """
+            shader DuplicateStructuredBufferRegister {
+                RWStructuredBuffer<int> values[2] @register(u3) @register(u3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values[1], 0)));
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'values': "
+            "register u3 binding 3",
+        ),
+        (
+            """
+            shader DuplicateCBufferBinding {
+                cbuffer Constants @binding(4) @binding(4) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource binding metadata for 'Constants': binding 4",
+        ),
+    ],
+)
+def test_glsl_resource_binding_aliases_reject_duplicate_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
             shader ConflictingTextureBindings {
                 sampler2D tex @binding(1) @register(t2);
 
@@ -1942,6 +2012,46 @@ def test_glsl_stage_resource_parameter_auto_binding_skips_explicit_global():
 
     assert "layout(binding = 0) uniform sampler2D explicitTex;" in generated_code
     assert "layout(binding = 1) uniform sampler2D localTex;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader DuplicateStageInputLocation {
+                fragment {
+                    vec4 main(vec2 uv @location(0) @location(0)) @gl_FragColor {
+                        return vec4(uv, 0.0, 1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL layout metadata for 'uv': location = 0",
+        ),
+        (
+            """
+            shader DuplicateFragmentOutputComponent {
+                struct PSOutput {
+                    float luminance @location(0) @component(0) @component(0);
+                };
+
+                fragment {
+                    PSOutput main(vec2 uv @TEXCOORD0) {
+                        PSOutput output;
+                        output.luminance = uv.x;
+                        return output;
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL layout metadata for 'luminance': component = 0",
+        ),
+    ],
+)
+def test_glsl_stage_io_layout_metadata_rejects_duplicate_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
 def test_glsl_shared_stage_resource_parameter_emits_one_global_binding():

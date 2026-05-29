@@ -6157,6 +6157,150 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
+    def test_image_access_returned_array_elements_emit_cuda_diagnostics(self):
+        """Test CUDA access checks follow returned storage-image array elements."""
+        source_code = """
+        shader ImageAccessReturnedArrayElements {
+            readonly image2D readImages @rgba16f[4];
+            writeonly image2D writeImages @rgba16f[4];
+            readonly uimage2D readCounters @r32ui[4];
+
+            image2D chooseWriteGlobal(int slot) {
+                return writeImages[slot + 1];
+            }
+
+            image2D chooseReadGlobal(int slot) {
+                return readImages[slot];
+            }
+
+            image2D chooseParamLocal(image2D imgs[4], int slot, int offset) {
+                image2D alias = imgs[slot + offset];
+                return alias;
+            }
+
+            uimage2D chooseCounterLocal(uimage2D counters[4], int slot, int offset) {
+                uimage2D alias = counters[slot + offset];
+                return alias;
+            }
+
+            image2D chooseWriteChain(int slot) {
+                return chooseParamLocal(writeImages, slot, 1);
+            }
+
+            int nextSlot() {
+                return 1;
+            }
+
+            compute {
+                void main(ivec2 pixel, int slot, int offset) {
+                    vec4 blockedGlobalRead =
+                        imageLoad(chooseWriteGlobal(slot), pixel);
+                    imageStore(chooseReadGlobal(slot), pixel, blockedGlobalRead);
+                    vec4 blockedParamRead =
+                        imageLoad(
+                            chooseParamLocal(writeImages, slot, offset),
+                            pixel
+                        );
+                    imageStore(
+                        chooseParamLocal(readImages, slot, offset),
+                        pixel,
+                        blockedParamRead
+                    );
+                    vec4 blockedChainRead =
+                        imageLoad(chooseWriteChain(slot), pixel);
+                    vec4 unsafeBlockedRead =
+                        imageLoad(
+                            chooseParamLocal(writeImages, nextSlot(), offset),
+                            pixel
+                        );
+                    imageStore(
+                        chooseParamLocal(readImages, slot++, offset),
+                        pixel,
+                        unsafeBlockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseCounterLocal(readCounters, nextSlot(), offset),
+                            pixel,
+                            1
+                        );
+                    vec4 allowedRead =
+                        imageLoad(chooseParamLocal(readImages, slot, offset), pixel);
+                    imageStore(
+                        chooseParamLocal(writeImages, slot, offset),
+                        pixel,
+                        allowedRead
+                    );
+                    ivec2 unsafeDims =
+                        imageSize(
+                            chooseParamLocal(writeImages, nextSlot(), offset)
+                        );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo writeImages_metadata[4] = {};" in cuda_code
+        assert (
+            "float4 blockedGlobalRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 blockedParamRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 blockedChainRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 unsafeBlockedRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert cuda_code.count("imageStore requires writable image resource") == 3
+        assert (
+            "uint blockedAtomic = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd requires readwrite image resource on uimage2D */ 0u;"
+            in cuda_code
+        )
+        assert (
+            "float4 allowedRead = surf2Dread<float4>"
+            "(chooseParamLocal(readImages, slot, offset), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowedRead, chooseParamLocal(writeImages, slot, offset), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "int2 unsafeDims = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseWriteGlobal" not in cuda_code
+        assert "surf2Dread<float4>(chooseParamLocal(writeImages" not in cuda_code
+        assert "surf2Dread<float4>(chooseWriteChain" not in cuda_code
+        assert "surf2Dwrite(blockedGlobalRead, chooseReadGlobal" not in cuda_code
+        forbidden_readonly_store = (
+            "surf2Dwrite(blockedParamRead, chooseParamLocal(readImages"
+        )
+        assert forbidden_readonly_store not in cuda_code
+        assert "writeImages_metadata[(nextSlot() + offset)]" not in cuda_code
+        assert "writeImages_metadata[nextSlot()]" not in cuda_code
+        assert "readImages_metadata[(slot++ + offset)]" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
         self,
     ):

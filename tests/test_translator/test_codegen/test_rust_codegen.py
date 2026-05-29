@@ -17004,7 +17004,7 @@ def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts():
     assert "RangeNode" not in generated_code
 
 
-def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts():
+def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts(tmp_path):
     code = """
     shader main {
         compute {
@@ -17054,6 +17054,7 @@ def test_while_statement_lowers_to_rust_while_and_scopes_loop_contexts():
     )
     assert "__cgl_do_break_0 = true;" not in generated_code
     assert "WhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts():

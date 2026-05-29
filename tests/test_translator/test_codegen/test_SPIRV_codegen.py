@@ -8665,6 +8665,69 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_byte_address_buffers_emit_interlocked_atomics(self, tmp_path):
+        source_code = """
+        shader ByteAddressAtomics {
+            RWByteAddressBuffer rawData @set(3) @binding(9);
+
+            compute {
+                void main() {
+                    uint oldAdd = 0u;
+                    uint oldOr = 0u;
+                    uint oldMin = 0u;
+                    uint oldMax = 0u;
+                    uint oldExchange = 0u;
+                    uint oldCompare = 0u;
+                    rawData.InterlockedAdd(0u, 1u, oldAdd);
+                    rawData.InterlockedAnd(4u, 3u);
+                    rawData.InterlockedOr(8u, oldAdd, oldOr);
+                    rawData.InterlockedXor(12u, 2u);
+                    rawData.InterlockedMin(16u, 5u, oldMin);
+                    rawData.InterlockedMax(20u, 6u, oldMax);
+                    rawData.InterlockedExchange(24u, 7u, oldExchange);
+                    rawData.InterlockedCompareExchange(
+                        28u, oldExchange, 9u, oldCompare
+                    );
+                    rawData.InterlockedCompareStore(32u, oldCompare, 11u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawDataBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawData", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {raw_var} DescriptorSet 3" in spv_code
+        assert f"OpDecorate {raw_var} Binding 9" in spv_code
+        assert "OpUDiv" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} %\d+ %\d+",
+            spv_code,
+        )
+        for opcode in (
+            "OpAtomicIAdd",
+            "OpAtomicAnd",
+            "OpAtomicOr",
+            "OpAtomicXor",
+            "OpAtomicUMin",
+            "OpAtomicUMax",
+            "OpAtomicExchange",
+        ):
+            assert opcode in spv_code
+        assert spv_code.count("OpAtomicCompareExchange") >= 2
+        assert "Interlocked" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
     ):
@@ -8705,6 +8768,75 @@ class TestVulkanSPIRVCodeGen:
         assert "Unknown type ByteAddressBuffer" not in spv_code
         assert "Unknown type RWByteAddressBuffer" not in spv_code
         assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_interlocked_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressAtomicDiagnostics {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    uvec2 vectorOld = uvec2(0u, 0u);
+                    rawData.InterlockedAdd(0u, 1u, oldValue);
+                    outData.InterlockedAdd(0u);
+                    outData.InterlockedAdd(0u, 1u, oldValue, oldValue);
+                    outData.InterlockedAdd(0.5, 1u, oldValue);
+                    outData.InterlockedOr(4u, 1.0, oldValue);
+                    outData.InterlockedXor(8u, 1u, oldValue + 1u);
+                    outData.InterlockedMax(12u, 1u, vectorOld);
+                    outData.InterlockedCompareExchange(16u, 1u, oldValue);
+                    outData.InterlockedCompareStore(20u, 1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires byte offset and "
+            "value operands"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd accepts only byte offset, "
+            "value, and optional original operands"
+        ) in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedOr value operand must be an "
+            "integer"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedXor original operand must be an "
+            "assignable scalar uint target"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedMax original operand must be "
+            "scalar uint"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedCompareExchange requires byte "
+            "offset, compare, value, and original operands"
+        ) in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedCompareStore requires byte "
+            "offset, compare, and value operands"
+        ) in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomic" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_byte_address_buffer_vector_methods_emit_invalid_operand_diagnostics(
