@@ -20606,7 +20606,7 @@ def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
     )
 
 
-def test_match_expression_initializer_emits_rust_match_initializer():
+def test_match_expression_initializer_emits_rust_match_initializer(tmp_path):
     code = """
     shader MatchInitializer {
         fn choose(model: int, fallback: vec3) -> vec3 {
@@ -20626,6 +20626,7 @@ def test_match_expression_initializer_emits_rust_match_initializer():
     assert "_ => {\n            fallback" in generated_code
     assert "};\n    processed_normal" in generated_code
     assert "let processed_normal: f32 = match model" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types():

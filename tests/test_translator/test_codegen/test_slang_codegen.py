@@ -13249,7 +13249,9 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
 
         compute {
             void main() {
+                uint uintMip = 2u;
                 ivec2 texSize = textureSize(colorMap, 2);
+                ivec2 texSizeFromUintMip = textureSize(colorMap, uintMip);
                 ivec3 layerSize = textureSize(layers, 1);
                 ivec3 volumeSize = textureSize(volumeTex, 0);
                 ivec2 shadowSize = textureSize(shadowMap, 0);
@@ -13257,6 +13259,7 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
                 ivec2 cubeShadowSize = textureSize(cubeShadow, 0);
                 ivec3 cubeShadowLayerSize = textureSize(cubeShadowLayers, 0);
                 ivec2 msSize = textureSize(msTex, 0);
+                ivec2 msSizeFromUintMip = textureSize(msTex, uintMip);
                 ivec3 msLayerSize = textureSize(msLayers, 0);
                 int texLevels = textureQueryLevels(colorMap);
                 int layerLevels = textureQueryLevels(layers);
@@ -13378,6 +13381,10 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
     assert "return samples;" in generated_code
     assert "int2 texSize = cgl_textureSize_sampler2D(colorMap, 2);" in generated_code
     assert (
+        "int2 texSizeFromUintMip = cgl_textureSize_sampler2D(colorMap, uintMip);"
+        in generated_code
+    )
+    assert (
         "int3 layerSize = cgl_textureSize_sampler2DArray(layers, 1);" in generated_code
     )
     assert (
@@ -13427,6 +13434,9 @@ def test_resource_query_builtins_emit_slang_get_dimensions_helpers():
         "cubeShadowLayers);" in generated_code
     )
     assert "int2 msSize = cgl_textureSize_sampler2DMS(msTex);" in generated_code
+    assert (
+        "int2 msSizeFromUintMip = cgl_textureSize_sampler2DMS(msTex);" in generated_code
+    )
     assert (
         "int3 msLayerSize = cgl_textureSize_sampler2DMSArray(msLayers);"
         in generated_code
@@ -13495,6 +13505,8 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
 
             void main() {
                 vec2 badMip = vec2(0.0, 1.0);
+                float floatMip = 1.0;
+                bool boolMip = true;
                 int missingTextureSize = textureSize();
                 int missingImageSize = imageSize();
                 int textureSizeFromSampler = textureSize(querySampler, 0);
@@ -13503,7 +13515,11 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int imageSizeFromSampler = imageSize(querySampler);
                 int extraTextureSize = textureSize(colorMap, 0, 1);
                 int badTextureMip = textureSize(colorMap, badMip);
+                int floatTextureMip = textureSize(colorMap, floatMip);
+                int boolTextureMip = textureSize(colorMap, boolMip);
                 int badMultisampleTextureMip = textureSize(msTex, badMip);
+                int floatMultisampleTextureMip = textureSize(msTex, floatMip);
+                int boolMultisampleTextureMip = textureSize(msTex, boolMip);
                 int extraImageSize = imageSize(colorImage, 0);
                 int msLevels = textureQueryLevels(msTex);
                 int msArrayLevels = textureQueryLevels(msLayers);
@@ -13590,8 +13606,28 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "textureSize requires a scalar mip argument */ 0;" in generated_code
     )
     assert (
+        "int floatTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int boolTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
+        in generated_code
+    )
+    assert (
         "int badMultisampleTextureMip = /* unsupported Slang resource query: "
         "textureSize requires a scalar mip argument */ 0;" in generated_code
+    )
+    assert (
+        "int floatMultisampleTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int boolMultisampleTextureMip = /* unsupported Slang resource query: "
+        "textureSize mip argument must be scalar int or uint, got bool */ 0;"
+        in generated_code
     )
     assert (
         "int extraImageSize = /* unsupported Slang resource query: "
@@ -13726,7 +13762,7 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0))));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 45
+    assert generated_code.count("unsupported Slang resource query") == 49
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code

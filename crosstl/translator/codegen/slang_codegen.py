@@ -8376,9 +8376,7 @@ class SlangCodeGen:
         if len(args) > 2:
             return "accepts resource and optional mip argument"
         if len(args) == 2:
-            return self.scalar_texture_argument_rank_unsupported_reason(
-                args[1], "mip argument"
-            )
+            return self.scalar_texture_mip_unsupported_reason(args[1])
         return None
 
     def dimension_query_expected_type_unsupported_reason(self, func_name, result_type):
@@ -9209,6 +9207,13 @@ class SlangCodeGen:
             node, "bias argument"
         ) or self.scalar_numeric_texture_argument_unsupported_reason(
             node, "bias argument"
+        )
+
+    def scalar_texture_mip_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "mip argument"
+        ) or self.scalar_integer_texture_argument_unsupported_reason(
+            node, "mip argument"
         )
 
     def scalar_integer_texture_argument_unsupported_reason(self, node, role):

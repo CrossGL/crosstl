@@ -10457,6 +10457,102 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_for_clause_assignments_update_cuda_metadata(self):
+        """Test CUDA metadata snapshots update from for init/update clauses."""
+        source_code = """
+        shader ResourceQueryForClauseAssignedAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            image2D imageMap;
+            image2D fallbackImage;
+            sampler2d textureGrid[4];
+            image2D imageGrid[4];
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(int slot) {
+                    sampler2d updateTex = colorMap;
+                    int i = 0;
+                    for (; i < 1; updateTex = textureGrid[slot]) {
+                        i = i + 1;
+                    }
+                    ivec2 updateTexSize = textureSize(updateTex, 0);
+
+                    sampler2d initTex = colorMap;
+                    image2D initImage = imageMap;
+                    int j = 0;
+                    for (initTex = fallbackMap; j < 1; initImage = fallbackImage) {
+                        j = j + 1;
+                    }
+                    ivec2 initTexSize = textureSize(initTex, 0);
+                    ivec2 initImageSize = imageSize(initImage);
+                    consume(initTex, initImage);
+
+                    sampler2d chainA = colorMap;
+                    sampler2d chainB = fallbackMap;
+                    int k = 0;
+                    for (; k < 1; chainB = chainA) {
+                        chainA = textureGrid[slot];
+                        k = k + 1;
+                    }
+                    ivec2 chainSize = textureSize(chainB, 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[4] = {};" in cuda_code
+        assert (
+            "for (; (i < 1); updateTex = textureGrid[slot], "
+            "updateTex_metadata = textureGrid_metadata[slot]) {" in cuda_code
+        )
+        assert (
+            "int2 updateTexSize = cgl_textureSize_sampler2D"
+            "(updateTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "for (initTex = fallbackMap, initTex_metadata = fallbackMap_metadata; "
+            "(j < 1); initImage = fallbackImage, "
+            "initImage_metadata = fallbackImage_metadata) {" in cuda_code
+        )
+        assert (
+            "int2 initTexSize = cgl_textureSize_sampler2D"
+            "(initTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 initImageSize = cgl_imageSize_image2D"
+            "(initImage_metadata);" in cuda_code
+        )
+        assert (
+            "consume(initTex, initTex_metadata, initImage, initImage_metadata);"
+            in cuda_code
+        )
+        assert (
+            "for (; (k < 1); chainB = chainA, "
+            "chainB_metadata = chainA_metadata) {" in cuda_code
+        )
+        assert "chainA_metadata = textureGrid_metadata[slot];" in cuda_code
+        assert (
+            "int2 chainSize = cgl_textureSize_sampler2D(chainB_metadata, 0);"
+            in cuda_code
+        )
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """

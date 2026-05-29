@@ -4101,6 +4101,67 @@ class TestHipCodeGen:
         assert "var manualPitchWidth: u32 = (/* HIP device query:" not in result
         assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
 
+    def test_hip_texture_object_border_color_descriptor_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test HIP texture descriptor flags and border-color outputs."""
+        code = """
+        void host(
+            hipTextureObject_t texObj,
+            unsigned int* flagsOut,
+            float* floats
+        ) {
+            hipTextureDesc textureDesc;
+            hipTextureDesc aliasTextureDesc;
+            hipGetTextureObjectTextureDesc(&textureDesc, texObj);
+            flagsOut[0] = textureDesc.flags;
+            floats[0] = textureDesc.borderColor[0];
+            floats[1] = textureDesc.borderColor[1];
+            floats[2] = textureDesc.borderColor[2];
+            textureDesc.borderColor[0] = 1.0;
+            float manualBorder = textureDesc.borderColor[0];
+            textureDesc.flags = 7;
+            unsigned int manualFlags = textureDesc.flags;
+            hipError_t err = hipTexObjectGetTextureDesc(&aliasTextureDesc, texObj);
+            floats[3] = aliasTextureDesc.borderColor[3];
+            aliasTextureDesc.borderColor[1]++;
+            float manualAliasBorder = aliasTextureDesc.borderColor[1];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "flagsOut[0] = (/* HIP device query: "
+            "textureObject.textureDesc.flags(texObj) */ 0);"
+        ) in result
+        for index in range(3):
+            assert (
+                f"floats[{index}] = (/* HIP device query: "
+                f"textureObject.textureDesc.borderColor[{index}](texObj) */ 0);"
+            ) in result
+        assert "textureDesc.borderColor[0] = 1.0;" in result
+        assert "var manualBorder: f32 = textureDesc.borderColor[0];" in result
+        assert "textureDesc.flags = 7;" in result
+        assert "var manualFlags: u32 = textureDesc.flags;" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "floats[3] = (/* HIP device query: "
+            "textureObject.textureDesc.borderColor[3](texObj) */ 0);"
+        ) in result
+        assert "(aliasTextureDesc.borderColor[1]++);" in result
+        assert "var manualAliasBorder: f32 = aliasTextureDesc.borderColor[1];" in result
+        assert "flagsOut[0] = textureDesc.flags;" not in result
+        assert "floats[0] = textureDesc.borderColor[0];" not in result
+        assert "floats[3] = aliasTextureDesc.borderColor[3];" not in result
+        assert "var manualBorder: f32 = (/* HIP device query:" not in result
+        assert "var manualFlags: u32 = (/* HIP device query:" not in result
+        assert "var manualAliasBorder: f32 = (/* HIP device query:" not in result
+
     def test_hip_channel_descriptor_expression_contexts_emit_status(self):
         """Test channel and array descriptor queries in expressions stay explicit."""
         code = """

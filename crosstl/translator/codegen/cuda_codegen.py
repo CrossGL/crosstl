@@ -543,6 +543,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if metadata_assignment:
             self.emit(f"{metadata_assignment};")
 
+    def format_for_clause_expression(self, node):
+        """Return a for-clause expression, preserving CUDA metadata sidecars."""
+        if node is None:
+            return ""
+        if isinstance(node, VariableNode):
+            return self.format_variable_declaration(node)
+
+        expr_node = getattr(node, "expression", node)
+        if isinstance(expr_node, AssignmentNode):
+            assignment = self.format_assignment_expression(expr_node)
+            metadata_assignment = self.format_query_metadata_assignment(expr_node)
+            parts = [
+                part
+                for part in (assignment, metadata_assignment)
+                if part and part.strip()
+            ]
+            return ", ".join(parts)
+
+        return self.visit(expr_node) or ""
+
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
         return self.builtin_map.get(name, name)
@@ -2004,12 +2024,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Visit for loop"""
         init_str = ""
         if node.init:
-            if isinstance(node.init, VariableNode):
-                init_str = self.format_variable_declaration(node.init)
-            elif hasattr(node.init, "expression"):
-                init_str = self.visit(node.init.expression)
-            else:
-                init_str = self.visit(node.init)
+            init_str = self.format_for_clause_expression(node.init)
 
         condition_str = ""
         if node.condition:
@@ -2017,7 +2032,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         update_str = ""
         if node.update:
-            update_str = self.visit(node.update)
+            update_str = self.format_for_clause_expression(node.update)
 
         self.emit(f"for ({init_str}; {condition_str}; {update_str}) {{")
 

@@ -10477,6 +10477,82 @@ def test_directx_ray_query_validates_global_acceleration_structure_arguments():
         HLSLCodeGen().generate_stage(crosstl.translator.parse(bad_code), "compute")
 
 
+def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
+    trace_ray_code = """
+    shader BadTraceRayInstanceMask {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 256, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay instance inclusion mask argument.*range 0 to 255.*256",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(trace_ray_code), "ray_generation"
+        )
+
+    ray_query_code = """
+    shader BadRayQueryInstanceMask {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(accel, 0, 0x100, ray);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RayQuery.TraceRayInline instance inclusion mask argument"
+            ".*range 0 to 255.*256"
+        ),
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(ray_query_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidRayInstanceMaskBounds {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "ray_generation"
+    )
+
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {

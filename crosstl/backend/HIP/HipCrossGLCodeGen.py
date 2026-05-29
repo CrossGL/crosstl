@@ -206,6 +206,7 @@ class HipToCrossGLConverter:
     HIP_TEXTURE_DESCRIPTOR_MEMBERS = {
         "disableTrilinearOptimization",
         "filterMode",
+        "flags",
         "maxAnisotropy",
         "maxMipmapLevelClamp",
         "minMipmapLevelClamp",
@@ -219,6 +220,10 @@ class HipToCrossGLConverter:
         "addressMode[0]",
         "addressMode[1]",
         "addressMode[2]",
+        "borderColor[0]",
+        "borderColor[1]",
+        "borderColor[2]",
+        "borderColor[3]",
     }
     HIP_RESOURCE_VIEW_DESCRIPTOR_MEMBERS = {
         "depth",

@@ -6715,6 +6715,21 @@ class HLSLCodeGen:
                 f"scalar floating, got {self.map_type(argument_type)}"
             )
 
+    def validate_hlsl_ray_instance_inclusion_mask_argument(
+        self, argument, shader_type, operation
+    ):
+        self.validate_hlsl_scalar_int_uint_expression(
+            argument,
+            f"DirectX {shader_type} {operation} instance inclusion mask argument",
+        )
+        mask_value = self.literal_int_value(argument, self.literal_int_constants)
+        if mask_value is None or 0 <= mask_value <= 0xFF:
+            return
+        raise ValueError(
+            f"DirectX {shader_type} {operation} instance inclusion mask argument "
+            f"must be in the range 0 to 255, got {mask_value}"
+        )
+
     def validate_hlsl_trace_ray_arguments(self, args, shader_type):
         self.validate_hlsl_trace_ray_exact_type_argument(
             args[0],
@@ -6724,7 +6739,6 @@ class HLSLCodeGen:
         )
         for index, role in (
             (1, "ray flags"),
-            (2, "instance inclusion mask"),
             (3, "ray contribution to hit group index"),
             (4, "geometry contribution multiplier"),
             (5, "miss shader index"),
@@ -6732,6 +6746,9 @@ class HLSLCodeGen:
             self.validate_hlsl_scalar_int_uint_expression(
                 args[index], f"DirectX {shader_type} TraceRay {role} argument"
             )
+        self.validate_hlsl_ray_instance_inclusion_mask_argument(
+            args[2], shader_type, "TraceRay"
+        )
         if len(args) == 8:
             self.validate_hlsl_trace_ray_exact_type_argument(
                 args[6], shader_type, "ray descriptor", "RayDesc"
@@ -6803,11 +6820,10 @@ class HLSLCodeGen:
                 args[1],
                 f"DirectX {shader_type} RayQuery.TraceRayInline ray flags argument",
             )
-            self.validate_hlsl_scalar_int_uint_expression(
+            self.validate_hlsl_ray_instance_inclusion_mask_argument(
                 args[2],
-                "DirectX "
-                f"{shader_type} RayQuery.TraceRayInline instance inclusion mask "
-                "argument",
+                shader_type,
+                "RayQuery.TraceRayInline",
             )
             self.validate_hlsl_ray_exact_type_argument(
                 args[3],
