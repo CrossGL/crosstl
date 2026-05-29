@@ -941,6 +941,7 @@ class MojoCodeGen:
         self.expression_identifier_replacements = {}
         self.do_while_contexts = []
         self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
@@ -1144,6 +1145,7 @@ class MojoCodeGen:
         self.expression_identifier_replacements = {}
         self.do_while_contexts = []
         self.for_contexts = []
+        self.loop_exit_alias_state_stack = []
         self.loop_depth = 0
         self.do_while_counter = 0
         self.lambda_counter = 0
@@ -4526,6 +4528,7 @@ class MojoCodeGen:
                 )
                 return f"{prelude}{indent_str}return {return_value}\n"
         elif isinstance(stmt, BreakNode):
+            self.record_loop_exit_alias_state()
             context = self.active_do_while_context()
             if context:
                 break_flag = context["break_flag"]
@@ -5577,6 +5580,24 @@ class MojoCodeGen:
             return context
         return None
 
+    def push_loop_exit_alias_state_scope(self):
+        self.loop_exit_alias_state_stack.append(
+            {"loop_depth": self.loop_depth, "states": []}
+        )
+
+    def pop_loop_exit_alias_state_scope(self):
+        if not self.loop_exit_alias_state_stack:
+            return []
+        return self.loop_exit_alias_state_stack.pop()["states"]
+
+    def record_loop_exit_alias_state(self):
+        if not self.loop_exit_alias_state_stack:
+            return
+        scope = self.loop_exit_alias_state_stack[-1]
+        if scope["loop_depth"] != self.loop_depth:
+            return
+        scope["states"].append(self.resource_access_alias_state())
+
     def statement_body_terminates_inner_loop(self, body):
         statements = self.statement_list(body)
         if not statements:
@@ -5658,20 +5679,32 @@ class MojoCodeGen:
 
         init = self.generate_statement(node.init, 0).strip()
         condition = self.generate_expression(node.condition)
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}{init}\n"
         code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
         self.for_contexts.append({"loop_depth": self.loop_depth, "update": node.update})
+        self.push_loop_exit_alias_state_scope()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.for_contexts.pop()
             self.loop_depth -= 1
 
         code += self.generate_for_update_statement(node.update, indent + 1)
+        update_alias_state = self.resource_access_alias_state()
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                update_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -5695,21 +5728,35 @@ class MojoCodeGen:
         indent_str = "    " * indent
         pattern = getattr(node, "pattern", "item")
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}for {pattern} in {iterable}:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
         try:
             body_code = ""
             for stmt in self.statement_list(getattr(node, "body", [])):
                 body_code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
 
         if body_code:
             code += body_code
         else:
             code += f"{indent_str}    pass\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -5727,15 +5774,29 @@ class MojoCodeGen:
     def generate_while(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(node.condition)
+        entry_alias_state = self.resource_access_alias_state()
 
         code = f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = entry_alias_state
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                entry_alias_state,
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 
@@ -5744,11 +5805,22 @@ class MojoCodeGen:
         code = f"{indent_str}while True:\n"
 
         self.loop_depth += 1
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 1)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.loop_depth -= 1
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                *(loop_exit_alias_states or [body_alias_state])
+            )
+        )
 
         return code
 
@@ -5766,10 +5838,15 @@ class MojoCodeGen:
         self.do_while_contexts.append(
             {"loop_depth": self.loop_depth, "break_flag": break_flag}
         )
+        self.push_loop_exit_alias_state_scope()
+        body_alias_state = self.resource_access_alias_state()
+        loop_exit_alias_states = []
         try:
             for stmt in self.statement_list(node.body):
                 code += self.generate_statement(stmt, indent + 2)
+            body_alias_state = self.resource_access_alias_state()
         finally:
+            loop_exit_alias_states = self.pop_loop_exit_alias_state_scope()
             self.do_while_contexts.pop()
             self.loop_depth -= 1
 
@@ -5779,6 +5856,13 @@ class MojoCodeGen:
         code += f"{indent_str}        break\n"
         code += f"{indent_str}    if not {condition}:\n"
         code += f"{indent_str}        break\n"
+
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                body_alias_state,
+                *loop_exit_alias_states,
+            )
+        )
 
         return code
 

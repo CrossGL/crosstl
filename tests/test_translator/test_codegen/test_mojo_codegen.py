@@ -8390,6 +8390,206 @@ def test_if_else_assigned_struct_resource_aliases_remain_field_specific():
     assert "imageStore(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidWhileStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                while (count > 0) {
+                    payload = PayloadBox(outputs[0], 1);
+                    count--;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            image2D images[2];
+
+            vec4 invalidWhileRead(int count, ivec2 pixel) {
+                PayloadBox payload = PayloadBox(outputs[0], 0);
+                while (count > 0) {
+                    payload = PayloadBox(images[0], 1);
+                    count--;
+                }
+                return imageLoad(payload.image, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidForStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                for (int i = 0; i < count; i++) {
+                    payload = PayloadBox(outputs[0], 1);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidForInStore(int count, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                for i in count {
+                    payload = PayloadBox(outputs[0], 1);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidDoWhileStore(
+                bool stop,
+                int count,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                do {
+                    if (stop) {
+                        break;
+                    }
+                    payload = PayloadBox(outputs[0], 1);
+                    count--;
+                } while (count > 0);
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidLoopStore(bool stop, ivec2 pixel, vec4 color) {
+                PayloadBox payload = PayloadBox(inputs[0], 0);
+                loop {
+                    if (stop) {
+                        break;
+                    }
+                    payload = PayloadBox(outputs[0], 1);
+                    break;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_loop_carried_resource_alias_access_qualifiers_apply_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_loop_carried_struct_resource_aliases_remain_field_specific():
+    source = """
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+
+    vec4 readAfterWhile(int count, ivec2 pixel) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        while (count > 0) {
+            payload = ImagePair(inputs[1], outputs[1]);
+            count--;
+        }
+        return imageLoad(payload.readable, pixel);
+    }
+
+    void writeAfterFor(int count, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        for (int i = 0; i < count; i++) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+
+    void writeAfterDoWhile(bool stop, int count, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        do {
+            if (stop) {
+                break;
+            }
+            payload = ImagePair(inputs[1], outputs[1]);
+            count--;
+        } while (count > 0);
+        imageStore(payload.writable, pixel, color);
+    }
+
+    void writeAfterLoop(bool stop, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        loop {
+            if (stop) {
+                break;
+            }
+            payload = ImagePair(inputs[1], outputs[1]);
+            break;
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "return image_load(payload.readable, pixel)" in generated_code
+    assert generated_code.count("image_store(payload.writable, pixel, color)") == 3
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;
