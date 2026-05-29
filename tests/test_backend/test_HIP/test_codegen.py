@@ -8412,6 +8412,170 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_texture_reference_output_reads_emit_metadata_expressions(self):
+        """Test texture-reference scalar getter outputs lower to metadata."""
+        code = """
+        void queryTextureReference(
+            textureReference* texRef,
+            int* ints,
+            unsigned int* flagsOut,
+            float* floats,
+            size_t* sizes
+        ) {
+            size_t alignment = 0;
+            size_t statusAlignment = 0;
+            hipTextureAddressMode addressMode;
+            hipTextureFilterMode filterMode;
+            hipTextureFilterMode mipFilterMode;
+            unsigned int flags = 0;
+            unsigned int statusFlags = 0;
+            int maxAniso = 0;
+            float mipBias = 0.0f;
+            hipArray_Format format;
+            int channels = 0;
+            float minClamp = 0.0f;
+            float maxClamp = 0.0f;
+            float statusMinClamp = 0.0f;
+            float statusMaxClamp = 0.0f;
+            hipGetTextureAlignmentOffset(&alignment, texRef);
+            sizes[0] = alignment;
+            alignment = 4;
+            size_t manualAlignment = alignment;
+            hipTexRefGetAddressMode(&addressMode, texRef, 1);
+            ints[0] = addressMode;
+            addressMode = hipAddressModeClamp;
+            hipTextureAddressMode manualAddressMode = addressMode;
+            hipTexRefGetFilterMode(&filterMode, texRef);
+            ints[1] = filterMode;
+            hipTexRefGetFlags(&flags, texRef);
+            flagsOut[0] = flags;
+            flags = 7;
+            unsigned int manualFlags = flags;
+            hipTexRefGetMaxAnisotropy(&maxAniso, texRef);
+            ints[2] = maxAniso;
+            hipTexRefGetMipmapFilterMode(&mipFilterMode, texRef);
+            ints[3] = mipFilterMode;
+            hipTexRefGetMipmapLevelBias(&mipBias, texRef);
+            floats[0] = mipBias;
+            hipTexRefGetFormat(&format, &channels, texRef);
+            ints[4] = format;
+            ints[5] = channels;
+            hipTexRefGetMipmapLevelClamp(&minClamp, &maxClamp, texRef);
+            floats[1] = minClamp;
+            floats[2] = maxClamp;
+            hipError_t errAlignment =
+                hipGetTextureAlignmentOffset(&statusAlignment, texRef);
+            sizes[1] = statusAlignment;
+            hipError_t errFlags = hipTexRefGetFlags(&statusFlags, texRef);
+            flagsOut[1] = statusFlags;
+            hipError_t errClamp =
+                hipTexRefGetMipmapLevelClamp(
+                    &statusMinClamp,
+                    &statusMaxClamp,
+                    texRef
+                );
+            floats[3] = statusMinClamp;
+            floats[4] = statusMaxClamp;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "sizes[0] = "
+            "(/* HIP device query: textureReference.alignmentOffset(texRef) */ 0);"
+            in result
+        )
+        assert "alignment = 4;" in result
+        assert "var manualAlignment: u32 = alignment;" in result
+        assert (
+            "ints[0] = (/* HIP device query: "
+            "textureReference.addressMode(texRef, 1) */ 0);"
+        ) in result
+        assert "var manualAddressMode: hipTextureAddressMode = addressMode;" in result
+        assert (
+            "ints[1] = (/* HIP device query: "
+            "textureReference.filterMode(texRef) */ 0);"
+        ) in result
+        assert (
+            "flagsOut[0] = (/* HIP device query: "
+            "textureReference.flags(texRef) */ 0);"
+        ) in result
+        assert "flags = 7;" in result
+        assert "var manualFlags: u32 = flags;" in result
+        assert (
+            "ints[2] = (/* HIP device query: "
+            "textureReference.maxAnisotropy(texRef) */ 0);"
+        ) in result
+        assert (
+            "ints[3] = (/* HIP device query: "
+            "textureReference.mipmapFilterMode(texRef) */ 0);"
+        ) in result
+        assert (
+            "floats[0] = (/* HIP device query: "
+            "textureReference.mipmapLevelBias(texRef) */ 0);"
+        ) in result
+        assert (
+            "ints[4] = (/* HIP device query: " "textureReference.format(texRef) */ 0);"
+        ) in result
+        assert (
+            "ints[5] = (/* HIP device query: "
+            "textureReference.channelCount(texRef) */ 0);"
+        ) in result
+        assert (
+            "floats[1] = (/* HIP device query: "
+            "textureReference.mipmapLevelClamp.min(texRef) */ 0);"
+        ) in result
+        assert (
+            "floats[2] = (/* HIP device query: "
+            "textureReference.mipmapLevelClamp.max(texRef) */ 0);"
+        ) in result
+        assert "var errAlignment: hipError_t = hipSuccess;" in result
+        assert (
+            "sizes[1] = "
+            "(/* HIP device query: textureReference.alignmentOffset(texRef) */ 0);"
+            in result
+        )
+        assert "var errFlags: hipError_t = hipSuccess;" in result
+        assert (
+            "flagsOut[1] = (/* HIP device query: "
+            "textureReference.flags(texRef) */ 0);"
+        ) in result
+        assert "var errClamp: hipError_t = hipSuccess;" in result
+        assert (
+            "floats[3] = (/* HIP device query: "
+            "textureReference.mipmapLevelClamp.min(texRef) */ 0);"
+        ) in result
+        assert (
+            "floats[4] = (/* HIP device query: "
+            "textureReference.mipmapLevelClamp.max(texRef) */ 0);"
+        ) in result
+        assert "sizes[0] = alignment;" not in result
+        assert "ints[0] = addressMode;" not in result
+        assert "ints[1] = filterMode;" not in result
+        assert "flagsOut[0] = flags;" not in result
+        assert "ints[2] = maxAniso;" not in result
+        assert "ints[3] = mipFilterMode;" not in result
+        assert "floats[0] = mipBias;" not in result
+        assert "ints[4] = format;" not in result
+        assert "ints[5] = channels;" not in result
+        assert "floats[1] = minClamp;" not in result
+        assert "floats[2] = maxClamp;" not in result
+        assert "sizes[1] = statusAlignment;" not in result
+        assert "flagsOut[1] = statusFlags;" not in result
+        assert "floats[3] = statusMinClamp;" not in result
+        assert "floats[4] = statusMaxClamp;" not in result
+        assert "var manualAlignment: u32 = (/* HIP device query:" not in result
+        assert (
+            "var manualAddressMode: hipTextureAddressMode = (/* HIP device query:"
+            not in result
+        )
+        assert "var manualFlags: u32 = (/* HIP device query:" not in result
+
     def test_hip_runtime_callback_activity_expression_conversion(self):
         """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """

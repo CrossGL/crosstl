@@ -10478,6 +10478,69 @@ class TestCudaCodeGen:
         assert "textures_metadata[(slot++ + offset)]" not in cuda_code
         assert "textureSize(" not in cuda_code
 
+    def test_resource_query_returned_resource_array_base_actuals_are_side_effect_safe(
+        self,
+    ):
+        """Test CUDA sidecars avoid duplicating unsafe resource-array bases."""
+        source_code = """
+        shader ReturnedResourceArrayBaseActualSafety {
+            sampler2d textureGrid[4][4];
+
+            sampler2d chooseParamTex(sampler2d texs[4], int slot) {
+                return texs[slot];
+            }
+
+            int nextLayer() {
+                return 1;
+            }
+
+            void consume(sampler2d tex) {
+                ivec2 texSize = textureSize(tex, 0);
+            }
+
+            compute {
+                void main(int layer, int slot) {
+                    ivec2 safeBaseSize =
+                        textureSize(
+                            chooseParamTex(textureGrid[layer + 1], slot + 1),
+                            0
+                        );
+                    ivec2 unsafeCallBaseSize =
+                        textureSize(
+                            chooseParamTex(textureGrid[nextLayer()], slot),
+                            0
+                        );
+                    consume(chooseParamTex(textureGrid[layer++], slot));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
+        assert (
+            "int2 safeBaseSize = cgl_textureSize_sampler2D"
+            "(textureGrid_metadata[(layer + 1)][(slot + 1)], 0);" in cuda_code
+        )
+        assert (
+            "int2 unsafeCallBaseSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "consume(chooseParamTex(textureGrid[layer++], slot), "
+            "/* unsupported CUDA resource query: metadata unavailable for "
+            "sampler2D argument tex */ CglResourceQueryInfo{});" in cuda_code
+        )
+        assert "textureGrid_metadata[nextLayer()]" not in cuda_code
+        assert "textureGrid_metadata[layer++]" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

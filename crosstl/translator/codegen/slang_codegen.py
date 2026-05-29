@@ -9030,9 +9030,12 @@ class SlangCodeGen:
         expected_rank = self.texture_offset_rank(resource_type)
         if expected_rank is None:
             return "requires an offset-capable sampler1D/2D/3D texture resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def texture_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -9051,9 +9054,12 @@ class SlangCodeGen:
         expected_rank = self.gather_offset_rank(resource_type)
         if expected_rank is None:
             return "requires a gather-offset-capable sampler2D/2DArray texture resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def gather_offsets_rank_unsupported_reason(self, texture_node, extra_args):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -9064,18 +9070,26 @@ class SlangCodeGen:
             return "requires a gather-offset-capable sampler2D/2DArray texture resource"
 
         if len(extra_args) in {1, 2} and self.is_array_expression(extra_args[0]):
-            return self.texture_rank_unsupported_reason(
+            rank_reason = self.texture_rank_unsupported_reason(
                 extra_args[0],
                 expected_rank,
                 resource_type,
                 "offset",
                 array_element=True,
             )
+            if rank_reason:
+                return rank_reason
+            return self.texture_offset_type_unsupported_reason(
+                extra_args[0], array_element=True
+            )
         if len(extra_args) in {4, 5}:
             for offset in extra_args[:4]:
                 reason = self.texture_rank_unsupported_reason(
                     offset, expected_rank, resource_type, "offset"
                 )
+                if reason:
+                    return reason
+                reason = self.texture_offset_type_unsupported_reason(offset)
                 if reason:
                     return reason
         return None
@@ -9094,9 +9108,12 @@ class SlangCodeGen:
         expected_rank = self.shadow_compare_offset_rank(resource_type)
         if expected_rank is None:
             return "requires an offset-capable sampler2DShadow/2DArrayShadow resource"
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             offset, expected_rank, resource_type, "offset"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
 
     def shadow_compare_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -9118,6 +9135,23 @@ class SlangCodeGen:
             return None
 
         return f"compare reference must be scalar float or double, got {mapped_type}"
+
+    def texture_offset_type_unsupported_reason(self, offset, array_element=False):
+        type_name = self.type_name_string(self.expression_result_type(offset))
+        if type_name is None:
+            return None
+        if array_element and "[" in type_name and "]" in type_name:
+            type_name, _suffix = split_array_type_suffix(type_name)
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type == "int":
+            return None
+
+        info = self.vector_value_info(type_name)
+        if info is not None and info["component_type"] == "int":
+            return None
+
+        return f"offset must be scalar or vector int, got {mapped_type}"
 
     def texture_gradient_type_unsupported_reason(self, gradient):
         type_name = self.type_name_string(self.expression_result_type(gradient))

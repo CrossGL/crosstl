@@ -3253,8 +3253,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "index_expr",
                 getattr(resource_expr, "index", None),
             )
+            if index_node is None or not self.is_safe_query_return_actual_index(
+                index_node
+            ):
+                return None
             base_expr = self.query_metadata_expression(array_node)
-            if base_expr is None or index_node is None:
+            if base_expr is None:
                 return None
             return f"{base_expr}[{self.visit(index_node)}]"
 

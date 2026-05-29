@@ -2172,6 +2172,12 @@ class HipToCrossGLConverter:
         elif name == "hipGetTextureAlignmentOffset":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"textureReference.alignmentOffset({args[1]})",
+                    )
                 return [
                     "// HIP texture alignment offset query: "
                     f"output: {output}, texture: {args[1]}"
@@ -2189,6 +2195,12 @@ class HipToCrossGLConverter:
         elif name == "hipTexRefGetAddressMode":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"textureReference.addressMode({args[1]}, {args[2]})",
+                    )
                 return [
                     "// HIP texture reference get address mode: "
                     f"output: {output}, texture: {args[1]}, dim: {args[2]}"
@@ -2206,6 +2218,7 @@ class HipToCrossGLConverter:
         }:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
                 labels = {
                     "hipTexRefGetArray": "array",
                     "hipTexRefGetBorderColor": "border color",
@@ -2217,6 +2230,19 @@ class HipToCrossGLConverter:
                     "hipTexRefGetMipMappedArray": "mipmapped array",
                     "hipTexRefGetMipmappedArray": "mipmapped array",
                 }
+                query_names = {
+                    "hipTexRefGetFilterMode": "filterMode",
+                    "hipTexRefGetFlags": "flags",
+                    "hipTexRefGetMaxAnisotropy": "maxAnisotropy",
+                    "hipTexRefGetMipmapFilterMode": "mipmapFilterMode",
+                    "hipTexRefGetMipmapLevelBias": "mipmapLevelBias",
+                }
+                query_name = query_names.get(name)
+                if output_name is not None and query_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"textureReference.{query_name}({args[1]})",
+                    )
                 return [
                     f"// HIP texture reference get {labels[name]}: "
                     f"output: {output}, texture: {args[1]}"
@@ -2225,6 +2251,20 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 format_output = self.format_runtime_pointer_target(node.args[0])
                 channels_output = self.format_runtime_pointer_target(node.args[1])
+                format_output_name = self.get_runtime_pointer_target_name(node.args[0])
+                channels_output_name = self.get_runtime_pointer_target_name(
+                    node.args[1]
+                )
+                if format_output_name is not None:
+                    self.register_device_query_source(
+                        format_output_name,
+                        f"textureReference.format({args[2]})",
+                    )
+                if channels_output_name is not None:
+                    self.register_device_query_source(
+                        channels_output_name,
+                        f"textureReference.channelCount({args[2]})",
+                    )
                 return [
                     "// HIP texture reference get format: "
                     f"format output: {format_output}, "
@@ -2234,6 +2274,18 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 min_output = self.format_runtime_pointer_target(node.args[0])
                 max_output = self.format_runtime_pointer_target(node.args[1])
+                min_output_name = self.get_runtime_pointer_target_name(node.args[0])
+                max_output_name = self.get_runtime_pointer_target_name(node.args[1])
+                if min_output_name is not None:
+                    self.register_device_query_source(
+                        min_output_name,
+                        f"textureReference.mipmapLevelClamp.min({args[2]})",
+                    )
+                if max_output_name is not None:
+                    self.register_device_query_source(
+                        max_output_name,
+                        f"textureReference.mipmapLevelClamp.max({args[2]})",
+                    )
                 return [
                     "// HIP texture reference get mipmap level clamp: "
                     f"min output: {min_output}, max output: {max_output}, "
