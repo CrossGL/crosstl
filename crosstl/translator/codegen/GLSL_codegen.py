@@ -7172,6 +7172,9 @@ class GLSLCodeGen:
             self.validate_function_structured_buffer_access_arguments(
                 func_name, expr.args
             )
+            self.validate_function_image_parameter_contract_arguments(
+                func_name, expr.args
+            )
             self.validate_function_image_access_arguments(func_name, expr.args)
             resource_specialization = self.glsl_resource_function_call_specialization(
                 func_name,
@@ -8142,6 +8145,95 @@ class GLSLCodeGen:
             )
             return
         raise ValueError(image_atomic_format_error("OpenGL", func_name, image_format))
+
+    def storage_image_effective_format(self, image_type, explicit_format=None):
+        if explicit_format is not None:
+            return explicit_format
+        image_type = self.resource_base_type(image_type)
+        if not self.is_storage_image_type(image_type):
+            return None
+        return self.image_format_qualifier(image_type)
+
+    def storage_image_parameter_contract(self, param):
+        raw_type = getattr(param, "param_type", getattr(param, "vtype", None))
+        if not self.is_storage_image_type(raw_type):
+            return None
+
+        base_type = self.resource_base_type(raw_type)
+        expected_type = self.resource_base_type(
+            self.map_resource_type_with_format(base_type, param)
+        )
+        explicit_format = self.explicit_glsl_image_format(param)
+        access_choices = self.resource_access_metadata_choices(param)
+        self.validate_resource_access_metadata_consistency(param, access_choices)
+        return {
+            "type": expected_type,
+            "format": explicit_format,
+            "access": access_choices[0][1] if access_choices else None,
+        }
+
+    def storage_image_argument_contract(self, arg):
+        actual_type = self.texture_argument_resource_type(arg)
+        if not self.is_storage_image_type(actual_type):
+            return None
+        explicit_format = self.image_resource_format(arg)
+        return {
+            "type": self.resource_base_type(actual_type),
+            "format": self.storage_image_effective_format(actual_type, explicit_format),
+            "access": self.image_resource_access(arg),
+        }
+
+    def validate_function_image_parameter_contract_arguments(self, func_name, args):
+        callee = self.function_definitions.get(func_name)
+        if callee is None:
+            return
+
+        params = list(getattr(callee, "parameters", getattr(callee, "params", [])))
+        for index, param in enumerate(params):
+            if index >= len(args):
+                break
+            expected = self.storage_image_parameter_contract(param)
+            if expected is None:
+                continue
+            actual = self.storage_image_argument_contract(args[index])
+            if actual is None:
+                continue
+
+            param_name = getattr(param, "name", None) or f"arg{index}"
+            actual_name = expression_debug_name(args[index])
+            expected_format = expected.get("format")
+            if expected_format is not None and actual.get("format") != expected_format:
+                actual_format = actual.get("format") or "<unspecified>"
+                raise ValueError(
+                    f"OpenGL function call '{func_name}' requires "
+                    f"{expected_format} storage image format for argument "
+                    f"{actual_name} passed to parameter {param_name}: got "
+                    f"{actual_format}"
+                )
+
+            expected_type = expected.get("type")
+            if expected_type is not None and actual.get("type") != expected_type:
+                actual_type = actual.get("type") or "<unknown>"
+                raise ValueError(
+                    f"OpenGL function call '{func_name}' requires "
+                    f"{expected_type} storage image for argument {actual_name} "
+                    f"passed to parameter {param_name}: got {actual_type}"
+                )
+
+            expected_access = expected.get("access")
+            actual_access = actual.get("access")
+            if expected_access is not None and not image_access_satisfies_requirement(
+                expected_access,
+                actual_access,
+            ):
+                required_label = image_access_requirement_label(expected_access)
+                actual_label = image_access_diagnostic_name(actual_access)
+                raise ValueError(
+                    f"OpenGL function call '{func_name}' requires "
+                    f"{required_label} storage image access for argument "
+                    f"{actual_name} passed to parameter {param_name}: got "
+                    f"{actual_label}"
+                )
 
     def validate_function_image_access_arguments(self, func_name, args):
         callee_requirements = self.function_image_access_requirements.get(func_name)

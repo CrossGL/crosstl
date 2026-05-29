@@ -10831,6 +10831,170 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_graph_struct_outputs_clear_stale_metadata(self):
+        """Test graph struct outputs clear prior query metadata."""
+        code = """
+        void queryGraphStructs(
+            hipDeviceptr_t devicePtr,
+            hipGraphNode_t kernelNode,
+            hipGraphNode_t memcpyNode,
+            hipGraphNode_t memsetNode,
+            hipGraphNode_t hostNode,
+            hipGraphNode_t allocNode,
+            hipGraphNode_t freeNode,
+            hipGraphNode_t signalNode,
+            hipGraphNode_t waitNode,
+            hipGraphNode_t driverMemcpyNode,
+            int device,
+            void** ptrs,
+            size_t* sizes,
+            int* values
+        ) {
+            size_t staleSize = 0;
+            hipKernelNodeParams kernelParams;
+            hipMemcpy3DParms copyParams;
+            hipMemsetParams memsetParams;
+            hipHostNodeParams hostParams;
+            hipMemAllocNodeParams allocParams;
+            hipKernelNodeAttrValue attrValue;
+            hipExternalSemaphoreSignalNodeParams signalParams;
+            hipExternalSemaphoreWaitNodeParams waitParams;
+            HIP_MEMCPY3D driverCopyParams;
+            void* freePtr;
+            size_t graphBytes = 0;
+
+            hipMemGetAddressRange((void**)&kernelParams, &staleSize, devicePtr);
+            hipGraphKernelNodeGetParams(kernelNode, &kernelParams);
+            ptrs[0] = kernelParams.func;
+
+            hipMemGetAddressRange((void**)&copyParams, &staleSize, devicePtr);
+            if (hipGraphMemcpyNodeGetParams(memcpyNode, &copyParams) == hipSuccess) {
+                ptrs[1] = copyParams.srcPtr.ptr;
+            }
+
+            hipMemGetAddressRange((void**)&memsetParams, &staleSize, devicePtr);
+            hipGraphMemsetNodeGetParams(memsetNode, &memsetParams);
+            sizes[0] = memsetParams.width;
+
+            hipMemGetAddressRange((void**)&hostParams, &staleSize, devicePtr);
+            if (hipGraphHostNodeGetParams(hostNode, &hostParams) != hipSuccess) {
+                ptrs[2] = hostParams.fn;
+            }
+
+            hipMemGetAddressRange((void**)&allocParams, &staleSize, devicePtr);
+            hipGraphMemAllocNodeGetParams(allocNode, &allocParams);
+            sizes[1] = allocParams.bytesize;
+
+            hipMemGetAddressRange((void**)&freePtr, &staleSize, devicePtr);
+            hipGraphMemFreeNodeGetParams(freeNode, &freePtr);
+            ptrs[3] = freePtr;
+
+            hipMemGetAddressRange((void**)&attrValue, &staleSize, devicePtr);
+            hipGraphKernelNodeGetAttribute(
+                kernelNode, hipKernelNodeAttributeCooperative, &attrValue
+            );
+            values[0] = attrValue.cooperative;
+
+            hipMemGetAddressRange((void**)&signalParams, &staleSize, devicePtr);
+            hipGraphExternalSemaphoresSignalNodeGetParams(
+                signalNode, &signalParams
+            );
+            ptrs[4] = signalParams.extSemArray;
+
+            hipMemGetAddressRange((void**)&waitParams, &staleSize, devicePtr);
+            hipGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams);
+            ptrs[5] = waitParams.extSemArray;
+
+            hipMemGetAddressRange((void**)&driverCopyParams, &staleSize, devicePtr);
+            hipDrvGraphMemcpyNodeGetParams(driverMemcpyNode, &driverCopyParams);
+            ptrs[6] = driverCopyParams.srcDevice;
+
+            hipMemGetAddressRange((void**)&graphBytes, &staleSize, devicePtr);
+            hipDeviceGetGraphMemAttribute(
+                device, hipGraphMemAttrUsedMemCurrent, &graphBytes
+            );
+            sizes[2] = graphBytes;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP graph kernel node get params: node: kernelNode, "
+                "params: (&kernelParams)"
+            ),
+            (
+                "HIP graph memcpy node get params: node: memcpyNode, "
+                "params: (&copyParams)"
+            ),
+            (
+                "HIP graph memset node get params: node: memsetNode, "
+                "params: (&memsetParams)"
+            ),
+            (
+                "HIP graph host node get params: node: hostNode, "
+                "params: (&hostParams)"
+            ),
+            (
+                "HIP graph memory alloc node get params: node: allocNode, "
+                "params output: allocParams"
+            ),
+            (
+                "HIP graph memory free node get params: node: freeNode, "
+                "pointer output: freePtr"
+            ),
+            (
+                "HIP graph kernel node get attribute: node: kernelNode, "
+                "attribute: hipKernelNodeAttributeCooperative, output: attrValue"
+            ),
+            (
+                "HIP graph external semaphore signal node get params: "
+                "node: signalNode, params: (&signalParams)"
+            ),
+            (
+                "HIP graph external semaphore wait node get params: "
+                "node: waitNode, params: (&waitParams)"
+            ),
+            (
+                "HIP driver graph memcpy node get params: "
+                "node: driverMemcpyNode, params output: driverCopyParams"
+            ),
+            (
+                "HIP device graph memory get attribute: device: device, "
+                "attribute: hipGraphMemAttrUsedMemCurrent, output: graphBytes"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+
+        for index, expression in [
+            (0, "kernelParams.func"),
+            (1, "copyParams.srcPtr.ptr"),
+            (2, "hostParams.fn"),
+            (3, "freePtr"),
+            (4, "signalParams.extSemArray"),
+            (5, "waitParams.extSemArray"),
+            (6, "driverCopyParams.srcDevice"),
+        ]:
+            assert f"ptrs[{index}] = {expression};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "memsetParams.width"),
+            (1, "allocParams.bytesize"),
+            (2, "graphBytes"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        assert "values[0] = attrValue.cooperative;" in result
+        assert "values[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_graph_api_conversion(self):
         """Test HIP graph APIs emit metadata comments."""
         code = """

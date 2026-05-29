@@ -3867,6 +3867,147 @@ class TestCudaCodeGen:
         assert "atomicCompareExchange(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_plain_pointer_reference_atomics_emit_cuda_diagnostics(self, tmp_path):
+        """Test CUDA atomics on pointer/reference targets validate mutability."""
+        source_code = """
+        shader PointerReferenceAtomicsCUDA {
+            struct AtomicHolder {
+                uint* value;
+                const uint* readonly;
+                uint2* vectorPtr;
+            };
+
+            void bumpPointers(
+                uint* writable,
+                const uint* readonly,
+                uint2* vectorPtr,
+                uint index,
+                uint value
+            ) {
+                uint direct = atomicAdd(writable, value);
+                uint indexed = atomicAdd(writable[index], value);
+                uint blocked = atomicAdd(readonly, value);
+                uint blockedIndexed = atomicAdd(readonly[index], value);
+                uint blockedAddress = atomicAdd(&writable, value);
+                uint2 blockedVector = atomicAdd(vectorPtr, uint2(1u, 2u));
+            }
+
+            void bumpReferences(uint& mut writable, uint& readonly, uint value) {
+                uint refDirect = atomicAdd(writable, value);
+                uint refAddress = atomicAdd(&writable, refDirect);
+                uint refBlocked = atomicAdd(readonly, value);
+            }
+
+            void bumpMembers(AtomicHolder holder, uint index, uint value) {
+                uint member = atomicAdd(holder.value, value);
+                uint memberIndexed = atomicAdd(holder.value[index], value);
+                uint blockedMember = atomicAdd(holder.readonly, value);
+                uint blockedMemberIndexed = atomicAdd(
+                    holder.readonly[index],
+                    value
+                );
+                uint2 blockedVectorMember = atomicAdd(
+                    holder.vectorPtr,
+                    uint2(3u, 4u)
+                );
+            }
+
+            void bumpHolderPointer(AtomicHolder* holder, uint index, uint value) {
+                uint pointerMember = atomicAdd(holder->value, value);
+                uint pointerMemberIndexed = atomicAdd(holder->value[index], value);
+                uint pointerBlocked = atomicAdd(holder->readonly, value);
+                uint pointerBlockedIndexed = atomicAdd(
+                    holder->readonly[index],
+                    value
+                );
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "PointerType(" not in cuda_code
+        assert "ReferenceType(" not in cuda_code
+        assert "uint* value;" in cuda_code
+        assert "const uint* readonly;" in cuda_code
+        assert "uint2* vectorPtr;" in cuda_code
+        assert (
+            "__device__ void bumpPointers(uint* writable, const uint* readonly, "
+            "uint2* vectorPtr, uint index, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ void bumpReferences(uint& writable, const uint& readonly, "
+            "uint value)"
+        ) in cuda_code
+        assert "uint direct = atomicAdd(writable, value);" in cuda_code
+        assert "uint indexed = atomicAdd(&writable[index], value);" in cuda_code
+        assert "uint member = atomicAdd(holder.value, value);" in cuda_code
+        assert (
+            "uint memberIndexed = atomicAdd(&holder.value[index], value);" in cuda_code
+        )
+        assert "uint pointerMember = atomicAdd(holder->value, value);" in cuda_code
+        assert (
+            "uint pointerMemberIndexed = atomicAdd(&holder->value[index], value);"
+            in cuda_code
+        )
+        assert "uint refDirect = atomicAdd(&writable, value);" in cuda_code
+        assert "uint refAddress = atomicAdd(&writable, refDirect);" in cuda_code
+        assert (
+            "uint blocked = /* unsupported CUDA atomic call: atomicAdd on const "
+            "uint* requires writable pointer target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedIndexed = /* unsupported CUDA atomic call: atomicAdd on "
+            "const uint* requires writable pointer target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedAddress = /* unsupported CUDA atomic call: atomicAdd on "
+            "uint* requires pointer target, not address of pointer */ 0u;" in cuda_code
+        )
+        assert (
+            "uint2 blockedVector = /* unsupported CUDA atomic call: atomicAdd on "
+            "uint2* requires supported scalar int/uint/float target */ "
+            "make_uint2(0u, 0u);" in cuda_code
+        )
+        assert (
+            "uint refBlocked = /* unsupported CUDA atomic call: atomicAdd on const "
+            "uint& requires mutable reference target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedMember = /* unsupported CUDA atomic call: atomicAdd on "
+            "const uint* requires writable pointer target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedMemberIndexed = /* unsupported CUDA atomic call: "
+            "atomicAdd on const uint* requires writable pointer target */ 0u;"
+            in cuda_code
+        )
+        assert (
+            "uint pointerBlocked = /* unsupported CUDA atomic call: atomicAdd on "
+            "const uint* requires writable pointer target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint pointerBlockedIndexed = /* unsupported CUDA atomic call: "
+            "atomicAdd on const uint* requires writable pointer target */ 0u;"
+            in cuda_code
+        )
+        assert (
+            "uint2 blockedVectorMember = /* unsupported CUDA atomic call: "
+            "atomicAdd on uint2* requires supported scalar int/uint/float target "
+            "*/ make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "atomicAdd(readonly" not in cuda_code
+        assert "uint blockedAddress = atomicAdd(&writable, value);" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_structured_buffer_element_atomics_emit_cuda_pointer_atomics(
         self, tmp_path
     ):

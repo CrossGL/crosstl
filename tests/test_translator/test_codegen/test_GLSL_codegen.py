@@ -24075,6 +24075,110 @@ def test_glsl_storage_image_access_allows_compatible_helper_calls():
     assert "writePixel__glsl_image_target(ivec2(0, 0), vec4(value));" in generated_code
 
 
+def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible_calls():
+    shader = """
+    shader StorageImageHelperMetadataContractsValid {
+        image2D counters @r32ui[];
+        image2D target;
+
+        int queryCounter(image2D images[] @r32ui, ivec2 pixel) {
+            return imageSize(images[0]).x;
+        }
+
+        void sizeOnlyWrite(image2D image @writeonly) {
+            ivec2 dims = imageSize(image);
+        }
+
+        compute {
+            void main() {
+                int count = queryCounter(counters, ivec2(0, 1));
+                sizeOnlyWrite(target);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[];" in generated_code
+    assert "layout(rgba32f, binding = 1) uniform image2D target;" in generated_code
+    assert "int queryCounter__glsl_images_counters(ivec2 pixel)" in generated_code
+    assert "void sizeOnlyWrite__glsl_image_target()" in generated_code
+    assert (
+        "int count = queryCounter__glsl_images_counters(ivec2(0, 1));" in generated_code
+    )
+    assert "sizeOnlyWrite__glsl_image_target();" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageHelperFormatContractInvalid {
+                image2D rgImages @rg32f[];
+
+                int queryCounter(image2D images[] @r32ui, ivec2 pixel) {
+                    return imageSize(images[0]).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryCounter(rgImages, ivec2(0, 1));
+                    }
+                }
+            }
+            """,
+            "function call 'queryCounter' requires r32ui storage image format "
+            "for argument rgImages passed to parameter images: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperTypeContractInvalid {
+                image2D colorImages[];
+
+                int queryCounter(uimage2D images[], ivec2 pixel) {
+                    return imageSize(images[0]).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryCounter(colorImages, ivec2(0, 1));
+                    }
+                }
+            }
+            """,
+            "function call 'queryCounter' requires uimage2D storage image "
+            "for argument colorImages passed to parameter images: got image2D",
+        ),
+        (
+            """
+            shader StorageImageHelperAccessContractInvalid {
+                image2D source @readonly;
+
+                void sizeOnlyWrite(image2D image @writeonly) {
+                    ivec2 dims = imageSize(image);
+                }
+
+                compute {
+                    void main() {
+                        sizeOnlyWrite(source);
+                    }
+                }
+            }
+            """,
+            "function call 'sizeOnlyWrite' requires write-capable storage image "
+            "access for argument source passed to parameter image: got readonly",
+        ),
+    ],
+)
+def test_glsl_storage_image_helper_parameter_metadata_contracts_reject_mismatches(
+    shader, match
+):
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [

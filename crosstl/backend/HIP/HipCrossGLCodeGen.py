@@ -3383,7 +3383,7 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 action = "get" if "GetParams" in name else "set"
                 params = (
-                    self.format_runtime_pointer_target(raw_args[1])
+                    self.format_runtime_raw_output_target(raw_args[1])
                     if action == "get"
                     else args[1]
                 )
@@ -3458,7 +3458,7 @@ class HipToCrossGLConverter:
                 ]
         if name in {"hipGraphMemAllocNodeGetParams", "hipGraphMemFreeNodeGetParams"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 node_kind = "alloc" if "Alloc" in name else "free"
                 detail_label = (
                     "params output" if node_kind == "alloc" else "pointer output"
@@ -3599,7 +3599,11 @@ class HipToCrossGLConverter:
         if name in {"hipGraphKernelNodeGetAttribute", "hipGraphKernelNodeSetAttribute"}:
             if len(args) >= 3:
                 action = "get" if name == "hipGraphKernelNodeGetAttribute" else "set"
-                value = self.format_runtime_pointer_target(raw_args[2])
+                value = (
+                    self.format_runtime_raw_output_target(raw_args[2])
+                    if action == "get"
+                    else self.format_runtime_pointer_target(raw_args[2])
+                )
                 label = "output" if action == "get" else "value"
                 return [
                     f"// HIP graph kernel node {action} attribute: "
@@ -3690,6 +3694,8 @@ class HipToCrossGLConverter:
             "hipGraphHostNodeSetParams",
         }:
             if len(args) >= 2:
+                if "GetParams" in name:
+                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [self.format_hip_graph_node_params_comment(name, args)]
         if name in {
             "hipGraphExecKernelNodeSetParams",
@@ -3768,6 +3774,8 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 action = "signal" if "Signal" in name else "wait"
                 direction = "get" if "GetParams" in name else "set"
+                if direction == "get":
+                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIP graph external semaphore {action} node {direction} params: "
                     f"node: {args[0]}, params: {args[1]}"
@@ -3785,7 +3793,11 @@ class HipToCrossGLConverter:
         if name in {"hipDeviceGetGraphMemAttribute", "hipDeviceSetGraphMemAttribute"}:
             if len(args) >= 3:
                 action = "get" if name == "hipDeviceGetGraphMemAttribute" else "set"
-                value = self.format_runtime_pointer_target(raw_args[2])
+                value = (
+                    self.format_runtime_raw_output_target(raw_args[2])
+                    if action == "get"
+                    else self.format_runtime_pointer_target(raw_args[2])
+                )
                 label = "output" if action == "get" else "value"
                 return [
                     f"// HIP device graph memory {action} attribute: "

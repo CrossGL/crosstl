@@ -18827,7 +18827,7 @@ def test_ternary_operator(tmp_path):
         pytest.fail("Ternary operator codegen not implemented")
 
 
-def test_vector_constructor():
+def test_vector_constructor(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -18855,6 +18855,7 @@ def test_vector_constructor():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert "Vec4::<f32>::new" in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Vector constructor codegen not implemented")

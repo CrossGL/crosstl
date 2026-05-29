@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 854
+        "test_count": 856
       },
       "translator_codegen": {
         "exists": true,
@@ -465,7 +465,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 94,
+        "unsupported_marker_count": 96,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -517,6 +517,14 @@
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_plain_atomic_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_plain_atomic_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "def unsupported_plain_atomic_call(self, operation, reason, fallback):"
           },
           {
@@ -538,14 +546,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "f\"/* unsupported {self.resource_backend_name()} structured buffer atomic: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_byte_address_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_byte_address_buffer_call("
           }
         ]
       },
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 384
+        "test_count": 385
       },
       "translator_codegen": {
         "exists": true,
@@ -669,7 +669,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 416
+        "test_count": 417
       },
       "translator_codegen": {
         "exists": true,

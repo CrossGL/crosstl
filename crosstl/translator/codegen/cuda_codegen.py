@@ -23,6 +23,7 @@ from ..ast import (
     ExpressionStatementNode,
     IdentifierNode,
     MemberAccessNode,
+    PointerAccessNode,
     UnaryOpNode,
     TernaryOpNode,
     BlockNode,
@@ -223,6 +224,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     member_type = member.vtype
                 else:
                     member_type = "float"
+                member_type = self.apply_readonly_qualifier_to_type(member_type, member)
                 member_types[member_name] = member_type
                 member_access = self.explicit_resource_access(member)
                 if member_access is not None and self.is_storage_image_type(
@@ -355,7 +357,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 param_type = "void"
 
             self.register_variable_type(param.name, param_type, param)
-            params.append(self.format_typed_declarator(param_type, param.name))
+            declaration_type = self.apply_readonly_qualifier_to_type(param_type, param)
+            params.append(self.format_typed_declarator(declaration_type, param.name))
             metadata_param = self.query_metadata_parameter(param.name, param_type)
             if metadata_param:
                 params.append(metadata_param)
@@ -406,6 +409,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 member_type = "float"
 
+            member_type = self.apply_readonly_qualifier_to_type(member_type, member)
             member_types[member.name] = member_type
             member_access = self.explicit_resource_access(member)
             if member_access is not None and self.is_storage_image_type(member_type):
@@ -500,10 +504,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return node.name
 
     def format_typed_declarator(self, type_name, name, dynamic_array_as_pointer=True):
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
-            type_name = self.convert_type_node_to_string(type_name)
-        else:
-            type_name = str(type_name)
+        type_name = self.type_name_string(type_name)
 
         if "[" not in type_name or "]" not in type_name:
             return f"{self.convert_crossgl_type_to_cuda(type_name)} {name}"
@@ -1142,11 +1143,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
             operation
         )
+        raw_target = raw_args[0] if raw_args else None
         target_expr = (
-            self.strip_address_of_expression(raw_args[0]) if raw_args else None
+            self.strip_address_of_expression(raw_target) if raw_target else None
         )
+        address_taken = target_expr is not raw_target
         target_type = self.expression_result_type(target_expr) if target_expr else None
-        pointee_type = self.cuda_atomic_pointer_pointee_type(target_type)
+        indirect_info = self.cuda_indirect_type_info(target_type)
+        pointee_type = (
+            indirect_info["pointee_type"] if indirect_info is not None else None
+        )
         atomic_type = pointee_type or target_type
         fallback = self.diagnostic_zero_value_for_type(atomic_type)
 
@@ -1166,9 +1172,35 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 fallback,
             )
 
+        if (
+            address_taken
+            and indirect_info is not None
+            and indirect_info["kind"] == "pointer"
+        ):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {indirect_info['type_label']} requires pointer target, "
+                "not address of pointer",
+                fallback,
+            )
+
+        readonly_reason = self.plain_atomic_readonly_target_reason(
+            target_expr, indirect_info
+        )
+        if readonly_reason is not None:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                readonly_reason,
+                fallback,
+            )
+
         scalar_kind = self.cuda_atomic_scalar_kind(atomic_type)
         if scalar_kind not in supported_kinds:
-            type_label = self.type_name_string(atomic_type) or "unknown target"
+            type_label = (
+                indirect_info["type_label"]
+                if indirect_info is not None
+                else self.type_name_string(atomic_type) or "unknown target"
+            )
             return self.unsupported_plain_atomic_call(
                 func_name,
                 f"on {type_label} requires supported scalar "
@@ -1177,30 +1209,95 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
 
         target_code = self.visit(target_expr)
-        target_pointer = target_code if pointee_type is not None else f"&{target_code}"
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            target_pointer = target_code
+        else:
+            target_pointer = f"&{target_code}"
         value_args = ", ".join(args[1:])
         return f"{intrinsic}({target_pointer}, {value_args})"
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a CUDA atomic."""
-        return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+        return isinstance(
+            expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode, PointerAccessNode)
+        )
 
     def cuda_atomic_pointer_pointee_type(self, type_name):
         """Return a scalar pointee type for pointer-typed CUDA atomic operands."""
+        info = self.cuda_indirect_type_info(type_name)
+        return info["pointee_type"] if info is not None else None
+
+    def cuda_indirect_type_info(self, type_name):
+        """Return pointer/reference metadata for CUDA indirect type spellings."""
         type_name = self.type_name_string(type_name)
         if not type_name:
             return None
 
         if type_name.startswith("ptr<") and type_name.endswith(">"):
-            return type_name[4:-1].strip()
+            pointee = type_name[4:-1].strip()
+            return {
+                "kind": "pointer",
+                "pointee_type": pointee,
+                "readonly": False,
+                "type_label": f"{pointee}*",
+            }
 
         mapped_type = self.convert_crossgl_type_to_cuda(type_name)
         for candidate in (type_name, mapped_type):
-            if candidate.endswith("*"):
-                pointee = candidate[:-1].strip()
-                if pointee.startswith("const "):
-                    pointee = pointee[len("const ") :].strip()
-                return pointee
+            info = self.cuda_pointer_or_reference_type_info(candidate)
+            if info is not None:
+                return info
+        return None
+
+    def cuda_pointer_or_reference_type_info(self, type_name):
+        """Parse a CUDA pointer/reference spelling into target metadata."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        stripped = type_name.strip()
+        for suffix, kind in (("*", "pointer"), ("&", "reference")):
+            if not stripped.endswith(suffix):
+                continue
+            pointee = stripped[: -len(suffix)].strip()
+            readonly = pointee.startswith("const ")
+            if readonly:
+                pointee = pointee[len("const ") :].strip()
+            return {
+                "kind": kind,
+                "pointee_type": pointee,
+                "readonly": readonly,
+                "type_label": stripped,
+            }
+        return None
+
+    def plain_atomic_readonly_target_reason(self, target_expr, indirect_info):
+        """Return a diagnostic reason for readonly plain atomic targets."""
+        if indirect_info is not None and indirect_info["readonly"]:
+            if indirect_info["kind"] == "reference":
+                return (
+                    f"on {indirect_info['type_label']} requires mutable "
+                    "reference target"
+                )
+            return (
+                f"on {indirect_info['type_label']} requires writable pointer " "target"
+            )
+
+        if isinstance(target_expr, ArrayAccessNode):
+            array_expr = getattr(
+                target_expr, "array_expr", getattr(target_expr, "array", None)
+            )
+            array_type = self.expression_result_type(array_expr)
+            array_info = self.cuda_indirect_type_info(array_type)
+            if array_info is not None and array_info["readonly"]:
+                if array_info["kind"] == "reference":
+                    return (
+                        f"on {array_info['type_label']} requires mutable "
+                        "reference target"
+                    )
+                return (
+                    f"on {array_info['type_label']} requires writable pointer " "target"
+                )
         return None
 
     def unsupported_plain_atomic_call(self, operation, reason, fallback):
@@ -2068,6 +2165,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return member_access
 
+    def visit_PointerAccessNode(self, node):
+        """Visit C-style pointer member access."""
+        pointer_expr = self.visit(getattr(node, "pointer_expr", None))
+        return f"{pointer_expr}->{node.member}"
+
     def generate_vector_swizzle(self, node, object_expr):
         object_node = getattr(node, "object_expr", getattr(node, "object", None))
         vector_info = self.vector_type_info(self.expression_result_type(object_node))
@@ -2297,10 +2399,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def convert_crossgl_type_to_cuda(self, crossgl_type):
         """Convert CrossGL types to CUDA equivalents"""
-        if hasattr(crossgl_type, "name") or hasattr(crossgl_type, "element_type"):
-            crossgl_type = self.convert_type_node_to_string(crossgl_type)
-        else:
-            crossgl_type = str(crossgl_type)
+        crossgl_type = self.type_name_string(crossgl_type)
+        if crossgl_type is None:
+            return "void"
 
         structured_buffer_type = self.cuda_structured_buffer_type(crossgl_type)
         if structured_buffer_type is not None:
@@ -2466,7 +2567,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return a stable string spelling for TypeNode or legacy type values."""
         if type_name is None:
             return None
-        if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
+        if (
+            hasattr(type_name, "name")
+            or hasattr(type_name, "element_type")
+            or hasattr(type_name, "pointee_type")
+            or hasattr(type_name, "referenced_type")
+        ):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
 
@@ -2922,6 +3028,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if array_element_type is not None:
             return array_element_type
 
+        indirect_info = self.cuda_indirect_type_info(type_name)
+        if indirect_info is not None and indirect_info["kind"] == "pointer":
+            return indirect_info["pointee_type"]
+
         parts = self.structured_buffer_type_parts(type_name)
         if parts is not None:
             return parts[1]
@@ -2929,11 +3039,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, PointerAccessNode):
+            member_type = self.pointer_access_member_type(node)
+            if member_type is not None:
+                return member_type
         if isinstance(node, FunctionCallNode):
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
         return super().expression_result_type(node)
+
+    def pointer_access_member_type(self, node):
+        """Return the member type for ``ptr->field`` expressions."""
+        pointer_expr = getattr(node, "pointer_expr", None)
+        pointer_type = self.expression_result_type(pointer_expr)
+        pointer_info = self.cuda_indirect_type_info(pointer_type)
+        if pointer_info is None:
+            return None
+
+        struct_type = pointer_info["pointee_type"]
+        if struct_type.startswith("const "):
+            struct_type = struct_type[len("const ") :].strip()
+        return self.struct_member_types.get(struct_type, {}).get(
+            getattr(node, "member", "")
+        )
 
     def resource_call_result_type(self, func_name, raw_args):
         """Infer CUDA-specific resource diagnostic result types."""
@@ -4633,6 +4762,36 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return access
         return None
 
+    def declaration_qualifier_names(self, node):
+        """Return normalized qualifier and attribute names on declarations."""
+        names = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name:
+                names.add(attr_name)
+        return names
+
+    def apply_readonly_qualifier_to_type(self, type_name, node):
+        """Apply readonly declaration qualifiers to pointer/reference types."""
+        type_string = self.type_name_string(type_name)
+        if not type_string:
+            return type_name
+
+        if self.cuda_pointer_or_reference_type_info(type_string) is None:
+            return type_string
+
+        if not (
+            self.declaration_qualifier_names(node) & {"const", "readonly", "constant"}
+        ):
+            return type_string
+
+        if type_string.startswith("const "):
+            return type_string
+        return f"const {type_string}"
+
     def is_storage_image_type(self, type_name):
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
@@ -4661,6 +4820,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
+        type_name = self.apply_readonly_qualifier_to_type(type_name, node)
         self.variable_types[name] = type_name
         if not self.is_storage_image_type(type_name):
             self.image_resource_accesses.pop(name, None)
@@ -5803,6 +5963,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "pointee_type"):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            prefix = "" if getattr(type_node, "is_mutable", True) else "const "
+            return f"{prefix}{pointee_type}*"
+        if hasattr(type_node, "referenced_type"):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            prefix = "" if getattr(type_node, "is_mutable", False) else "const "
+            return f"{prefix}{referenced_type}&"
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
