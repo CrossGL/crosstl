@@ -3027,6 +3027,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcCreateProgram":
             if len(args) >= 6:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [
                     f"// HIPRTC create program: output: {output}, source: {args[1]}, "
@@ -3035,6 +3036,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcDestroyProgram":
             if args:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [f"// HIPRTC destroy program: output: {output}"]
         if name == "hiprtcCompileProgram":
@@ -3089,6 +3091,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcGetLoweredName":
             if len(args) >= 3:
+                self.clear_lvalue_metadata_source(raw_args[2])
                 output = self.format_runtime_pointer_target(raw_args[2])
                 return [
                     f"// HIPRTC get lowered name: program: {args[0]}, "
@@ -3096,6 +3099,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcLinkCreate":
             if len(args) >= 4:
+                self.clear_lvalue_metadata_source(raw_args[3])
                 output = self.format_runtime_pointer_target(raw_args[3])
                 return [
                     f"// HIPRTC link create: options: {args[0]}, "

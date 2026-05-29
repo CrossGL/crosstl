@@ -9054,6 +9054,102 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hiprtc_raw_outputs_clear_stale_metadata(self):
+        """Test HIPRTC raw handle/string outputs clear prior query metadata."""
+        code = """
+        void queryRtcRawOutputs(
+            hipDeviceptr_t devicePtr,
+            const char* source,
+            const char** headers,
+            const char** includeNames,
+            hiprtcJIT_option jitOptions,
+            void* optionValues,
+            void** ptrs
+        ) {
+            hiprtcProgram program;
+            hiprtcLinkState linkState;
+            const char* loweredName = 0;
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&program, &staleSize, devicePtr);
+            hiprtcCreateProgram(
+                &program,
+                source,
+                "kernel.hip",
+                0,
+                headers,
+                includeNames
+            );
+            ptrs[0] = program;
+
+            hipMemGetAddressRange((void**)&loweredName, &staleSize, devicePtr);
+            hiprtcGetLoweredName(program, "kernel", &loweredName);
+            ptrs[1] = loweredName;
+
+            hipMemGetAddressRange((void**)&linkState, &staleSize, devicePtr);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &linkState);
+            ptrs[2] = linkState;
+
+            hipMemGetAddressRange((void**)&program, &staleSize, devicePtr);
+            hiprtcDestroyProgram(&program);
+            ptrs[3] = program;
+
+            hipMemGetAddressRange((void**)&program, &staleSize, devicePtr);
+            if (hiprtcCreateProgram(&program, source, "status.hip", 0, headers, includeNames) == HIPRTC_SUCCESS) {
+                ptrs[4] = program;
+            }
+
+            hipMemGetAddressRange((void**)&loweredName, &staleSize, devicePtr);
+            if (hiprtcGetLoweredName(program, "status", &loweredName) == HIPRTC_SUCCESS) {
+                ptrs[5] = loweredName;
+            }
+
+            hipMemGetAddressRange((void**)&linkState, &staleSize, devicePtr);
+            if (hiprtcLinkCreate(1, &jitOptions, &optionValues, &linkState) == HIPRTC_SUCCESS) {
+                ptrs[6] = linkState;
+            }
+
+            hipMemGetAddressRange((void**)&program, &staleSize, devicePtr);
+            if (hiprtcDestroyProgram(&program) == HIPRTC_SUCCESS) {
+                ptrs[7] = program;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIPRTC create program: output: program, source: source, "
+            'name: "kernel.hip"'
+        ) in result
+        assert (
+            "// HIPRTC get lowered name: program: program, expression: "
+            '"kernel", output: loweredName'
+        ) in result
+        assert (
+            "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+            "option values: (&optionValues), state output: linkState"
+        ) in result
+        assert "// HIPRTC destroy program: output: program" in result
+        for index, name in [
+            (0, "program"),
+            (1, "loweredName"),
+            (2, "linkState"),
+            (3, "program"),
+            (4, "program"),
+            (5, "loweredName"),
+            (6, "linkState"),
+            (7, "program"),
+        ]:
+            assert f"ptrs[{index}] = {name};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """

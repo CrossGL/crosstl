@@ -10356,6 +10356,71 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 
 
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            """
+                uint wrong = WaveActiveBallot(predicate);
+                return wrong;
+            """,
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+        (
+            """
+                uvec4 wrong = WaveGetLaneIndex();
+                return wrong.x;
+            """,
+            "DirectX wave intrinsic 'WaveGetLaneIndex' requires "
+            "uint result context, got uint4",
+        ),
+        (
+            """
+                bool wrong = WaveActiveSum(value);
+                return wrong ? 1u : 0u;
+            """,
+            "DirectX wave intrinsic 'WaveActiveSum' requires "
+            "uint result context, got bool",
+        ),
+        (
+            """
+                float wrong = QuadReadAcrossX(pair);
+                return uint(wrong);
+            """,
+            "DirectX wave intrinsic 'QuadReadAcrossX' requires "
+            "float2 result context, got float",
+        ),
+        (
+            "return WaveActiveBallot(predicate);",
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+        (
+            "return take(WaveActiveBallot(predicate));",
+            "DirectX wave intrinsic 'WaveActiveBallot' requires "
+            "uint4 result context, got uint",
+        ),
+    ],
+)
+def test_directx_wave_intrinsics_validate_result_contexts(body, match):
+    code = f"""
+    shader BadWaveResultContext {{
+        compute {{
+            uint take(uint value) {{
+                return value;
+            }}
+
+            uint main(uint value, bool predicate, uint lane, uvec4 mask, vec2 pair) {{
+                {body}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 def test_directx_wave_intrinsics_infer_let_result_types():
     code = """
     shader WaveIntrinsicLetTypes {

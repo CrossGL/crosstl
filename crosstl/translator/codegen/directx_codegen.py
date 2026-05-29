@@ -3661,9 +3661,16 @@ class HLSLCodeGen:
             obj = self.generate_expression_with_expected(obj_expr, None)
             return f"{obj}.{member}"
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
-            condition = self.generate_expression(getattr(expr, "condition", ""))
-            true_expr = self.generate_expression(getattr(expr, "true_expr", ""))
-            false_expr = self.generate_expression(getattr(expr, "false_expr", ""))
+            expected_type = self.current_expression_expected_type
+            condition = self.generate_expression_with_expected(
+                getattr(expr, "condition", ""), "bool"
+            )
+            true_expr = self.generate_expression_with_expected(
+                getattr(expr, "true_expr", ""), expected_type
+            )
+            false_expr = self.generate_expression_with_expected(
+                getattr(expr, "false_expr", ""), expected_type
+            )
             return f"({condition} ? {true_expr} : {false_expr})"
         else:
             return str(expr)
@@ -3727,6 +3734,7 @@ class HLSLCodeGen:
             )
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
+        self.validate_hlsl_wave_intrinsic_result_context(operation, args)
         args_str = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{operation}({args_str})"
 
@@ -3763,6 +3771,41 @@ class HLSLCodeGen:
         if self.is_vector_value_type(base_type):
             return self.vector_component_type(base_type), mapped_type
         return None, mapped_type
+
+    def hlsl_result_component_type(self, vtype):
+        mapped_type = self.map_type(vtype)
+        if self.is_scalar_value_type(mapped_type):
+            return mapped_type
+        if self.is_vector_value_type(mapped_type):
+            return self.vector_component_type(mapped_type)
+        return None
+
+    def hlsl_wave_result_context_matches(self, actual_type, expected_type):
+        if not self.hlsl_value_shape_matches(actual_type, expected_type):
+            return False
+
+        actual_component = self.hlsl_result_component_type(actual_type)
+        expected_component = self.hlsl_result_component_type(expected_type)
+        if actual_component == "bool" or expected_component == "bool":
+            return actual_component == expected_component
+        return True
+
+    def validate_hlsl_wave_intrinsic_result_context(self, operation, args):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type or expected_type == "void":
+            return
+
+        actual_type = self.hlsl_wave_intrinsic_return_type(operation, args)
+        if not actual_type:
+            return
+        if self.hlsl_wave_result_context_matches(actual_type, expected_type):
+            return
+
+        raise ValueError(
+            f"DirectX wave intrinsic '{operation}' requires "
+            f"{self.hlsl_value_type_display(actual_type)} result context, got "
+            f"{self.hlsl_value_type_display(expected_type)}"
+        )
 
     def validate_hlsl_wave_scalar_bool_argument(self, operation, argument, role):
         base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
