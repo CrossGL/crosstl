@@ -24110,6 +24110,41 @@ def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible
     assert "sizeOnlyWrite__glsl_image_target();" in generated_code
 
 
+def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitively():
+    shader = """
+    shader StorageImageHelperArrayElementSpecializationValid {
+        image2D counters @r32ui[2];
+
+        int queryElement(image2D image @r32ui) {
+            return imageSize(image).x;
+        }
+
+        int queryViaArray(image2D images[] @r32ui) {
+            return queryElement(images[0]);
+        }
+
+        compute {
+            void main() {
+                int directCount = queryElement(counters[0]);
+                int nestedCount = queryViaArray(counters);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
+    assert "int queryElement__glsl_image_counters_0()" in generated_code
+    assert "return imageSize(counters[0]).x;" in generated_code
+    assert "int queryElement__glsl_image_counters()" not in generated_code
+    assert "return imageSize(counters).x;" not in generated_code
+    assert "int queryViaArray__glsl_images_counters()" in generated_code
+    assert "return queryElement__glsl_image_counters_0();" in generated_code
+    assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
+    assert "int nestedCount = queryViaArray__glsl_images_counters();" in generated_code
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [
@@ -24131,6 +24166,48 @@ def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible
             """,
             "function call 'queryCounter' requires r32ui storage image format "
             "for argument rgImages passed to parameter images: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperArrayElementFormatContractInvalid {
+                image2D rgImages @rg32f[2];
+
+                int queryElement(image2D image @r32ui) {
+                    return imageSize(image).x;
+                }
+
+                compute {
+                    void main() {
+                        int count = queryElement(rgImages[0]);
+                    }
+                }
+            }
+            """,
+            "function call 'queryElement' requires r32ui storage image format "
+            "for argument rgImages\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperTransitiveElementFormatContractInvalid {
+                image2D rgImages @rg32f[2];
+
+                int leaf(image2D image @r32ui) {
+                    return imageSize(image).x;
+                }
+
+                int mid(image2D images[]) {
+                    return leaf(images[0]);
+                }
+
+                compute {
+                    void main() {
+                        int count = mid(rgImages);
+                    }
+                }
+            }
+            """,
+            "function call 'leaf' requires r32ui storage image format "
+            "for argument images\\[0\\] passed to parameter image: got rg32f",
         ),
         (
             """
@@ -24169,6 +24246,29 @@ def test_glsl_storage_image_helper_parameter_metadata_contracts_allow_compatible
             """,
             "function call 'sizeOnlyWrite' requires write-capable storage image "
             "access for argument source passed to parameter image: got readonly",
+        ),
+        (
+            """
+            shader StorageImageHelperTransitiveAccessContractInvalid {
+                image2D source @readonly;
+
+                void leaf(image2D image @writeonly) {
+                    ivec2 dims = imageSize(image);
+                }
+
+                void mid(image2D image) {
+                    leaf(image);
+                }
+
+                compute {
+                    void main() {
+                        mid(source);
+                    }
+                }
+            }
+            """,
+            "function call 'leaf' requires write-capable storage image access "
+            "for argument image passed to parameter image: got readonly",
         ),
     ],
 )

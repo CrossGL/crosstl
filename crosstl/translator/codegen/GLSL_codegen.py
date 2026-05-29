@@ -2404,7 +2404,10 @@ class GLSLCodeGen:
 
     def glsl_resource_binding_info(self, arg, aliases):
         arg_name = self.expression_name(arg)
-        if arg_name in aliases:
+        is_array_access = isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        )
+        if arg_name in aliases and not is_array_access:
             return aliases[arg_name]
 
         resource_type = self.texture_argument_resource_type(arg)
@@ -2415,6 +2418,13 @@ class GLSLCodeGen:
         if expression is None:
             return None
 
+        if arg_name in aliases:
+            return {
+                **aliases[arg_name],
+                "expression": expression,
+                "type": resource_type,
+            }
+
         return {
             "expression": expression,
             "type": resource_type,
@@ -2423,13 +2433,6 @@ class GLSLCodeGen:
         }
 
     def glsl_resource_argument_expression(self, arg, aliases):
-        arg_name = self.expression_name(arg)
-        if arg_name in aliases:
-            return aliases[arg_name]["expression"]
-        if isinstance(arg, str):
-            return arg
-        if hasattr(arg, "name") and isinstance(arg.name, str):
-            return arg.name
         if isinstance(arg, ArrayAccessNode) or (
             hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
         ):
@@ -2439,6 +2442,13 @@ class GLSLCodeGen:
             if array_code is None:
                 return None
             return f"{array_code}[{self.generate_expression(index_expr)}]"
+        arg_name = self.expression_name(arg)
+        if arg_name in aliases:
+            return aliases[arg_name]["expression"]
+        if isinstance(arg, str):
+            return arg
+        if hasattr(arg, "name") and isinstance(arg.name, str):
+            return arg.name
         return None
 
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):

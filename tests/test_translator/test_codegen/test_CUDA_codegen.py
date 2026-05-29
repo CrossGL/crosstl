@@ -4008,6 +4008,83 @@ class TestCudaCodeGen:
         assert "uint blockedAddress = atomicAdd(&writable, value);" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_pointer_reference_helper_returns_and_aliases_emit_cuda(self, tmp_path):
+        """Test CUDA pointer/reference helper returns preserve native aliases."""
+        source_code = """
+        shader PointerReferenceHelpersCUDA {
+            struct Holder {
+                uint* value;
+                uint* fallback;
+            };
+
+            fn choosePtr(uint* lhs, uint* rhs, bool flag) -> uint* {
+                return flag ? lhs : rhs;
+            }
+
+            fn chooseRef(uint& mut lhs, uint& mut rhs, bool flag) -> uint& mut {
+                return flag ? lhs : rhs;
+            }
+
+            void assignAliases(
+                Holder holder,
+                Holder* holderPtr,
+                uint* writable,
+                uint& mut left,
+                uint& mut right,
+                bool flag,
+                uint index
+            ) {
+                uint* selected = choosePtr(writable, holder.value, flag);
+                uint* selectedMember = choosePtr(
+                    holderPtr->value,
+                    holder.fallback,
+                    flag
+                );
+                holder.value = selected;
+                holderPtr->fallback = selectedMember;
+                uint fromPointer = selected[index];
+                uint fromPointerMember = holderPtr->fallback[index];
+                uint& mut selectedRef = chooseRef(left, right, flag);
+                selectedRef = fromPointer + fromPointerMember;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "PointerType(" not in cuda_code
+        assert "ReferenceType(" not in cuda_code
+        assert "uint* value;" in cuda_code
+        assert "uint* fallback;" in cuda_code
+        assert (
+            "__device__ uint* choosePtr(uint* lhs, uint* rhs, bool flag)" in cuda_code
+        )
+        assert (
+            "__device__ uint& chooseRef(uint& lhs, uint& rhs, bool flag)" in cuda_code
+        )
+        assert "return (flag ? lhs : rhs);" in cuda_code
+        assert "Holder* holderPtr" in cuda_code
+        assert "uint* selected = choosePtr(writable, holder.value, flag);" in cuda_code
+        assert (
+            "uint* selectedMember = choosePtr(holderPtr->value, holder.fallback, flag);"
+            in cuda_code
+        )
+        assert "holder.value = selected;" in cuda_code
+        assert "holderPtr->fallback = selectedMember;" in cuda_code
+        assert "uint fromPointer = selected[index];" in cuda_code
+        assert "uint fromPointerMember = holderPtr->fallback[index];" in cuda_code
+        assert "uint& selectedRef = chooseRef(left, right, flag);" in cuda_code
+        assert "selectedRef = (fromPointer + fromPointerMember);" in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_structured_buffer_element_atomics_emit_cuda_pointer_atomics(
         self, tmp_path
     ):

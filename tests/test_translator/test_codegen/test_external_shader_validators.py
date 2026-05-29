@@ -333,6 +333,29 @@ shader GLSLParameterImageAtomicValidator {
 """
 
 
+GLSL_ARRAY_ELEMENT_IMAGE_SPECIALIZATION_COMPUTE_SHADER = """
+shader GLSLArrayElementImageSpecializationValidator {
+    image2D counters @r32ui[2];
+
+    int queryElement(image2D image @r32ui) {
+        return imageSize(image).x;
+    }
+
+    int queryViaArray(image2D images[] @r32ui) {
+        return queryElement(images[0]);
+    }
+
+    compute {
+        void main() {
+            int directCount = queryElement(counters[0]);
+            int nestedCount = queryViaArray(counters);
+            imageStore(counters[1], ivec2(0, 0), uint(directCount + nestedCount));
+        }
+    }
+}
+"""
+
+
 GLSL_STORAGE_IMAGE_ACCESS_COMPUTE_SHADER = """
 shader GLSLStorageImageAccessValidator {
     image2D source @access(readonly);
@@ -2398,6 +2421,30 @@ def test_generated_glsl_parameter_image_atomic_specialization_validates_with_gls
     assert "imageAtomicAdd(image, pixel, value)" not in code
     assert "imageAtomicAdd(counters, pixel, value)" in code
     assert "addCounter__glsl_image_counters(ivec2(0, 1), 2u)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_array_element_image_specialization_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "array_element_image_specialization.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            GLSL_ARRAY_ELEMENT_IMAGE_SPECIALIZATION_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
+    assert "int queryElement__glsl_image_counters_0()" in code
+    assert "return imageSize(counters[0]).x;" in code
+    assert "int queryElement__glsl_image_counters()" not in code
+    assert "return imageSize(counters).x;" not in code
+    assert "return queryElement__glsl_image_counters_0();" in code
+    assert "imageStore(counters[1], ivec2(0, 0), uvec4(uint(" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])
