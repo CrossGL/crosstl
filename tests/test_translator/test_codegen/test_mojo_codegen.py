@@ -12574,6 +12574,27 @@ def test_function_style_struct_constructor_field_diagnostics():
         generate_code(parse_code(tokenize_code(source)))
 
 
+def test_function_style_struct_constructor_missing_field_diagnostics():
+    source = """
+    struct PairBox {
+        float value;
+        float alt;
+    };
+    void invalidMissingField() {
+        let badValue = PairBox(1.0);
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"missing field PairBox\.alt.*declaration badValue"
+            r".*expected fields: value, alt"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _braced_struct_assignment_target_source():
     return """
     struct MixedBox {

@@ -1002,6 +1002,56 @@ shader TextureLocalAliasValidation {
 """
 
 
+RESOURCE_TEXTURE_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
+shader ResourceTextureArrayLocalAliasValidation {
+    sampler2D textures[4];
+    sampler texturesSampler[4];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        int layer @ TEXCOORD1;
+    };
+
+    vec4 sampleParam(sampler2D paramTextures[4], sampler paramTexturesSampler[4], int layer, vec2 uv) {
+        let paramAlias = paramTextures;
+        let chainedAlias = paramAlias;
+        return texture(chainedAlias[layer], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            let texAlias = textures;
+            return texture(texAlias[input.layer], input.uv)
+                + sampleParam(textures, texturesSampler, input.layer, input.uv);
+        }
+    }
+}
+"""
+
+
+RESOURCE_IMAGE_ARRAY_LOCAL_ALIAS_COMPUTE_SHADER = """
+shader ResourceImageArrayLocalAliasValidation {
+    image2D images @rgba32f[4];
+
+    void copyParam(image2D paramImages[4] @rgba32f) {
+        let paramAlias = paramImages;
+        let chainedAlias = paramAlias;
+        vec4 paramValue = imageLoad(chainedAlias[1], ivec2(1, 1));
+        imageStore(paramAlias[0], ivec2(1, 1), paramValue);
+    }
+
+    compute {
+        void main() {
+            let imageAlias = images;
+            vec4 value = imageLoad(imageAlias[1], ivec2(0, 0));
+            copyParam(images);
+            imageStore(imageAlias[0], ivec2(0, 0), value);
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
 shader SampledTextureArrayConstIndexValidation {
     const int COUNT = 4;
@@ -5551,6 +5601,70 @@ def test_generated_metal_fragment_texture_local_alias_compiles_with_metal(tmp_pa
 
     run_validator(
         [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_resource_array_local_aliases_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    fragment_source = tmp_path / "fragment_resource_array_local_alias.metal"
+    fragment_output = tmp_path / "fragment_resource_array_local_alias.air"
+    fragment_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RESOURCE_TEXTURE_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER),
+        "fragment",
+    )
+    assert "array<texture2d<float>, 4> texAlias = textures;" in fragment_code
+    assert (
+        "texAlias[input.layer].sample(texturesSampler[input.layer], input.uv)"
+        in fragment_code
+    )
+    assert "chainedAlias[layer].sample(paramTexturesSampler[layer], uv)" in (
+        fragment_code
+    )
+    fragment_source.write_text(fragment_code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(fragment_source),
+            "-o",
+            str(fragment_output),
+        ]
+    )
+
+    compute_source = tmp_path / "compute_resource_array_local_alias.metal"
+    compute_output = tmp_path / "compute_resource_array_local_alias.air"
+    compute_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(RESOURCE_IMAGE_ARRAY_LOCAL_ALIAS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> imageAlias = images;"
+        in compute_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> chainedAlias = paramAlias;"
+        in compute_code
+    )
+    compute_source.write_text(compute_code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-c",
+            str(compute_source),
+            "-o",
+            str(compute_output),
+        ]
     )
 
 

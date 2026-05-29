@@ -356,6 +356,7 @@ class MetalCodeGen:
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_array_sizes = {}
         self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
@@ -794,6 +795,7 @@ class MetalCodeGen:
         self.current_sampler_parameter_array_sizes = {}
         self.texture_variable_types = {}
         self.current_texture_parameters = {}
+        self.current_texture_parameter_array_sizes = {}
         self.current_texture_alias_sources = {}
         self.image_variable_formats = {}
         self.current_image_format_parameters = {}
@@ -1755,6 +1757,7 @@ class MetalCodeGen:
         sampler_parameters = set()
         sampler_parameter_array_sizes = {}
         texture_parameters = {}
+        texture_parameter_array_sizes = {}
         image_format_parameters = {}
         previous_function_name = self.current_function_name
         previous_function_return_type = self.current_function_return_type
@@ -1910,6 +1913,10 @@ class MetalCodeGen:
                 texture_parameters[p.name] = self.map_resource_type_with_format(
                     self.resource_base_type(raw_param_type), p
                 )
+                resource_array = self.resource_array_parameter(raw_param_type, p)
+                if resource_array is not None:
+                    _, array_size = resource_array
+                    texture_parameter_array_sizes[p.name] = array_size
                 record_explicit_image_metadata(
                     p.name,
                     p,
@@ -2221,11 +2228,15 @@ class MetalCodeGen:
             self.current_sampler_parameter_array_sizes
         )
         previous_texture_parameters = self.current_texture_parameters
+        previous_texture_parameter_array_sizes = (
+            self.current_texture_parameter_array_sizes
+        )
         previous_texture_alias_sources = self.current_texture_alias_sources
         previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
         self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
+        self.current_texture_parameter_array_sizes = texture_parameter_array_sizes
         self.current_texture_alias_sources = {}
         self.current_image_format_parameters = image_format_parameters
         if shader_type == "mesh" and self.current_metal_mesh_output_config is not None:
@@ -2249,6 +2260,9 @@ class MetalCodeGen:
             previous_sampler_parameter_array_sizes
         )
         self.current_texture_parameters = previous_texture_parameters
+        self.current_texture_parameter_array_sizes = (
+            previous_texture_parameter_array_sizes
+        )
         self.current_texture_alias_sources = previous_texture_alias_sources
         self.current_image_format_parameters = previous_image_format_parameters
         self.current_structured_buffer_length_parameters = (
@@ -2955,7 +2969,9 @@ class MetalCodeGen:
                 stmt, var_type
             )
             if texture_alias_type is not None:
-                var_type = texture_alias_type
+                var_type = self.local_variable_texture_alias_declaration_type(
+                    stmt, texture_alias_type
+                )
                 self.current_texture_parameters[stmt.name] = texture_alias_type
                 self.record_local_texture_alias_sampler_source(stmt)
                 self.record_local_image_alias_metadata(stmt)
@@ -3156,6 +3172,59 @@ class MetalCodeGen:
         ):
             return initial_type
         return self.map_resource_type_with_format(declared_type_name, node)
+
+    def local_variable_texture_alias_declaration_type(self, node, resource_type):
+        array_size = self.texture_argument_resource_array_size(
+            getattr(node, "initial_value", None)
+        )
+        if array_size is None:
+            return resource_type
+        return self.format_resource_array_type(resource_type, array_size)
+
+    def texture_argument_resource_array_size(self, texture_arg):
+        if isinstance(texture_arg, ArrayAccessNode):
+            return None
+        texture_name = self.expression_name(texture_arg)
+        if not texture_name:
+            return None
+
+        local_type = self.local_variable_types.get(texture_name)
+        _element_type, array_size = self.metal_array_type_parts(local_type)
+        if array_size is not None:
+            return array_size
+
+        if texture_name in self.current_texture_parameter_array_sizes:
+            return self.current_texture_parameter_array_sizes[texture_name]
+
+        for texture_variable, _, _texture_type, array_size in self.texture_variables:
+            if getattr(texture_variable, "name", None) == texture_name:
+                return array_size
+        return None
+
+    def format_resource_array_type(self, resource_type, array_size):
+        return f"array<{resource_type}, {array_size or '1'}>"
+
+    def metal_array_type_parts(self, type_name):
+        if type_name is None:
+            return None, None
+        type_text = str(type_name).strip()
+        if not (type_text.startswith("array<") and type_text.endswith(">")):
+            return None, None
+
+        inner = type_text[len("array<") : -1]
+        depth = 0
+        for index, char in enumerate(inner):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth -= 1
+            elif char == "," and depth == 0:
+                return inner[:index].strip(), inner[index + 1 :].strip()
+        return inner.strip(), None
+
+    def metal_array_element_type(self, type_name):
+        element_type, _array_size = self.metal_array_type_parts(type_name)
+        return element_type
 
     def local_variable_sampler_alias_resource_type(self, node, declared_type):
         initial_value = getattr(node, "initial_value", None)
@@ -3579,6 +3648,9 @@ class MetalCodeGen:
             if array_type and "[" in array_type and "]" in array_type:
                 base_type, _ = split_array_type_suffix(array_type)
                 return base_type
+            metal_array_element_type = self.metal_array_element_type(array_type)
+            if metal_array_element_type is not None:
+                return metal_array_element_type
             pointee_type = self.pointer_pointee_type_name(array_type)
             if pointee_type is not None:
                 return pointee_type
@@ -11297,7 +11369,9 @@ class MetalCodeGen:
             source_name = self.expression_name(source_arg)
             source_sampler_name = f"{source_name}Sampler" if source_name else None
             if source_sampler_name in self.sampler_variable_names():
-                index = self.array_access_index_expression(source_arg)
+                index = self.array_access_index_expression(
+                    source_arg
+                ) or self.array_access_index_expression(texture_arg)
                 if (
                     index is not None
                     and self.sampler_array_size(source_sampler_name) is not None

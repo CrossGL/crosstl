@@ -4171,6 +4171,7 @@ class MojoCodeGen:
         named_arguments,
         base_context,
         constructor_style="braced",
+        require_all_fields=False,
     ):
         fields = dict(field_items)
         expected = ", ".join(fields) or "no fields"
@@ -4202,6 +4203,16 @@ class MojoCodeGen:
                 )
             initialized_fields.add(field_name)
 
+        if require_all_fields:
+            for field_name, _ in field_items:
+                if field_name not in initialized_fields:
+                    raise ValueError(
+                        f"Invalid {constructor_style} struct constructor for Mojo "
+                        "codegen; "
+                        f"missing field {struct_type}.{field_name} in "
+                        f"{base_context}; expected fields: {expected}"
+                    )
+
     def generate_struct_function_constructor_call(self, expr, type_name, context):
         mapped_type = self.map_type(type_name)
         field_items = list(self.struct_types.get(type_name, {}).items())
@@ -4213,6 +4224,7 @@ class MojoCodeGen:
             {},
             base_context,
             "function-style",
+            True,
         )
         positional_args = []
         for index, argument in enumerate(expr.args):

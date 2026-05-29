@@ -1685,6 +1685,9 @@ class HipToCrossGLConverter:
         elif name == "hipChooseDevice":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "selectedDevice")
                 return [
                     f"// HIP choose device: output: {output}, properties: {args[1]}"
                 ]
@@ -1706,6 +1709,11 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceGetByPCIBusId":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"deviceByPCIBusId({args[1]})"
+                    )
                 return [
                     f"// HIP get device by PCI bus id: output: {output}, "
                     f"bus id: {args[1]}"
@@ -1727,6 +1735,9 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceGetLimit":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, f"limit.{args[1]}")
                 return [f"// HIP get device limit: output: {output}, limit: {args[1]}"]
         elif name == "hipDeviceSetLimit":
             if len(args) >= 2:
@@ -1736,6 +1747,9 @@ class HipToCrossGLConverter:
         elif name == "hipGetDeviceFlags":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "deviceFlags")
                 return [f"// HIP get device flags: output: {output}"]
         elif name == "hipSetDeviceFlags":
             if args:

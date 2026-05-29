@@ -22786,6 +22786,96 @@ def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata(
     assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
 
 
+def test_metal_resource_array_local_aliases_preserve_element_metadata():
+    texture_shader = """
+    shader TextureArrayLocalAliases {
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+
+        struct VSOutput {
+            vec2 uv;
+            int layer;
+        };
+
+        vec4 sampleParam(sampler2D paramTextures[4], sampler paramTexturesSampler[4], int layer, vec2 uv) {
+            let paramAlias = paramTextures;
+            let chainedAlias = paramAlias;
+            return texture(chainedAlias[layer], uv);
+        }
+
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                let texAlias = textures;
+                return texture(texAlias[input.layer], input.uv)
+                    + sampleParam(textures, texturesSampler, input.layer, input.uv);
+            }
+        }
+    }
+    """
+
+    image_shader = """
+    shader ImageArrayLocalAliases {
+        image2D images @rgba32f[4];
+
+        void copyParam(image2D paramImages[4] @rgba32f) {
+            let paramAlias = paramImages;
+            let chainedAlias = paramAlias;
+            vec4 paramValue = imageLoad(chainedAlias[1], ivec2(1, 1));
+            imageStore(paramAlias[0], ivec2(1, 1), paramValue);
+        }
+
+        compute {
+            void main() {
+                let imageAlias = images;
+                vec4 value = imageLoad(imageAlias[1], ivec2(0, 0));
+                copyParam(images);
+                imageStore(imageAlias[0], ivec2(0, 0), value);
+            }
+        }
+    }
+    """
+
+    fragment_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(texture_shader), "fragment"
+    )
+    compute_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(image_shader), "compute"
+    )
+
+    assert "array<texture2d<float>, 4> texAlias = textures;" in fragment_code
+    assert "array<sampler, 4> texturesSampler [[sampler(0)]]" in fragment_code
+    assert "texAlias[input.layer].sample(texturesSampler[input.layer], input.uv)" in (
+        fragment_code
+    )
+    assert "array<texture2d<float>, 4> paramAlias = paramTextures;" in fragment_code
+    assert "array<texture2d<float>, 4> chainedAlias = paramAlias;" in fragment_code
+    assert "chainedAlias[layer].sample(paramTexturesSampler[layer], uv)" in (
+        fragment_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> imageAlias = images;"
+        in compute_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> paramAlias = paramImages;"
+        in compute_code
+    )
+    assert (
+        "array<texture2d<float, access::read_write>, 4> chainedAlias = paramAlias;"
+        in compute_code
+    )
+    assert "float4 value = imageAlias[1].read(uint2(int2(0, 0)));" in compute_code
+    assert "float4 paramValue = chainedAlias[1].read(uint2(int2(1, 1)));" in (
+        compute_code
+    )
+    assert "paramAlias[0].write(paramValue, uint2(int2(1, 1)));" in compute_code
+    assert "imageAlias[0].write(value, uint2(int2(0, 0)));" in compute_code
+    assert "texture2d<float> texAlias = textures;" not in fragment_code
+    assert "texture2d<float, access::read_write> imageAlias = images;" not in (
+        compute_code
+    )
+
+
 def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
     shader = """
     shader ImplicitSamplerArrayElements {

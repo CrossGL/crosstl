@@ -9293,6 +9293,103 @@ def test_compute_stage_uses_execution_config_numthreads():
     assert "[numthreads(8, 4, 2)]" in compute_code
 
 
+def test_compute_stage_emits_wave_size_attribute():
+    shader = """
+    shader ComputeWaveSize {
+        compute {
+            void main() @ WaveSize(32) {
+                int value = 1;
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "[numthreads(1, 1, 1)]\n[WaveSize(32)]\nvoid CSMain" in generated
+
+
+def test_compute_wave_size_attribute_validates_arguments_and_stage():
+    missing_argument_code = """
+    shader BadWaveSizeMissingArgument {
+        compute {
+            void main() @ WaveSize { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*requires exactly 1 argument",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_argument_code), "compute"
+        )
+
+    extra_argument_code = """
+    shader BadWaveSizeExtraArgument {
+        compute {
+            void main() @ WaveSize(32, 64) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*requires exactly 1 argument",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(extra_argument_code), "compute"
+        )
+
+    non_literal_code = """
+    shader BadWaveSizeNonLiteral {
+        compute {
+            void main() @ WaveSize(WAVE_SIZE) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*immediate integer",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(non_literal_code), "compute"
+        )
+
+    invalid_lane_count_code = """
+    shader BadWaveSizeLaneCount {
+        compute {
+            void main() @ WaveSize(12) { }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*4, 8, 16, 32, 64, or 128",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(invalid_lane_count_code), "compute"
+        )
+
+    fragment_code = """
+    shader BadWaveSizeStage {
+        fragment {
+            vec4 main() @ SV_Target @ WaveSize(32) {
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="WaveSize.*compute",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(fragment_code), "fragment"
+        )
+
+
 def test_fragment_stage_emits_waveops_include_helper_lanes_attribute():
     shader = """
     shader FragmentWaveOpsHelperLanes {

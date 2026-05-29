@@ -5524,6 +5524,100 @@ class TestHipCodeGen:
         assert "var fromStatusCurrent: i32 = statusCurrent;" not in result
         assert "var fromStatusCount: i32 = statusCount;" not in result
 
+    def test_hip_device_selection_limit_and_flag_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test selected-device, limit, and flag outputs lower to metadata."""
+        code = """
+        void host(hipDeviceProp_t* props, char* pciBusId, int* out, size_t* sizes) {
+            int device = 0;
+            size_t limitValue = 0;
+            size_t statusLimit = 0;
+            unsigned int flags = 0;
+            hipChooseDevice(&device, props);
+            out[0] = device;
+            device = 4;
+            int manualDevice = device;
+            hipError_t errDevice = hipDeviceGetByPCIBusId(&device, pciBusId);
+            out[1] = device;
+            device++;
+            int manualBusDevice = device;
+            hipDeviceGetLimit(&limitValue, hipLimitMallocHeapSize);
+            sizes[0] = limitValue;
+            hipDeviceSetLimit(hipLimitMallocHeapSize, limitValue);
+            limitValue = 4096;
+            size_t manualLimit = limitValue;
+            hipError_t errLimit =
+                hipDeviceGetLimit(&statusLimit, hipLimitPrintfFifoSize);
+            size_t statusLimitValue = statusLimit;
+            hipGetDeviceFlags(&flags);
+            unsigned int capturedFlags = flags;
+            hipSetDeviceFlags(flags);
+            flags++;
+            unsigned int manualFlags = flags;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP choose device: output: device, properties: props" in result
+        assert "out[0] = (/* HIP device query: selectedDevice */ 0);" in result
+        assert "device = 4;" in result
+        assert "var manualDevice: i32 = device;" in result
+        assert (
+            "// HIP get device by PCI bus id: output: device, bus id: pciBusId"
+            in result
+        )
+        assert "var errDevice: hipError_t = hipSuccess;" in result
+        assert (
+            "out[1] = (/* HIP device query: deviceByPCIBusId(pciBusId) */ 0);" in result
+        )
+        assert "(device++);" in result
+        assert "var manualBusDevice: i32 = device;" in result
+        assert (
+            "// HIP get device limit: output: limitValue, "
+            "limit: hipLimitMallocHeapSize"
+        ) in result
+        assert (
+            "sizes[0] = (/* HIP device query: limit.hipLimitMallocHeapSize */ 0);"
+            in result
+        )
+        assert (
+            "// HIP set device limit: limit: hipLimitMallocHeapSize, "
+            "value: limitValue"
+        ) in result
+        assert "limitValue = 4096;" in result
+        assert "var manualLimit: u32 = limitValue;" in result
+        assert (
+            "// HIP get device limit: output: statusLimit, "
+            "limit: hipLimitPrintfFifoSize"
+        ) in result
+        assert "var errLimit: hipError_t = hipSuccess;" in result
+        assert (
+            "var statusLimitValue: u32 = "
+            "(/* HIP device query: limit.hipLimitPrintfFifoSize */ 0);"
+        ) in result
+        assert "// HIP get device flags: output: flags" in result
+        assert (
+            "var capturedFlags: u32 = (/* HIP device query: deviceFlags */ 0);"
+            in result
+        )
+        assert "// HIP set device flags: flags" in result
+        assert "(flags++);" in result
+        assert "var manualFlags: u32 = flags;" in result
+        assert "out[0] = device;" not in result
+        assert "out[1] = device;" not in result
+        assert "sizes[0] = limitValue;" not in result
+        assert "var capturedFlags: u32 = flags;" not in result
+        assert "var manualDevice: i32 = (/* HIP device query:" not in result
+        assert "var manualBusDevice: i32 = (/* HIP device query:" not in result
+        assert "var manualLimit: u32 = (/* HIP device query:" not in result
+        assert "var manualFlags: u32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

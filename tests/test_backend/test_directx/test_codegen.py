@@ -816,6 +816,20 @@ def test_codegen_waveops_include_helper_lanes_attribute_passthrough():
     assert "QuadAny(predicate)" in output
 
 
+def test_codegen_wave_size_attribute_passthrough():
+    hlsl = textwrap.dedent("""
+        [WaveSize(32)]
+        [numthreads(8, 1, 1)]
+        void main(uint3 tid : SV_DispatchThreadID) {
+        }
+        """).strip()
+
+    output = generate_crossgl(hlsl)
+
+    assert "@ WaveSize(32)" in output
+    assert "@ numthreads(8, 1, 1)" in output
+
+
 def test_codegen_interlocked_mapping():
     output = generate_crossgl(INTERLOCKED_HLSL)
     assert "atomicAdd" in output

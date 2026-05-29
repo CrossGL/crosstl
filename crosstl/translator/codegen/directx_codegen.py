@@ -419,6 +419,7 @@ class HLSLCodeGen:
         "min16uint",
         "uint64_t",
     }
+    HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
 
     def __init__(self):
         """Initialize DirectX type maps and per-generation resource state."""
@@ -2102,6 +2103,9 @@ class HLSLCodeGen:
                 func, effective_shader_type
             )
         )
+        wave_size_attribute = self.generate_hlsl_wave_size_attribute(
+            func, effective_shader_type
+        )
 
         if effective_shader_type in shader_map:
             return_semantic_attr = self.map_semantic(return_semantic)
@@ -2111,6 +2115,7 @@ class HLSLCodeGen:
                     func, effective_shader_type
                 )
                 code += self.generate_compute_numthreads(execution_config)
+            code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             function_name = entry_name or shader_map[effective_shader_type]
             code += f"{return_type} {function_name}({params_str}){return_semantic_attr} {{\n"
@@ -2121,6 +2126,7 @@ class HLSLCodeGen:
                 func, effective_shader_type, execution_config
             )
             code += self.generate_hlsl_stage_attributes(func, effective_shader_type)
+            code += wave_size_attribute
             code += waveops_helper_lanes_attribute
             if shader_attr:
                 code += f'[shader("{shader_attr}")]\n'
@@ -5587,6 +5593,13 @@ class HLSLCodeGen:
             normalized = normalized[len("hlsl_") :]
         return normalized == "waveopsincludehelperlanes"
 
+    def hlsl_wave_size_attribute(self, attr):
+        attr_name = str(getattr(attr, "name", ""))
+        normalized = attr_name.lower()
+        if normalized.startswith("hlsl_"):
+            normalized = normalized[len("hlsl_") :]
+        return normalized == "wavesize"
+
     def generate_hlsl_waveops_include_helper_lanes_attribute(self, func, shader_type):
         found = False
         for attr in getattr(func, "attributes", []) or []:
@@ -5608,6 +5621,40 @@ class HLSLCodeGen:
                 "fragment/pixel shader entry points"
             )
         return "[WaveOpsIncludeHelperLanes]\n"
+
+    def generate_hlsl_wave_size_attribute(self, func, shader_type):
+        found = False
+        lane_count = None
+        for attr in getattr(func, "attributes", []) or []:
+            if not self.hlsl_wave_size_attribute(attr):
+                continue
+            found = True
+            arguments = getattr(attr, "arguments", []) or []
+            if len(arguments) != 1:
+                raise ValueError(
+                    "DirectX WaveSize attribute requires exactly 1 argument"
+                )
+
+            lane_count = self.hlsl_int_literal_value(arguments[0])
+            if lane_count is None:
+                raise ValueError(
+                    "DirectX WaveSize attribute requires an immediate integer "
+                    "argument"
+                )
+            if lane_count not in self.HLSL_WAVE_SIZE_LANE_COUNTS:
+                raise ValueError(
+                    "DirectX WaveSize attribute lane count must be one of "
+                    "4, 8, 16, 32, 64, or 128"
+                )
+
+        if not found:
+            return ""
+        if shader_type != "compute":
+            raise ValueError(
+                "DirectX WaveSize attribute is only valid on compute shader "
+                "entry points"
+            )
+        return f"[WaveSize({lane_count})]\n"
 
     def normalized_hlsl_stage_attribute_argument(self, func, expected_name):
         value = self.hlsl_stage_attribute_argument(func, expected_name)
@@ -12963,6 +13010,8 @@ class HLSLCodeGen:
             if self.hlsl_stage_attribute_name(attr):
                 continue
             if self.hlsl_waveops_include_helper_lanes_attribute(attr):
+                continue
+            if self.hlsl_wave_size_attribute(attr):
                 continue
             if (
                 is_image_format_attribute(attr)
