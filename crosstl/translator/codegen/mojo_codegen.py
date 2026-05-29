@@ -25,6 +25,7 @@ from ..ast import (
     ForNode,
     FunctionCallNode,
     FunctionNode,
+    IdentifierNode,
     IfNode,
     IdentifierPatternNode,
     LiteralPatternNode,
@@ -54,7 +55,9 @@ from ..ast import (
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
 from .enum_utils import (
     build_generic_enum_specialization,
+    collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
+    collect_generic_parameter_names,
     enum_constant_name,
     enum_struct_fields,
     enum_variant_constructor_name,
@@ -62,6 +65,7 @@ from .enum_utils import (
     generic_enum_specialized_fields,
     generic_enum_specialized_variant_fields,
     generic_type_parts,
+    type_node_contains_generic_parameter,
 )
 
 
@@ -937,6 +941,7 @@ class MojoCodeGen:
         self.do_while_counter = 0
         self.lambda_counter = 0
         self.match_expression_counter = 0
+        self.match_subject_counter = 0
         self.dimension_query_counter = 0
         self.expression_prelude_stack = []
         self.type_mapping = {
@@ -1135,6 +1140,7 @@ class MojoCodeGen:
         self.do_while_counter = 0
         self.lambda_counter = 0
         self.match_expression_counter = 0
+        self.match_subject_counter = 0
         self.dimension_query_counter = 0
         self.expression_prelude_stack = []
         self.collect_function_return_types(ast)
@@ -1147,13 +1153,13 @@ class MojoCodeGen:
 
         structs = getattr(ast, "structs", [])
         self.prepare_generic_enum_metadata(ast, structs)
+        for node in structs:
+            if isinstance(node, EnumNode):
+                code += self.generate_enum(node)
         code += self.generate_generic_payload_enum_constants()
         code += self.generate_generic_payload_enum_structs()
         code += self.generate_generic_payload_enum_constructors()
         for node in structs:
-            if isinstance(node, EnumNode):
-                code += self.generate_enum(node)
-                continue
             if isinstance(node, StructNode):
                 if node.name in self.generic_enum_struct_definitions:
                     continue
@@ -1397,11 +1403,15 @@ class MojoCodeGen:
         return "float"
 
     def prepare_generic_enum_metadata(self, ast, structs):
+        self.generic_parameter_names = collect_generic_parameter_names(ast)
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             structs
         )
-        self.generic_enum_specializations = (
-            self.collect_mojo_generic_enum_specializations(ast)
+        self.reject_parameterized_generic_enum_specializations(ast)
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
         )
 
         for name, definition in self.generic_enum_struct_definitions.items():
@@ -1426,16 +1436,13 @@ class MojoCodeGen:
             ):
                 self.struct_types[struct_name][field_name] = self.type_name(field_type)
 
-    def collect_mojo_generic_enum_specializations(self, ast):
-        specializations = {}
+    def reject_parameterized_generic_enum_specializations(self, ast):
         if not self.generic_enum_struct_definitions:
-            return specializations
-
+            return
         visited = set()
 
         def visit(value):
             if value is None or isinstance(value, (str, int, float, bool)):
-                self.maybe_register_generic_enum_type(value, specializations)
                 return
             if isinstance(value, (list, tuple, set)):
                 for item in value:
@@ -1451,14 +1458,24 @@ class MojoCodeGen:
                 return
             visited.add(value_id)
 
-            self.maybe_register_generic_enum_type(value, specializations)
             if not hasattr(value, "__dict__"):
                 return
+            name = getattr(value, "name", None)
+            generic_args = getattr(value, "generic_args", None)
+            if name in self.generic_enum_struct_definitions and generic_args:
+                if any(
+                    type_node_contains_generic_parameter(
+                        arg, self.generic_parameter_names
+                    )
+                    for arg in generic_args
+                ):
+                    raise ValueError(
+                        "Mojo generic payload enum specializations must be concrete"
+                    )
             for child in vars(value).values():
                 visit(child)
 
         visit(ast)
-        return dict(sorted(specializations.items()))
 
     def maybe_register_generic_enum_type(self, type_value, specializations):
         type_text = self.type_name(type_value)
@@ -1467,6 +1484,8 @@ class MojoCodeGen:
         if definition is None:
             return None
         if len(generic_args) != len(definition["generic_params"]):
+            return None
+        if self.generic_type_contains_parameter(type_text):
             return None
         specialization = build_generic_enum_specialization(type_text, definition)
         specializations[type_text] = specialization
@@ -1484,11 +1503,19 @@ class MojoCodeGen:
             return None
         if len(generic_args) != len(definition["generic_params"]):
             return None
+        if self.generic_type_contains_parameter(type_text):
+            return None
         specialization = self.generic_enum_specializations.get(type_text)
         if specialization is None:
             specialization = build_generic_enum_specialization(type_text, definition)
             self.generic_enum_specializations[type_text] = specialization
         return specialization
+
+    def generic_type_contains_parameter(self, type_text):
+        base_name, generic_args = generic_type_parts(type_text)
+        if base_name in self.generic_parameter_names and not generic_args:
+            return True
+        return any(self.generic_type_contains_parameter(arg) for arg in generic_args)
 
     def generic_enum_mapped_type(self, type_value):
         specialization = self.generic_enum_specialization_for_type(type_value)
@@ -3737,21 +3764,33 @@ class MojoCodeGen:
         arms = getattr(node, "arms", []) or []
         self.validate_match_arms(arms, subject_type)
         code = ""
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            code += (
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
         emitted_condition = False
-        wildcard_body = None
 
-        for arm in arms:
+        for arm_index, arm in enumerate(arms):
             pattern = getattr(arm, "pattern", None)
             guard = getattr(arm, "guard", None)
             body = getattr(arm, "body", [])
-            if isinstance(pattern, WildcardPatternNode) and guard is None:
-                wildcard_body = body
-                continue
-
-            keyword = "if" if not emitted_condition else "elif"
             replacements = self.match_arm_identifier_replacements(
                 pattern, expression, guard, subject_type
             )
+            if self.is_unconditional_final_match_arm(
+                arms, arm_index, pattern, guard, subject_type
+            ):
+                if emitted_condition:
+                    code += f"{indent_str}else:\n"
+                    code += self.generate_match_arm_body(body, indent + 1, replacements)
+                else:
+                    code += self.generate_match_arm_body(body, indent, replacements)
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
             condition = self.match_arm_condition(
                 pattern, expression, guard, replacements, subject_type
             )
@@ -3759,10 +3798,7 @@ class MojoCodeGen:
             code += self.generate_match_arm_body(body, indent + 1, replacements)
             emitted_condition = True
 
-        if wildcard_body is not None:
-            code += f"{indent_str}else:\n"
-            code += self.generate_switch_case_body(wildcard_body, indent + 1)
-        elif not emitted_condition:
+        if not code and not emitted_condition:
             code += f"{indent_str}pass\n"
 
         return code
@@ -3771,6 +3807,18 @@ class MojoCodeGen:
         name = f"__cgl_match_value_{self.match_expression_counter}"
         self.match_expression_counter += 1
         return name
+
+    def next_match_subject_temp_name(self):
+        name = f"__cgl_match_subject_{self.match_subject_counter}"
+        self.match_subject_counter += 1
+        return name
+
+    def match_subject_needs_temp(self, subject_expr):
+        if isinstance(subject_expr, (str, VariableNode, IdentifierNode)):
+            return False
+        if isinstance(subject_expr, MemberAccessNode):
+            return self.match_subject_needs_temp(subject_expr.object)
+        return True
 
     def match_arm_error(self, reason=None):
         detail = reason or "only unguarded literal and wildcard patterns are supported"
@@ -3851,24 +3899,47 @@ class MojoCodeGen:
         branch_indent = indent + 1
         temp_name = self.next_match_expression_temp_name()
         expression = self.generate_expression(subject_expr)
-        lines = [
+        lines = []
+        if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
+            subject_name = self.next_match_subject_temp_name()
+            lines.append(
+                f"{indent_str}var {subject_name}: {self.map_type(subject_type)} = "
+                f"{expression}\n"
+            )
+            expression = subject_name
+        lines.append(
             f"{indent_str}var {temp_name}: {self.map_type(match_type)} = "
             f"{self.zero_value_for_type(match_type)}\n"
-        ]
+        )
 
         emitted_condition = False
-        wildcard_arm = None
         for arm_index, arm in enumerate(arms, start=1):
             pattern = getattr(arm, "pattern", None)
             guard = getattr(arm, "guard", None)
-            if isinstance(pattern, WildcardPatternNode) and guard is None:
-                wildcard_arm = (arm_index, arm)
-                continue
-
-            keyword = "if" if not emitted_condition else "elif"
             replacements = self.match_arm_identifier_replacements(
                 pattern, expression, guard, subject_type
             )
+            if self.is_unconditional_final_match_arm(
+                arms, arm_index - 1, pattern, guard, subject_type
+            ):
+                if emitted_condition:
+                    lines.append(f"{indent_str}else:\n")
+                    assignment_indent = branch_indent
+                else:
+                    assignment_indent = indent
+                lines.append(
+                    self.generate_match_value_arm_assignment(
+                        arm,
+                        match_type,
+                        f"{context} match arm {arm_index}",
+                        temp_name,
+                        assignment_indent,
+                        replacements,
+                    )
+                )
+                continue
+
+            keyword = "if" if not emitted_condition else "elif"
             condition = self.match_arm_condition(
                 pattern, expression, guard, replacements, subject_type
             )
@@ -3884,19 +3955,6 @@ class MojoCodeGen:
                 )
             )
             emitted_condition = True
-
-        if wildcard_arm is not None:
-            arm_index, arm = wildcard_arm
-            lines.append(f"{indent_str}else:\n")
-            lines.append(
-                self.generate_match_value_arm_assignment(
-                    arm,
-                    match_type,
-                    f"{context} match arm {arm_index}",
-                    temp_name,
-                    branch_indent,
-                )
-            )
 
         prelude_context["lines"].extend(lines)
         return temp_name
@@ -3983,7 +4041,9 @@ class MojoCodeGen:
             condition = f"{expression} == {self.generate_expression(pattern.literal)}"
         elif isinstance(pattern, IdentifierPatternNode):
             if self.is_enum_identifier_pattern(pattern):
-                condition = self.enum_identifier_pattern_condition(pattern, expression)
+                condition = self.enum_identifier_pattern_condition(
+                    pattern, expression, subject_type
+                )
         elif isinstance(pattern, ConstructorPatternNode):
             condition = self.constructor_pattern_condition(
                 pattern, expression, replacements, subject_type
@@ -4013,11 +4073,13 @@ class MojoCodeGen:
         name = getattr(pattern, "name", None)
         return isinstance(name, str) and name in self.enum_variant_aliases
 
-    def enum_identifier_pattern_condition(self, pattern, expression):
+    def enum_identifier_pattern_condition(self, pattern, expression, subject_type=None):
         name = pattern.name
         alias = self.enum_variant_aliases[name]
         enum_type = self.enum_variant_result_types.get(name)
-        if enum_type in self.struct_types:
+        if enum_type in self.struct_types or self.generic_enum_specialization_for_type(
+            subject_type, expected_base=enum_type
+        ):
             return f"{expression}.variant == {alias}"
         return f"{expression} == {alias}"
 
@@ -4039,7 +4101,7 @@ class MojoCodeGen:
         conditions = [
             self.enum_variant_tag_condition(variant_path, expression, subject_type)
         ]
-        for argument, (field_name, _field_type) in zip(arguments, variant_fields):
+        for argument, (field_name, field_type) in zip(arguments, variant_fields):
             field_expression = self.match_pattern_field_expression(
                 expression, field_name
             )
@@ -4049,7 +4111,7 @@ class MojoCodeGen:
                     field_expression,
                     replacements,
                     top_level=False,
-                    subject_type=subject_type,
+                    subject_type=field_type,
                 )
             )
         return (
@@ -4094,7 +4156,7 @@ class MojoCodeGen:
                     field_expression,
                     replacements,
                     top_level=False,
-                    subject_type=subject_type,
+                    subject_type=field_types[field_name],
                 )
             )
         return (
@@ -4170,7 +4232,9 @@ class MojoCodeGen:
             if self.is_enum_identifier_pattern(pattern):
                 if collect_conditions:
                     conditions.append(
-                        self.enum_identifier_pattern_condition(pattern, expression)
+                        self.enum_identifier_pattern_condition(
+                            pattern, expression, subject_type
+                        )
                     )
                 return conditions
             if not top_level:
@@ -4189,7 +4253,7 @@ class MojoCodeGen:
                         variant_path, expression, subject_type
                     )
                 )
-            for argument, (field_name, _field_type) in zip(
+            for argument, (field_name, field_type) in zip(
                 getattr(pattern, "arguments", []) or [], variant_fields
             ):
                 conditions.extend(
@@ -4199,6 +4263,7 @@ class MojoCodeGen:
                         replacements,
                         top_level=False,
                         collect_conditions=collect_conditions,
+                        subject_type=field_type,
                     )
                 )
             return conditions
@@ -4214,6 +4279,16 @@ class MojoCodeGen:
                             pattern_type, expression, subject_type
                         )
                     )
+            field_types = None
+            if variant_fields is not None:
+                field_types = dict(variant_fields)
+            elif (
+                self.struct_pattern_type_name(pattern_type, subject_type)
+                in self.struct_types
+            ):
+                field_types = self.struct_types[
+                    self.struct_pattern_type_name(pattern_type, subject_type)
+                ]
             for field_name, field_pattern in (
                 getattr(pattern, "field_patterns", {}) or {}
             ).items():
@@ -4224,6 +4299,11 @@ class MojoCodeGen:
                         replacements,
                         top_level=False,
                         collect_conditions=collect_conditions,
+                        subject_type=(
+                            field_types.get(field_name)
+                            if field_types is not None
+                            else subject_type
+                        ),
                     )
                 )
         return conditions
@@ -4299,13 +4379,12 @@ class MojoCodeGen:
 
     def match_arms_cover_enum_variants(self, arms, subject_type=None):
         enum_type = None
-        covered_variants = set()
+        patterns_by_variant = {}
         for arm in arms:
             if getattr(arm, "guard", None) is not None:
                 continue
-            variant_path = self.match_pattern_enum_variant_path(
-                getattr(arm, "pattern", None)
-            )
+            pattern = getattr(arm, "pattern", None)
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
             if variant_path is None:
                 continue
             arm_enum_type = self.enum_variant_result_types.get(variant_path)
@@ -4315,23 +4394,153 @@ class MojoCodeGen:
                 enum_type = arm_enum_type
             elif enum_type != arm_enum_type:
                 return False
+            variant_name = variant_path.split("::", 1)[1]
+            patterns_by_variant.setdefault(variant_name, []).append(pattern)
+
+        expected_variants = set(self.enum_variant_names.get(enum_type, []))
+        covered_variants = {
+            variant_name
+            for variant_name, patterns in patterns_by_variant.items()
+            if self.match_patterns_cover_enum_variant_group(patterns, subject_type)
+        }
+        return bool(expected_variants) and expected_variants.issubset(covered_variants)
+
+    def match_patterns_cover_enum_variant_group(self, patterns, subject_type=None):
+        if any(
+            self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+            for pattern in patterns
+        ):
+            return True
+
+        variant_path = self.match_pattern_enum_variant_path(patterns[0], subject_type)
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if not variant_fields:
+            return False
+
+        fields_by_name = dict(variant_fields)
+        constrained_fields = {}
+        for pattern in patterns:
+            field_patterns = self.match_pattern_field_pattern_map(pattern, subject_type)
+            if field_patterns is None:
+                return False
+            for field_name in fields_by_name:
+                field_pattern = field_patterns.get(field_name)
+                if field_pattern is None:
+                    continue
+                if self.is_unconstrained_match_pattern(field_pattern):
+                    continue
+                constrained_fields.setdefault(field_name, []).append(field_pattern)
+
+        if len(constrained_fields) != 1:
+            return False
+        field_name, nested_patterns = next(iter(constrained_fields.items()))
+        return self.match_patterns_cover_enum_type(
+            nested_patterns,
+            fields_by_name[field_name],
+        )
+
+    def match_pattern_field_pattern_map(self, pattern, subject_type=None):
+        if isinstance(pattern, StructPatternNode):
+            return dict(getattr(pattern, "field_patterns", {}) or {})
+        if isinstance(pattern, ConstructorPatternNode):
+            variant_path = getattr(pattern, "type_name", None)
+            variant_fields = self.enum_pattern_variant_fields(
+                variant_path, subject_type
+            )
+            if variant_fields is None:
+                return None
+            return {
+                field_name: argument
+                for argument, (field_name, _field_type) in zip(
+                    getattr(pattern, "arguments", []) or [], variant_fields
+                )
+            }
+        return None
+
+    def match_patterns_cover_enum_type(self, patterns, subject_type):
+        enum_type = None
+        covered_variants = set()
+        for pattern in patterns:
+            if not self.match_pattern_covers_entire_enum_variant(pattern, subject_type):
+                return False
+            variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+            if variant_path is None:
+                return False
+            pattern_enum_type = self.enum_variant_result_types.get(variant_path)
+            if pattern_enum_type is None:
+                return False
+            if enum_type is None:
+                enum_type = pattern_enum_type
+            elif enum_type != pattern_enum_type:
+                return False
             covered_variants.add(variant_path.split("::", 1)[1])
 
         expected_variants = set(self.enum_variant_names.get(enum_type, []))
         return bool(expected_variants) and expected_variants.issubset(covered_variants)
 
-    def match_pattern_enum_variant_path(self, pattern):
+    def is_unconditional_final_match_arm(
+        self, arms, index, pattern, guard, subject_type=None
+    ):
+        if guard is not None or index != len(arms) - 1:
+            return False
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if self.is_irrefutable_match_pattern(pattern, guard, subject_type):
+            return True
+        return self.match_arms_cover_enum_variants(
+            arms, subject_type
+        ) and self.match_pattern_covers_entire_enum_variant(pattern, subject_type)
+
+    def match_pattern_covers_entire_enum_variant(self, pattern, subject_type=None):
+        variant_path = self.match_pattern_enum_variant_path(pattern, subject_type)
+        if variant_path is None:
+            return False
+        variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
+        if variant_fields is None:
+            return False
+        if isinstance(pattern, IdentifierPatternNode):
+            return not variant_fields
+        if isinstance(pattern, ConstructorPatternNode):
+            arguments = getattr(pattern, "arguments", []) or []
+            return len(arguments) == len(variant_fields) and all(
+                self.is_unconstrained_match_pattern(argument) for argument in arguments
+            )
+        if isinstance(pattern, StructPatternNode):
+            return all(
+                self.is_unconstrained_match_pattern(field_pattern)
+                for field_pattern in (
+                    getattr(pattern, "field_patterns", {}) or {}
+                ).values()
+            )
+        return False
+
+    def is_unconstrained_match_pattern(self, pattern):
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if isinstance(pattern, IdentifierPatternNode):
+            return not self.is_enum_identifier_pattern(pattern)
+        return False
+
+    def match_pattern_enum_variant_path(self, pattern, subject_type=None):
         if isinstance(
             pattern, IdentifierPatternNode
         ) and self.is_enum_identifier_pattern(pattern):
             return pattern.name.replace(".", "::")
         if isinstance(pattern, ConstructorPatternNode):
             variant_path = getattr(pattern, "type_name", None)
-            if variant_path in self.enum_variant_result_types:
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
                 return variant_path.replace(".", "::")
         if isinstance(pattern, StructPatternNode):
             variant_path = getattr(pattern, "type_name", None)
-            if variant_path in self.enum_variant_result_types:
+            if (
+                variant_path in self.enum_variant_result_types
+                or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
+                is not None
+            ):
                 return variant_path.replace(".", "::")
         return None
 
@@ -4346,7 +4555,11 @@ class MojoCodeGen:
                 f"constructor pattern {variant_path} expects "
                 f"{len(variant_fields)} fields, got {len(arguments)}"
             )
-        return self.nested_pattern_rejection_reason(arguments)
+        for argument, (_field_name, field_type) in zip(arguments, variant_fields):
+            reason = self.nested_pattern_rejection_reason([argument], field_type)
+            if reason is not None:
+                return reason
+        return None
 
     def struct_pattern_rejection_reason(self, pattern, subject_type=None):
         pattern_type = getattr(pattern, "type_name", None)
@@ -4364,12 +4577,17 @@ class MojoCodeGen:
             return "struct destructuring patterns cannot be lowered"
 
         field_patterns = getattr(pattern, "field_patterns", {}) or {}
-        for field_name in field_patterns:
+        for field_name, field_pattern in field_patterns.items():
             if field_name not in field_types:
                 return f"struct pattern field {field_name} cannot be lowered"
-        return self.nested_pattern_rejection_reason(field_patterns.values())
+            reason = self.nested_pattern_rejection_reason(
+                [field_pattern], field_types[field_name]
+            )
+            if reason is not None:
+                return reason
+        return None
 
-    def nested_pattern_rejection_reason(self, patterns):
+    def nested_pattern_rejection_reason(self, patterns, subject_type=None):
         for nested_pattern in patterns:
             if isinstance(nested_pattern, (WildcardPatternNode, LiteralPatternNode)):
                 continue
@@ -4378,12 +4596,16 @@ class MojoCodeGen:
                     continue
                 continue
             if isinstance(nested_pattern, ConstructorPatternNode):
-                reason = self.constructor_pattern_rejection_reason(nested_pattern)
+                reason = self.constructor_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
                 if reason is not None:
                     return reason
                 continue
             if isinstance(nested_pattern, StructPatternNode):
-                reason = self.struct_pattern_rejection_reason(nested_pattern)
+                reason = self.struct_pattern_rejection_reason(
+                    nested_pattern, subject_type
+                )
                 if reason is not None:
                     return reason
                 continue
@@ -6029,7 +6251,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_resource_size_target_shape(
@@ -6082,7 +6306,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_image_result_target_shape(
@@ -6140,7 +6366,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_buffer_result_target_shape(
@@ -6193,7 +6421,9 @@ class MojoCodeGen:
 
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm_index, arm in enumerate(arms, start=1):
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 self.validate_reinterpret_result_target_shape(
@@ -8801,6 +9031,11 @@ class MojoCodeGen:
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
 
+    def type_name_string(self, type_value):
+        if type_value is None:
+            return None
+        return self.type_name(type_value)
+
     def normalize_generic_vector_type_name(self, type_name):
         if not isinstance(type_name, str):
             return type_name
@@ -8816,7 +9051,8 @@ class MojoCodeGen:
         return type_name
 
     def is_array_type_name(self, type_name):
-        return type_name is not None and "[" in str(type_name) and "]" in str(type_name)
+        type_text = str(type_name or "")
+        return "[" in type_text and type_text.endswith("]")
 
     def parse_array_type_name(self, type_name):
         type_text = str(type_name)
@@ -9056,7 +9292,9 @@ class MojoCodeGen:
             return self.array_type_name(element_type, len(expr.elements))
         if isinstance(expr, MatchNode):
             arms = getattr(expr, "arms", []) or []
-            self.validate_match_expression_arms(arms)
+            self.validate_match_expression_arms(
+                arms, self.expression_result_type(getattr(expr, "expression", None))
+            )
             for arm in arms:
                 arm_expr, _ = self.match_arm_value_expression(arm)
                 arm_type = self.expression_result_type(arm_expr)
@@ -9620,7 +9858,7 @@ class MojoCodeGen:
         else:
             vtype_str = str(vtype)
 
-        if "[" in vtype_str and "]" in vtype_str:
+        if self.is_array_type_name(vtype_str):
             base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:

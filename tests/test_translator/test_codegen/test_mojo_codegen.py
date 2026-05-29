@@ -4124,8 +4124,30 @@ def test_match_expression_allows_exhaustive_payload_enum_patterns_without_wildca
 
     assert "if value.variant == MaybeInt_Some:" in generated_code
     assert "elif value.variant == MaybeInt_Named:" in generated_code
-    assert "elif value.variant == MaybeInt_None:" in generated_code
+    assert "else:\n        __cgl_match_value_0 = (-1)" in generated_code
     assert "match expressions must include a final wildcard arm" not in generated_code
+
+
+def test_match_expression_rejects_constrained_payload_patterns_without_wildcard():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(1) => 1,
+            MaybeInt::None => 0
+        };
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="match expressions must include a final wildcard arm",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_match_expression_allows_final_struct_destructuring_without_wildcard():
@@ -4144,8 +4166,8 @@ def test_match_expression_allows_final_struct_destructuring_without_wildcard():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "if True:" in generated_code
     assert "__cgl_match_value_0 = (point.x + point.y)" in generated_code
+    assert "if True:" not in generated_code
     assert "match expressions must include a final wildcard arm" not in generated_code
 
 
@@ -4262,6 +4284,218 @@ def test_match_expression_struct_destructuring_patterns_compile_with_mojo(tmp_pa
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["13"]
+
+
+def test_generic_payload_enum_variants_lower_to_specialized_mojo_structs():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    Result<int, int> makeOk(int value) {
+        return Result::Ok(value);
+    }
+
+    Result<int, int> makeErr(int value) {
+        return Result::Err(value);
+    }
+
+    int inspect(Result<int, int> value) {
+        return match value {
+            Result::Ok(ok) => ok,
+            Result::Err(err) => err + 10
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Result_int_int:" in generated_code
+    assert "alias Result_Ok = 0" in generated_code
+    assert "alias Result_Err = 1" in generated_code
+    assert (
+        "fn Result_int_int_Ok_make(payload0: Int32) -> Result_int_int:"
+        in generated_code
+    )
+    assert (
+        "fn Result_int_int_Err_make(payload0: Int32) -> Result_int_int:"
+        in generated_code
+    )
+    assert "fn makeOk(value: Int32) -> Result_int_int:" in generated_code
+    assert "return Result_int_int_Ok_make(value)" in generated_code
+    assert "if value.variant == Result_Ok:" in generated_code
+    assert "else:\n        __cgl_match_value_0 = (value.Err_0 + 10)" in generated_code
+    assert "Result::" not in generated_code
+
+
+def test_generic_payload_enum_variants_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    Result<int, int> makeOk(int value) {
+        return Result::Ok(value);
+    }
+
+    Result<int, int> makeErr(int value) {
+        return Result::Err(value);
+    }
+
+    int inspect(Result<int, int> value) {
+        return match value {
+            Result::Ok(ok) => ok,
+            Result::Err(err) => err + 10
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(makeOk(7)))\n"
+        "    print(inspect(makeErr(3)))\n"
+    )
+
+    source_path = tmp_path / "generic_payload_enum.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "13"]
+
+
+def test_generic_payload_enum_parameterized_specializations_are_rejected_for_mojo_codegen():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    generic<T> fn pass(Result<T, MathError> value) -> Result<T, MathError> {
+        return match value {
+            Result::Ok(ok) => Result::Ok(ok),
+            Result::Err(err) => Result::Err(err)
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="must be concrete"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_generic_payload_enum_match_expression_uses_single_subject_call():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    Result<vec3, MathError> makeResult(bool ok) {
+        match ok {
+            true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); },
+            _ => { return Result::Err(MathError::DivisionByZero); }
+        }
+    }
+
+    vec3 read(bool ok, vec3 fallback) {
+        let value = match makeResult(ok) {
+            Result::Ok(actual) => actual,
+            Result::Err(_) => fallback
+        };
+        return value;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var __cgl_match_subject_0: Result_vec3_MathError = makeResult(ok)"
+        in generated_code
+    )
+    assert generated_code.count("makeResult(ok)") == 1
+    assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
+    assert "else:" in generated_code
+    assert "Result<" not in generated_code
+
+
+def test_nested_generic_payload_enum_field_patterns_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    generic<T> struct Option {
+        enum OptionType {
+            Some(T),
+            None
+        }
+        OptionType variant;
+    }
+
+    enum RenderCommand {
+        Draw {
+            material: Option<int>,
+            value: int
+        },
+        Clear
+    };
+
+    int inspect(RenderCommand command) {
+        return match command {
+            RenderCommand::Draw { material: Option::Some(mat), value } => mat + value,
+            RenderCommand::Draw { material: Option::None, value } => value,
+            RenderCommand::Clear => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(RenderCommand_Draw_make(Option_int_Some_make(3), 4)))\n"
+        "    print(inspect(RenderCommand_Draw_make(Option_int_None_make(), 4)))\n"
+        "    print(inspect(RenderCommand_Clear_make()))\n"
+    )
+
+    source_path = tmp_path / "nested_generic_payload_enum_patterns.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "4", "0"]
 
 
 def test_match_expression_guarded_bindings_compile_with_mojo(tmp_path):
