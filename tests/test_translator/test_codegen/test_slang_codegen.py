@@ -5284,6 +5284,75 @@ def test_slang_ray_query_methods_emit_native_calls_and_infer_results():
     assert "RayQueryOpNode" not in generated_code
 
 
+def test_slang_ray_query_methods_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayQueryTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec3 value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                bool validProceed = rq.Proceed();
+                uint validStatus = rq.CommittedStatus();
+                vec3 validOrigin = rq.CandidateObjectRayOrigin();
+                float proceedFloat = rq.Proceed();
+                bool statusBool = rq.CommittedStatus();
+                vec3 rayTVector = rq.CandidateRayT();
+                float originScalar = rq.CandidateObjectRayOrigin();
+                acceptVector(rq.CandidateRayT());
+                acceptFloat(rq.CommittedObjectRayDirection());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool validProceed = rq.Proceed();" in generated_code
+    assert "uint validStatus = rq.CommittedStatus();" in generated_code
+    assert "float3 validOrigin = rq.CandidateObjectRayOrigin();" in generated_code
+    assert (
+        "float proceedFloat = /* unsupported Slang RayQuery: Proceed returns bool "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "bool statusBool = /* unsupported Slang RayQuery: CommittedStatus returns "
+        "uint but target expects bool */ false;" in generated_code
+    )
+    assert (
+        "float3 rayTVector = /* unsupported Slang RayQuery: CandidateRayT returns "
+        "float but target expects float3 */ float3(0.0);" in generated_code
+    )
+    assert (
+        "float originScalar = /* unsupported Slang RayQuery: "
+        "CandidateObjectRayOrigin returns float3 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang RayQuery: CandidateRayT returns float "
+        "but target expects float3 */ float3(0.0));" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang RayQuery: CommittedObjectRayDirection "
+        "returns float3 but target expects float */ 0);" in generated_code
+    )
+    assert "float proceedFloat = rq.Proceed();" not in generated_code
+    assert "bool statusBool = rq.CommittedStatus();" not in generated_code
+    assert "float3 rayTVector = rq.CandidateRayT();" not in generated_code
+    assert "float originScalar = rq.CandidateObjectRayOrigin();" not in generated_code
+    assert "acceptVector(rq.CandidateRayT());" not in generated_code
+    assert "acceptFloat(rq.CommittedObjectRayDirection());" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
 def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
     code = """
     shader SlangRayQueryAliases {

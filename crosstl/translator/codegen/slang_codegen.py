@@ -4528,6 +4528,52 @@ class SlangCodeGen:
             "CommittedWorldToObject3x4",
         }
 
+    def generate_slang_ray_query_expression(self, operation, query_expr, args):
+        result_type = self.slang_ray_query_method_return_type(operation)
+        target_reason = self.slang_ray_query_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.slang_ray_query_diagnostic_expression(operation, target_reason)
+
+        query = self.generate_expression(query_expr)
+        arg_list = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{query}.{operation}({arg_list})"
+
+    def slang_ray_query_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_ray_query_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if result_type == "void":
+            return f"returns void but target expects {expected_type}"
+        if not self.is_slang_ray_query_value_type(result_type):
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_ray_query_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        if self.is_slang_ray_query_value_type(expected_type):
+            return expected_type
+        return None
+
+    def is_slang_ray_query_value_type(self, type_name):
+        return self.is_scalar_value_type(type_name) or self.is_vector_value_type(
+            type_name
+        )
+
+    def slang_ray_query_diagnostic_expression(self, operation, reason):
+        expected_type = self.slang_ray_query_expected_target_type()
+        fallback = self.zero_value_for_type(expected_type) if expected_type else "0"
+        return f"/* unsupported Slang RayQuery: {operation} {reason} */ {fallback}"
+
     def slang_ray_query_call_parts(self, node):
         if isinstance(node, RayQueryOpNode):
             return (
@@ -5795,13 +5841,19 @@ class SlangCodeGen:
         elif isinstance(node, AtomicOpNode):
             return self.generate_slang_atomic_op_expression(node)
         elif isinstance(node, RayQueryOpNode):
-            query = self.generate_expression(node.query_expr)
-            args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
-            return f"{query}.{node.operation}({args})"
+            return self.generate_slang_ray_query_expression(
+                node.operation, node.query_expr, node.arguments
+            )
         elif isinstance(node, FunctionCallNode):
             func_expr = getattr(node, "function", None)
             if func_expr is None:
                 func_expr = node.name
+            ray_query_call = self.slang_ray_query_call_parts(node)
+            if ray_query_call is not None:
+                operation, query_expr, args = ray_query_call
+                return self.generate_slang_ray_query_expression(
+                    operation, query_expr, args
+                )
             if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
                 callee = func_expr.name
             elif isinstance(func_expr, str):

@@ -11845,6 +11845,69 @@ class GLSLCodeGen:
             f"'{node_name}': {attr_name} {source} {requirement}"
         )
 
+    def unsupported_resource_space_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Unsupported OpenGL resource binding metadata for "
+            f"'{node_name}': {attr_name} {source} is not supported by OpenGL GLSL"
+        )
+
+    def resource_register_prefix(self, source):
+        if source is None:
+            return None
+        raw_source = str(source).strip().lower()
+        if len(raw_source) >= 2 and raw_source[0] in {"b", "s", "t", "u"}:
+            suffix = raw_source[1:]
+            if suffix.isdigit():
+                return raw_source[0]
+        return None
+
+    def expected_resource_register_prefix(self, node):
+        if (
+            hasattr(node, "members")
+            and not hasattr(node, "var_type")
+            and not hasattr(node, "param_type")
+        ):
+            return "b", "uniform buffer binding"
+
+        vtype = self.resource_node_type(node)
+
+        if self.is_glsl_buffer_block_variable(node, vtype):
+            return "u", "buffer binding"
+
+        if self.is_structured_buffer_type(vtype):
+            if self.structured_buffer_type_name(vtype) == "StructuredBuffer":
+                return "t", "buffer binding"
+            return "u", "buffer binding"
+
+        mapped_type = self.map_resource_type_with_format(vtype, node)
+        if self.is_opaque_resource_type(mapped_type):
+            if self.is_storage_image_type(vtype):
+                return "u", "image binding"
+            return "t", "texture binding"
+
+        if mapped_type == "sampler":
+            return "s", "sampler binding"
+
+        return None, None
+
+    def validate_resource_register_prefix(self, node, source):
+        actual_prefix = self.resource_register_prefix(source)
+        if actual_prefix is None:
+            return
+
+        expected_prefix, namespace = self.expected_resource_register_prefix(node)
+        if expected_prefix is None or actual_prefix == expected_prefix:
+            return
+
+        node_name = self.resource_node_name(node, "<unnamed>")
+        raise ValueError(
+            "Incompatible OpenGL resource register metadata for "
+            f"'{node_name}': register {source} uses {actual_prefix}-register, "
+            f"expected {expected_prefix}-register for {namespace}"
+        )
+
     def invalid_resource_access_message(self, node, source):
         node_name = self.resource_node_name(node, "<unnamed>")
         source = source if source is not None else "<missing>"
@@ -11860,15 +11923,22 @@ class GLSLCodeGen:
             return choices
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
-            arguments = getattr(attr, "arguments", []) or []
-            if not attr_name or not arguments:
+            if not attr_name:
                 continue
             attr_name = str(attr_name).lower()
-            source = self.attribute_value_to_string(arguments[0])
+            arguments = getattr(attr, "arguments", []) or []
+            source = self.attribute_value_to_string(arguments[0]) if arguments else None
+            if attr_name in {"set", "space"}:
+                raise ValueError(
+                    self.unsupported_resource_space_message(node, attr_name, source)
+                )
+            if not arguments:
+                continue
             if attr_name in {"binding", "buffer", "sampler", "texture"}:
                 binding = self.binding_index_value(arguments[0])
             elif attr_name == "register":
                 binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
+                self.validate_resource_register_prefix(node, source)
             else:
                 continue
             if binding is None:

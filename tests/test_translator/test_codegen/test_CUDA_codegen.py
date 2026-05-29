@@ -6301,6 +6301,148 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_image_access_returned_struct_member_arrays_emit_cuda_diagnostics(self):
+        """Test CUDA access checks follow returned storage-image struct members."""
+        source_code = """
+        struct CounterBundle {
+            uimage2D writeCounters[4] @access(read_write) @r32ui;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        shader ImageAccessReturnedStructMemberArrays {
+            uimage2D globalCounters @access(read_write) @r32ui[4];
+
+            uimage2D chooseMemberWrite(CounterBundle bundle, int slot) {
+                return bundle.writeCounters[slot];
+            }
+
+            uimage2D chooseMemberRead(CounterBundle bundle, int slot) {
+                return bundle.readCounters[slot];
+            }
+
+            uimage2D chooseMemberReadLocal(CounterBundle bundle, int slot) {
+                uimage2D alias = bundle.readCounters[slot];
+                return alias;
+            }
+
+            uimage2D chooseMemberReadChain(CounterBundle bundle, int slot) {
+                return chooseMemberRead(bundle, slot);
+            }
+
+            uimage2D chooseMemberReadBranch(
+                CounterBundle bundle,
+                int slot,
+                bool useNext
+            ) {
+                return useNext
+                    ? bundle.readCounters[slot]
+                    : bundle.readCounters[slot + 1];
+            }
+
+            uimage2D chooseGlobal(int slot) {
+                return globalCounters[slot];
+            }
+
+            compute {
+                void main(
+                    CounterBundle bundle,
+                    ivec2 pixel,
+                    int slot,
+                    bool useNext,
+                    uint expected,
+                    uint replacement
+                ) {
+                    uint writeMember =
+                        imageAtomicAdd(chooseMemberWrite(bundle, slot), pixel, 1);
+                    uint readMemberAdd =
+                        imageAtomicAdd(chooseMemberRead(bundle, slot), pixel, 1);
+                    uint readMemberCas =
+                        imageAtomicCompSwap(
+                            chooseMemberRead(bundle, slot),
+                            pixel,
+                            expected,
+                            replacement
+                        );
+                    uint readMemberLocal =
+                        imageAtomicAdd(
+                            chooseMemberReadLocal(bundle, slot),
+                            pixel,
+                            1
+                        );
+                    uint readMemberChain =
+                        imageAtomicCompSwap(
+                            chooseMemberReadChain(bundle, slot),
+                            pixel,
+                            expected,
+                            replacement
+                        );
+                    uint readMemberBranch =
+                        imageAtomicAdd(
+                            chooseMemberReadBranch(bundle, slot, useNext),
+                            pixel,
+                            1
+                        );
+                    uint writeGlobal =
+                        imageAtomicCompSwap(
+                            chooseGlobal(slot),
+                            pixel,
+                            expected,
+                            replacement
+                        );
+                    ivec2 readMemberDims =
+                        imageSize(chooseMemberRead(bundle, slot));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "uint writeMember = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint writeGlobal = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicCompSwap on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint readMemberAdd = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd requires readwrite image resource on uimage2D */ 0u;"
+            in cuda_code
+        )
+        assert (
+            "uint readMemberCas = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicCompSwap requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "uint readMemberLocal = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd requires readwrite image resource on uimage2D */ 0u;"
+            in cuda_code
+        )
+        assert (
+            "uint readMemberChain = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicCompSwap requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "uint readMemberBranch = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicAdd requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "int2 readMemberDims = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on uimage2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert "imageAtomicAdd(" not in cuda_code
+        assert "imageAtomicCompSwap(" not in cuda_code
+
     def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
         self,
     ):

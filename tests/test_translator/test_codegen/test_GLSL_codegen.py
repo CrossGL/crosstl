@@ -1644,14 +1644,16 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
         };
 
         RWStructuredBuffer<int> values @binding(3) @register(u3);
+        StructuredBuffer<int> readValues @binding(5) @register(t5);
         sampler2D tex @binding(1) @texture(1) @register(t1);
         image2D img @binding(2) @register(u2);
 
         fragment {
             vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
                 int value = buffer_load(values, 0);
+                int readValue = buffer_load(readValues, 0);
                 return texture(tex, uv) + imageLoad(img, ivec2(0, 0)) +
-                    tint + vec4(float(value));
+                    tint + vec4(float(value + readValue));
             }
         }
     }
@@ -1663,8 +1665,171 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
 
     assert "layout(std140, binding = 4) uniform Constants" in generated_code
     assert "layout(std430, binding = 3) buffer valuesBuffer" in generated_code
+    assert "layout(std430, binding = 5) readonly buffer readValuesBuffer" in (
+        generated_code
+    )
     assert "layout(binding = 1) uniform sampler2D tex;" in generated_code
     assert "layout(rgba32f, binding = 2) uniform image2D img;" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader TextureUsesURegister {
+                sampler2D tex @register(u2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'tex': "
+            "register u2 uses u-register, expected t-register for texture binding",
+        ),
+        (
+            """
+            shader ImageUsesTRegister {
+                image2D img @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'img': "
+            "register t2 uses t-register, expected u-register for image binding",
+        ),
+        (
+            """
+            shader RWBufferUsesTRegister {
+                RWStructuredBuffer<int> values @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'values': "
+            "register t2 uses t-register, expected u-register for buffer binding",
+        ),
+        (
+            """
+            shader ReadonlyBufferUsesURegister {
+                StructuredBuffer<int> values @register(u2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'values': "
+            "register u2 uses u-register, expected t-register for buffer binding",
+        ),
+        (
+            """
+            shader CBufferUsesURegister {
+                cbuffer Constants @register(u2) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'Constants': "
+            "register u2 uses u-register, expected b-register for uniform buffer "
+            "binding",
+        ),
+        (
+            """
+            shader BufferBlockUsesTRegister {
+                struct Data {
+                    int value;
+                };
+
+                Data data @glsl_buffer_block(std430) @register(t2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(data.value));
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'data': "
+            "register t2 uses t-register, expected u-register for buffer binding",
+        ),
+    ],
+)
+def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader TextureUsesDescriptorSet {
+                sampler2D tex @set(1) @binding(2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader ImageUsesRegisterSpace {
+                image2D img @space(2) @binding(3);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(img, ivec2(0, 0));
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'img': "
+            "space 2 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader StageResourceUsesDescriptorSet {
+                fragment {
+                    vec4 main(sampler2D tex @set(1) @binding(2)) @gl_FragColor {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+    ],
+)
+def test_glsl_resource_binding_rejects_descriptor_set_space_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
 @pytest.mark.parametrize(

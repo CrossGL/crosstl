@@ -108,8 +108,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.indent_level = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
-        self.struct_member_types = {}
-        self.struct_member_image_accesses = {}
+        (
+            self.struct_member_types,
+            self.struct_member_image_accesses,
+        ) = self.collect_struct_member_metadata(ast_node)
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
@@ -191,6 +193,36 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if hasattr(body, "statements"):
             return body.statements
         return [body]
+
+    def collect_struct_member_metadata(self, root):
+        """Collect struct member types and storage-image access before emission."""
+        member_types_by_struct = {}
+        member_accesses_by_struct = {}
+        for struct in getattr(root, "structs", []) or []:
+            struct_name = getattr(struct, "name", None)
+            if not struct_name:
+                continue
+            member_types = {}
+            member_accesses = {}
+            for member in getattr(struct, "members", []) or []:
+                member_name = getattr(member, "name", None)
+                if not member_name:
+                    continue
+                if hasattr(member, "member_type"):
+                    member_type = member.member_type
+                elif hasattr(member, "vtype"):
+                    member_type = member.vtype
+                else:
+                    member_type = "float"
+                member_types[member_name] = member_type
+                member_access = self.explicit_resource_access(member)
+                if member_access is not None and self.is_storage_image_type(
+                    member_type
+                ):
+                    member_accesses[member_name] = member_access
+            member_types_by_struct[struct_name] = member_types
+            member_accesses_by_struct[struct_name] = member_accesses
+        return member_types_by_struct, member_accesses_by_struct
 
     def statement_body_terminates(self, body):
         """Return true when the body already exits the active control flow."""
@@ -3058,6 +3090,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if self.is_queryable_resource_type(self.get_variable_node_type(var))
         }
         global_resource_names = {name for name in global_resource_names if name}
+        global_variable_types = {
+            getattr(var, "name", None): self.type_name_string(
+                self.get_variable_node_type(var)
+            )
+            for var in getattr(root, "global_variables", [])
+        }
+        global_variable_types = {
+            name: type_name
+            for name, type_name in global_variable_types.items()
+            if name and type_name
+        }
 
         function_infos = []
         for func in functions:
@@ -3110,12 +3153,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             all_param_indices = {
                 name: index for name, index in all_param_indices.items() if name
             }
+            param_types = {
+                getattr(param, "name", None): self.type_name_string(
+                    self.get_parameter_type(param)
+                )
+                for param in params
+            }
+            param_types = {
+                name: type_name
+                for name, type_name in param_types.items()
+                if name and type_name
+            }
             function_infos.append(
                 (
                     func_name,
                     return_expr,
                     resource_param_indices,
                     all_param_indices,
+                    param_types,
                     local_alias_sources,
                 )
             )
@@ -3128,6 +3183,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return_expr,
                 resource_param_indices,
                 all_param_indices,
+                param_types,
                 local_alias_sources,
             ) in function_infos:
                 if func_name in return_sources:
@@ -3139,6 +3195,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     all_param_indices,
                     return_sources,
                     local_alias_sources,
+                    param_types=param_types,
+                    global_variable_types=global_variable_types,
                 )
                 if return_source is not None:
                     return_sources[func_name] = return_source
@@ -3155,6 +3213,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         known_return_sources=None,
         local_alias_sources=None,
         local_visited=None,
+        param_types=None,
+        global_variable_types=None,
     ):
         """Describe a traceable resource-return expression for caller metadata."""
         if known_return_sources is None:
@@ -3163,6 +3223,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             local_alias_sources = {}
         if local_visited is None:
             local_visited = set()
+        if param_types is None:
+            param_types = {}
+        if global_variable_types is None:
+            global_variable_types = {}
 
         if isinstance(return_expr, TernaryOpNode):
             true_source = self.query_return_source_descriptor(
@@ -3173,6 +3237,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 known_return_sources,
                 local_alias_sources,
                 local_visited.copy(),
+                param_types=param_types,
+                global_variable_types=global_variable_types,
             )
             false_source = self.query_return_source_descriptor(
                 return_expr.false_expr,
@@ -3182,6 +3248,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 known_return_sources,
                 local_alias_sources,
                 local_visited.copy(),
+                param_types=param_types,
+                global_variable_types=global_variable_types,
             )
             if true_source is None or false_source is None:
                 return None
@@ -3211,6 +3279,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 all_param_indices,
                 known_return_sources,
                 local_alias_sources,
+                param_types,
+                global_variable_types,
             )
 
         return_base_expr = return_expr
@@ -3219,8 +3289,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return_base_expr, return_indices = self.query_array_access_parts(
                 return_expr
             )
+        elif isinstance(return_expr, MemberAccessNode):
+            return_base_expr = return_expr
         elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
             return None
+
+        if isinstance(return_base_expr, MemberAccessNode):
+            return self.query_return_member_source_descriptor(
+                return_base_expr,
+                return_indices,
+                all_param_indices,
+                param_types,
+                global_variable_types,
+            )
 
         return_name = self.get_expression_name(return_base_expr)
         if not return_name:
@@ -3241,6 +3322,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 known_return_sources,
                 local_alias_sources,
                 local_visited | {return_name},
+                param_types=param_types,
+                global_variable_types=global_variable_types,
             )
             if source_descriptor is None:
                 return None
@@ -3265,6 +3348,62 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             }
         return None
 
+    def query_return_member_source_descriptor(
+        self,
+        member_expr,
+        return_indices,
+        all_param_indices,
+        param_types,
+        global_variable_types,
+    ):
+        """Describe a storage-image struct member returned by a helper."""
+        object_node = getattr(
+            member_expr,
+            "object_expr",
+            getattr(member_expr, "object", None),
+        )
+        member = getattr(member_expr, "member", None)
+        member_name = getattr(member, "name", member)
+        if object_node is None or not isinstance(member_name, str):
+            return None
+
+        object_name = self.get_expression_name(object_node)
+        if not object_name:
+            return None
+
+        object_kind = None
+        object_type = None
+        descriptor = {
+            "kind": "member",
+            "member": member_name,
+            "indices": return_indices,
+            "param_indices": all_param_indices,
+        }
+        if object_name in param_types:
+            object_kind = "parameter"
+            object_type = param_types[object_name]
+            descriptor["object_index"] = all_param_indices.get(object_name)
+        elif object_name in global_variable_types:
+            object_kind = "global"
+            object_type = global_variable_types[object_name]
+            descriptor["object_name"] = object_name
+        else:
+            return None
+
+        object_type = self.type_name_string(object_type)
+        member_type = self.struct_member_types.get(object_type, {}).get(member_name)
+        if not self.is_storage_image_type(member_type):
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, all_param_indices)
+            for index in return_indices
+        ):
+            return None
+
+        descriptor["object_kind"] = object_kind
+        descriptor["object_type"] = object_type
+        return descriptor
+
     def inline_query_return_source_descriptor(
         self,
         return_source,
@@ -3274,10 +3413,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         all_param_indices,
         known_return_sources,
         local_alias_sources=None,
+        param_types=None,
+        global_variable_types=None,
     ):
         """Inline a traceable callee resource return into the caller context."""
         if local_alias_sources is None:
             local_alias_sources = {}
+        if param_types is None:
+            param_types = {}
+        if global_variable_types is None:
+            global_variable_types = {}
         source_param_indices = return_source.get("param_indices", {})
         kind = return_source["kind"]
 
@@ -3308,6 +3453,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 all_param_indices,
                 known_return_sources,
                 local_alias_sources,
+                param_types=param_types,
+                global_variable_types=global_variable_types,
             )
             if base_source is None:
                 return None
@@ -3341,6 +3488,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 all_param_indices,
                 known_return_sources,
                 local_alias_sources,
+                param_types,
+                global_variable_types,
             )
             false_source = self.inline_query_return_source_descriptor(
                 return_source["false_source"],
@@ -3350,6 +3499,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 all_param_indices,
                 known_return_sources,
                 local_alias_sources,
+                param_types,
+                global_variable_types,
             )
             if true_source is None or false_source is None:
                 return None
@@ -3361,13 +3512,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "param_indices": all_param_indices,
             }
 
+        if kind == "member":
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            inlined = dict(return_source)
+            inlined["indices"] = indices
+            inlined["param_indices"] = all_param_indices
+            return inlined
+
         return None
 
     def append_query_return_indices(self, return_source, indices, param_indices):
         """Append array indices to a flattened resource-return descriptor."""
         if not indices:
             return return_source
-        if return_source["kind"] not in {"global", "parameter"}:
+        if return_source["kind"] not in {"global", "parameter", "member"}:
             return None
         if any(
             not self.is_safe_query_return_index(index, param_indices)
@@ -3927,11 +4092,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if return_source["kind"] == "global":
             metadata_expr = self.query_metadata_name(return_source["name"])
-        else:
+        elif return_source["kind"] == "parameter":
             index = return_source["index"]
             if index >= len(raw_args):
                 return None
             metadata_expr = self.query_metadata_expression(raw_args[index])
+        else:
+            return None
         if metadata_expr is None:
             return None
 
@@ -4821,6 +4988,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if index is None or index >= len(raw_args):
                 return None
             return self.image_resource_access(raw_args[index])
+
+        if kind == "member":
+            object_type = return_source.get("object_type")
+            member = return_source.get("member")
+            return self.struct_member_image_accesses.get(object_type, {}).get(member)
 
         return None
 
