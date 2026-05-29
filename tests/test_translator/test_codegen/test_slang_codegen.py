@@ -4434,6 +4434,98 @@ def test_task_stage_helper_can_dispatch_mesh():
     assert "launchMesh();" in generated_code
 
 
+def test_mesh_intrinsics_validate_shared_nested_helper_stage_contexts():
+    valid_code = """
+    shader SlangSharedMeshTaskHelpers {
+        void launchMesh() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        void relayDispatch() {
+            launchMesh();
+        }
+
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                relayDispatch();
+            }
+        }
+
+        mesh {
+            void main(
+                @vertices out vec4 verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "void launchMesh()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "void relayDispatch()" in generated_code
+    assert "relayDispatch();" in generated_code
+    assert "void configureCounts()" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "configureCounts();" in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+    invalid_dispatch_code = """
+    shader InvalidSlangSharedDispatchHelper {
+        void launchMesh() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        void relayDispatch() {
+            launchMesh();
+        }
+
+        compute {
+            void main() @numthreads(1, 1, 1) {
+                relayDispatch();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="compute stage cannot call DispatchMesh"):
+        generate_code(parse_code(tokenize_code(invalid_dispatch_code)))
+
+    invalid_counts_code = """
+    shader InvalidSlangSharedCountsHelper {
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                configureCounts();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="task stage cannot call SetMeshOutputCounts"):
+        generate_code(parse_code(tokenize_code(invalid_counts_code)))
+
+
 @pytest.mark.parametrize(
     ("stage_source", "message"),
     [

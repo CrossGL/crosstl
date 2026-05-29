@@ -9482,6 +9482,66 @@ class TestVulkanSPIRVCodeGen:
 
         assert "WARNING" not in spv_code
 
+    def test_descriptor_arrays_and_counter_sidecars_allocate_set_scoped_bindings(
+        self, tmp_path
+    ):
+        source_code = """
+        shader DescriptorSets {
+            sampler2d reservedZero @binding(0);
+            sampler2d textures[4] @binding(1);
+            AppendStructuredBuffer<float> appendQueues[2] @binding(3);
+            sampler2d reservedFour @binding(4);
+            RWStructuredBuffer<float> autoData;
+            image2D images @set(1) @binding(1) @rgba16f[2];
+            sampler2d setOneAuto @set(1);
+            StructuredBuffer<float> setOneWeights @set(1);
+
+            compute {
+                void main() {
+                    float x = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        expected_uniform_constant_slots = {
+            "reservedZero": (0, 0),
+            "textures": (0, 1),
+            "reservedFour": (0, 4),
+            "images": (1, 1),
+            "setOneAuto": (1, 0),
+        }
+        expected_uniform_slots = {
+            "appendQueues": (0, 3),
+            "appendQueuesCounter": (0, 2),
+            "autoData": (0, 5),
+            "setOneWeights": (1, 2),
+        }
+
+        for name, (descriptor_set, binding) in expected_uniform_constant_slots.items():
+            variable_id = spirv_named_variable(
+                spv_code, name, storage_class="UniformConstant"
+            )
+            assert (
+                f"OpDecorate {variable_id} DescriptorSet {descriptor_set}" in spv_code
+            )
+            assert f"OpDecorate {variable_id} Binding {binding}" in spv_code
+
+        for name, (descriptor_set, binding) in expected_uniform_slots.items():
+            variable_id = spirv_named_variable(spv_code, name, storage_class="Uniform")
+            assert (
+                f"OpDecorate {variable_id} DescriptorSet {descriptor_set}" in spv_code
+            )
+            assert f"OpDecorate {variable_id} Binding {binding}" in spv_code
+
+        assert "OpTypeArray" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_resource_globals_reject_duplicate_explicit_spirv_bindings(self):
         source_code = """
         shader Resources {
@@ -12507,6 +12567,78 @@ class TestVulkanSPIRVCodeGen:
             "got readonly"
         ) in spv_code
         assert "SPIR-V descriptor resource 'writeAlias'" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_storage_image_array_parameter_access_contracts_emit_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StorageImageArrayParameterDiagnostics {
+            image2D readOnlyImages @rgba32f @readonly[2];
+            image2D writeOnlyImages @rgba32f @writeonly[2];
+
+            vec4 readImage(image2D images[2] @rgba32f, uint slot, ivec2 pixel) {
+                return imageLoad(images[slot], pixel);
+            }
+
+            void writeImage(
+                image2D images[2] @rgba32f,
+                uint slot,
+                ivec2 pixel,
+                vec4 value
+            ) {
+                imageStore(images[slot], pixel, value);
+            }
+
+            vec4 updateImage(image2D images[2] @rgba32f, uint slot, ivec2 pixel) {
+                vec4 oldValue = imageLoad(images[slot], pixel);
+                imageStore(images[slot], pixel, oldValue);
+                return oldValue;
+            }
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 rejectedRead = readImage(writeOnlyImages, 0u, pixel);
+                    writeImage(readOnlyImages, 1u, pixel, rejectedRead);
+                    vec4 rejectedUpdate =
+                        updateImage(readOnlyImages, 0u, pixel);
+                    vec4 rejectedWriteOnlyUpdate =
+                        updateImage(writeOnlyImages, 1u, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: function call 'readImage' requires read-capable "
+            "storage image access for argument writeOnlyImages passed to "
+            "parameter images: got writeonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'writeImage' requires write-capable "
+            "storage image access for argument readOnlyImages passed to "
+            "parameter images: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateImage' requires read-write "
+            "storage image access for argument readOnlyImages passed to "
+            "parameter images: got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'updateImage' requires read-write "
+            "storage image access for argument writeOnlyImages passed to "
+            "parameter images: got writeonly"
+        ) in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "imageStore(" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 

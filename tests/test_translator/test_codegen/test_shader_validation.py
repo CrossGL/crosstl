@@ -1287,6 +1287,35 @@ shader SampledTextureArrayConstIndexValidation {
 """
 
 
+METAL_SYMBOLIC_SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER = """
+shader MetalSymbolicSampledTextureArrayValidation {
+    const int BASE_COUNT = 2;
+    const int TEXTURE_COUNT = BASE_COUNT * 2;
+    sampler2D textures[TEXTURE_COUNT];
+    sampler samplers[TEXTURE_COUNT];
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+    };
+
+    vec4 sampleLayer(
+        sampler2D localTextures[TEXTURE_COUNT],
+        sampler localSamplers[TEXTURE_COUNT],
+        int layer,
+        vec2 uv
+    ) {
+        return texture(localTextures[layer], localSamplers[layer], uv);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            return sampleLayer(textures, samplers, TEXTURE_COUNT - 1, input.uv);
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_TRANSITIVE_SHADOWED_FRAGMENT_SHADER = """
 shader TransitiveSampledShadowedConstIndexValidation {
     const int COUNT = 4;
@@ -6487,6 +6516,35 @@ def test_generated_metal_fragment_sampled_texture_const_index_compiles_with_meta
         "fragment",
     )
     source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_symbolic_sampled_texture_arrays_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "symbolic_sampled_texture_arrays.metal"
+    output = tmp_path / "symbolic_sampled_texture_arrays.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SYMBOLIC_SAMPLED_TEXTURE_ARRAY_FRAGMENT_SHADER),
+        "fragment",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "constant int TEXTURE_COUNT = BASE_COUNT * 2;" in code
+    assert "array<texture2d<float>, TEXTURE_COUNT> textures [[texture(0)]]" in code
+    assert "array<sampler, TEXTURE_COUNT> samplers [[sampler(0)]]" in code
+    assert (
+        "float4 sampleLayer(array<texture2d<float>, TEXTURE_COUNT> "
+        "localTextures, array<sampler, TEXTURE_COUNT> localSamplers"
+    ) in code
+    assert "localTextures[layer].sample(localSamplers[layer], uv)" in code
 
     run_validator(
         [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
