@@ -372,7 +372,6 @@ class MetalCodeGen:
         "QuadAll": "quad_all",
     }
     METAL_WAVE_UNSUPPORTED_OPERATIONS = {
-        "WaveMatch": "has no uint4-compatible Metal simdgroup mask lowering yet",
         "WaveMultiPrefixSum": "has no Metal partitioned prefix equivalent",
         "WaveMultiPrefixCountBits": "has no Metal partitioned prefix equivalent",
         "WaveMultiPrefixProduct": "has no Metal partitioned prefix equivalent",
@@ -516,6 +515,7 @@ class MetalCodeGen:
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.required_metal_wave_match_helper = False
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
         self.required_glsl_buffer_aggregate_load_helpers = {}
@@ -1051,6 +1051,7 @@ class MetalCodeGen:
         self.suppress_image_load_component_suffix = False
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.required_metal_wave_match_helper = False
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -2707,7 +2708,9 @@ class MetalCodeGen:
                 operation = self.function_call_name(node)
             else:
                 continue
-            if operation in {"WaveGetLaneIndex", "WaveGetLaneCount"}:
+            if operation == "WaveMatch":
+                operations.add("WaveGetLaneCount")
+            elif operation in {"WaveGetLaneIndex", "WaveGetLaneCount"}:
                 operations.add(operation)
         return operations
 
@@ -5472,6 +5475,17 @@ class MetalCodeGen:
             self.required_metal_wave_ballot_helper = True
             predicate = self.generate_expression(arguments[0])
             return f"__crossgl_metal_wave_ballot({predicate})"
+        if operation == "WaveMatch":
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_count_parameter is None:
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    "requires a compute-stage threads_per_simdgroup value",
+                )
+            self.required_metal_wave_match_helper = True
+            value = self.generate_expression(arguments[0])
+            return f"__crossgl_metal_wave_match({value}, {lane_count_parameter})"
         if operation == "WaveReadLaneAt":
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
@@ -5561,6 +5575,24 @@ class MetalCodeGen:
             )
         return None
 
+    def metal_wave_validate_match_argument(self, operation, argument):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if (
+            array_suffix
+            or mapped_type != component_type
+            or component_type not in self.METAL_WAVE_NUMERIC_COMPONENT_TYPES
+        ):
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be numeric scalar, got {mapped_type}",
+            )
+        return None
+
     def metal_wave_validate_quad_lane_range(self, operation, argument):
         lane_index = self.literal_int_value(argument, self.literal_int_constants)
         if lane_index is None:
@@ -5599,6 +5631,12 @@ class MetalCodeGen:
             )
             if diagnostic is not None:
                 return diagnostic
+        if operation == "WaveMatch":
+            diagnostic = self.metal_wave_validate_match_argument(
+                operation, arguments[0]
+            )
+            if diagnostic is not None:
+                return diagnostic
 
         if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
             diagnostic = self.metal_wave_validate_lane_argument(
@@ -5630,19 +5668,41 @@ class MetalCodeGen:
         )
 
     def generate_metal_wave_helpers(self):
-        if not self.required_metal_wave_ballot_helper:
-            return ""
-        return (
-            "uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
-            "    simd_vote::vote_t mask = simd_vote::vote_t(simd_ballot(predicate));\n"
-            "    return uint4(\n"
-            "        uint(mask & simd_vote::vote_t(0xffffffffu)),\n"
-            "        uint((mask >> simd_vote::vote_t(32u)) & "
-            "simd_vote::vote_t(0xffffffffu)),\n"
-            "        0u,\n"
-            "        0u);\n"
-            "}\n\n"
-        )
+        code = ""
+        if self.required_metal_wave_ballot_helper:
+            code += (
+                "uint4 __crossgl_metal_wave_ballot(bool predicate) {\n"
+                "    simd_vote::vote_t mask = simd_vote::vote_t(simd_ballot(predicate));\n"
+                "    return uint4(\n"
+                "        uint(mask & simd_vote::vote_t(0xffffffffu)),\n"
+                "        uint((mask >> simd_vote::vote_t(32u)) & "
+                "simd_vote::vote_t(0xffffffffu)),\n"
+                "        0u,\n"
+                "        0u);\n"
+                "}\n\n"
+            )
+        if self.required_metal_wave_match_helper:
+            code += (
+                "template <typename T>\n"
+                "uint4 __crossgl_metal_wave_match(T value, uint laneCount) {\n"
+                "    uint4 mask = uint4(0u);\n"
+                "    for (uint lane = 0u; lane < laneCount; ++lane) {\n"
+                "        if (simd_broadcast(value, ushort(lane)) == value) {\n"
+                "            if (lane < 32u) {\n"
+                "                mask.x |= (1u << lane);\n"
+                "            } else if (lane < 64u) {\n"
+                "                mask.y |= (1u << (lane - 32u));\n"
+                "            } else if (lane < 96u) {\n"
+                "                mask.z |= (1u << (lane - 64u));\n"
+                "            } else {\n"
+                "                mask.w |= (1u << (lane - 96u));\n"
+                "            }\n"
+                "        }\n"
+                "    }\n"
+                "    return mask;\n"
+                "}\n\n"
+            )
+        return code
 
     def generate_ray_tracing_op_expression(self, expr):
         raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)

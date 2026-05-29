@@ -1746,7 +1746,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipStreamEndCapture":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[1])
                 return [
                     f"// HIP stream end capture: stream: {args[0]}, graph output: {output}"
                 ]
@@ -1780,8 +1780,8 @@ class HipToCrossGLConverter:
                     f"status output: {status_output}, id output: {id_output}"
                 )
                 if len(args) >= 6:
-                    graph_output = self.format_runtime_pointer_target(node.args[3])
-                    dependencies_output = self.format_runtime_pointer_target(
+                    graph_output = self.format_runtime_raw_output_target(node.args[3])
+                    dependencies_output = self.format_runtime_raw_output_target(
                         node.args[4]
                     )
                     count_output = self.format_runtime_pointer_target(node.args[5])
@@ -3338,18 +3338,18 @@ class HipToCrossGLConverter:
                 return [f"// HIP exchange stream capture mode: output: {output}"]
         if name == "hipGraphCreate":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP graph create: output: {output}, flags: {args[1]}"]
         if name == "hipGraphDestroy":
             if args:
                 return [f"// HIP graph destroy: {args[0]}"]
         if name == "hipGraphClone":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP graph clone: output: {output}, source: {args[1]}"]
         if name == "hipGraphAddNode":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph add generic node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
@@ -3357,7 +3357,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDrvGraphAddMemcpyNode":
             if len(args) >= 6:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP driver graph add memcpy node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
@@ -3365,7 +3365,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDrvGraphAddMemsetNode":
             if len(args) >= 6:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP driver graph add memset node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
@@ -3373,7 +3373,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDrvGraphAddMemFreeNode":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP driver graph add memory free node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
@@ -3411,7 +3411,7 @@ class HipToCrossGLConverter:
             "hipGraphAddMemsetNode",
         }:
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 node_kind = {
                     "hipGraphAddEmptyNode": "empty",
                     "hipGraphAddHostNode": "host",
@@ -3428,7 +3428,7 @@ class HipToCrossGLConverter:
                 return [comment]
         if name == "hipGraphAddChildGraphNode":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph add child graph node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, "
@@ -3436,7 +3436,7 @@ class HipToCrossGLConverter:
                 ]
         if name in {"hipGraphAddEventRecordNode", "hipGraphAddEventWaitNode"}:
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 action = "record" if name == "hipGraphAddEventRecordNode" else "wait"
                 return [
                     f"// HIP graph add event {action} node: output: {output}, "
@@ -3448,7 +3448,7 @@ class HipToCrossGLConverter:
             "hipGraphAddMemFreeNode",
         }:
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 node_kind = "alloc" if name == "hipGraphAddMemAllocNode" else "free"
                 detail_label = "params" if node_kind == "alloc" else "pointer"
                 return [
@@ -3473,7 +3473,7 @@ class HipToCrossGLConverter:
             "hipGraphAddMemcpyNodeToSymbol",
         }:
             if name == "hipGraphAddMemcpyNode1D" and len(args) >= 8:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph add memcpy 1D node: output: {output}, "
                     f"graph: {args[1]}, dependencies: {args[2]}, count: {args[3]}, "
@@ -3481,7 +3481,7 @@ class HipToCrossGLConverter:
                     f"kind: {args[7]}"
                 ]
             if len(args) >= 9:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 copy_kind = {
                     "hipGraphAddMemcpyNodeFromSymbol": "from symbol",
                     "hipGraphAddMemcpyNodeToSymbol": "to symbol",
@@ -3572,7 +3572,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphNodeFindInClone":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph node find in clone: output: {output}, "
                     f"original: {args[1]}, clone graph: {args[2]}"
@@ -3585,7 +3585,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphChildGraphNodeGetGraph":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 return [
                     f"// HIP graph child node get graph: "
                     f"node: {args[0]}, output: {output}"
@@ -3623,8 +3623,8 @@ class HipToCrossGLConverter:
                 return [f"// HIP graph destroy node: {args[0]}"]
         if name == "hipGraphInstantiate":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
-                error_output = self.format_runtime_pointer_target(raw_args[2])
+                output = self.format_runtime_raw_output_target(raw_args[0])
+                error_output = self.format_runtime_raw_output_target(raw_args[2])
                 return [
                     f"// HIP graph instantiate: output: {output}, graph: {args[1]}, "
                     f"error node output: {error_output}, log buffer: {args[3]}, "
@@ -3632,14 +3632,14 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphInstantiateWithFlags":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph instantiate with flags: output: {output}, "
                     f"graph: {args[1]}, flags: {args[2]}"
                 ]
         if name == "hipGraphInstantiateWithParams":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graph instantiate with params: output: {output}, "
                     f"graph: {args[1]}, params: {args[2]}"
@@ -3655,7 +3655,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP graph exec destroy: {args[0]}"]
         if name == "hipGraphExecUpdate":
             if len(args) >= 4:
-                error_output = self.format_runtime_pointer_target(raw_args[2])
+                error_output = self.format_runtime_raw_output_target(raw_args[2])
                 result_output = self.format_runtime_pointer_target(raw_args[3])
                 return [
                     f"// HIP graph exec update: exec: {args[0]}, graph: {args[1]}, "
@@ -3709,7 +3709,7 @@ class HipToCrossGLConverter:
             "hipGraphEventWaitNodeGetEvent",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 action = (
                     "record" if name == "hipGraphEventRecordNodeGetEvent" else "wait"
                 )
@@ -3748,7 +3748,7 @@ class HipToCrossGLConverter:
             "hipGraphAddExternalSemaphoresWaitNode",
         }:
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 action = (
                     "signal"
                     if name == "hipGraphAddExternalSemaphoresSignalNode"
@@ -3894,6 +3894,10 @@ class HipToCrossGLConverter:
         if isinstance(arg, UnaryOpNode) and arg.op == "&":
             return self.visit_lvalue_expression(arg.operand)
         return self.visit(arg)
+
+    def format_runtime_raw_output_target(self, arg):
+        self.clear_lvalue_metadata_source(arg)
+        return self.format_runtime_pointer_target(arg)
 
     def get_runtime_pointer_target_name(self, arg):
         if isinstance(arg, CastNode):

@@ -5353,6 +5353,70 @@ def test_slang_ray_query_methods_validate_target_result_types():
     assert "RayQueryOpNode" not in generated_code
 
 
+def test_slang_ray_query_matrix_methods_validate_target_result_types():
+    code = """
+    shader InvalidSlangRayQueryMatrixTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptMatrix(mat4 value) {
+            }
+
+            void acceptMatrix3x4(mat3x4 value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                mat3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();
+                acceptMatrix3x4(rq.CommittedWorldToObject3x4());
+                float matrixScalar = rq.CommittedObjectToWorld3x4();
+                vec3 matrixVector = rq.CandidateWorldToObject3x4();
+                mat4 matrixWrongShape = rq.CandidateObjectToWorld3x4();
+                acceptMatrix(rq.CommittedWorldToObject3x4());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float3x4 validObjectToWorld = rq.CommittedObjectToWorld3x4();"
+        in generated_code
+    )
+    assert "acceptMatrix3x4(rq.CommittedWorldToObject3x4());" in generated_code
+    assert (
+        "float matrixScalar = /* unsupported Slang RayQuery: "
+        "CommittedObjectToWorld3x4 returns float3x4 but target expects float */ "
+        "0;" in generated_code
+    )
+    assert (
+        "float3 matrixVector = /* unsupported Slang RayQuery: "
+        "CandidateWorldToObject3x4 returns float3x4 but target expects float3 */ "
+        "float3(0.0);" in generated_code
+    )
+    assert (
+        "float4x4 matrixWrongShape = /* unsupported Slang RayQuery: "
+        "CandidateObjectToWorld3x4 returns float3x4 but target expects float4x4 */ "
+        "float4x4(0.0);" in generated_code
+    )
+    assert (
+        "acceptMatrix(/* unsupported Slang RayQuery: CommittedWorldToObject3x4 "
+        "returns float3x4 but target expects float4x4 */ float4x4(0.0));"
+        in generated_code
+    )
+    assert "float matrixScalar = rq.CommittedObjectToWorld3x4();" not in generated_code
+    assert "float3 matrixVector = rq.CandidateWorldToObject3x4();" not in generated_code
+    assert (
+        "float4x4 matrixWrongShape = rq.CandidateObjectToWorld3x4();"
+        not in generated_code
+    )
+    assert "acceptMatrix(rq.CommittedWorldToObject3x4());" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
 def test_slang_ray_query_void_methods_validate_value_contexts():
     code = """
     shader InvalidSlangRayQueryVoidTargets {

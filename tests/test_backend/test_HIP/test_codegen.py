@@ -10442,6 +10442,268 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_graph_raw_outputs_clear_stale_metadata(self):
+        """Test graph handle outputs clear prior query metadata."""
+        code = """
+        void queryGraphHandles(
+            hipDeviceptr_t devicePtr,
+            hipStream_t stream,
+            hipEvent_t event,
+            void** ptrs
+        ) {
+            hipGraph_t graph;
+            hipGraph_t clone;
+            hipGraph_t captured;
+            hipGraph_t embedded;
+            hipGraphExec_t exec;
+            hipGraphNode_t genericNode;
+            hipGraphNode_t emptyNode;
+            hipGraphNode_t hostNode;
+            hipGraphNode_t kernelNode;
+            hipGraphNode_t memcpyNode;
+            hipGraphNode_t memsetNode;
+            hipGraphNode_t childNode;
+            hipGraphNode_t recordNode;
+            hipGraphNode_t waitNode;
+            hipGraphNode_t allocNode;
+            hipGraphNode_t freeNode;
+            hipGraphNode_t copy1DNode;
+            hipGraphNode_t fromSymbolNode;
+            hipGraphNode_t toSymbolNode;
+            hipGraphNode_t cloneNode;
+            hipGraphNode_t errorNode;
+            hipGraphNode_t signalNode;
+            hipGraphNode_t waitExternalNode;
+            hipGraphNode_t driverMemcpyNode;
+            hipGraphNode_t driverMemsetNode;
+            hipGraphNode_t driverFreeNode;
+            hipGraphNode_t* deps;
+            hipGraphNode_t* capturedDeps;
+            hipEvent_t recordEvent;
+            hipEvent_t waitEvent;
+            hipGraphNodeParams nodeParams;
+            hipHostNodeParams hostParams;
+            hipKernelNodeParams kernelParams;
+            hipMemcpy3DParms copyParams;
+            hipMemsetParams memsetParams;
+            HIP_MEMCPY3D driverCopyParams;
+            hipMemAllocNodeParams allocParams;
+            hipGraphInstantiateParams instantiateParams;
+            hipGraphExecUpdateResult updateResult;
+            hipExternalSemaphoreSignalNodeParams signalParams;
+            hipExternalSemaphoreWaitParams waitParams;
+            hipStreamCaptureStatus captureStatus;
+            unsigned long long captureId = 0;
+            size_t capturedDepCount = 0;
+            void* devicePtrValue;
+            void* dst;
+            void* src;
+            void* symbol;
+            hipCtx_t ctx;
+            size_t numDeps = 0;
+            size_t bytes = 64;
+            size_t staleSize = 0;
+            char log[64];
+
+            hipMemGetAddressRange((void**)&graph, &staleSize, devicePtr);
+            hipGraphCreate(&graph, 0);
+            ptrs[0] = graph;
+
+            hipMemGetAddressRange((void**)&clone, &staleSize, devicePtr);
+            hipGraphClone(&clone, graph);
+            ptrs[1] = clone;
+
+            hipMemGetAddressRange((void**)&captured, &staleSize, devicePtr);
+            hipStreamEndCapture(stream, &captured);
+            ptrs[2] = captured;
+
+            hipMemGetAddressRange((void**)&captured, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&capturedDeps, &staleSize, devicePtr);
+            hipStreamGetCaptureInfo_v2(
+                stream, &captureStatus, &captureId, &captured, &capturedDeps,
+                &capturedDepCount
+            );
+            ptrs[3] = captured;
+            ptrs[4] = capturedDeps;
+
+            hipMemGetAddressRange((void**)&genericNode, &staleSize, devicePtr);
+            hipGraphAddNode(&genericNode, graph, deps, numDeps, &nodeParams);
+            ptrs[5] = genericNode;
+
+            hipMemGetAddressRange((void**)&emptyNode, &staleSize, devicePtr);
+            hipGraphAddEmptyNode(&emptyNode, graph, deps, numDeps);
+            ptrs[6] = emptyNode;
+
+            hipMemGetAddressRange((void**)&hostNode, &staleSize, devicePtr);
+            hipGraphAddHostNode(&hostNode, graph, deps, numDeps, &hostParams);
+            ptrs[7] = hostNode;
+
+            hipMemGetAddressRange((void**)&kernelNode, &staleSize, devicePtr);
+            hipGraphAddKernelNode(&kernelNode, graph, deps, numDeps, &kernelParams);
+            ptrs[8] = kernelNode;
+
+            hipMemGetAddressRange((void**)&memcpyNode, &staleSize, devicePtr);
+            if (hipGraphAddMemcpyNode(&memcpyNode, graph, deps, numDeps, &copyParams) == hipSuccess) {
+                ptrs[9] = memcpyNode;
+            }
+
+            hipMemGetAddressRange((void**)&memsetNode, &staleSize, devicePtr);
+            hipGraphAddMemsetNode(
+                &memsetNode, graph, deps, numDeps, &memsetParams
+            );
+            ptrs[10] = memsetNode;
+
+            hipMemGetAddressRange((void**)&childNode, &staleSize, devicePtr);
+            hipGraphAddChildGraphNode(&childNode, graph, deps, numDeps, clone);
+            ptrs[11] = childNode;
+
+            hipMemGetAddressRange((void**)&recordNode, &staleSize, devicePtr);
+            hipGraphAddEventRecordNode(&recordNode, graph, deps, numDeps, event);
+            ptrs[12] = recordNode;
+
+            hipMemGetAddressRange((void**)&waitNode, &staleSize, devicePtr);
+            hipGraphAddEventWaitNode(&waitNode, graph, deps, numDeps, event);
+            ptrs[13] = waitNode;
+
+            hipMemGetAddressRange((void**)&allocNode, &staleSize, devicePtr);
+            hipGraphAddMemAllocNode(&allocNode, graph, deps, numDeps, &allocParams);
+            ptrs[14] = allocNode;
+
+            hipMemGetAddressRange((void**)&freeNode, &staleSize, devicePtr);
+            hipGraphAddMemFreeNode(&freeNode, graph, deps, numDeps, devicePtrValue);
+            ptrs[15] = freeNode;
+
+            hipMemGetAddressRange((void**)&copy1DNode, &staleSize, devicePtr);
+            hipGraphAddMemcpyNode1D(
+                &copy1DNode, graph, deps, numDeps, dst, src, bytes,
+                hipMemcpyDeviceToDevice
+            );
+            ptrs[16] = copy1DNode;
+
+            hipMemGetAddressRange((void**)&fromSymbolNode, &staleSize, devicePtr);
+            hipGraphAddMemcpyNodeFromSymbol(
+                &fromSymbolNode, graph, deps, numDeps, dst, symbol, bytes, 4,
+                hipMemcpyDeviceToDevice
+            );
+            ptrs[17] = fromSymbolNode;
+
+            hipMemGetAddressRange((void**)&toSymbolNode, &staleSize, devicePtr);
+            hipGraphAddMemcpyNodeToSymbol(
+                &toSymbolNode, graph, deps, numDeps, symbol, src, bytes, 8,
+                hipMemcpyDeviceToDevice
+            );
+            ptrs[18] = toSymbolNode;
+
+            hipMemGetAddressRange((void**)&driverMemcpyNode, &staleSize, devicePtr);
+            hipDrvGraphAddMemcpyNode(
+                &driverMemcpyNode, graph, deps, numDeps, &driverCopyParams, ctx
+            );
+            ptrs[19] = driverMemcpyNode;
+
+            hipMemGetAddressRange((void**)&driverMemsetNode, &staleSize, devicePtr);
+            hipDrvGraphAddMemsetNode(
+                &driverMemsetNode, graph, deps, numDeps, &memsetParams, ctx
+            );
+            ptrs[20] = driverMemsetNode;
+
+            hipMemGetAddressRange((void**)&driverFreeNode, &staleSize, devicePtr);
+            hipDrvGraphAddMemFreeNode(&driverFreeNode, graph, deps, numDeps, devicePtr);
+            ptrs[21] = driverFreeNode;
+
+            hipMemGetAddressRange((void**)&cloneNode, &staleSize, devicePtr);
+            hipGraphNodeFindInClone(&cloneNode, kernelNode, clone);
+            ptrs[22] = cloneNode;
+
+            hipMemGetAddressRange((void**)&embedded, &staleSize, devicePtr);
+            hipGraphChildGraphNodeGetGraph(childNode, &embedded);
+            ptrs[23] = embedded;
+
+            hipMemGetAddressRange((void**)&exec, &staleSize, devicePtr);
+            hipGraphInstantiateWithFlags(&exec, graph, 0);
+            ptrs[24] = exec;
+
+            hipMemGetAddressRange((void**)&exec, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&errorNode, &staleSize, devicePtr);
+            if (hipGraphInstantiate(&exec, graph, &errorNode, log, 64) == hipSuccess) {
+                ptrs[25] = exec;
+                ptrs[26] = errorNode;
+            }
+
+            hipMemGetAddressRange((void**)&exec, &staleSize, devicePtr);
+            hipGraphInstantiateWithParams(&exec, graph, &instantiateParams);
+            ptrs[27] = exec;
+
+            hipMemGetAddressRange((void**)&errorNode, &staleSize, devicePtr);
+            hipGraphExecUpdate(exec, graph, &errorNode, &updateResult);
+            ptrs[28] = errorNode;
+
+            hipMemGetAddressRange((void**)&signalNode, &staleSize, devicePtr);
+            hipGraphAddExternalSemaphoresSignalNode(
+                &signalNode, graph, deps, numDeps, &signalParams
+            );
+            ptrs[29] = signalNode;
+
+            hipMemGetAddressRange((void**)&waitExternalNode, &staleSize, devicePtr);
+            if (hipGraphAddExternalSemaphoresWaitNode(&waitExternalNode, graph, deps, numDeps, &waitParams) == hipSuccess) {
+                ptrs[30] = waitExternalNode;
+            }
+
+            hipMemGetAddressRange((void**)&recordEvent, &staleSize, devicePtr);
+            hipGraphEventRecordNodeGetEvent(recordNode, &recordEvent);
+            ptrs[31] = recordEvent;
+
+            hipMemGetAddressRange((void**)&waitEvent, &staleSize, devicePtr);
+            hipGraphEventWaitNodeGetEvent(waitNode, &waitEvent);
+            ptrs[32] = waitEvent;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        for index, name in [
+            (0, "graph"),
+            (1, "clone"),
+            (2, "captured"),
+            (3, "captured"),
+            (4, "capturedDeps"),
+            (5, "genericNode"),
+            (6, "emptyNode"),
+            (7, "hostNode"),
+            (8, "kernelNode"),
+            (9, "memcpyNode"),
+            (10, "memsetNode"),
+            (11, "childNode"),
+            (12, "recordNode"),
+            (13, "waitNode"),
+            (14, "allocNode"),
+            (15, "freeNode"),
+            (16, "copy1DNode"),
+            (17, "fromSymbolNode"),
+            (18, "toSymbolNode"),
+            (19, "driverMemcpyNode"),
+            (20, "driverMemsetNode"),
+            (21, "driverFreeNode"),
+            (22, "cloneNode"),
+            (23, "embedded"),
+            (24, "exec"),
+            (25, "exec"),
+            (26, "errorNode"),
+            (27, "exec"),
+            (28, "errorNode"),
+            (29, "signalNode"),
+            (30, "waitExternalNode"),
+            (31, "recordEvent"),
+            (32, "waitEvent"),
+        ]:
+            assert f"ptrs[{index}] = {name};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_graph_api_conversion(self):
         """Test HIP graph APIs emit metadata comments."""
         code = """

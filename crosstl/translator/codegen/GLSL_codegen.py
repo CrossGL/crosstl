@@ -11458,17 +11458,46 @@ class GLSLCodeGen:
             f"'{node_name}': format {source} is not a supported storage image format"
         )
 
+    def glsl_image_format_choice_description(self, attr_name, source):
+        if attr_name == "format":
+            source = source if source is not None else "<missing>"
+            return f"format {source}"
+        return f"@{attr_name}"
+
+    def duplicate_glsl_image_format_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        description = self.glsl_image_format_choice_description(attr_name, source)
+        return (
+            "Duplicate OpenGL image format metadata for "
+            f"'{node_name}': {description}"
+        )
+
+    def conflicting_glsl_image_format_message(
+        self, node, previous_attr, previous_source, attr_name, source
+    ):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        previous = self.glsl_image_format_choice_description(
+            previous_attr, previous_source
+        )
+        current = self.glsl_image_format_choice_description(attr_name, source)
+        return (
+            "Conflicting OpenGL image format metadata for "
+            f"'{node_name}': {previous} differs from {current}"
+        )
+
     def explicit_glsl_image_format(self, node):
         if node is None or not hasattr(node, "attributes"):
             return None
         supported_formats = supported_image_formats()
+        choices = []
         for attr in node.attributes:
             attr_name = getattr(attr, "name", None)
             if not attr_name:
                 continue
             attr_name = str(attr_name).lower()
             if attr_name in supported_formats:
-                return attr_name
+                choices.append((attr_name, attr_name, attr_name))
+                continue
             if attr_name != "format":
                 continue
 
@@ -11479,8 +11508,39 @@ class GLSLCodeGen:
             format_name = str(source).lower()
             if format_name not in supported_formats:
                 raise ValueError(self.invalid_glsl_image_format_message(node, source))
-            return format_name
-        return None
+            choices.append((attr_name, source, format_name))
+
+        if not choices:
+            return None
+
+        seen_by_attribute = {}
+        for attr_name, source, format_name in choices:
+            previous = seen_by_attribute.get(attr_name)
+            if previous is not None:
+                previous_source, previous_format = previous
+                if format_name == previous_format:
+                    raise ValueError(
+                        self.duplicate_glsl_image_format_message(
+                            node, attr_name, source
+                        )
+                    )
+                raise ValueError(
+                    self.conflicting_glsl_image_format_message(
+                        node, attr_name, previous_source, attr_name, source
+                    )
+                )
+            seen_by_attribute[attr_name] = (source, format_name)
+
+        first_attr, first_source, first_format = choices[0]
+        for attr_name, source, format_name in choices[1:]:
+            if format_name == first_format:
+                continue
+            raise ValueError(
+                self.conflicting_glsl_image_format_message(
+                    node, first_attr, first_source, attr_name, source
+                )
+            )
+        return first_format
 
     def validate_glsl_image_format_target(self, node, vtype, explicit_format):
         if explicit_format is None or self.is_storage_image_type(vtype):

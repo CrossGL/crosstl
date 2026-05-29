@@ -174,6 +174,7 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
                 bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
                 bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
                 uvec4 ballot = WaveActiveBallot(anyLane);
+                uvec4 matchMask = WaveMatch(value);
                 uint count = WaveActiveCountBits(allLane);
                 uint prefixCount = WavePrefixCountBits(anyLane);
                 uint broadcast = WaveReadLaneAt(prefixSum, 0u);
@@ -195,6 +196,7 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
     assert "uint4 __crossgl_metal_wave_ballot(bool predicate)" in generated_code
+    assert "uint4 __crossgl_metal_wave_match(T value, uint laneCount)" in generated_code
     assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
     assert "uint sumValue = simd_sum(value);" in generated_code
@@ -212,6 +214,10 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "bool anyLane = simd_any(prefixSum > 0u);" in generated_code
     assert "bool allLane = simd_all(prefixProduct > 0u);" in generated_code
     assert "uint4 ballot = __crossgl_metal_wave_ballot(anyLane);" in generated_code
+    assert (
+        "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in generated_code
+    )
     assert (
         "uint count = uint(popcount(simd_vote::vote_t(simd_ballot(allLane))));"
         in generated_code
@@ -240,6 +246,7 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
     assert "WaveActiveSum(value)" not in generated_code
     assert "WaveActiveBallot(anyLane)" not in generated_code
+    assert "WaveMatch(value)" not in generated_code
     assert "WaveOpNode" not in generated_code
 
 
@@ -355,6 +362,64 @@ def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts():
     assert "[[thread_index_in_simdgroup]]" not in generated_code
 
 
+def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts():
+    compute_shader = """
+    shader MetalWaveMatchHelperForwarding {
+        uvec4 helperMatch(uint seed) {
+            return WaveMatch(seed);
+        }
+
+        compute {
+            void main() {
+                uint value = 3u;
+                uvec4 direct = WaveMatch(value);
+                uvec4 helper = helperMatch(value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(compute_shader)))
+
+    assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in generated_code
+    assert (
+        "return __crossgl_metal_wave_match(seed, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint4 direct = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in (generated_code)
+    )
+    assert "uint4 helper = helperMatch(value, crossglWaveLaneCount);" in generated_code
+    assert "unsupported Metal wave intrinsic: WaveMatch" not in generated_code
+
+    fragment_shader = """
+    shader MetalWaveMatchFragmentDiagnostics {
+        uvec4 helperMatch(uint seed) {
+            return WaveMatch(seed);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uvec4 mask = helperMatch(1u);
+                return vec4(float(mask.x), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+
+    assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in generated_code
+    assert (
+        "uint4 mask = uint4(0) /* unsupported Metal wave helper call: function "
+        "'helperMatch' requires compute-stage threads_per_simdgroup value */;"
+        in generated_code
+    )
+    assert "[[threads_per_simdgroup]]" not in generated_code
+
+
 def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     shader = """
     shader InvalidMetalWaveIntrinsics {
@@ -366,6 +431,8 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
                 bool badAnyValue = WaveActiveAnyTrue(value);
                 uvec4 badBallotVector =
                     WaveActiveBallot(lanes == uvec2(1u, 2u));
+                uvec4 badMatchBool = WaveMatch(badAnyValue);
+                uvec4 badMatchVector = WaveMatch(lanes);
                 uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
                 uint badQuad = QuadReadLaneAt(value, 4u);
             }
@@ -390,6 +457,16 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
         "uint4(0);" in generated_code
     )
     assert (
+        "uint4 badMatchBool = /* unsupported Metal wave intrinsic: "
+        "WaveMatch value argument must be numeric scalar, got bool */ uint4(0);"
+        in generated_code
+    )
+    assert (
+        "uint4 badMatchVector = /* unsupported Metal wave intrinsic: "
+        "WaveMatch value argument must be numeric scalar, got uint2 */ uint4(0);"
+        in generated_code
+    )
+    assert (
         "uint badLane = /* unsupported Metal wave intrinsic: WaveReadLaneAt "
         "lane index must be scalar int or uint, got float2 */ 0u;" in generated_code
     )
@@ -399,6 +476,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     )
     assert "WaveActiveSum()" not in generated_code
     assert "WaveActiveAnyTrue(value)" not in generated_code
+    assert "WaveMatch(badAnyValue)" not in generated_code
     assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
     assert "WaveOpNode" not in generated_code
 

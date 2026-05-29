@@ -4565,8 +4565,10 @@ class SlangCodeGen:
         return None
 
     def is_slang_ray_query_value_type(self, type_name):
-        return self.is_scalar_value_type(type_name) or self.is_vector_value_type(
-            type_name
+        return (
+            self.is_scalar_value_type(type_name)
+            or self.is_vector_value_type(type_name)
+            or self.is_matrix_value_type(type_name)
         )
 
     def slang_ray_query_diagnostic_expression(self, operation, reason):
@@ -5347,6 +5349,25 @@ class SlangCodeGen:
             "bool3",
             "bool4",
         }
+
+    def is_matrix_value_type(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return False
+        type_name = self.convert_type(type_name)
+        if not isinstance(type_name, str):
+            return False
+        for prefix in ("float", "double"):
+            if not type_name.startswith(prefix):
+                continue
+            suffix = type_name[len(prefix) :]
+            return (
+                len(suffix) == 3
+                and suffix[0] in "234"
+                and suffix[1] == "x"
+                and suffix[2] in "234"
+            )
+        return False
 
     def vector_component_type(self, type_name):
         mapped_type = self.convert_type(type_name)
@@ -7627,6 +7648,8 @@ class SlangCodeGen:
         if self.is_vector_value_type(type_name):
             component_zero = self.vector_zero_value(type_name)
             return f"{type_name}({component_zero})"
+        if self.is_matrix_value_type(type_name):
+            return f"{type_name}(0.0)"
         if type_name in self.user_struct_names:
             return f"{type_name}()"
         return "0"

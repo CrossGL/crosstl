@@ -17295,6 +17295,95 @@ def test_opengl_explicit_storage_image_format_layouts():
     assert "layout(r32ui, binding = 4) uniform uimage2D counters;" in generated_code
 
 
+def test_opengl_image_format_metadata_accepts_equivalent_aliases():
+    shader = """
+    shader EquivalentImageFormatAliases {
+        image2D scalar @r32f @format(r32f);
+
+        fragment {
+            vec4 main(image2D target[2] @format(r32ui) @r32ui @binding(4)) @gl_FragColor {
+                imageStore(target[1], ivec2(0, 0), 7u);
+                float loaded = imageLoad(scalar, ivec2(0, 0));
+                return vec4(loaded);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "layout(r32f, binding = 0) uniform image2D scalar;" in generated_code
+    assert "layout(r32ui, binding = 4) uniform uimage2D target[2];" in generated_code
+    assert "imageStore(target[1], ivec2(0, 0), uvec4(7u));" in generated_code
+    assert "float loaded = imageLoad(scalar, ivec2(0, 0)).x;" in generated_code
+    assert "fragColor = vec4(loaded);" in generated_code
+    assert "vec4 main(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader DuplicateGlobalDirectImageFormat {
+                image2D scalar @r32f @r32f;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'scalar': @r32f",
+        ),
+        (
+            """
+            shader DuplicateGlobalFormatImageFormat {
+                image2D scalar @format(r32f) @format(r32f);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'scalar': format r32f",
+        ),
+        (
+            """
+            shader DuplicateStageParameterDirectImageFormat {
+                fragment {
+                    vec4 main(image2D target[2] @r32ui @r32ui) @gl_FragColor {
+                        imageStore(target[1], ivec2(0, 0), 7u);
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'target': @r32ui",
+        ),
+        (
+            """
+            shader DuplicateStageParameterFormatImageFormat {
+                fragment {
+                    vec4 main(image2D target[2] @format(r32ui) @format(r32ui)) @gl_FragColor {
+                        imageStore(target[1], ivec2(0, 0), 7u);
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL image format metadata for 'target': format r32ui",
+        ),
+    ],
+)
+def test_opengl_image_format_metadata_rejects_duplicate_metadata(shader, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+
 @pytest.mark.parametrize(
     ("shader", "message"),
     [
