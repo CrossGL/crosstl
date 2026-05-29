@@ -9660,6 +9660,143 @@ def test_image_prefixed_struct_array_return_aliases_remain_field_specific():
     assert ".Store(" not in generated_code
 
 
+def test_resource_prefixed_generic_user_types_do_not_become_resources():
+    source = """
+    generic<T> struct TextureBox {
+        T value;
+        int tag;
+    };
+    generic<T> struct BufferBox {
+        T value;
+        int tag;
+    };
+    generic<T> struct SamplerBox {
+        T value;
+        int tag;
+    };
+    enum TextureMode {
+        Linear,
+        Nearest
+    };
+    TextureBox<int> globalTextureBox;
+    BufferBox<int> globalBufferBox;
+    SamplerBox<float> globalSamplerBox;
+    TextureMode globalMode;
+
+    int readTextureBox() {
+        TextureBox<int> local = TextureBox<int>(3, 1);
+        return local.value + globalTextureBox.value + int(globalMode);
+    }
+
+    int readBufferBox() {
+        BufferBox<int> local = BufferBox<int>(5, 2);
+        return local.value + globalBufferBox.value;
+    }
+
+    float readSamplerBox() {
+        SamplerBox<float> local = SamplerBox<float>(2.0, 3);
+        return local.value + globalSamplerBox.value;
+    }
+    """
+    codegen = MojoCodeGen()
+    generated_code = codegen.generate(parse_code(tokenize_code(source)))
+
+    assert codegen.mojo_resource_kind("TextureBox<int>") is None
+    assert codegen.mojo_resource_kind("BufferBox<int>") is None
+    assert codegen.mojo_resource_kind("SamplerBox<float>") is None
+    assert codegen.mojo_resource_kind("TextureMode") is None
+    assert not codegen.resource_access_aliasable_type("TextureBox<int>")
+    assert not codegen.resource_access_aliasable_type("BufferBox<int>")
+    assert not codegen.resource_access_aliasable_type("SamplerBox<float>")
+    assert "struct TextureBox:" in generated_code
+    assert "struct BufferBox:" in generated_code
+    assert "struct SamplerBox:" in generated_code
+    assert "alias TextureMode = Int32" in generated_code
+    assert "var globalTextureBox: TextureBox<int>" in generated_code
+    assert "var globalBufferBox: BufferBox<int>" in generated_code
+    assert "var globalSamplerBox: SamplerBox<float>" in generated_code
+    assert "# CrossGL resource metadata: name=globalTextureBox" not in generated_code
+    assert "# CrossGL resource metadata: name=globalBufferBox" not in generated_code
+    assert "# CrossGL resource metadata: name=globalSamplerBox" not in generated_code
+    assert "# CrossGL resource metadata: name=globalMode" not in generated_code
+
+
+def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct TextureBundle {
+        Texture2D<float4> texture;
+        SamplerState samplerState;
+        int tag;
+    };
+    struct BufferBundle {
+        RWStructuredBuffer<int> values;
+        int tag;
+    };
+    Texture2D<float4> sourceTexture;
+    SamplerState linearSampler;
+    RWStructuredBuffer<int> outputValues;
+
+    Result<TextureBundle, int> wrapTextureBundle(TextureBundle payload) {
+        return Result::Ok(payload);
+    }
+
+    Result<BufferBundle, int> wrapBufferBundle(BufferBundle payload) {
+        return Result::Ok(payload);
+    }
+
+    float4 sampleBundle(vec2 uv) {
+        TextureBundle bundle = TextureBundle(sourceTexture, linearSampler, 7);
+        return match wrapTextureBundle(bundle) {
+            Result::Ok(payload) => payload.texture.Sample(payload.samplerState, uv),
+            Result::Err(_) => float4(0.0)
+        };
+    }
+
+    void storeBundle(uint index, int value) {
+        BufferBundle bundle = BufferBundle(outputValues, 4);
+        match wrapBufferBundle(bundle) {
+            Result::Ok(payload) => {
+                payload.values.Store(index, value);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "struct TextureBundle:" in generated_code
+    assert "struct BufferBundle:" in generated_code
+    assert "struct Result_TextureBundle_int:" in generated_code
+    assert "struct Result_BufferBundle_int:" in generated_code
+    assert "var Ok_0: TextureBundle" in generated_code
+    assert "var Ok_0: BufferBundle" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=sourceTexture kind=texture" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=linearSampler kind=sampler" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=outputValues kind=buffer" in generated_code
+    )
+    assert "# CrossGL resource metadata: name=TextureBundle" not in generated_code
+    assert "# CrossGL resource metadata: name=BufferBundle" not in generated_code
+    assert "TextureBundle kind=texture" not in generated_code
+    assert "BufferBundle kind=buffer" not in generated_code
+    assert "sample(__cgl_match_subject_0.Ok_0.texture, uv)" in generated_code
+    assert "buffer_store(__cgl_match_subject_1.Ok_0.values, index, value)" in (
+        generated_code
+    )
+    assert ".Sample(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;

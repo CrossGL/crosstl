@@ -6712,6 +6712,58 @@ class TestHipCodeGen:
         assert "var manualDriverVersion: i32 = (/* HIP device query:" not in result
         assert "var manualRuntimeVersion: i32 = (/* HIP device query:" not in result
 
+    def test_hip_runtime_version_proc_array_outputs_clear_stale_metadata(self):
+        """Test version/proc-address array outputs clear prior query metadata."""
+        code = """
+        void queryVersionProcArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            void** procs,
+            hipDriverProcAddressQueryResult* statuses,
+            int* versions,
+            int* out
+        ) {
+            size_t staleSize = 0;
+            unsigned int flags = 0;
+
+            hipMemGetAddressRange((void**)&versions, &staleSize, devicePtr);
+            hipDriverGetVersion(&versions[0]);
+            out[0] = versions[0];
+            hipRuntimeGetVersion(&versions[1]);
+            out[1] = versions[1];
+
+            hipMemGetAddressRange((void**)&procs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&statuses, &staleSize, devicePtr);
+            hipGetProcAddress(
+                "hipMalloc",
+                &procs[0],
+                versions[1],
+                flags,
+                &statuses[0]
+            );
+            void* selected = procs[0];
+            out[2] = statuses[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get driver version: output: versions[0]" in result
+        assert "out[0] = versions[0];" in result
+        assert "// HIP get runtime version: output: versions[1]" in result
+        assert "out[1] = versions[1];" in result
+        assert (
+            '// HIP get proc address: symbol: "hipMalloc", output: procs[0], '
+            "version: versions[1], flags: flags, status output: statuses[0]"
+        ) in result
+        assert "var selected: ptr<void> = procs[0];" in result
+        assert "out[2] = statuses[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_stream_scalar_output_reads_emit_metadata_expressions(self):
         """Test HIP stream scalar outputs lower to explicit metadata."""
         code = """

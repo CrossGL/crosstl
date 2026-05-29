@@ -2602,6 +2602,17 @@ class MojoCodeGen:
             return base_type, size or 1
         return type_name, 1
 
+    def user_defined_type_base(self, type_name):
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        generic = self.parse_generic_type_name(base_type)
+        if generic is not None:
+            return generic[0]
+        return base_type
+
+    def is_user_defined_type_name(self, type_name):
+        base_type = self.user_defined_type_base(type_name)
+        return base_type in self.struct_types or base_type in self.enum_types
+
     def is_glsl_buffer_block_node(self, node):
         attributes = {
             str(getattr(attr, "name", "")).lower()
@@ -2634,7 +2645,7 @@ class MojoCodeGen:
         if node is not None and self.is_glsl_buffer_block_node(node):
             return "glsl_buffer_block"
         base_type, _ = self.resource_base_type_and_count(type_name)
-        if base_type in self.struct_types or base_type in self.enum_types:
+        if self.is_user_defined_type_name(base_type):
             return None
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"

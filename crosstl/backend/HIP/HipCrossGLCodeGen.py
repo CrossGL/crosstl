@@ -2050,8 +2050,8 @@ class HipToCrossGLConverter:
                 return [f"// HIP set device flags: {args[0]}"]
         elif name == "hipGetProcAddress":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[1])
-                status_output = self.format_runtime_pointer_target(node.args[4])
+                output = self.format_runtime_raw_output_target(node.args[1])
+                status_output = self.format_runtime_raw_output_target(node.args[4])
                 return [
                     f"// HIP get proc address: symbol: {args[0]}, output: {output}, "
                     f"version: {args[2]}, flags: {args[3]}, "
@@ -3162,7 +3162,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP initialize runtime: flags: {args[0]}"]
         if name in {"hipDriverGetVersion", "hipRuntimeGetVersion"}:
             if args:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 version_kind = "driver" if name == "hipDriverGetVersion" else "runtime"
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
