@@ -389,6 +389,45 @@ def test_codegen_structs_and_arrays_roundtrip():
     assert "vColor" in output
 
 
+def test_codegen_const_gather_offset_arrays_roundtrip():
+    code = textwrap.dedent("""
+        #version 460 core
+        uniform sampler2D tex;
+        layout(location = 0) out vec4 fragColor;
+
+        void main() {
+            const ivec2 offsets[4] = {
+                ivec2(-1, 0),
+                ivec2(1, 0),
+                ivec2(0, -1),
+                ivec2(0, 1),
+            };
+            const ivec2 ctorOffsets[4] = ivec2[4](
+                ivec2(-1, -1),
+                ivec2(1, -1),
+                ivec2(-1, 1),
+                ivec2(1, 1)
+            );
+            vec2 uv = vec2(0.5, 0.5);
+            fragColor = textureGatherOffsets(tex, uv, offsets, 0)
+                + textureGatherOffsets(tex, uv, ctorOffsets, 1);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "fragment")
+    assert "ArrayAccessNode" not in crossgl
+    assert "InitializerListNode" not in crossgl
+    assert "const ivec2 offsets[4] = {" in crossgl
+    assert "const ivec2 ctorOffsets[4] = {" in crossgl
+    assert "textureGatherOffsets(tex, uv, offsets, 0)" in crossgl
+    assert "textureGatherOffsets(tex, uv, ctorOffsets, 1)" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "textureGatherOffsets(" not in glsl
+    assert "textureGatherOffset(tex" in glsl
+
+
 def test_codegen_compute_roundtrip():
     output = assert_roundtrip(COMPUTE_GLSL, "compute", ShaderStage.COMPUTE)
     lowered = output.lower()

@@ -24,6 +24,7 @@ from .OpenglAst import (
     BreakNode,
     ContinueNode,
     DiscardNode,
+    InitializerListNode,
 )
 
 
@@ -1643,6 +1644,11 @@ class GLSLToCrossGLConverter:
         elif isinstance(node, VectorConstructorNode):
             args = ", ".join(self.generate_expression(arg) for arg in node.args)
             return f"{self.convert_type(node.type_name)}({args})"
+        elif isinstance(node, InitializerListNode):
+            elements = ", ".join(
+                self.generate_expression(element) for element in node.elements
+            )
+            return f"{{ {elements} }}"
         else:
             return str(node)
 

@@ -3,6 +3,7 @@ from typing import List
 
 import pytest
 
+from crosstl.backend.GLSL.OpenglAst import InitializerListNode, VariableNode
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
 
@@ -82,8 +83,47 @@ def test_parse_structs_and_arrays():
             vColor = color;
             gl_Position = vec4(1.0);
         }
-        """)
+    """)
     parse_ok(code, "vertex")
+
+
+def test_parse_const_array_initializers():
+    code = textwrap.dedent("""
+        #version 460 core
+        void main() {
+            const ivec2 offsets[4] = {
+                ivec2(-1, 0),
+                ivec2(1, 0),
+                ivec2(0, -1),
+                ivec2(0, 1),
+            };
+            const ivec2 ctorOffsets[4] = ivec2[4](
+                ivec2(-1, -1),
+                ivec2(1, -1),
+                ivec2(-1, 1),
+                ivec2(1, 1)
+            );
+        }
+        """)
+
+    ast = parse_ok(code, "fragment")
+    main = next(function for function in ast.functions if function.name == "main")
+    declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
+
+    offsets, ctor_offsets = declarations
+    assert offsets.name == "offsets"
+    assert offsets.is_const is True
+    assert offsets.is_array is True
+    assert offsets.array_size.value == "4"
+    assert isinstance(offsets.value, InitializerListNode)
+    assert len(offsets.value.elements) == 4
+
+    assert ctor_offsets.name == "ctorOffsets"
+    assert ctor_offsets.is_const is True
+    assert ctor_offsets.is_array is True
+    assert ctor_offsets.array_size.value == "4"
+    assert isinstance(ctor_offsets.value, InitializerListNode)
+    assert len(ctor_offsets.value.elements) == 4
 
 
 def test_parse_control_flow_constructs():

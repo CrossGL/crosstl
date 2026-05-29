@@ -25,6 +25,7 @@ from .OpenglAst import (
     BreakNode,
     ContinueNode,
     DiscardNode,
+    InitializerListNode,
 )
 
 TYPE_TOKENS = {
@@ -755,12 +756,14 @@ class GLSLParser:
             op = ASSIGNMENT_TOKENS[self.current_token[0]]
             self.eat(self.current_token[0])
             right = self.parse_expression()
+            self.skip_newlines()
             if self.current_token[0] != "SEMICOLON":
                 raise SyntaxError(
                     f"Expected ';' after assignment, got {self.current_token}"
                 )
             self.eat("SEMICOLON")
             return AssignmentNode(expr, right, op)
+        self.skip_newlines()
         if self.current_token[0] == "SEMICOLON":
             self.eat("SEMICOLON")
             return expr
@@ -944,9 +947,11 @@ class GLSLParser:
 
     def parse_ternary(self):
         expr = self.parse_logical_or()
+        self.skip_newlines()
         if self.current_token[0] == "QUESTION":
             self.eat("QUESTION")
             true_expr = self.parse_expression()
+            self.skip_newlines()
             self.eat("COLON")
             false_expr = self.parse_expression()
             return TernaryOpNode(expr, true_expr, false_expr)
@@ -954,60 +959,73 @@ class GLSLParser:
 
     def parse_logical_or(self):
         expr = self.parse_logical_and()
+        self.skip_newlines()
         while self.current_token[0] == "LOGICAL_OR":
             op = self.current_token[1]
             self.eat("LOGICAL_OR")
             right = self.parse_logical_and()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_logical_and(self):
         expr = self.parse_bitwise_or()
+        self.skip_newlines()
         while self.current_token[0] == "LOGICAL_AND":
             op = self.current_token[1]
             self.eat("LOGICAL_AND")
             right = self.parse_bitwise_or()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_bitwise_or(self):
         expr = self.parse_bitwise_xor()
+        self.skip_newlines()
         while self.current_token[0] == "BITWISE_OR":
             op = self.current_token[1]
             self.eat("BITWISE_OR")
             right = self.parse_bitwise_xor()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_bitwise_xor(self):
         expr = self.parse_bitwise_and()
+        self.skip_newlines()
         while self.current_token[0] == "BITWISE_XOR":
             op = self.current_token[1]
             self.eat("BITWISE_XOR")
             right = self.parse_bitwise_and()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_bitwise_and(self):
         expr = self.parse_equality()
+        self.skip_newlines()
         while self.current_token[0] == "BITWISE_AND":
             op = self.current_token[1]
             self.eat("BITWISE_AND")
             right = self.parse_equality()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_equality(self):
         expr = self.parse_relational()
+        self.skip_newlines()
         while self.current_token[0] in ("EQUAL", "NOT_EQUAL"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_relational()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_relational(self):
         expr = self.parse_shift()
+        self.skip_newlines()
         while self.current_token[0] in (
             "LESS_THAN",
             "LESS_EQUAL",
@@ -1018,33 +1036,40 @@ class GLSLParser:
             self.eat(self.current_token[0])
             right = self.parse_shift()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_shift(self):
         expr = self.parse_additive()
+        self.skip_newlines()
         while self.current_token[0] in ("SHIFT_LEFT", "SHIFT_RIGHT"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_additive()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_additive(self):
         expr = self.parse_multiplicative()
+        self.skip_newlines()
         while self.current_token[0] in ("PLUS", "MINUS"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_multiplicative()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_multiplicative(self):
         expr = self.parse_unary()
+        self.skip_newlines()
         while self.current_token[0] in ("MULTIPLY", "DIVIDE", "MOD"):
             op = self.current_token[1]
             self.eat(self.current_token[0])
             right = self.parse_unary()
             expr = BinaryOpNode(expr, op, right)
+            self.skip_newlines()
         return expr
 
     def parse_unary(self):
@@ -1063,15 +1088,13 @@ class GLSLParser:
     def parse_postfix(self):
         expr = self.parse_primary()
         while True:
-            if (
-                self.current_token[0] == "LBRACKET"
-                and self.peek(1)[0] == "RBRACKET"
-                and self.peek(2)[0] == "LPAREN"
-                and isinstance(expr, VariableNode)
-            ):
+            if self.is_array_constructor_suffix(expr):
                 self.eat("LBRACKET")
+                if self.current_token[0] != "RBRACKET":
+                    self.parse_expression()
                 self.eat("RBRACKET")
-                expr = VariableNode("", f"{expr.name}[]")
+                args = self.parse_call_arguments()
+                expr = InitializerListNode(args)
                 continue
             if self.current_token[0] == "LBRACKET":
                 self.eat("LBRACKET")
@@ -1097,6 +1120,26 @@ class GLSLParser:
             break
         return expr
 
+    def is_array_constructor_suffix(self, expr):
+        if not isinstance(expr, VariableNode) or self.current_token[0] != "LBRACKET":
+            return False
+
+        depth = 0
+        idx = self.index
+        while idx < len(self.tokens):
+            token_type = self.tokens[idx][0]
+            if token_type == "LBRACKET":
+                depth += 1
+            elif token_type == "RBRACKET":
+                depth -= 1
+                if depth == 0:
+                    next_idx = idx + 1
+                    if next_idx < len(self.tokens):
+                        return self.tokens[next_idx][0] == "LPAREN"
+                    return False
+            idx += 1
+        return False
+
     def parse_call_arguments(self):
         self.eat("LPAREN")
         args = []
@@ -1119,6 +1162,8 @@ class GLSLParser:
             expr = self.parse_expression()
             self.eat("RPAREN")
             return expr
+        if self.current_token[0] == "LBRACE":
+            return self.parse_initializer_list()
         if self.current_token[0] == "NUMBER":
             value = self.current_token[1]
             self.eat("NUMBER")
@@ -1139,3 +1184,20 @@ class GLSLParser:
             self.advance()
             return value
         raise SyntaxError(f"Unexpected token in expression: {self.current_token}")
+
+    def parse_initializer_list(self):
+        self.eat("LBRACE")
+        elements = []
+        self.skip_newlines()
+        while self.current_token[0] != "RBRACE":
+            elements.append(self.parse_expression())
+            self.skip_newlines()
+            if self.current_token[0] == "COMMA":
+                self.eat("COMMA")
+                self.skip_newlines()
+                if self.current_token[0] == "RBRACE":
+                    break
+                continue
+            break
+        self.eat("RBRACE")
+        return InitializerListNode(elements)
