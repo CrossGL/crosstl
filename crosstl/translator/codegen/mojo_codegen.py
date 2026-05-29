@@ -2944,6 +2944,47 @@ class MojoCodeGen:
                         current.append(candidate)
         return merged
 
+    def resource_access_alias_state(self):
+        return (
+            {
+                name: list(candidates)
+                for name, candidates in self.resource_access_qualifier_aliases.items()
+            },
+            {
+                path: list(candidates)
+                for path, candidates in (
+                    self.resource_access_path_qualifier_aliases.items()
+                )
+            },
+        )
+
+    def restore_resource_access_alias_state(self, state):
+        qualifier_aliases, path_aliases = state
+        self.resource_access_qualifier_aliases = {
+            name: list(candidates) for name, candidates in qualifier_aliases.items()
+        }
+        self.resource_access_path_qualifier_aliases = {
+            path: list(candidates) for path, candidates in path_aliases.items()
+        }
+
+    def merge_resource_access_alias_states(self, *states):
+        qualifier_maps = [state[0] for state in states]
+        path_maps = [state[1] for state in states]
+        return (
+            self.merge_resource_access_candidate_maps(*qualifier_maps),
+            self.merge_resource_access_candidate_maps(*path_maps),
+        )
+
+    def merge_resource_access_candidate_maps(self, *maps):
+        merged = {}
+        for candidate_map in maps:
+            for name, candidates in candidate_map.items():
+                current = merged.setdefault(name, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
     def generic_enum_field_alias_candidates(self, expr, target_type):
         func_name = self.function_call_name(expr)
         fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
@@ -5564,79 +5605,52 @@ class MojoCodeGen:
         op = self.map_operator(node.operator)
         return f"{left} {op} {right}"
 
+    def generate_branch_statements(self, branch, indent):
+        code = ""
+        if hasattr(branch, "statements"):
+            for stmt in branch.statements:
+                code += self.generate_statement(stmt, indent)
+        elif isinstance(branch, list):
+            for stmt in branch:
+                code += self.generate_statement(stmt, indent)
+        elif branch is not None:
+            code += self.generate_statement(branch, indent)
+        return code
+
     def generate_if(self, node, indent):
         indent_str = "    " * indent
         condition = self.generate_expression(
             node.condition if hasattr(node, "condition") else node.if_condition
         )
+        entry_alias_state = self.resource_access_alias_state()
         code = f"{indent_str}if {condition}:\n"
 
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
-        if hasattr(if_body, "statements"):
-            for stmt in if_body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(if_body, list):
-            for stmt in if_body:
-                code += self.generate_statement(stmt, indent + 1)
+        self.restore_resource_access_alias_state(entry_alias_state)
+        code += self.generate_branch_statements(if_body, indent + 1)
+        then_alias_state = self.resource_access_alias_state()
 
+        else_alias_state = entry_alias_state
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
+            self.restore_resource_access_alias_state(entry_alias_state)
             if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
-                # Generate elif by recursively generating the nested if with elif prefix
-                elif_condition = self.generate_expression(
-                    else_branch.condition
-                    if hasattr(else_branch, "condition")
-                    else else_branch.if_condition
-                )
-                code += f"{indent_str}elif {elif_condition}:\n"
-
-                # Generate elif body
-                elif_body = getattr(
-                    else_branch, "then_branch", getattr(else_branch, "if_body", None)
-                )
-                if hasattr(elif_body, "statements"):
-                    for stmt in elif_body.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(elif_body, list):
-                    for stmt in elif_body:
-                        code += self.generate_statement(stmt, indent + 1)
-
-                nested_else = getattr(else_branch, "else_branch", None)
-                if nested_else:
-                    if hasattr(nested_else, "__class__") and "If" in str(
-                        nested_else.__class__
-                    ):
-                        # Another elif
-                        remaining_code = self.generate_if(nested_else, indent)
-                        # Remove the "if" prefix and replace with "elif"
-                        remaining_lines = remaining_code.split("\n")
-                        if remaining_lines[0].strip().startswith("if "):
-                            remaining_lines[0] = remaining_lines[0].replace(
-                                "if ", "elif ", 1
-                            )
-                        code += "\n".join(remaining_lines)
-                    else:
-                        # Final else clause
-                        code += f"{indent_str}else:\n"
-                        if hasattr(nested_else, "statements"):
-                            for stmt in nested_else.statements:
-                                code += self.generate_statement(stmt, indent + 1)
-                        elif isinstance(nested_else, list):
-                            for stmt in nested_else:
-                                code += self.generate_statement(stmt, indent + 1)
-                        else:
-                            code += self.generate_statement(nested_else, indent + 1)
+                remaining_code = self.generate_if(else_branch, indent)
+                remaining_lines = remaining_code.splitlines(keepends=True)
+                if remaining_lines and remaining_lines[0].strip().startswith("if "):
+                    remaining_lines[0] = remaining_lines[0].replace("if ", "elif ", 1)
+                code += "".join(remaining_lines)
             else:
                 code += f"{indent_str}else:\n"
-                if hasattr(else_branch, "statements"):
-                    for stmt in else_branch.statements:
-                        code += self.generate_statement(stmt, indent + 1)
-                elif isinstance(else_branch, list):
-                    for stmt in else_branch:
-                        code += self.generate_statement(stmt, indent + 1)
-                else:
-                    code += self.generate_statement(else_branch, indent + 1)
+                code += self.generate_branch_statements(else_branch, indent + 1)
+            else_alias_state = self.resource_access_alias_state()
 
+        self.restore_resource_access_alias_state(
+            self.merge_resource_access_alias_states(
+                then_alias_state,
+                else_alias_state,
+            )
+        )
         return code
 
     def generate_for(self, node, indent):

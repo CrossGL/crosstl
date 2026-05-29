@@ -8272,11 +8272,122 @@ def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
             """,
             r"image_atomic_add.*writeCounters.*writeonly",
         ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidIfElseAssignedWrapperStore(
+                bool choose,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox payload = PayloadBox(outputs[0], 0);
+                if (choose) {
+                    payload = PayloadBox(inputs[0], 1);
+                } else {
+                    payload = PayloadBox(outputs[1], 2);
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            image2D images[2];
+
+            vec4 invalidIfElseAssignedWrapperRead(bool choose, ivec2 pixel) {
+                PayloadBox payload = PayloadBox(images[0], 0);
+                if (choose) {
+                    payload = PayloadBox(outputs[0], 1);
+                } else {
+                    payload = PayloadBox(images[1], 2);
+                }
+                return imageLoad(payload.image, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            void invalidChainedIfElseWrapperStore(
+                bool choose,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox readable = PayloadBox(inputs[0], 0);
+                PayloadBox writable = PayloadBox(outputs[0], 1);
+                PayloadBox payload = writable;
+                if (choose) {
+                    payload = readable;
+                } else {
+                    payload = writable;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
     ],
 )
 def test_resource_alias_access_qualifiers_propagate_for_mojo_codegen(source, pattern):
     with pytest.raises(ValueError, match=pattern):
         generate_code(parse_code(tokenize_code(source)))
+
+
+def test_if_else_assigned_struct_resource_aliases_remain_field_specific():
+    source = """
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+
+    vec4 readAllowed(bool choose, ivec2 pixel) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        if (choose) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        } else {
+            payload = ImagePair(inputs[0], outputs[0]);
+        }
+        return imageLoad(payload.readable, pixel);
+    }
+
+    void writeAllowed(bool choose, ivec2 pixel, vec4 color) {
+        ImagePair payload = ImagePair(inputs[0], outputs[0]);
+        if (choose) {
+            payload = ImagePair(inputs[1], outputs[1]);
+        } else {
+            payload = ImagePair(inputs[0], outputs[0]);
+        }
+        imageStore(payload.writable, pixel, color);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "return image_load(payload.readable, pixel)" in generated_code
+    assert "image_store(payload.writable, pixel, color)" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
 
 
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
