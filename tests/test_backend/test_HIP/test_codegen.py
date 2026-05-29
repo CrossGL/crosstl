@@ -1550,6 +1550,110 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_runtime_handle_launch_array_outputs_clear_stale_metadata(self):
+        """Test runtime handle/launch outputs clear stale array/member metadata."""
+        code = """
+        struct LaunchOutputs {
+            dim3 grid;
+            dim3 block;
+            size_t shared;
+            hipStream_t stream;
+            void* rangeHandle;
+        };
+
+        void queryRuntimeOutputTargets(
+            hipDeviceptr_t devicePtr,
+            size_t bytes,
+            void** handles,
+            dim3* grids,
+            dim3* blocks,
+            size_t* sharedMem,
+            hipStream_t* streams,
+            LaunchOutputs* holder,
+            void** ptrs,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&handles, &staleSize, devicePtr);
+            hipMemGetHandleForAddressRange(
+                &handles[0],
+                devicePtr,
+                bytes,
+                hipMemRangeHandleTypeDmaBuf,
+                0
+            );
+            ptrs[0] = handles[0];
+
+            hipMemGetAddressRange((void**)&grids, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&blocks, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sharedMem, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&streams, &staleSize, devicePtr);
+            __hipPopCallConfiguration(
+                &grids[0],
+                &blocks[0],
+                &sharedMem[0],
+                &streams[0]
+            );
+            values[0] = sharedMem[0];
+            ptrs[1] = streams[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemGetHandleForAddressRange(
+                &holder->rangeHandle,
+                devicePtr,
+                bytes,
+                hipMemRangeHandleTypeDmaBuf,
+                0
+            );
+            ptrs[2] = holder->rangeHandle;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            __hipPopCallConfiguration(
+                &holder->grid,
+                &holder->block,
+                &holder->shared,
+                &holder->stream
+            );
+            values[1] = holder->shared;
+            ptrs[3] = holder->stream;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory get handle for address range: output: handles[0], "
+            "device pointer: devicePtr, bytes: bytes, "
+            "handle type: hipMemRangeHandleTypeDmaBuf, flags: 0"
+        ) in result
+        assert (
+            "// HIP pop call configuration: grid output: grids[0], "
+            "block output: blocks[0], shared memory output: sharedMem[0], "
+            "stream output: streams[0]"
+        ) in result
+        assert (
+            "// HIP memory get handle for address range: output: "
+            "holder->rangeHandle, device pointer: devicePtr, bytes: bytes, "
+            "handle type: hipMemRangeHandleTypeDmaBuf, flags: 0"
+        ) in result
+        assert (
+            "// HIP pop call configuration: grid output: holder->grid, "
+            "block output: holder->block, shared memory output: holder->shared, "
+            "stream output: holder->stream"
+        ) in result
+        assert "ptrs[0] = handles[0];" in result
+        assert "values[0] = sharedMem[0];" in result
+        assert "ptrs[1] = streams[0];" in result
+        assert "ptrs[2] = holder->rangeHandle;" in result
+        assert "values[1] = holder->shared;" in result
+        assert "ptrs[3] = holder->stream;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_user_defined_hip_launch_kernel_call_is_not_kernel_launch(self):
         """Test user-defined hipLaunchKernel shadows launch lowering."""
         code = """

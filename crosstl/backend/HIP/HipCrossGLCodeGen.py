@@ -1643,10 +1643,10 @@ class HipToCrossGLConverter:
                 ]
         elif name == "__hipPopCallConfiguration":
             if len(args) >= 4:
-                grid_output = self.format_runtime_pointer_target(node.args[0])
-                block_output = self.format_runtime_pointer_target(node.args[1])
-                shared_output = self.format_runtime_pointer_target(node.args[2])
-                stream_output = self.format_runtime_pointer_target(node.args[3])
+                grid_output = self.format_runtime_raw_output_target(node.args[0])
+                block_output = self.format_runtime_raw_output_target(node.args[1])
+                shared_output = self.format_runtime_raw_output_target(node.args[2])
+                stream_output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP pop call configuration: grid output: {grid_output}, "
                     f"block output: {block_output}, shared memory output: "
@@ -2747,7 +2747,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP link destroy: state: {args[0]}"]
         elif name == "hipMemGetHandleForAddressRange":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory get handle for address range: output: {output}, "
                     f"device pointer: {args[1]}, bytes: {args[2]}, "
