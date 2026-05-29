@@ -8,8 +8,11 @@ from crosstl.translator.parser import Parser
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
     AtomicOpNode,
+    ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayType,
     AssignmentNode,
+    BinaryOpNode,
     BlockNode,
     BufferOpNode,
     BuiltinVariableNode,
@@ -22,6 +25,7 @@ from crosstl.translator.ast import (
     LiteralNode,
     MatchArmNode,
     MatchNode,
+    MemberAccessNode,
     MeshOpNode,
     NamedType,
     PrimitiveType,
@@ -30,6 +34,7 @@ from crosstl.translator.ast import (
     ReturnNode,
     SwizzleNode,
     SyncNode,
+    TernaryOpNode,
     TextureNode,
     TextureOpNode,
     VariableNode,
@@ -10030,6 +10035,124 @@ def test_generic_user_struct_function_bodies_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_function_bodies.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_array_and_ternary_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+
+    int chooseBox(bool useLeft) {}
+    int readBoxArray(int index) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    def box_constructor(value, tag):
+        return ConstructorNode(box_int, [value, tag])
+
+    def member(expr, name):
+        return MemberAccessNode(expr, name)
+
+    functions["chooseBox"].body = BlockNode(
+        [
+            VariableNode(
+                "left", box_int, box_constructor(int_literal(1), int_literal(2))
+            ),
+            VariableNode(
+                "right",
+                box_int,
+                box_constructor(int_literal(3), int_literal(4)),
+            ),
+            VariableNode(
+                "chosen",
+                box_int,
+                TernaryOpNode(
+                    IdentifierNode("useLeft"),
+                    IdentifierNode("left"),
+                    IdentifierNode("right"),
+                ),
+            ),
+            ReturnNode(
+                BinaryOpNode(
+                    member(IdentifierNode("chosen"), "value"),
+                    "+",
+                    member(IdentifierNode("chosen"), "tag"),
+                )
+            ),
+        ]
+    )
+    functions["readBoxArray"].body = BlockNode(
+        [
+            VariableNode(
+                "boxes",
+                ArrayType(box_int, 2),
+                ArrayLiteralNode(
+                    [
+                        box_constructor(int_literal(1), int_literal(2)),
+                        box_constructor(int_literal(3), int_literal(4)),
+                    ]
+                ),
+            ),
+            ReturnNode(
+                BinaryOpNode(
+                    member(
+                        ArrayAccessNode(
+                            IdentifierNode("boxes"), IdentifierNode("index")
+                        ),
+                        "value",
+                    ),
+                    "+",
+                    member(
+                        ArrayAccessNode(IdentifierNode("boxes"), int_literal(0)),
+                        "tag",
+                    ),
+                )
+            ),
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_arrays_and_ternaries_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
+
+    assert "fn chooseBox(useLeft: Bool) -> Int32:" in generated_code
+    assert "    var left: Box[Int32] = Box[Int32](1, 2)" in generated_code
+    assert "    var right: Box[Int32] = Box[Int32](3, 4)" in generated_code
+    assert "    var chosen: Box[Int32] = (left if useLeft else right)" in generated_code
+    assert "    return (chosen.value + chosen.tag)" in generated_code
+    assert "fn readBoxArray(index: Int32) -> Int32:" in generated_code
+    assert (
+        "    var boxes: InlineArray[Box[Int32], 2] = "
+        "InlineArray[Box[Int32], 2](Box[Int32](1, 2), Box[Int32](3, 4))"
+        in generated_code
+    )
+    assert "    return (boxes[int(index)].value + boxes[0].tag)" in generated_code
+    assert "Box<int>" not in generated_code
+
+
+def test_generic_user_struct_arrays_and_ternaries_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_arrays_and_ternaries.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],

@@ -7434,6 +7434,60 @@ def test_metal_mesh_payload_dispatch_accepts_threadgroup_pointer_dereference():
     assert "DispatchMesh" not in generated
 
 
+def test_metal_mesh_payload_helper_accepts_threadgroup_pointer_dereference():
+    code = """
+    shader meshpipe {
+        struct MeshPayload {
+            uint meshlet;
+            uint lane;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void issue(threadgroup MeshPayload* payload) {
+                DispatchMesh(1, 1, 1, *payload);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                groupshared MeshPayload payloads[2];
+                payloads[0].meshlet = 3u;
+                payloads[0].lane = 4u;
+                issue(&payloads[0]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[1],
+                @indices out uint points[1]
+            ) @numthreads(1, 1, 1) @outputtopology(point) {
+                SetMeshOutputCounts(1, 1);
+                verts[0].position =
+                    vec4(float(payload.meshlet + payload.lane), 0.0, 0.0, 1.0);
+                points[0] = 0u;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void issue(threadgroup MeshPayload* payload, "
+        "object_data MeshPayload& _crossglMeshPayload, "
+        "mesh_grid_properties _crossglMeshGrid)"
+    ) in generated
+    assert "issue(&payloads[0], _crossglMeshPayload, _crossglMeshGrid);" in generated
+    assert "_crossglMeshPayload = *payload;" in generated
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in generated
+    assert "unsupported Metal mesh payload dispatch" not in generated
+    assert "unsupported Metal mesh dispatch" not in generated
+    assert "DispatchMesh" not in generated
+
+
 def test_metal_mesh_payload_dispatch_accepts_threadgroup_member_sources():
     code = """
     shader meshpipe {

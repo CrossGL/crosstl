@@ -3646,6 +3646,46 @@ shader MetalMeshPayloadPointerDerefSourceValidation {
 """
 
 
+METAL_MESH_PAYLOAD_HELPER_POINTER_DEREF_SOURCE_SHADER = """
+shader MetalMeshPayloadHelperPointerDerefSourceValidation {
+    struct MeshPayload {
+        uint meshlet;
+        uint lane;
+    };
+
+    struct MeshVertex {
+        vec4 position @ gl_Position;
+    };
+
+    task {
+        void issue(threadgroup MeshPayload* payload) {
+            DispatchMesh(1, 1, 1, *payload);
+        }
+
+        void main() @numthreads(1, 1, 1) {
+            groupshared MeshPayload payloads[2];
+            payloads[0].meshlet = 3u;
+            payloads[0].lane = 4u;
+            issue(&payloads[0]);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            @vertices out MeshVertex verts[1],
+            @indices out uint points[1]
+        ) @numthreads(1, 1, 1) @outputtopology(point) {
+            SetMeshOutputCounts(1, 1);
+            verts[0].position =
+                vec4(float(payload.meshlet + payload.lane), 0.0, 0.0, 1.0);
+            points[0] = 0u;
+        }
+    }
+}
+"""
+
+
 METAL_MESH_PAYLOAD_ADDRESS_SPACE_SHADER = """
 shader MetalMeshPayloadAddressSpaceValidation {
     struct Payload {
@@ -7417,6 +7457,52 @@ def test_generated_metal_mesh_payload_pointer_deref_source_compiles_with_metal3(
 
     assert "threadgroup MeshPayload* alias = &payloads[0];" in code
     assert "_crossglMeshPayload = *alias;" in code
+    assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in code
+    assert "unsupported Metal mesh payload dispatch" not in code
+    assert "unsupported Metal mesh dispatch" not in code
+    assert "DispatchMesh" not in code
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_mesh_payload_helper_pointer_deref_source_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    supported, diagnostics = metal_supports_mesh_object_stage_attributes(
+        xcrun, tmp_path
+    )
+    if not supported:
+        pytest.skip(
+            "xcrun metal does not support Metal 3 mesh/object stage attributes: "
+            f"{diagnostics}"
+        )
+
+    source = tmp_path / "mesh_payload_helper_pointer_deref_source.metal"
+    output = tmp_path / "mesh_payload_helper_pointer_deref_source.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_MESH_PAYLOAD_HELPER_POINTER_DEREF_SOURCE_SHADER)
+    )
+    source.write_text(code, encoding="utf-8")
+
+    assert "void issue(threadgroup MeshPayload* payload, " in code
+    assert "issue(&payloads[0], _crossglMeshPayload, _crossglMeshGrid);" in code
+    assert "_crossglMeshPayload = *payload;" in code
     assert "_crossglMeshGrid.set_threadgroups_per_grid(uint3(1, 1, 1));" in code
     assert "unsupported Metal mesh payload dispatch" not in code
     assert "unsupported Metal mesh dispatch" not in code
