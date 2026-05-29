@@ -3059,6 +3059,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         }
         global_resource_names = {name for name in global_resource_names if name}
 
+        function_infos = []
         for func in functions:
             func_name = getattr(func, "name", None)
             return_type = getattr(func, "return_type", None)
@@ -3086,14 +3087,36 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             all_param_indices = {
                 name: index for name, index in all_param_indices.items() if name
             }
-            return_source = self.query_return_source_descriptor(
+            function_infos.append(
+                (
+                    func_name,
+                    return_expr,
+                    resource_param_indices,
+                    all_param_indices,
+                )
+            )
+
+        changed = True
+        while changed:
+            changed = False
+            for (
+                func_name,
                 return_expr,
                 resource_param_indices,
-                global_resource_names,
                 all_param_indices,
-            )
-            if return_source is not None:
-                return_sources[func_name] = return_source
+            ) in function_infos:
+                if func_name in return_sources:
+                    continue
+                return_source = self.query_return_source_descriptor(
+                    return_expr,
+                    resource_param_indices,
+                    global_resource_names,
+                    all_param_indices,
+                    return_sources,
+                )
+                if return_source is not None:
+                    return_sources[func_name] = return_source
+                    changed = True
 
         return return_sources
 
@@ -3103,20 +3126,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         resource_param_indices,
         global_resource_names,
         all_param_indices,
+        known_return_sources=None,
     ):
         """Describe a traceable resource-return expression for caller metadata."""
+        if known_return_sources is None:
+            known_return_sources = {}
+
         if isinstance(return_expr, TernaryOpNode):
             true_source = self.query_return_source_descriptor(
                 return_expr.true_expr,
                 resource_param_indices,
                 global_resource_names,
                 all_param_indices,
+                known_return_sources,
             )
             false_source = self.query_return_source_descriptor(
                 return_expr.false_expr,
                 resource_param_indices,
                 global_resource_names,
                 all_param_indices,
+                known_return_sources,
             )
             if true_source is None or false_source is None:
                 return None
@@ -3127,6 +3156,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "false_source": false_source,
                 "param_indices": all_param_indices,
             }
+
+        if isinstance(return_expr, FunctionCallNode):
+            callee_name = self.raw_function_call_name(return_expr)
+            return_source = known_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                return_expr,
+                "arguments",
+                getattr(return_expr, "args", []),
+            )
+            return self.inline_query_return_source_descriptor(
+                return_source,
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+            )
 
         return_base_expr = return_expr
         return_indices = []
@@ -3160,6 +3208,237 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "param_indices": all_param_indices,
             }
         return None
+
+    def inline_query_return_source_descriptor(
+        self,
+        return_source,
+        raw_args,
+        resource_param_indices,
+        global_resource_names,
+        all_param_indices,
+        known_return_sources,
+    ):
+        """Inline a traceable callee resource return into the caller context."""
+        source_param_indices = return_source.get("param_indices", {})
+        kind = return_source["kind"]
+
+        if kind == "global":
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            return {
+                "kind": "global",
+                "name": return_source["name"],
+                "indices": indices,
+                "param_indices": all_param_indices,
+            }
+
+        if kind == "parameter":
+            index = return_source["index"]
+            if index >= len(raw_args):
+                return None
+            base_source = self.query_return_source_descriptor(
+                raw_args[index],
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+            )
+            if base_source is None:
+                return None
+            indices = self.substitute_query_return_indices(
+                return_source.get("indices", []),
+                source_param_indices,
+                raw_args,
+                all_param_indices,
+            )
+            if indices is None:
+                return None
+            return self.append_query_return_indices(
+                base_source,
+                indices,
+                all_param_indices,
+            )
+
+        if kind == "ternary":
+            condition = self.substitute_query_return_expr(
+                return_source["condition"],
+                source_param_indices,
+                raw_args,
+            )
+            if condition is None:
+                return None
+            true_source = self.inline_query_return_source_descriptor(
+                return_source["true_source"],
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+            )
+            false_source = self.inline_query_return_source_descriptor(
+                return_source["false_source"],
+                raw_args,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+            )
+            if true_source is None or false_source is None:
+                return None
+            return {
+                "kind": "ternary",
+                "condition": condition,
+                "true_source": true_source,
+                "false_source": false_source,
+                "param_indices": all_param_indices,
+            }
+
+        return None
+
+    def append_query_return_indices(self, return_source, indices, param_indices):
+        """Append array indices to a flattened resource-return descriptor."""
+        if not indices:
+            return return_source
+        if return_source["kind"] not in {"global", "parameter"}:
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, param_indices)
+            for index in indices
+        ):
+            return None
+        combined = dict(return_source)
+        combined["indices"] = list(return_source.get("indices", [])) + list(indices)
+        combined["param_indices"] = param_indices
+        return combined
+
+    def substitute_query_return_indices(
+        self,
+        indices,
+        param_indices,
+        raw_args,
+        target_param_indices,
+    ):
+        """Substitute callee index parameters with caller-context expressions."""
+        substituted_indices = []
+        for index_expr in indices:
+            substituted = self.substitute_query_return_expr(
+                index_expr,
+                param_indices,
+                raw_args,
+            )
+            if substituted is None or not self.is_safe_query_return_index(
+                substituted,
+                target_param_indices,
+            ):
+                return None
+            substituted_indices.append(substituted)
+        return substituted_indices
+
+    def substitute_query_return_expr(self, expr, param_indices, raw_args):
+        """Replace callee parameters in a return-source expression."""
+        expr_name = self.get_expression_name(expr)
+        if isinstance(expr, (IdentifierNode, VariableNode, str)):
+            if expr_name in param_indices:
+                param_index = param_indices[expr_name]
+                if param_index >= len(raw_args):
+                    return None
+                return raw_args[param_index]
+            return expr
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.substitute_query_return_expr(
+                expr.left,
+                param_indices,
+                raw_args,
+            )
+            right = self.substitute_query_return_expr(
+                expr.right,
+                param_indices,
+                raw_args,
+            )
+            if left is None or right is None:
+                return None
+            return BinaryOpNode(left, expr.operator, right)
+
+        if isinstance(expr, UnaryOpNode):
+            operand = self.substitute_query_return_expr(
+                expr.operand,
+                param_indices,
+                raw_args,
+            )
+            if operand is None:
+                return None
+            return UnaryOpNode(expr.operator, operand, expr.is_postfix)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.substitute_query_return_expr(
+                expr.condition,
+                param_indices,
+                raw_args,
+            )
+            true_expr = self.substitute_query_return_expr(
+                expr.true_expr,
+                param_indices,
+                raw_args,
+            )
+            false_expr = self.substitute_query_return_expr(
+                expr.false_expr,
+                param_indices,
+                raw_args,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return TernaryOpNode(condition, true_expr, false_expr)
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = self.substitute_query_return_expr(
+                expr.array_expr,
+                param_indices,
+                raw_args,
+            )
+            index_expr = self.substitute_query_return_expr(
+                expr.index_expr,
+                param_indices,
+                raw_args,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return ArrayAccessNode(array_expr, index_expr)
+
+        if isinstance(expr, MemberAccessNode):
+            object_expr = self.substitute_query_return_expr(
+                expr.object_expr,
+                param_indices,
+                raw_args,
+            )
+            if object_expr is None:
+                return None
+            return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, FunctionCallNode):
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                substituted = self.substitute_query_return_expr(
+                    argument,
+                    param_indices,
+                    raw_args,
+                )
+                if substituted is None:
+                    return None
+                arguments.append(substituted)
+            return FunctionCallNode(
+                expr.function,
+                arguments,
+                getattr(expr, "generic_args", []),
+            )
+
+        return expr
 
     def query_array_access_parts(self, expr):
         """Return the base expression and ordered indices for nested array access."""

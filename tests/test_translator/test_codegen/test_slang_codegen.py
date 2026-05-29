@@ -13992,6 +13992,178 @@ def test_resource_query_expected_types_flow_into_ternaries_and_array_literals():
     assert "imageSize(" not in generated_code
 
 
+def test_scalar_resource_query_expected_types_flow_through_nested_contexts():
+    code = """
+    struct ScalarQueryResult {
+        float levelsFloat;
+        ivec2 samplesVector;
+        int validLevels;
+    };
+
+    shader ScalarResourceQueryExpectedContexts {
+        sampler2d colorMap;
+        sampler2dms msTex;
+        image2DMS msImage;
+
+        compute {
+            int chooseScalar(bool take) {
+                return take ? textureQueryLevels(colorMap) : textureSamples(msTex);
+            }
+
+            float chooseFloat(bool take) {
+                return take ? textureQueryLevels(colorMap) : imageSamples(msImage);
+            }
+
+            ivec2 chooseVector(bool take) {
+                return take ? textureSamples(msTex) : imageSamples(msImage);
+            }
+
+            void acceptScalar(int value) {
+            }
+
+            void acceptFloatArray(float values[2]) {
+            }
+
+            void acceptVectorArray(ivec2 values[2]) {
+            }
+
+            void acceptScalarArray(int values[3]) {
+            }
+
+            void main() {
+                bool take = true;
+                int scalarFromTernary =
+                    take ? textureQueryLevels(colorMap) : imageSamples(msImage);
+                float floatFromTernary =
+                    take ? textureQueryLevels(colorMap) : textureSamples(msTex);
+                ivec2 vectorFromTernary =
+                    take ? textureSamples(msTex) : imageSamples(msImage);
+                ScalarQueryResult constructed = ScalarQueryResult(
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                );
+                float floatArray[2] = {
+                    textureQueryLevels(colorMap),
+                    imageSamples(msImage)
+                };
+                ivec2 vectorArray[2] = {
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                };
+                int scalarArray[3] = {
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                };
+                acceptScalar(
+                    take ? textureQueryLevels(colorMap) : textureSamples(msTex)
+                );
+                acceptFloatArray({
+                    textureQueryLevels(colorMap),
+                    imageSamples(msImage)
+                });
+                acceptVectorArray({
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                });
+                acceptScalarArray({
+                    textureQueryLevels(colorMap),
+                    textureSamples(msTex),
+                    imageSamples(msImage)
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "return (take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
+        "cgl_textureSamples_sampler2DMS(msTex));" in generated_code
+    )
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureQueryLevels "
+        "returns int but target expects float */ 0 : /* unsupported Slang resource "
+        "query: imageSamples returns int but target expects float */ 0);"
+        in generated_code
+    )
+    assert (
+        "return (take ? /* unsupported Slang resource query: textureSamples "
+        "returns int but target expects int2 */ int2(0) : /* unsupported Slang "
+        "resource query: imageSamples returns int but target expects int2 */ "
+        "int2(0));" in generated_code
+    )
+    assert (
+        "int scalarFromTernary = (take ? cgl_textureQueryLevels_sampler2D(colorMap) "
+        ": cgl_imageSamples_image2DMS(msImage));" in generated_code
+    )
+    assert (
+        "float floatFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0 : "
+        "/* unsupported Slang resource query: textureSamples returns int but "
+        "target expects float */ 0);" in generated_code
+    )
+    assert (
+        "int2 vectorFromTernary = (take ? /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0) : "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects int2 */ int2(0));" in generated_code
+    )
+    assert (
+        "ScalarQueryResult constructed = ScalarQueryResult("
+        "/* unsupported Slang resource query: textureQueryLevels returns int but "
+        "target expects float */ 0, /* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0), "
+        "cgl_imageSamples_image2DMS(msImage));" in generated_code
+    )
+    assert (
+        "float floatArray[2] = {/* unsupported Slang resource query: "
+        "textureQueryLevels returns int but target expects float */ 0, "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects float */ 0};" in generated_code
+    )
+    assert (
+        "int2 vectorArray[2] = {/* unsupported Slang resource query: "
+        "textureSamples returns int but target expects int2 */ int2(0), "
+        "/* unsupported Slang resource query: imageSamples returns int but target "
+        "expects int2 */ int2(0)};" in generated_code
+    )
+    assert (
+        "int scalarArray[3] = {cgl_textureQueryLevels_sampler2D(colorMap), "
+        "cgl_textureSamples_sampler2DMS(msTex), "
+        "cgl_imageSamples_image2DMS(msImage)};" in generated_code
+    )
+    assert (
+        "acceptScalar((take ? cgl_textureQueryLevels_sampler2D(colorMap) : "
+        "cgl_textureSamples_sampler2DMS(msTex)));" in generated_code
+    )
+    assert (
+        "acceptFloatArray({/* unsupported Slang resource query: textureQueryLevels "
+        "returns int but target expects float */ 0, /* unsupported Slang resource "
+        "query: imageSamples returns int but target expects float */ 0});"
+        in generated_code
+    )
+    assert (
+        "acceptVectorArray({/* unsupported Slang resource query: textureSamples "
+        "returns int but target expects int2 */ int2(0), /* unsupported Slang "
+        "resource query: imageSamples returns int but target expects int2 */ "
+        "int2(0)});" in generated_code
+    )
+    assert (
+        "acceptScalarArray({cgl_textureQueryLevels_sampler2D(colorMap), "
+        "cgl_textureSamples_sampler2DMS(msTex), "
+        "cgl_imageSamples_image2DMS(msImage)});" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 18
+    assert "textureQueryLevels(" not in generated_code
+    assert "textureSamples(" not in generated_code
+    assert "imageSamples(" not in generated_code
+
+
 def test_resource_query_expected_types_flow_through_nested_array_return_helpers():
     code = """
     shader ResourceQueryNestedArrayContexts {

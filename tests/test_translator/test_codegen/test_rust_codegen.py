@@ -20580,7 +20580,9 @@ def test_match_arm_block_tail_expression_emits_without_semicolon():
     assert "Result::Err(MathError::InvalidInput);" not in generated_code
 
 
-def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
+def test_keyword_like_let_binding_inside_match_arm_preserves_function_body(
+    tmp_path,
+):
     code = """
     shader KeywordBinding {
         fn process_lighting_model(model: int) -> vec3 {
@@ -20604,6 +20606,7 @@ def test_keyword_like_let_binding_inside_match_arm_preserves_function_body():
         "pub fn process_lighting_model(model: i32) -> Vec3<f32> {\n}\n"
         not in generated_code
     )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_match_expression_initializer_emits_rust_match_initializer(tmp_path):
