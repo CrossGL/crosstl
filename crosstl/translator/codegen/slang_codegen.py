@@ -6221,6 +6221,11 @@ class SlangCodeGen:
             )
             if rejection_reason is None:
                 self.validate_slang_dispatch_mesh_payload_argument(node)
+                target_reason = self.slang_mesh_target_type_rejection_reason()
+                if target_reason is not None:
+                    return self.unsupported_slang_mesh_op_expression(
+                        node.operation, target_reason
+                    )
                 args = ", ".join(
                     self.generate_expression(arg) for arg in node.arguments
                 )
@@ -6360,8 +6365,32 @@ class SlangCodeGen:
             return None
         return self.convert_type(arg_type)
 
+    def slang_mesh_target_type_rejection_reason(self):
+        expected_type = self.slang_mesh_expected_target_type()
+        if expected_type is None:
+            return None
+        return f"returns void but target expects {expected_type}"
+
+    def slang_mesh_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type in {"auto", "void"}:
+            return None
+        return expected_type
+
     def unsupported_slang_mesh_op_expression(self, operation, reason):
-        return f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ 0"
+        return (
+            f"/* unsupported Slang mesh intrinsic: {operation} {reason} */ "
+            f"{self.slang_mesh_fallback_value()}"
+        )
+
+    def slang_mesh_fallback_value(self):
+        expected_type = self.slang_mesh_expected_target_type()
+        if expected_type is not None:
+            return self.zero_value_for_type(expected_type)
+        return "0"
 
     def generate_lambda_expression(self, args):
         """Render supported CrossGL pseudo-lambdas as Slang lambda expressions."""

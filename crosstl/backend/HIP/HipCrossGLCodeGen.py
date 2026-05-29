@@ -3544,7 +3544,7 @@ class HipToCrossGLConverter:
                 ]
         if name in {"hipGraphGetNodes", "hipGraphGetRootNodes"}:
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[2])
+                output = self.format_runtime_raw_output_target(raw_args[2])
                 node_set = "nodes" if name == "hipGraphGetNodes" else "root nodes"
                 return [
                     f"// HIP graph get {node_set}: graph: {args[0]}, "
@@ -3552,7 +3552,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphGetEdges":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(raw_args[3])
+                output = self.format_runtime_raw_output_target(raw_args[3])
                 return [
                     f"// HIP graph get edges: graph: {args[0]}, "
                     f"from output: {args[1]}, to output: {args[2]}, "
@@ -3560,7 +3560,7 @@ class HipToCrossGLConverter:
                 ]
         if name in {"hipGraphNodeGetDependencies", "hipGraphNodeGetDependentNodes"}:
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[2])
+                output = self.format_runtime_raw_output_target(raw_args[2])
                 node_set = (
                     "dependencies"
                     if name == "hipGraphNodeGetDependencies"
@@ -3579,7 +3579,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphNodeGetType":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 return [
                     f"// HIP graph node get type: node: {args[0]}, output: {output}"
                 ]
@@ -3609,7 +3609,7 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 action = "get" if name == "hipGraphNodeGetEnabled" else "set"
                 value = (
-                    self.format_runtime_pointer_target(raw_args[2])
+                    self.format_runtime_raw_output_target(raw_args[2])
                     if action == "get"
                     else args[2]
                 )
@@ -3656,14 +3656,14 @@ class HipToCrossGLConverter:
         if name == "hipGraphExecUpdate":
             if len(args) >= 4:
                 error_output = self.format_runtime_raw_output_target(raw_args[2])
-                result_output = self.format_runtime_pointer_target(raw_args[3])
+                result_output = self.format_runtime_raw_output_target(raw_args[3])
                 return [
                     f"// HIP graph exec update: exec: {args[0]}, graph: {args[1]}, "
                     f"error node output: {error_output}, result output: {result_output}"
                 ]
         if name == "hipGraphExecGetFlags":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 return [
                     f"// HIP graph exec get flags: exec: {args[0]}, output: {output}"
                 ]

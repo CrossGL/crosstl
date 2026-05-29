@@ -3260,6 +3260,67 @@ def test_mesh_and_task_intrinsics_lower_to_native_slang_calls():
     assert "unsupported Slang mesh intrinsic" not in generated_code
 
 
+def test_mesh_intrinsics_validate_value_contexts():
+    dispatch_code = """
+    shader InvalidSlangDispatchMeshValues {
+        task {
+            void acceptVector(vec3 value) {
+                return;
+            }
+
+            vec3 dispatchReturn() {
+                return DispatchMesh(1, 2, 3);
+            }
+
+            void main() {
+                vec3 dispatchVector = DispatchMesh(1, 2, 3);
+                acceptVector(DispatchMesh(1, 2, 3));
+            }
+        }
+    }
+    """
+
+    dispatch_generated = generate_code(parse_code(tokenize_code(dispatch_code)))
+
+    assert (
+        "float3 dispatchReturn()\n{\n"
+        "    return /* unsupported Slang mesh intrinsic: DispatchMesh returns void "
+        "but target expects float3 */ float3(0.0);\n}" in dispatch_generated
+    )
+    assert (
+        "float3 dispatchVector = /* unsupported Slang mesh intrinsic: DispatchMesh "
+        "returns void but target expects float3 */ float3(0.0);" in dispatch_generated
+    )
+    assert (
+        "acceptVector(/* unsupported Slang mesh intrinsic: DispatchMesh returns void "
+        "but target expects float3 */ float3(0.0));" in dispatch_generated
+    )
+    assert "return DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "float3 dispatchVector = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "acceptVector(DispatchMesh(1, 2, 3));" not in dispatch_generated
+
+    counts_code = """
+    shader InvalidSlangSetMeshOutputCountsValues {
+        mesh {
+            void main() @outputtopology(triangle) {
+                bvec2 countsVector = SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    counts_generated = generate_code(parse_code(tokenize_code(counts_code)))
+
+    assert (
+        "bool2 countsVector = /* unsupported Slang mesh intrinsic: "
+        "SetMeshOutputCounts returns void but target expects bool2 */ bool2(false);"
+        in counts_generated
+    )
+    assert "bool2 countsVector = SetMeshOutputCounts(3, 1);" not in counts_generated
+    assert "MeshOpNode" not in dispatch_generated
+    assert "MeshOpNode" not in counts_generated
+
+
 def test_mesh_payload_parameter_lowers_to_native_slang_payload_qualifier():
     code = """
     shader SlangMeshPayload {

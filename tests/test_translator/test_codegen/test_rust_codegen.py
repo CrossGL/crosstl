@@ -16876,7 +16876,7 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_for_statement():
+def test_for_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -16907,6 +16907,7 @@ def test_for_statement():
         )  # Rust codegen converts for loops to while loops
         assert "let mut i: i32 = 0;" in generated_code
         assert "let mut i: i32 = 0;;" not in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")

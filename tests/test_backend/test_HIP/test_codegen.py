@@ -10704,6 +10704,133 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_graph_scalar_outputs_clear_stale_metadata(self):
+        """Test graph scalar outputs clear prior query metadata."""
+        code = """
+        void queryGraphScalars(
+            hipDeviceptr_t devicePtr,
+            hipGraph_t graph,
+            hipGraphExec_t exec,
+            hipGraphNode_t node,
+            hipGraphNode_t* nodes,
+            hipGraphNode_t* fromNodes,
+            hipGraphNode_t* toNodes,
+            size_t* counts,
+            int* values,
+            unsigned long long* flagsOut
+        ) {
+            size_t staleSize = 0;
+            size_t numNodes = 0;
+            size_t numRoots = 0;
+            size_t numEdges = 0;
+            size_t numDeps = 0;
+            size_t numDependent = 0;
+            hipGraphNodeType nodeType;
+            int enabled = 0;
+            unsigned long long execFlags = 0;
+            hipGraphExecUpdateResult updateResult;
+            hipGraphNode_t errorNode;
+
+            hipMemGetAddressRange((void**)&numNodes, &staleSize, devicePtr);
+            hipGraphGetNodes(graph, nodes, &numNodes);
+            counts[0] = numNodes;
+
+            hipMemGetAddressRange((void**)&numRoots, &staleSize, devicePtr);
+            if (hipGraphGetRootNodes(graph, nodes, &numRoots) == hipSuccess) {
+                counts[1] = numRoots;
+            }
+
+            hipMemGetAddressRange((void**)&numEdges, &staleSize, devicePtr);
+            hipGraphGetEdges(graph, fromNodes, toNodes, &numEdges);
+            counts[2] = numEdges;
+
+            hipMemGetAddressRange((void**)&numDeps, &staleSize, devicePtr);
+            hipGraphNodeGetDependencies(node, nodes, &numDeps);
+            counts[3] = numDeps;
+
+            hipMemGetAddressRange((void**)&numDependent, &staleSize, devicePtr);
+            if (hipGraphNodeGetDependentNodes(node, nodes, &numDependent) == hipSuccess) {
+                counts[4] = numDependent;
+            }
+
+            hipMemGetAddressRange((void**)&nodeType, &staleSize, devicePtr);
+            hipGraphNodeGetType(node, &nodeType);
+            values[0] = nodeType;
+
+            hipMemGetAddressRange((void**)&enabled, &staleSize, devicePtr);
+            if (hipGraphNodeGetEnabled(exec, node, &enabled) == hipSuccess) {
+                values[1] = enabled;
+            }
+
+            hipMemGetAddressRange((void**)&updateResult, &staleSize, devicePtr);
+            hipGraphExecUpdate(exec, graph, &errorNode, &updateResult);
+            values[2] = updateResult;
+
+            hipMemGetAddressRange((void**)&execFlags, &staleSize, devicePtr);
+            if (hipGraphExecGetFlags(exec, &execFlags) == hipSuccess) {
+                flagsOut[0] = execFlags;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP graph get nodes: graph: graph, nodes output: nodes, "
+                "count output: numNodes"
+            ),
+            (
+                "HIP graph get root nodes: graph: graph, nodes output: nodes, "
+                "count output: numRoots"
+            ),
+            (
+                "HIP graph get edges: graph: graph, from output: fromNodes, "
+                "to output: toNodes, count output: numEdges"
+            ),
+            (
+                "HIP graph node get dependencies: node: node, "
+                "nodes output: nodes, count output: numDeps"
+            ),
+            (
+                "HIP graph node get dependent nodes: node: node, "
+                "nodes output: nodes, count output: numDependent"
+            ),
+            "HIP graph node get type: node: node, output: nodeType",
+            "HIP graph node get enabled: exec: exec, node: node, output: enabled",
+            (
+                "HIP graph exec update: exec: exec, graph: graph, "
+                "error node output: errorNode, result output: updateResult"
+            ),
+            "HIP graph exec get flags: exec: exec, output: execFlags",
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for index, name in [
+            (0, "numNodes"),
+            (1, "numRoots"),
+            (2, "numEdges"),
+            (3, "numDeps"),
+            (4, "numDependent"),
+        ]:
+            assert f"counts[{index}] = {name};" in result
+            assert f"counts[{index}] = (/* HIP device query:" not in result
+        for index, name in [
+            (0, "nodeType"),
+            (1, "enabled"),
+            (2, "updateResult"),
+        ]:
+            assert f"values[{index}] = {name};" in result
+            assert f"values[{index}] = (/* HIP device query:" not in result
+        assert "flagsOut[0] = execFlags;" in result
+        assert "flagsOut[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_graph_api_conversion(self):
         """Test HIP graph APIs emit metadata comments."""
         code = """
