@@ -8915,6 +8915,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 ivec3 badPixel = ivec3(2, 3, 4);
                 float floatFetchLod = 1.0;
                 bool boolSampleIndex = true;
+                bool boolBias = true;
                 bool boolLod = true;
                 vec2 badLod = vec2(0.0, 1.0);
                 ivec2 badSampleIndex = ivec2(0, 1);
@@ -8945,6 +8946,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                     1.0
                 );
                 vec4 badBiasRank = texture(colorMap, uv, badUv);
+                vec4 boolBiasType = texture(colorMap, uv, boolBias);
                 vec4 badLodCoordRank = textureLod(colorMap, badUv, 1.0);
                 vec4 badLodRank = textureLod(colorMap, uv, badLod);
                 vec4 boolLodType = textureLod(colorMap, uv, boolLod);
@@ -9050,6 +9052,11 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texture requires a scalar bias argument */ float4(0.0);" in generated_code
     )
     assert (
+        "float4 boolBiasType = /* unsupported Slang sampled texture: "
+        "texture bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 badLodCoordRank = /* unsupported Slang sampled texture: "
         "textureLod requires a 2-component coordinate for sampler2D */ "
         "float4(0.0);" in generated_code
@@ -9131,7 +9138,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texelFetch fetch index argument must be scalar int or uint, got bool */ "
         "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 32
+    assert generated_code.count("unsupported Slang sampled texture") == 33
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -9599,13 +9606,17 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                 ivec3 badOffset = ivec3(1, 0, 0);
                 vec2 floatOffset = vec2(1.0, 0.0);
                 bvec2 boolOffset = bvec2(true, false);
+                bool boolBias = true;
                 bool boolLod = true;
+                vec2 badBias = vec2(0.0, 1.0);
                 vec2 badLod = vec2(0.0, 1.0);
                 vec4 badCoord = textureProj(colorMap, uv);
                 vec4 samplerProjected = textureProj(querySampler, uvq);
                 vec4 imageProjected = textureProj(colorImage, uvq);
                 vec4 shadowProjected = textureProj(shadowMap, uvq);
                 vec4 multisampleProjected = textureProj(msTex, uvq);
+                vec4 badProjectedBiasRank = textureProj(colorMap, uvq, badBias);
+                vec4 boolProjectedBias = textureProj(colorMap, uvq, boolBias);
                 vec4 missingLod = textureProjLod(colorMap, uvq);
                 vec4 boolProjectedLod = textureProjLod(colorMap, uvq, boolLod);
                 vec4 missingGrad = textureProjGrad(colorMap, uvq, ddx);
@@ -9620,6 +9631,12 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
                     colorMap,
                     uvq,
                     floatOffset
+                );
+                vec4 boolProjectedOffsetBias = textureProjOffset(
+                    colorMap,
+                    uvq,
+                    offset,
+                    boolBias
                 );
                 vec4 boolProjectedLodOffset = textureProjLodOffset(
                     colorMap,
@@ -9674,6 +9691,15 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         in generated_code
     )
     assert (
+        "float4 badProjectedBiasRank = /* unsupported Slang projected texture: "
+        "textureProj requires a scalar bias argument */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedBias = /* unsupported Slang projected texture: "
+        "textureProj bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
         "float4 missingLod = /* unsupported Slang projected texture: "
         "textureProjLod requires one lod argument */ float4(0.0);" in generated_code
     )
@@ -9701,6 +9727,11 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 floatProjectedOffset = /* unsupported Slang projected texture: "
         "textureProjOffset offset must be scalar or vector int, got float2 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolProjectedOffsetBias = /* unsupported Slang projected texture: "
+        "textureProjOffset bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
     )
     assert (
         "float4 boolProjectedLodOffset = /* unsupported Slang projected texture: "

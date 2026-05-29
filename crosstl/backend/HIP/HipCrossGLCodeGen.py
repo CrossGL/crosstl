@@ -171,6 +171,16 @@ class HipToCrossGLConverter:
         "ptxVersion",
         "sharedSizeBytes",
     }
+    HIP_CHANNEL_DESCRIPTOR_MEMBERS = {"f", "w", "x", "y", "z"}
+    HIP_ARRAY_DESCRIPTOR_MEMBERS = {"Format", "Height", "NumChannels", "Width"}
+    HIP_ARRAY3D_DESCRIPTOR_MEMBERS = {
+        "Depth",
+        "Flags",
+        "Format",
+        "Height",
+        "NumChannels",
+        "Width",
+    }
 
     def __init__(self):
         """Initialize HIP-to-CrossGL visitor state."""
@@ -776,7 +786,22 @@ class HipToCrossGLConverter:
         elif name in {"hipArrayGetDescriptor", "hipArray3DGetDescriptor"}:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
                 dimension = "3D " if name == "hipArray3DGetDescriptor" else ""
+                if output_name is not None:
+                    if name == "hipArray3DGetDescriptor":
+                        members = self.HIP_ARRAY3D_DESCRIPTOR_MEMBERS
+                        query_prefix = "array.descriptor3D"
+                    else:
+                        members = self.HIP_ARRAY_DESCRIPTOR_MEMBERS
+                        query_prefix = "array.descriptor"
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            member: f"{query_prefix}.{member}({args[1]})"
+                            for member in members
+                        },
+                    )
                 return [
                     f"// HIP array get {dimension}descriptor: output: {output}, "
                     f"array: {args[1]}"
@@ -2671,6 +2696,15 @@ class HipToCrossGLConverter:
         elif name == "hipGetChannelDesc":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_member_query_sources(
+                        output_name,
+                        {
+                            member: f"array.channelDesc.{member}({args[1]})"
+                            for member in self.HIP_CHANNEL_DESCRIPTOR_MEMBERS
+                        },
+                    )
                 return [f"// HIP get channel desc: output: {output}, array: {args[1]}"]
         elif name == "hipCreateSurfaceObject":
             if len(args) >= 2:

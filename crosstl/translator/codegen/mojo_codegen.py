@@ -1819,7 +1819,7 @@ class MojoCodeGen:
             return self.struct_field_resource_access(expr.object)
         return None
 
-    def resource_access_qualifier(self, expr):
+    def direct_resource_access_qualifier(self, expr):
         root_name = self.resource_access_root_name(expr)
         if root_name is not None:
             access = self.resource_access_qualifiers.get(root_name)
@@ -1831,25 +1831,62 @@ class MojoCodeGen:
             return field_access
         return None, root_name
 
-    def validate_resource_read_access(self, expr, operation):
-        access, resource_name = self.resource_access_qualifier(expr)
-        if resource_name is None:
-            return
-        if access == "writeonly":
-            raise ValueError(
-                f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{resource_name}' is writeonly"
+    def resource_access_qualifier_candidates(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_qualifier_candidates(expr.array)
+
+        if isinstance(expr, TernaryOpNode):
+            candidates = []
+            candidates.extend(self.resource_access_qualifier_candidates(expr.true_expr))
+            candidates.extend(
+                self.resource_access_qualifier_candidates(expr.false_expr)
             )
+            return self.unique_resource_access_qualifiers(candidates)
+
+        if isinstance(expr, MatchNode):
+            candidates = []
+            for arm in getattr(expr, "arms", []) or []:
+                arm_expr, _ = self.match_arm_value_expression(arm)
+                candidates.extend(self.resource_access_qualifier_candidates(arm_expr))
+            return self.unique_resource_access_qualifiers(candidates)
+
+        access, resource_name = self.direct_resource_access_qualifier(expr)
+        if access is None or resource_name is None:
+            return []
+        return [(access, resource_name)]
+
+    def unique_resource_access_qualifiers(self, candidates):
+        unique = []
+        seen = set()
+        for access, resource_name in candidates:
+            key = (access, resource_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((access, resource_name))
+        return unique
+
+    def resource_access_qualifier(self, expr):
+        candidates = self.resource_access_qualifier_candidates(expr)
+        if candidates:
+            return candidates[0]
+        return self.direct_resource_access_qualifier(expr)
+
+    def validate_resource_read_access(self, expr, operation):
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "writeonly":
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{resource_name}' is writeonly"
+                )
 
     def validate_resource_write_access(self, expr, operation):
-        access, resource_name = self.resource_access_qualifier(expr)
-        if resource_name is None:
-            return
-        if access == "readonly":
-            raise ValueError(
-                f"Unsupported {operation} for Mojo codegen; "
-                f"resource '{resource_name}' is readonly"
-            )
+        for access, resource_name in self.resource_access_qualifier_candidates(expr):
+            if access == "readonly":
+                raise ValueError(
+                    f"Unsupported {operation} for Mojo codegen; "
+                    f"resource '{resource_name}' is readonly"
+                )
 
     def validate_resource_read_write_access(self, expr, operation):
         self.validate_resource_read_access(expr, operation)

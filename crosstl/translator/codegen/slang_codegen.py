@@ -8189,8 +8189,8 @@ class SlangCodeGen:
 
             if func_name == "texture":
                 if extra_args:
-                    bias_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                        extra_args[0], "bias argument"
+                    bias_reason = self.scalar_texture_bias_unsupported_reason(
+                        extra_args[0]
                     )
                     if bias_reason:
                         return self.unsupported_sampled_texture_call(
@@ -8612,6 +8612,11 @@ class SlangCodeGen:
             if not extra_args:
                 return f"{texture_name}.Sample({projected_coord})"
             if len(extra_args) == 1:
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[0])
+                if bias_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, bias_reason
+                    )
                 bias = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleBias({projected_coord}, {bias})"
             return self.unsupported_texture_projected_call(
@@ -8636,6 +8641,11 @@ class SlangCodeGen:
                 if offset_reason:
                     return self.unsupported_texture_projected_call(
                         func_name, offset_reason
+                    )
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[1])
+                if bias_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, bias_reason
                     )
                 offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
@@ -9186,6 +9196,13 @@ class SlangCodeGen:
             node, "lod argument"
         ) or self.scalar_numeric_texture_argument_unsupported_reason(
             node, "lod argument"
+        )
+
+    def scalar_texture_bias_unsupported_reason(self, node):
+        return self.scalar_texture_argument_rank_unsupported_reason(
+            node, "bias argument"
+        ) or self.scalar_numeric_texture_argument_unsupported_reason(
+            node, "bias argument"
         )
 
     def scalar_integer_texture_argument_unsupported_reason(self, node, role):

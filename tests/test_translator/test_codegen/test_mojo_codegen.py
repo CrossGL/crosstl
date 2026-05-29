@@ -5001,6 +5001,104 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         generate_code(parse_code(tokenize_code(invalid_raw_free_read)))
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D writeImages[2];
+            readonly image2D readImages[2];
+
+            vec4 invalidRead(bool useWrite, int slot, ivec2 pixel) {
+                return imageLoad(
+                    (useWrite ? writeImages : readImages)[slot],
+                    pixel
+                );
+            }
+            """,
+            r"imageLoad.*writeImages.*writeonly",
+        ),
+        (
+            """
+            readonly image2D readImages[2];
+            writeonly image2D writeImages[2];
+
+            void invalidWrite(bool useRead, int slot, ivec2 pixel, vec4 value) {
+                imageStore(
+                    (useRead ? readImages : writeImages)[slot],
+                    pixel,
+                    value
+                );
+            }
+            """,
+            r"imageStore.*readImages.*readonly",
+        ),
+        (
+            """
+            writeonly RWStructuredBuffer<int> writeBuffers[2];
+            RWStructuredBuffer<int> values[2];
+
+            int invalidLoad(bool useWrite, int slot, uint index) {
+                return (useWrite ? writeBuffers : values)[slot].Load(index);
+            }
+            """,
+            r"Load.*writeBuffers.*writeonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readBuffers[2];
+            RWStructuredBuffer<int> values[2];
+
+            void invalidStore(int mode, int slot, uint index, int value) {
+                (match mode { 0 => readBuffers, _ => values })[slot].Store(
+                    index,
+                    value
+                );
+            }
+            """,
+            r"Store.*readBuffers.*readonly",
+        ),
+        (
+            """
+            readonly RWByteAddressBuffer readRaw[2];
+            RWByteAddressBuffer rawBuffers[2];
+
+            void invalidRawStore(int mode, int slot, uint offset, uint4 data) {
+                (match mode { 0 => readRaw, _ => rawBuffers })[slot].Store4(
+                    offset,
+                    data
+                );
+            }
+            """,
+            r"Store4.*readRaw.*readonly",
+        ),
+        (
+            """
+            struct Resources {
+                writeonly image2D images[2];
+            };
+
+            vec4 invalidStructRead(
+                bool useLeft,
+                Resources left,
+                Resources right,
+                int slot,
+                ivec2 pixel
+            ) {
+                return imageLoad((useLeft ? left : right).images[slot], pixel);
+            }
+            """,
+            r"imageLoad.*images.*writeonly",
+        ),
+    ],
+)
+def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;

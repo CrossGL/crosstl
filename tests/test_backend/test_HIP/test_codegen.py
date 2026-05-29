@@ -3933,6 +3933,87 @@ class TestHipCodeGen:
         assert "hipArray3DGetDescriptor(" not in result
         assert "hipArrayGetInfo(" not in result
 
+    def test_hip_channel_array_descriptor_member_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test HIP descriptor member reads lower to explicit metadata."""
+        code = """
+        void host(hipArray_t array, int* ints, size_t* dims) {
+            hipChannelFormatDesc channelDesc;
+            HIP_ARRAY_DESCRIPTOR arrayDesc;
+            HIP_ARRAY3D_DESCRIPTOR array3DDesc;
+            hipGetChannelDesc(&channelDesc, array);
+            ints[0] = channelDesc.x;
+            ints[1] = channelDesc.y;
+            ints[2] = channelDesc.z;
+            ints[3] = channelDesc.w;
+            ints[4] = channelDesc.f;
+            hipArrayGetDescriptor(&arrayDesc, array);
+            dims[0] = arrayDesc.Width;
+            dims[1] = arrayDesc.Height;
+            ints[5] = arrayDesc.Format;
+            ints[6] = arrayDesc.NumChannels;
+            hipError_t err = hipArray3DGetDescriptor(&array3DDesc, array);
+            dims[2] = array3DDesc.Width;
+            dims[3] = array3DDesc.Height;
+            dims[4] = array3DDesc.Depth;
+            ints[7] = array3DDesc.Format;
+            ints[8] = array3DDesc.NumChannels;
+            ints[9] = array3DDesc.Flags;
+            channelDesc.x = 32;
+            int manualChannelX = channelDesc.x;
+            arrayDesc.Width = 99;
+            size_t manualWidth = arrayDesc.Width;
+            array3DDesc.Flags++;
+            int manualFlags = array3DDesc.Flags;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get channel desc: output: channelDesc, array: array" in result
+        for index, member in enumerate(["x", "y", "z", "w", "f"]):
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"array.channelDesc.{member}(array) */ 0);"
+            ) in result
+        for index, member in [(0, "Width"), (1, "Height")]:
+            assert (
+                f"dims[{index}] = (/* HIP device query: "
+                f"array.descriptor.{member}(array) */ 0);"
+            ) in result
+        for index, member in [(5, "Format"), (6, "NumChannels")]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"array.descriptor.{member}(array) */ 0);"
+            ) in result
+        for index, member in [(2, "Width"), (3, "Height"), (4, "Depth")]:
+            assert (
+                f"dims[{index}] = (/* HIP device query: "
+                f"array.descriptor3D.{member}(array) */ 0);"
+            ) in result
+        for index, member in [(7, "Format"), (8, "NumChannels"), (9, "Flags")]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"array.descriptor3D.{member}(array) */ 0);"
+            ) in result
+        assert "channelDesc.x = 32;" in result
+        assert "var manualChannelX: i32 = channelDesc.x;" in result
+        assert "arrayDesc.Width = 99;" in result
+        assert "var manualWidth: u32 = arrayDesc.Width;" in result
+        assert "(array3DDesc.Flags++);" in result
+        assert "var manualFlags: i32 = array3DDesc.Flags;" in result
+        assert "ints[0] = channelDesc.x;" not in result
+        assert "dims[0] = arrayDesc.Width;" not in result
+        assert "dims[2] = array3DDesc.Width;" not in result
+        assert "var manualChannelX: i32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualFlags: i32 = (/* HIP device query:" not in result
+
     def test_hip_object_lifecycle_expression_contexts_emit_status(self):
         """Test object lifecycle calls in expressions stay explicit."""
         code = """

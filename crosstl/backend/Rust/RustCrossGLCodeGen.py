@@ -478,6 +478,7 @@ class RustToCrossGLConverter:
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
+        self.local_callable_scopes = []
 
     def get_indent(self):
         """Return whitespace for the current indentation level."""
@@ -545,6 +546,7 @@ class RustToCrossGLConverter:
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
         self.local_binding_name_scopes = []
+        self.local_callable_scopes = []
         code = "shader main {\n"
 
         for use_stmt in ast.use_statements:
@@ -620,6 +622,34 @@ class RustToCrossGLConverter:
     def pop_name_alias_scope(self):
         if self.name_alias_scopes:
             self.name_alias_scopes.pop()
+
+    def push_local_callable_scope(self, entries=None):
+        scope = {}
+        if entries:
+            for name, alias in entries:
+                if name:
+                    scope[name] = alias or name
+        self.local_callable_scopes.append(scope)
+
+    def pop_local_callable_scope(self):
+        if self.local_callable_scopes:
+            self.local_callable_scopes.pop()
+
+    def add_local_callable(self, name, alias=None):
+        if not name:
+            return
+        if not self.local_callable_scopes:
+            self.push_local_callable_scope()
+        self.local_callable_scopes[-1][name] = alias or name
+
+    def lookup_local_callable_name(self, name):
+        if not isinstance(name, str):
+            return None
+        for scope in reversed(self.local_callable_scopes):
+            callable_name = scope.get(name)
+            if callable_name is not None:
+                return callable_name
+        return None
 
     def resolve_name_alias(self, name):
         if not isinstance(name, str):
@@ -1722,6 +1752,7 @@ class RustToCrossGLConverter:
         self.current_closure_helpers = []
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         try:
             body_code = self.generate_function_body(func.body, indent=indent + 1)
             helper_code = "".join(self.current_closure_helpers)
@@ -1732,6 +1763,7 @@ class RustToCrossGLConverter:
         finally:
             self.current_function_return_type = previous_return_type
             self.current_closure_helpers = previous_helpers
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
 
         return code
@@ -1759,6 +1791,7 @@ class RustToCrossGLConverter:
         self.current_closure_helpers = []
         self.current_function_return_type = func.return_type
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         self.push_name_alias_scope(name_aliases)
         self.local_binding_name_scopes.append(local_binding_names)
         try:
@@ -1769,6 +1802,7 @@ class RustToCrossGLConverter:
             self.current_closure_helpers = previous_helpers
             self.local_binding_name_scopes.pop()
             self.pop_name_alias_scope()
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
 
         code = helper_code
@@ -1988,6 +2022,7 @@ class RustToCrossGLConverter:
             )
             if helper_name is not None:
                 target_name = self.declare_local_alias(stmt.name)
+                self.add_local_callable(stmt.name, target_name)
                 mutability = "mut " if stmt.is_mutable else ""
                 return f"{indent_str}let {mutability}{target_name} = {helper_name};\n"
 
@@ -1999,6 +2034,8 @@ class RustToCrossGLConverter:
         if stmt.value:
             value_str = self.generate_expression(stmt.value)
             target_name = self.declare_local_alias(stmt.name)
+            if isinstance(stmt.value, ClosureNode):
+                self.add_local_callable(stmt.name, target_name)
             if stmt.vtype:
                 self.add_value_type(target_name, stmt.vtype)
                 type_str = self.format_typed_declarator(stmt.vtype, target_name)
@@ -7824,6 +7861,7 @@ class RustToCrossGLConverter:
         self.current_function_return_type = closure.return_type
         self.closure_helper_generation_depth += 1
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         try:
             if pattern_params:
                 body = self.generate_closure_pattern_parameter_body(
@@ -7835,6 +7873,7 @@ class RustToCrossGLConverter:
             else:
                 body = self.generate_closure_body_code(closure.body, indent=2)
         finally:
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
             self.closure_helper_generation_depth -= 1
             self.current_function_return_type = previous_return_type
@@ -7855,6 +7894,7 @@ class RustToCrossGLConverter:
             for info, param in zip(parameter_infos, closure.params)
         ]
         self.push_value_type_scope(param_types)
+        self.push_local_callable_scope()
         try:
             body = self.generate_closure_body(
                 closure.body,
@@ -7866,6 +7906,7 @@ class RustToCrossGLConverter:
                 closure.return_type,
             )
         finally:
+            self.pop_local_callable_scope()
             self.pop_value_type_scope()
         if not params:
             return f"lambda({body})"
@@ -8541,6 +8582,10 @@ class RustToCrossGLConverter:
         stripped_func, type_args = self.split_function_type_arguments(rust_func)
         if type_args and self.lookup_user_function_signature(stripped_func) is not None:
             rust_func = stripped_func
+
+        local_callable = self.lookup_local_callable_name(stripped_func)
+        if local_callable is not None:
+            return local_callable
 
         rust_func = self.resolve_imported_module_path(rust_func)
         if self.is_user_defined_function(rust_func):

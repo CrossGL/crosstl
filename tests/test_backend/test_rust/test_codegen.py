@@ -6359,6 +6359,38 @@ def test_typed_inline_closure_resource_parameters_convert_helpers():
     assert ".buffer_load" not in result
 
 
+def test_local_closure_names_shadow_resource_builtin_function_names():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn closure_named_like_builtin(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        fallback: Vec4<f32>,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let sample = |resource: ColorTexture| -> Vec4<f32> {
+            fallback
+        };
+        let sample_lod = |resource: ColorTexture, level: f32| -> Vec4<f32> {
+            fallback + Vec4::<f32>::new(level, 0.0, 0.0, 0.0)
+        };
+        let local_sample = sample(tex);
+        let local_lod = sample_lod(tex, lod);
+        let real_sample = tex.sample(uv);
+        return local_sample + local_lod + real_sample;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let local_sample = sample(tex);" in result
+    assert "let local_lod = sample_lod(tex, lod);" in result
+    assert "let real_sample = texture(tex, uv);" in result
+    assert "let local_sample = texture(tex);" not in result
+    assert "let local_lod = textureLod(tex, lod);" not in result
+
+
 def test_typed_pattern_closures_emit_helpers():
     code = """
     struct Point {
