@@ -5823,6 +5823,163 @@ class TestHipCodeGen:
         assert "var manualPrimaryFlags: u32 = (/* HIP device query:" not in result
         assert "var manualPrimaryActive: i32 = (/* HIP device query:" not in result
 
+    def test_hip_driver_device_output_reads_emit_metadata_expressions(self):
+        """Test HIP driver/device scalar outputs lower to explicit metadata."""
+        code = """
+        void host(int ordinal, hipDevice_t peerDevice, int* out) {
+            hipDevice_t device;
+            hipDevice_t statusDevice;
+            int canAccess = 0;
+            int statusCanAccess = 0;
+            int p2pAttribute = 0;
+            int statusP2PAttribute = 0;
+            unsigned int linkType = 0;
+            unsigned int hopCount = 0;
+            unsigned int statusLinkType = 0;
+            unsigned int statusHopCount = 0;
+            hipDeviceGet(&device, ordinal);
+            out[0] = device;
+            hipDeviceCanAccessPeer(&canAccess, device, peerDevice);
+            out[1] = canAccess;
+            canAccess = 0;
+            int manualCanAccess = canAccess;
+            hipDeviceGetP2PAttribute(
+                &p2pAttribute,
+                hipDevP2PAttrPerformanceRank,
+                device,
+                peerDevice
+            );
+            out[2] = p2pAttribute;
+            p2pAttribute = 7;
+            int manualP2PAttribute = p2pAttribute;
+            hipExtGetLinkTypeAndHopCount(
+                device,
+                peerDevice,
+                &linkType,
+                &hopCount
+            );
+            out[3] = linkType;
+            out[4] = hopCount;
+            linkType = 3;
+            hopCount = 4;
+            unsigned int manualLinkType = linkType;
+            unsigned int manualHopCount = hopCount;
+            hipError_t errDevice = hipDeviceGet(&statusDevice, ordinal + 1);
+            out[5] = statusDevice;
+            hipError_t errCanAccess =
+                hipDeviceCanAccessPeer(&statusCanAccess, device, peerDevice);
+            out[6] = statusCanAccess;
+            hipError_t errP2P =
+                hipDeviceGetP2PAttribute(
+                    &statusP2PAttribute,
+                    hipDevP2PAttrAccessSupported,
+                    device,
+                    peerDevice
+                );
+            out[7] = statusP2PAttribute;
+            hipError_t errLink =
+                hipExtGetLinkTypeAndHopCount(
+                    device,
+                    peerDevice,
+                    &statusLinkType,
+                    &statusHopCount
+                );
+            out[8] = statusLinkType;
+            out[9] = statusHopCount;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device handle: output: device, ordinal: ordinal" in result
+        assert "out[0] = (/* HIP device query: deviceHandle(ordinal) */ 0);" in result
+        assert (
+            "// HIP device can access peer: output: canAccess, device: device, "
+            "peer device: peerDevice"
+        ) in result
+        assert (
+            "out[1] = (/* HIP device query: canAccessPeer(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "canAccess = 0;" in result
+        assert "var manualCanAccess: i32 = canAccess;" in result
+        assert (
+            "// HIP get P2P attribute: output: p2pAttribute, "
+            "attribute: hipDevP2PAttrPerformanceRank, source device: device, "
+            "destination device: peerDevice"
+        ) in result
+        assert (
+            "out[2] = (/* HIP device query: "
+            "p2pAttribute.hipDevP2PAttrPerformanceRank(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "p2pAttribute = 7;" in result
+        assert "var manualP2PAttribute: i32 = p2pAttribute;" in result
+        assert (
+            "// HIP get link type and hop count: device 1: device, "
+            "device 2: peerDevice, link type output: linkType, "
+            "hop count output: hopCount"
+        ) in result
+        assert (
+            "out[3] = (/* HIP device query: linkType(device, peerDevice) */ 0);"
+            in result
+        )
+        assert (
+            "out[4] = (/* HIP device query: hopCount(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "linkType = 3;" in result
+        assert "hopCount = 4;" in result
+        assert "var manualLinkType: u32 = linkType;" in result
+        assert "var manualHopCount: u32 = hopCount;" in result
+        assert (
+            "// HIP get device handle: output: statusDevice, ordinal: (ordinal + 1)"
+            in result
+        )
+        assert "var errDevice: hipError_t = hipSuccess;" in result
+        assert (
+            "out[5] = (/* HIP device query: deviceHandle((ordinal + 1)) */ 0);"
+            in result
+        )
+        assert "var errCanAccess: hipError_t = hipSuccess;" in result
+        assert (
+            "out[6] = (/* HIP device query: canAccessPeer(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "var errP2P: hipError_t = hipSuccess;" in result
+        assert (
+            "out[7] = (/* HIP device query: "
+            "p2pAttribute.hipDevP2PAttrAccessSupported(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "var errLink: hipError_t = hipSuccess;" in result
+        assert (
+            "out[8] = (/* HIP device query: linkType(device, peerDevice) */ 0);"
+            in result
+        )
+        assert (
+            "out[9] = (/* HIP device query: hopCount(device, peerDevice) */ 0);"
+            in result
+        )
+        assert "out[0] = device;" not in result
+        assert "out[1] = canAccess;" not in result
+        assert "out[2] = p2pAttribute;" not in result
+        assert "out[3] = linkType;" not in result
+        assert "out[4] = hopCount;" not in result
+        assert "out[5] = statusDevice;" not in result
+        assert "out[6] = statusCanAccess;" not in result
+        assert "out[7] = statusP2PAttribute;" not in result
+        assert "out[8] = statusLinkType;" not in result
+        assert "out[9] = statusHopCount;" not in result
+        assert "var manualCanAccess: i32 = (/* HIP device query:" not in result
+        assert "var manualP2PAttribute: i32 = (/* HIP device query:" not in result
+        assert "var manualLinkType: u32 = (/* HIP device query:" not in result
+        assert "var manualHopCount: u32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

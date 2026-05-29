@@ -4558,6 +4558,186 @@ def test_non_copy_loop_break_match_preserves_scrutinee_for_later_use_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_match_terminal_if_arms_move_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def if_returns(then_value, else_value):
+        return IfNode(
+            IdentifierNode("flag"),
+            [ReturnNode(then_value)],
+            [ReturnNode(else_value)],
+        )
+
+    terminal_if_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    if_returns(
+                        count_of(IdentifierNode("payload")),
+                        LiteralNode(0, int_type),
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    if_returns(
+                        BinaryOpNode(
+                            count_of(IdentifierNode("payload")),
+                            "+",
+                            LiteralNode(1, int_type),
+                        ),
+                        LiteralNode(1, int_type),
+                    )
+                ],
+            ),
+        ],
+    )
+
+    partial_if_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    IfNode(
+                        IdentifierNode("flag"),
+                        [ReturnNode(count_of(IdentifierNode("payload")))],
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [ReturnNode(count_of(IdentifierNode("payload")))],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustTerminalIfMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "terminal_if_match",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [terminal_if_match],
+            ),
+            FunctionNode(
+                "partial_if_match_then_read",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("flag", bool_type),
+                ],
+                [
+                    partial_if_match,
+                    ReturnNode(return_match),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    terminal_function = generated_code[
+        generated_code.index("pub fn terminal_if_match") : generated_code.index(
+            "pub fn partial_if_match_then_read"
+        )
+    ]
+    partial_function = generated_code[
+        generated_code.index("pub fn partial_if_match_then_read") :
+    ]
+
+    assert "match choice {" in terminal_function
+    assert ".clone()" not in terminal_function
+    assert "if flag {" in terminal_function
+    assert "return payload.count;" in terminal_function
+    assert "match choice.clone() {" in partial_function
+    assert "return match choice {" in partial_function
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 

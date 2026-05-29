@@ -8911,6 +8911,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec2 ddy = vec2(0.0, 0.1);
                 ivec2 pixel = ivec2(2, 3);
                 ivec3 badPixel = ivec3(2, 3, 4);
+                float floatFetchLod = 1.0;
+                bool boolSampleIndex = true;
                 vec2 badLod = vec2(0.0, 1.0);
                 ivec2 badSampleIndex = ivec2(0, 1);
                 vec4 missingTexture = texture();
@@ -8957,6 +8959,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec4 fetchShadow = texelFetch(shadowMap, pixel, 0);
                 vec4 fetchCube = texelFetch(cubeTex, pixel, 0);
                 vec4 badFetchCoordRank = texelFetch(colorMap, badPixel, 0);
+                vec4 floatFetchLevel = texelFetch(colorMap, pixel, floatFetchLod);
+                vec4 boolFetchSample = texelFetch(msTex, pixel, boolSampleIndex);
                 vec4 badFetchIndexRank = texelFetch(msTex, pixel, badSampleIndex);
             }
         }
@@ -9093,10 +9097,20 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
     )
     assert (
         "float4 badFetchIndexRank = /* unsupported Slang sampled texture: "
-        "texelFetch requires a scalar fetch index argument */ float4(0.0);"
-        in generated_code
+        "texelFetch fetch index argument must be scalar int or uint, got int2 */ "
+        "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 27
+    assert (
+        "float4 floatFetchLevel = /* unsupported Slang sampled texture: "
+        "texelFetch fetch index argument must be scalar int or uint, got float */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolFetchSample = /* unsupported Slang sampled texture: "
+        "texelFetch fetch index argument must be scalar int or uint, got bool */ "
+        "float4(0.0);" in generated_code
+    )
+    assert generated_code.count("unsupported Slang sampled texture") == 29
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code

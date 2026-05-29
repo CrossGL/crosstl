@@ -22526,6 +22526,101 @@ def test_glsl_storage_image_access_attributes_emit_parameter_qualifiers():
     assert "image2D image writeonly" not in generated_code
 
 
+def test_glsl_storage_image_access_function_attributes_emit_qualifiers():
+    shader = """
+    shader StorageImageAccessFunctionSpelling {
+        image2D source @access(readonly);
+        image2D target @access(writeonly);
+
+        float readPixel(image2D image @access(readonly), ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        void writePixel(image2D image @access(writeonly), ivec2 pixel, vec4 value) {
+            imageStore(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float value = readPixel(source, ivec2(0, 0));
+                writePixel(target, ivec2(0, 0), vec4(value));
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate(ast)
+
+    assert (
+        "layout(rgba32f, binding = 0) readonly uniform image2D source;"
+        in generated_code
+    )
+    assert (
+        "layout(rgba32f, binding = 1) writeonly uniform image2D target;"
+        in generated_code
+    )
+    assert "float readPixel(readonly image2D image, ivec2 pixel)" in generated_code
+    assert (
+        "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)"
+        in generated_code
+    )
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader StorageImageAccessConflictGlobal {
+                image2D image @readonly @writeonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on global variable 'image': "
+            "@readonly, @writeonly",
+        ),
+        (
+            """
+            shader StorageImageAccessConflictParameter {
+                void writePixel(image2D image @access(readonly) @writeonly) {
+                }
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on parameter 'image' of "
+            "function 'writePixel': @readonly, @writeonly",
+        ),
+        (
+            """
+            shader StorageImageAccessConflictReadWrite {
+                image2D image @readwrite @readonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Conflicting resource access metadata on global variable 'image': "
+            "@readonly, @readwrite",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_conflicting_metadata(shader, match):
+    with pytest.raises(ValueError, match=match):
+        ast = crosstl.translator.parse(shader)
+        GLSLCodeGen().generate(ast)
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [

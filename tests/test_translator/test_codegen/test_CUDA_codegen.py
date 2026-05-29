@@ -10016,18 +10016,19 @@ class TestCudaCodeGen:
             "CglResourceQueryInfo tex_metadata, cudaSurfaceObject_t img, "
             "CglResourceQueryInfo img_metadata)" in cuda_code
         )
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
         assert (
-            "int2 directTexSize = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
-            in cuda_code
+            "int2 directTexSize = cgl_textureSize_sampler2D"
+            "(colorMap_metadata, 0);" in cuda_code
         )
         assert (
-            "int directLevels = /* unsupported CUDA resource query: "
-            "textureQueryLevels metadata unavailable on sampler2D */ 0;" in cuda_code
+            "int directLevels = cgl_textureQueryLevels_sampler2D"
+            "(colorMap_metadata);" in cuda_code
         )
         assert (
-            "int2 directImageSize = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 directImageSize = cgl_imageSize_image2D"
+            "(imageMap_metadata);" in cuda_code
         )
         assert (
             "int2 bundleTexSize = /* unsupported CUDA resource query: "
@@ -10039,11 +10040,8 @@ class TestCudaCodeGen:
             "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
         )
         assert (
-            "consume(chooseTex(), /* unsupported CUDA resource query: "
-            "metadata unavailable for sampler2D argument tex */ "
-            "CglResourceQueryInfo{}, chooseImage(), /* unsupported CUDA "
-            "resource query: metadata unavailable for image2D argument img */ "
-            "CglResourceQueryInfo{});" in cuda_code
+            "consume(chooseTex(), colorMap_metadata, chooseImage(), "
+            "imageMap_metadata);" in cuda_code
         )
         assert (
             "consume(bundle.tex, /* unsupported CUDA resource query: "
@@ -10062,6 +10060,96 @@ class TestCudaCodeGen:
         assert "consume(chooseTex(), chooseImage());" not in cuda_code
         assert "consume(bundle.tex, bundle.img);" not in cuda_code
         assert "consume(chooseBundle().tex, chooseBundle().img);" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_simple_returned_resources_forward_cuda_metadata(self):
+        """Test CUDA query sidecars follow directly returned resources."""
+        source_code = """
+        shader ReturnedResourceQueries {
+            sampler2d colorMap;
+            image2D imageMap;
+            sampler2d textures[2];
+            image2D images[2];
+
+            sampler2d chooseGlobalTex() {
+                return colorMap;
+            }
+
+            image2D chooseGlobalImage() {
+                return imageMap;
+            }
+
+            sampler2d chooseParamTex(sampler2d tex) {
+                return tex;
+            }
+
+            image2D chooseParamImage(image2D img) {
+                return img;
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(int slot) {
+                    sampler2d aliasTex = chooseParamTex(textures[slot]);
+                    image2D aliasImage = chooseParamImage(images[slot]);
+                    ivec2 directGlobalTexSize = textureSize(chooseGlobalTex(), 0);
+                    int directGlobalLevels = textureQueryLevels(chooseGlobalTex());
+                    ivec2 directGlobalImageSize = imageSize(chooseGlobalImage());
+                    ivec2 aliasTexSize = textureSize(aliasTex, 0);
+                    ivec2 aliasImageSize = imageSize(aliasImage);
+                    consume(chooseParamTex(textures[slot]), chooseParamImage(images[slot]));
+                    consume(chooseGlobalTex(), chooseGlobalImage());
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textures_metadata[2] = {};" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[2] = {};" in cuda_code
+        assert (
+            "int2 directGlobalTexSize = cgl_textureSize_sampler2D"
+            "(colorMap_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int directGlobalLevels = cgl_textureQueryLevels_sampler2D"
+            "(colorMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 directGlobalImageSize = cgl_imageSize_image2D"
+            "(imageMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 aliasTexSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int2 aliasImageSize = cgl_imageSize_image2D"
+            "(images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "consume(chooseParamTex(textures[slot]), textures_metadata[slot], "
+            "chooseParamImage(images[slot]), images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "consume(chooseGlobalTex(), colorMap_metadata, chooseGlobalImage(), "
+            "imageMap_metadata);" in cuda_code
+        )
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "metadata unavailable for image2D argument img" not in cuda_code
         assert "textureSize(" not in cuda_code
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code

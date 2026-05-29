@@ -3107,16 +3107,33 @@ class RustCodeGen:
         )
 
     def match_arm_body_terminates(self, body):
+        return self.statement_body_terminates(body)
+
+    def statement_body_terminates(self, body):
         statements = self.statement_list(body)
         if not statements:
             return False
 
         tail = statements[-1]
+        return self.statement_terminates(tail)
+
+    def statement_terminates(self, tail):
         if isinstance(tail, ReturnNode):
             return True
         if isinstance(tail, MatchNode):
             return self.match_statement_terminates_all_arms(tail)
+        if isinstance(tail, IfNode):
+            return self.if_statement_terminates_all_paths(tail)
         return False
+
+    def if_statement_terminates_all_paths(self, node):
+        then_branch = getattr(node, "then_branch", getattr(node, "if_body", None))
+        else_branch = getattr(node, "else_branch", getattr(node, "else_body", None))
+        if else_branch is None:
+            return False
+        return self.statement_body_terminates(
+            then_branch
+        ) and self.statement_body_terminates(else_branch)
 
     def generate_match_expression(
         self,

@@ -8272,8 +8272,10 @@ class SlangCodeGen:
             )
             if coord_reason:
                 return self.unsupported_sampled_texture_call(func_name, coord_reason)
-            fetch_index_reason = self.scalar_texture_argument_rank_unsupported_reason(
-                extra_args[0], "fetch index argument"
+            fetch_index_reason = (
+                self.scalar_integer_texture_argument_unsupported_reason(
+                    extra_args[0], "fetch index argument"
+                )
             )
             if fetch_index_reason:
                 return self.unsupported_sampled_texture_call(
@@ -9106,6 +9108,17 @@ class SlangCodeGen:
         if actual_rank is None or actual_rank == 1:
             return None
         return f"requires {self.texture_rank_phrase(1, role)}"
+
+    def scalar_integer_texture_argument_unsupported_reason(self, node, role):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"int", "uint"}:
+            return None
+
+        return f"{role} must be scalar int or uint, got {mapped_type}"
 
     def texture_rank_unsupported_reason(
         self, node, expected_rank, resource_type, role, array_element=False

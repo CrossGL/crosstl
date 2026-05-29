@@ -324,6 +324,57 @@ def test_braced_struct_constructors_zero_fill_nested_struct_and_array_fields():
     )
 
 
+def _braced_struct_matrix_and_array_struct_zero_fill_source():
+    return """
+    struct Leaf {
+        float weight;
+        float2 offset;
+    };
+
+    struct MatrixBundle {
+        mat2 transform;
+        Leaf leaves[2];
+        float scalar;
+    };
+
+    MatrixBundle makeMatrixBundle() {
+        return MatrixBundle { scalar: 7.0 };
+    }
+
+    MatrixBundle makePartialLeaves() {
+        return MatrixBundle { leaves: { Leaf { weight: 3.0 } } };
+    }
+    """
+
+
+def test_braced_struct_constructors_zero_fill_matrix_and_array_struct_fields():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_braced_struct_matrix_and_array_struct_zero_fill_source())
+        )
+    )
+
+    matrix_zero = (
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 0.0))"
+    )
+    leaf_zero = "Leaf(0.0, SIMD[DType.float32, 2](0.0, 0.0))"
+    leaf_partial = "Leaf(weight=3.0, offset=SIMD[DType.float32, 2](0.0, 0.0))"
+
+    assert (
+        f"return MatrixBundle(transform={matrix_zero}, "
+        f"leaves=InlineArray[Leaf, 2]({leaf_zero}, {leaf_zero}), scalar=7.0)"
+        in generated_code
+    )
+    assert (
+        f"return MatrixBundle(transform={matrix_zero}, "
+        f"leaves=InlineArray[Leaf, 2]({leaf_partial}, {leaf_zero}), scalar=0.0)"
+        in generated_code
+    )
+    assert "MatrixBundle(scalar=7.0)" not in generated_code
+    assert "leaves=InlineArray[Leaf, 2](Leaf(weight=3.0))" not in generated_code
+
+
 def test_braced_struct_positional_missing_fields_zero_fill_direct_ast():
     codegen = MojoCodeGen()
     codegen.struct_types["Pair"] = {"x": "float", "y": "float"}
@@ -412,6 +463,38 @@ fn main():
     assert "17.0" in result.stdout
     assert "5.0" in result.stdout
     assert "1.0" in result.stdout
+
+
+def test_braced_struct_matrix_and_array_struct_zero_fill_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_braced_struct_matrix_and_array_struct_zero_fill_source())
+        )
+    )
+    generated_code += """
+fn main():
+    print(makeMatrixBundle().transform.c0)
+    print(makeMatrixBundle().leaves[1].offset)
+    print(makeMatrixBundle().scalar)
+    print(makePartialLeaves().leaves[0].weight)
+    print(makePartialLeaves().leaves[1].weight)
+"""
+
+    source_path = tmp_path / "braced_struct_matrix_array_zero_fill.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0.0, 0.0]" in result.stdout
+    assert "7.0" in result.stdout
+    assert "3.0" in result.stdout
 
 
 def test_unit_enums_lower_to_mojo_aliases():

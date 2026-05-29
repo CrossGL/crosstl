@@ -73,6 +73,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_metadata_function_params = {}
         self.query_functions_by_name = {}
         self.query_metadata_aliases = {}
+        self.query_return_sources = {}
         self.query_local_resource_names_by_function = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
@@ -108,6 +109,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
+        self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
         self.resource_query_info_required = False
         (
@@ -2957,6 +2959,56 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return local_names, alias_sources
 
+    def collect_simple_query_return_sources(self, root):
+        """Collect direct resource returns that can reuse caller-side metadata."""
+        return_sources = {}
+        functions = self.query_collect_functions(root)
+        global_resource_names = {
+            getattr(var, "name", None)
+            for var in getattr(root, "global_variables", [])
+            if self.is_queryable_resource_type(self.get_variable_node_type(var))
+        }
+        global_resource_names = {name for name in global_resource_names if name}
+
+        for func in functions:
+            func_name = getattr(func, "name", None)
+            return_type = getattr(func, "return_type", None)
+            if not func_name or not self.is_queryable_resource_type(return_type):
+                continue
+
+            statements = self.statement_list(getattr(func, "body", []))
+            if len(statements) != 1 or not isinstance(statements[0], ReturnNode):
+                continue
+
+            return_expr = getattr(statements[0], "value", None)
+            if not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
+                continue
+            return_name = self.get_expression_name(return_expr)
+            if not return_name:
+                continue
+
+            params = getattr(func, "parameters", getattr(func, "params", []))
+            param_indices = {
+                getattr(param, "name", None): index
+                for index, param in enumerate(params)
+                if self.is_queryable_resource_type(self.get_parameter_type(param))
+            }
+            param_indices = {
+                name: index for name, index in param_indices.items() if name
+            }
+            if return_name in param_indices:
+                return_sources[func_name] = {
+                    "kind": "parameter",
+                    "index": param_indices[return_name],
+                }
+            elif return_name in global_resource_names:
+                return_sources[func_name] = {
+                    "kind": "global",
+                    "name": return_name,
+                }
+
+        return return_sources
+
     def collect_resource_query_requirements(self, node):
         """Collect query metadata needs, resolving local CUDA resource aliases."""
         global_names, function_params = (
@@ -2997,6 +3049,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         def mark_resolved_resource(func_name, resource_expr, visited=None):
             if visited is None:
                 visited = set()
+            if isinstance(resource_expr, FunctionCallNode):
+                callee_name = self.raw_function_call_name(resource_expr)
+                return_source = self.query_return_sources.get(callee_name)
+                if return_source is None:
+                    return False
+                if return_source["kind"] == "global":
+                    before = len(global_names)
+                    global_names.add(return_source["name"])
+                    return len(global_names) != before
+                raw_args = getattr(
+                    resource_expr,
+                    "arguments",
+                    getattr(resource_expr, "args", []),
+                )
+                index = return_source["index"]
+                if index >= len(raw_args):
+                    return False
+                return mark_resolved_resource(func_name, raw_args[index], visited)
+
             resource_name = self.get_expression_name(resource_expr)
             if not resource_name:
                 return False
@@ -3093,6 +3164,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def query_metadata_expression(self, resource_expr):
         """Return CUDA query metadata paired with a resource expression."""
+        if isinstance(resource_expr, FunctionCallNode):
+            callee_name = self.raw_function_call_name(resource_expr)
+            return_source = self.query_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            if return_source["kind"] == "global":
+                return self.query_metadata_name(return_source["name"])
+            raw_args = getattr(
+                resource_expr,
+                "arguments",
+                getattr(resource_expr, "args", []),
+            )
+            index = return_source["index"]
+            if index >= len(raw_args):
+                return None
+            return self.query_metadata_expression(raw_args[index])
+
         if isinstance(resource_expr, ArrayAccessNode):
             array_node = getattr(
                 resource_expr,

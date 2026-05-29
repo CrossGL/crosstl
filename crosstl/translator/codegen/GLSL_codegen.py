@@ -195,6 +195,7 @@ from .image_access_contracts import (
     is_texture_sampling_operation,
     is_texture_sample_offset_operation,
     is_two_component_image_format,
+    normalized_image_access,
     numeric_component_count_from_type,
     numeric_component_kind_from_type,
     numeric_expression_component_count,
@@ -11592,6 +11593,8 @@ class GLSLCodeGen:
             "writeonly",
         }
         qualifiers = set()
+        access_choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, access_choices)
 
         for qualifier in getattr(node, "qualifiers", []) or []:
             qualifier = str(qualifier).lower()
@@ -11606,11 +11609,57 @@ class GLSLCodeGen:
             if attr_name in supported:
                 qualifiers.add(attr_name)
 
+        for _, access in access_choices:
+            if access == "read":
+                qualifiers.add("readonly")
+            elif access == "write":
+                qualifiers.add("writeonly")
+
         if "globallycoherent" in qualifiers:
             qualifiers.add("coherent")
 
         order = ("coherent", "volatile", "restrict", "readonly", "writeonly")
         return " ".join(qualifier for qualifier in order if qualifier in qualifiers)
+
+    def resource_access_metadata_choices(self, node):
+        choices = []
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            source = str(qualifier).lower()
+            access = normalized_image_access(source)
+            if access is not None:
+                choices.append((source, access))
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                source = self.attribute_value_to_string(arguments[0])
+                access = normalized_image_access(source)
+                if access is not None:
+                    choices.append((f"access({source})", access))
+                continue
+
+            access = normalized_image_access(attr_name)
+            if access is not None:
+                choices.append((attr_name, access))
+        return choices
+
+    def validate_resource_access_metadata_consistency(self, node, choices):
+        if not choices:
+            return
+        first_source, first_access = choices[0]
+        node_name = self.resource_node_name(node, "<unnamed>")
+        for source, access in choices[1:]:
+            if access != first_access:
+                raise ValueError(
+                    "Conflicting OpenGL resource access metadata for "
+                    f"'{node_name}': {first_source} differs from {source}"
+                )
 
     def map_operator(self, op):
         op_map = {

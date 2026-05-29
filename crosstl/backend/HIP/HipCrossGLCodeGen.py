@@ -1695,6 +1695,20 @@ class HipToCrossGLConverter:
             if len(args) >= 4:
                 link_type_output = self.format_runtime_pointer_target(node.args[2])
                 hop_count_output = self.format_runtime_pointer_target(node.args[3])
+                link_type_output_name = self.get_runtime_pointer_target_name(
+                    node.args[2]
+                )
+                hop_count_output_name = self.get_runtime_pointer_target_name(
+                    node.args[3]
+                )
+                if link_type_output_name is not None:
+                    self.register_device_query_source(
+                        link_type_output_name, f"linkType({args[0]}, {args[1]})"
+                    )
+                if hop_count_output_name is not None:
+                    self.register_device_query_source(
+                        hop_count_output_name, f"hopCount({args[0]}, {args[1]})"
+                    )
                 return [
                     f"// HIP get link type and hop count: device 1: {args[0]}, "
                     f"device 2: {args[1]}, link type output: {link_type_output}, "
@@ -2588,12 +2602,22 @@ class HipToCrossGLConverter:
         if name == "hipDeviceGet":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(raw_args[0])
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"deviceHandle({args[1]})"
+                    )
                 return [
                     f"// HIP get device handle: output: {output}, ordinal: {args[1]}"
                 ]
         if name == "hipDeviceCanAccessPeer":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(raw_args[0])
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"canAccessPeer({args[1]}, {args[2]})"
+                    )
                 return [
                     f"// HIP device can access peer: output: {output}, "
                     f"device: {args[1]}, peer device: {args[2]}"
@@ -2601,6 +2625,12 @@ class HipToCrossGLConverter:
         if name == "hipDeviceGetP2PAttribute":
             if len(args) >= 4:
                 output = self.format_runtime_pointer_target(raw_args[0])
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"p2pAttribute.{args[1]}({args[2]}, {args[3]})",
+                    )
                 return [
                     f"// HIP get P2P attribute: output: {output}, "
                     f"attribute: {args[1]}, source device: {args[2]}, "
