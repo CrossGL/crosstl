@@ -11334,6 +11334,18 @@ class GLSLCodeGen:
                 return int(raw_value[len(prefix) :])
         return None
 
+    def invalid_resource_binding_message(self, node, attr_name, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        if attr_name == "register":
+            requirement = "must use b/s/t/u register syntax or an integer binding"
+        else:
+            requirement = "must resolve to a concrete integer binding"
+        return (
+            "Invalid OpenGL resource binding metadata for "
+            f"'{node_name}': {attr_name} {source} {requirement}"
+        )
+
     def explicit_resource_binding_choices(self, node):
         choices = []
         if not hasattr(node, "attributes"):
@@ -11351,8 +11363,11 @@ class GLSLCodeGen:
                 binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
             else:
                 continue
-            if binding is not None:
-                choices.append((attr_name, source, binding))
+            if binding is None:
+                raise ValueError(
+                    self.invalid_resource_binding_message(node, attr_name, source)
+                )
+            choices.append((attr_name, source, binding))
         return choices
 
     def explicit_resource_binding_choice_description(self, attr_name, source, binding):

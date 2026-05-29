@@ -1110,6 +1110,91 @@ def test_glsl_resource_binding_aliases_reject_conflicting_metadata(code, message
         GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
 
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            """
+            shader InvalidTextureBindingOperand {
+                sampler2D tex @binding(slot);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "binding slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidTextureRegisterOperand {
+                sampler2D tex @register(q2);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "register q2 must use b/s/t/u register syntax or an integer binding",
+        ),
+        (
+            """
+            shader InvalidCBufferBindingOperand {
+                cbuffer Constants @binding(slot) {
+                    vec4 tint;
+                };
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return tint;
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'Constants': "
+            "binding slot must resolve to a concrete integer binding",
+        ),
+        (
+            """
+            shader InvalidStructuredBufferRegisterOperand {
+                RWStructuredBuffer<int> values @register(q4);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(float(buffer_load(values, 0)));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'values': "
+            "register q4 must use b/s/t/u register syntax or an integer binding",
+        ),
+        (
+            """
+            shader InvalidStageResourceBindingOperand {
+                fragment {
+                    vec4 main(sampler2D tex @texture(slot)) @gl_FragColor {
+                        return texture(tex, vec2(0.0));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource binding metadata for 'tex': "
+            "texture slot must resolve to a concrete integer binding",
+        ),
+    ],
+)
+def test_glsl_resource_binding_operands_reject_non_integer_metadata(code, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_glsl_stage_local_resources_emit_global_layout_bindings():
     code = """
     shader StageLocalResourcesGLSL {

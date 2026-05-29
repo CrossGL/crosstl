@@ -5086,6 +5086,11 @@ class SlangCodeGen:
             tail_return = self.generate_tail_expression_statement(node)
             if tail_return is not None:
                 return tail_return
+            synchronization_statement = self.generate_slang_synchronization_statement(
+                node.expression
+            )
+            if synchronization_statement is not None:
+                return synchronization_statement
             prelude, result_names, expr = self.generate_expression_with_prelude(
                 node.expression
             )
@@ -5112,6 +5117,11 @@ class SlangCodeGen:
         elif isinstance(node, ContinueNode):
             return "continue;"
         else:
+            synchronization_statement = self.generate_slang_synchronization_statement(
+                node
+            )
+            if synchronization_statement is not None:
+                return synchronization_statement
             prelude, result_names, expr = self.generate_expression_with_prelude(node)
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
@@ -5799,7 +5809,7 @@ class SlangCodeGen:
             else:
                 callee = self.generate_expression(func_expr)
             synchronization_call = self.generate_slang_synchronization_call(
-                callee, node.args
+                callee, node.args, statement_context=False
             )
             if synchronization_call is not None:
                 return synchronization_call
@@ -5876,7 +5886,31 @@ class SlangCodeGen:
         else:
             return str(node)
 
-    def generate_slang_synchronization_call(self, callee, args):
+    def function_call_simple_callee_name(self, node):
+        if not isinstance(node, FunctionCallNode):
+            return None
+
+        func_expr = getattr(node, "function", None)
+        if func_expr is None:
+            func_expr = getattr(node, "name", None)
+        if hasattr(func_expr, "name") and getattr(func_expr, "name", None):
+            return func_expr.name
+        if isinstance(func_expr, str):
+            return func_expr
+        return None
+
+    def generate_slang_synchronization_statement(self, node):
+        callee = self.function_call_simple_callee_name(node)
+        call = self.generate_slang_synchronization_call(
+            callee, getattr(node, "args", []), statement_context=True
+        )
+        if call is None:
+            return None
+        return f"{call};"
+
+    def generate_slang_synchronization_call(
+        self, callee, args, statement_context=False
+    ):
         if not isinstance(callee, str) or callee in self.user_function_names:
             return None
 
@@ -5887,6 +5921,11 @@ class SlangCodeGen:
             raise ValueError(
                 f"Slang synchronization builtin '{callee}' requires 0 "
                 f"argument(s), got {len(args)}"
+            )
+        if not statement_context:
+            raise ValueError(
+                f"Slang synchronization builtin '{callee}' is statement-only "
+                "and cannot be used as a value"
             )
         return f"{intrinsic}()"
 

@@ -9835,6 +9835,128 @@ class TestCudaCodeGen:
         assert "cgl_imageSize_image1DArray(lineImages_metadata)" not in cuda_code
         assert "cgl_imageSize_imageCubeArray(cubeImages_metadata)" not in cuda_code
 
+    def test_resource_query_local_aliases_forward_cuda_metadata(self):
+        """Test CUDA resource query sidecars follow local resource aliases."""
+        source_code = """
+        shader ResourceQueryAliases {
+            sampler2d colorMap;
+            sampler2d textures[2];
+            image2D images[2];
+
+            void consumeAlias(sampler2d tex, image2D img) {
+                ivec2 consumedTexSize = textureSize(tex, 0);
+                ivec2 consumedImageSize = imageSize(img);
+            }
+
+            void queryParamAliases(
+                sampler2d paramTex,
+                sampler2d paramTextures[2],
+                image2D paramImages[2],
+                int i
+            ) {
+                sampler2d paramAlias = paramTex;
+                sampler2d paramElementAlias = paramTextures[i];
+                image2D paramImageAlias = paramImages[i];
+                ivec2 paramSize = textureSize(paramAlias, 0);
+                int paramLevels = textureQueryLevels(paramAlias);
+                ivec2 paramElementSize = textureSize(paramElementAlias, 0);
+                ivec2 paramImageSize = imageSize(paramImageAlias);
+            }
+
+            compute {
+                void main(int slot) {
+                    sampler2d texAlias = colorMap;
+                    sampler2d texElementAlias = textures[slot];
+                    image2D imageElementAlias = images[slot];
+                    ivec2 aliasSize = textureSize(texAlias, 0);
+                    int aliasLevels = textureQueryLevels(texAlias);
+                    ivec2 elementSize = textureSize(texElementAlias, 0);
+                    ivec2 imageSizeValue = imageSize(imageElementAlias);
+                    sampler2d detachedTex;
+                    ivec2 detachedSize = textureSize(detachedTex, 0);
+                    consumeAlias(texAlias, imageElementAlias);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textures_metadata[2] = {};" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[2] = {};" in cuda_code
+        assert (
+            "__device__ void consumeAlias(texture<float4, 2> tex, "
+            "CglResourceQueryInfo tex_metadata, cudaSurfaceObject_t img, "
+            "CglResourceQueryInfo img_metadata)" in cuda_code
+        )
+        assert (
+            "__device__ void queryParamAliases(texture<float4, 2> paramTex, "
+            "CglResourceQueryInfo paramTex_metadata, "
+            "texture<float4, 2> paramTextures[2], "
+            "CglResourceQueryInfo paramTextures_metadata[2], "
+            "cudaSurfaceObject_t paramImages[2], "
+            "CglResourceQueryInfo paramImages_metadata[2], int i)" in cuda_code
+        )
+        assert (
+            "int2 paramSize = cgl_textureSize_sampler2D(paramTex_metadata, 0);"
+            in cuda_code
+        )
+        assert (
+            "int paramLevels = cgl_textureQueryLevels_sampler2D(paramTex_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int2 paramElementSize = cgl_textureSize_sampler2D"
+            "(paramTextures_metadata[i], 0);" in cuda_code
+        )
+        assert (
+            "int2 paramImageSize = cgl_imageSize_image2D"
+            "(paramImages_metadata[i]);" in cuda_code
+        )
+        assert (
+            "int2 aliasSize = cgl_textureSize_sampler2D(colorMap_metadata, 0);"
+            in cuda_code
+        )
+        assert (
+            "int aliasLevels = cgl_textureQueryLevels_sampler2D(colorMap_metadata);"
+            in cuda_code
+        )
+        assert (
+            "int2 elementSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int2 imageSizeValue = cgl_imageSize_image2D(images_metadata[slot]);"
+            in cuda_code
+        )
+        assert (
+            "int2 detachedSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "consumeAlias(texAlias, colorMap_metadata, imageElementAlias, "
+            "images_metadata[slot]);" in cuda_code
+        )
+        for alias_name in (
+            "texAlias_metadata",
+            "texElementAlias_metadata",
+            "imageElementAlias_metadata",
+            "paramAlias_metadata",
+            "paramElementAlias_metadata",
+            "paramImageAlias_metadata",
+            "detachedTex_metadata",
+        ):
+            assert alias_name not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

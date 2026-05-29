@@ -2544,6 +2544,86 @@ def test_synchronization_intrinsics_reject_arguments(builtin_name):
         generate_code(parse_code(tokenize_code(code)))
 
 
+@pytest.mark.parametrize(
+    "builtin_name",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "deviceMemoryBarrier",
+        "memoryBarrierImage",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_synchronization_intrinsics_reject_value_contexts(builtin_name):
+    code = f"""
+    shader InvalidSlangSynchronizationValue {{
+        compute {{
+            void main() {{
+                int value = {builtin_name}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"Slang synchronization builtin '{builtin_name}' is "
+            r"statement-only and cannot be used as a value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_synchronization_intrinsics_reject_condition_contexts():
+    code = """
+    shader InvalidSlangSynchronizationCondition {
+        compute {
+            void main() {
+                if (memoryBarrier()) {
+                    return;
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Slang synchronization builtin 'memoryBarrier' is "
+            "statement-only and cannot be used as a value"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_user_defined_synchronization_names_can_return_values():
+    code = """
+    shader UserDefinedSlangSynchronizationValue {
+        compute {
+            int barrier() {
+                return 7;
+            }
+
+            void main() {
+                int value = barrier();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int barrier()" in generated_code
+    assert "int value = barrier();" in generated_code
+    assert "GroupMemoryBarrier" not in generated_code
+
+
 def test_threadgroup_memory_qualifiers_emit_slang_groupshared():
     code = """
     shader SharedMemoryQualifiers {

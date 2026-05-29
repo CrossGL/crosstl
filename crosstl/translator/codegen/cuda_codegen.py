@@ -72,6 +72,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
         self.query_functions_by_name = {}
+        self.query_metadata_aliases = {}
+        self.query_local_resource_names_by_function = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
@@ -105,6 +107,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.struct_member_image_accesses = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
+        self.query_metadata_aliases = {}
+        self.query_local_resource_names_by_function = {}
         self.resource_query_info_required = False
         (
             self.query_resource_names,
@@ -252,12 +256,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_query_metadata_aliases = self.query_metadata_aliases
         saved_current_function_name = self.current_function_name
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
         self.current_function_name = node.name
         self.current_structured_buffer_length_parameters = {}
+        self.query_metadata_aliases = {}
         qualifiers = []
 
         if hasattr(node, "qualifiers") and node.qualifiers:
@@ -327,6 +333,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("}")
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.query_metadata_aliases = saved_query_metadata_aliases
         self.current_function_name = saved_current_function_name
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -390,10 +397,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 inferred_type or "auto",
                 source_node=initial_value,
             )
+            self.register_query_metadata_alias(
+                node.name,
+                inferred_type or "auto",
+                initial_value,
+            )
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
             self.register_variable_type(node.name, var_type, node, initial_value)
+            self.register_query_metadata_alias(node.name, var_type, initial_value)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -2900,6 +2913,213 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
         dimensions, mip, samples = spec
         return {"dimensions": dimensions, "mip": mip, "samples": samples}
+
+    def is_queryable_resource_type(self, type_name):
+        """Return whether a resource type can use CUDA query metadata."""
+        if type_name is None:
+            return False
+        resource_type = self.resource_base_type(self.query_type_name(type_name))
+        return self.dimension_query_spec(resource_type) is not None
+
+    def collect_function_resource_aliases(self, func):
+        """Collect local queryable resource declarations and initializers."""
+        local_names = set()
+        alias_sources = {}
+        body = getattr(func, "body", [])
+
+        for node in self.query_walk_nodes(body):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            var_type = self.get_variable_node_type(node)
+            if not name or not self.is_queryable_resource_type(var_type):
+                continue
+            local_names.add(name)
+            initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+            if initial_value is not None:
+                alias_sources[name] = initial_value
+
+        return local_names, alias_sources
+
+    def collect_resource_query_requirements(self, node):
+        """Collect query metadata needs, resolving local CUDA resource aliases."""
+        global_names, function_params = (
+            ResourceQueryMixin.collect_resource_query_requirements(self, node)
+        )
+
+        functions = self.query_collect_functions(node)
+        functions_by_name = {getattr(func, "name", None): func for func in functions}
+        functions_by_name = {
+            name: func for name, func in functions_by_name.items() if name
+        }
+        function_parameter_names = {
+            func_name: {
+                getattr(param, "name", None)
+                for param in getattr(func, "parameters", getattr(func, "params", []))
+            }
+            for func_name, func in functions_by_name.items()
+        }
+        function_parameter_names = {
+            func_name: {name for name in names if name}
+            for func_name, names in function_parameter_names.items()
+        }
+
+        local_resource_names = {}
+        local_alias_sources = {}
+        for func_name, func in functions_by_name.items():
+            names, aliases = self.collect_function_resource_aliases(func)
+            local_resource_names[func_name] = names
+            local_alias_sources[func_name] = aliases
+
+        global_resource_names = {
+            getattr(var, "name", None)
+            for var in getattr(node, "global_variables", [])
+            if self.is_queryable_resource_type(self.get_variable_node_type(var))
+        }
+        global_resource_names = {name for name in global_resource_names if name}
+
+        def mark_resolved_resource(func_name, resource_expr, visited=None):
+            if visited is None:
+                visited = set()
+            resource_name = self.get_expression_name(resource_expr)
+            if not resource_name:
+                return False
+            if resource_name in visited:
+                return False
+            visited.add(resource_name)
+
+            aliases = local_alias_sources.get(func_name, {})
+            if resource_name in aliases:
+                return mark_resolved_resource(
+                    func_name,
+                    aliases[resource_name],
+                    visited,
+                )
+
+            if resource_name in local_resource_names.get(func_name, set()):
+                return False
+
+            if resource_name in function_parameter_names.get(func_name, set()):
+                before = len(function_params.setdefault(func_name, set()))
+                function_params[func_name].add(resource_name)
+                return len(function_params[func_name]) != before
+
+            before = len(global_names)
+            global_names.add(resource_name)
+            return len(global_names) != before
+
+        for func_name, func in functions_by_name.items():
+            for call in self.query_walk_nodes(getattr(func, "body", [])):
+                if not isinstance(call, FunctionCallNode):
+                    continue
+                func_call_name = self.raw_function_call_name(call)
+                raw_args = getattr(call, "arguments", getattr(call, "args", []))
+                if func_call_name in self.query_function_names and raw_args:
+                    mark_resolved_resource(func_name, raw_args[0])
+
+        changed = True
+        while changed:
+            changed = False
+            for caller_name, caller in functions_by_name.items():
+                for call in self.query_walk_nodes(getattr(caller, "body", [])):
+                    if not isinstance(call, FunctionCallNode):
+                        continue
+                    callee_name = self.raw_function_call_name(call)
+                    callee = functions_by_name.get(callee_name)
+                    if callee is None:
+                        continue
+
+                    callee_required = function_params.get(callee_name, set())
+                    if not callee_required:
+                        continue
+
+                    callee_params = getattr(
+                        callee, "parameters", getattr(callee, "params", [])
+                    )
+                    raw_args = getattr(call, "arguments", getattr(call, "args", []))
+                    for index, param in enumerate(callee_params):
+                        if index >= len(raw_args):
+                            continue
+                        param_name = getattr(param, "name", None)
+                        if param_name not in callee_required:
+                            continue
+                        changed = (
+                            mark_resolved_resource(caller_name, raw_args[index])
+                            or changed
+                        )
+
+        for names in local_resource_names.values():
+            global_names.difference_update(names - global_resource_names)
+
+        self.query_local_resource_names_by_function = {
+            func_name: names
+            for func_name, names in local_resource_names.items()
+            if names
+        }
+        return (
+            global_names,
+            {func_name: names for func_name, names in function_params.items() if names},
+        )
+
+    def register_query_metadata_alias(self, name, type_name, source_node=None):
+        """Track local resource aliases that can reuse an existing metadata sidecar."""
+        if not self.current_function_name or not name:
+            return
+        if not self.is_queryable_resource_type(type_name) or source_node is None:
+            self.query_metadata_aliases.pop(name, None)
+            return
+
+        metadata_expr = self.query_metadata_expression(source_node)
+        if metadata_expr is None:
+            self.query_metadata_aliases.pop(name, None)
+            return
+        self.query_metadata_aliases[name] = metadata_expr
+
+    def query_metadata_expression(self, resource_expr):
+        """Return CUDA query metadata paired with a resource expression."""
+        if isinstance(resource_expr, ArrayAccessNode):
+            array_node = getattr(
+                resource_expr,
+                "array_expr",
+                getattr(resource_expr, "array", None),
+            )
+            index_node = getattr(
+                resource_expr,
+                "index_expr",
+                getattr(resource_expr, "index", None),
+            )
+            base_expr = self.query_metadata_expression(array_node)
+            if base_expr is None or index_node is None:
+                return None
+            return f"{base_expr}[{self.visit(index_node)}]"
+
+        resource_name = self.get_expression_name(resource_expr)
+        if not resource_name:
+            return None
+
+        alias_expr = self.query_metadata_aliases.get(resource_name)
+        if alias_expr is not None:
+            return alias_expr
+
+        current_function = self.current_function_name
+        local_names = self.query_local_resource_names_by_function.get(
+            current_function,
+            set(),
+        )
+        if resource_name in local_names:
+            return None
+
+        if current_function:
+            query_params = self.query_metadata_function_params.get(
+                current_function,
+                set(),
+            )
+            if resource_name in query_params:
+                return self.query_metadata_name(resource_name)
+
+        if resource_name in self.query_resource_names:
+            return self.query_metadata_name(resource_name)
+        return None
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""
