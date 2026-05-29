@@ -7820,6 +7820,16 @@ class SlangCodeGen:
             )
 
         intrinsic, value_arg_count = operation
+        target_reason = self.atomic_result_expected_type_unsupported_reason(
+            func_name, result_type
+        )
+        if target_reason:
+            return diagnostic(
+                func_name,
+                target_reason,
+                self.atomic_result_diagnostic_fallback_type(result_type),
+            )
+
         expression_args = 1 + value_arg_count
         explicit_result_args = expression_args + 1
         if len(args) == expression_args:
@@ -7861,6 +7871,28 @@ class SlangCodeGen:
             f"/* unsupported Slang byte-address buffer: {operation} {reason} */ "
             f"{self.zero_value_for_type(result_type)}"
         )
+
+    def atomic_result_expected_type(self):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type == "auto":
+            return None
+        if self.is_scalar_value_type(expected_type) or self.is_vector_value_type(
+            expected_type
+        ):
+            return expected_type
+        return None
+
+    def atomic_result_expected_type_unsupported_reason(self, operation, result_type):
+        expected_type = self.atomic_result_expected_type()
+        result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def atomic_result_diagnostic_fallback_type(self, result_type):
+        return self.atomic_result_expected_type() or result_type
 
     def zero_value_for_type(self, type_name):
         type_name = self.convert_type(type_name)
@@ -8325,7 +8357,13 @@ class SlangCodeGen:
             return None
         return f"cgl_{operation}_{suffix}"
 
-    def image_atomic_zero_value(self, image_type=None):
+    def image_atomic_zero_value(self, image_type=None, result_type=None):
+        expected_type = self.atomic_result_expected_type()
+        if expected_type:
+            return self.zero_value_for_type(expected_type)
+        if result_type:
+            return self.zero_value_for_type(result_type)
+
         element_type = self.image_resource_element_type(image_type)
         if isinstance(element_type, str) and element_type.startswith("uint"):
             return "0u"
@@ -8335,10 +8373,12 @@ class SlangCodeGen:
             return "0u"
         return "0"
 
-    def unsupported_image_atomic_call(self, operation, reason, image_type=None):
+    def unsupported_image_atomic_call(
+        self, operation, reason, image_type=None, result_type=None
+    ):
         return (
             f"/* unsupported Slang image atomic: {operation} {reason} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+            f"{self.image_atomic_zero_value(image_type, result_type)}"
         )
 
     def image_atomic_required_args_reason(self, operation):
@@ -8415,6 +8455,17 @@ class SlangCodeGen:
             )
 
         return_type = self.image_atomic_return_type(image_type)
+        target_reason = self.atomic_result_expected_type_unsupported_reason(
+            operation, return_type
+        )
+        if target_reason:
+            return self.unsupported_image_atomic_call(
+                operation,
+                target_reason,
+                image_type,
+                self.atomic_result_diagnostic_fallback_type(return_type),
+            )
+
         intrinsic = self.image_atomic_intrinsic(operation)
         value_expr = self.image_atomic_value_expression(
             operation,

@@ -7137,7 +7137,12 @@ class MetalCodeGen:
         if target_info is None:
             return None
 
-        if operator != "=":
+        compound_member_assignment = (
+            operator != "="
+            and target_info["member"] is not None
+            and target_info["role"] in {"vertices", "primitives"}
+        )
+        if operator != "=" and not compound_member_assignment:
             return self.unsupported_metal_mesh_output_assignment_diagnostic(
                 target_info, "compound mesh output assignments are not supported"
             )
@@ -7147,7 +7152,7 @@ class MetalCodeGen:
         if role == "vertices":
             if target_info["member"] is not None:
                 return self.generate_metal_mesh_single_member_output_assignment(
-                    target_info, rendered_value, "set_vertex"
+                    target_info, rendered_value, "set_vertex", operator
                 )
             value = self.metal_mesh_vertex_output_value_from_rendered(
                 value_expr, rendered_value, self.current_metal_mesh_output_config
@@ -7170,7 +7175,7 @@ class MetalCodeGen:
         if role == "primitives":
             if target_info["member"] is not None:
                 return self.generate_metal_mesh_single_member_output_assignment(
-                    target_info, rendered_value, "set_primitive"
+                    target_info, rendered_value, "set_primitive", operator
                 )
             index = self.generate_expression(index_expr)
             return (
@@ -7181,23 +7186,27 @@ class MetalCodeGen:
         return None
 
     def generate_metal_mesh_single_member_output_assignment(
-        self, target_info, rendered_value, setter
+        self, target_info, rendered_value, setter, operator="="
     ):
         output_info = target_info["output"]
         member_name = target_info["member"]
         element_type = output_info["element_type"]
         member_types = self.struct_member_types.get(element_type, {})
-        if list(member_types) != [member_name]:
+        if operator != "=" or list(member_types) != [member_name]:
             accumulator = self.metal_mesh_output_accumulator(target_info)
             if accumulator is None:
+                reason = (
+                    "compound member writes require an output accumulator"
+                    if operator != "="
+                    else "partial member writes require an output accumulator"
+                )
                 return self.unsupported_metal_mesh_output_assignment_diagnostic(
-                    target_info,
-                    "partial member writes require an output accumulator",
+                    target_info, reason
                 )
             index = self.generate_expression(target_info["index"])
             temp_name = accumulator["name"]
             return (
-                f"{temp_name}.{member_name} = {rendered_value}\n"
+                f"{temp_name}.{member_name} {operator} {rendered_value}\n"
                 f"{self.current_metal_mesh_output_parameter}"
                 f".{setter}({index}, {temp_name})"
             )
@@ -7229,7 +7238,8 @@ class MetalCodeGen:
 
             element_type = target_info["output"]["element_type"]
             member_types = self.struct_member_types.get(element_type, {})
-            if list(member_types) == [target_info["member"]]:
+            operator = getattr(node, "operator", "=")
+            if operator == "=" and list(member_types) == [target_info["member"]]:
                 continue
 
             key = self.metal_mesh_output_accumulator_key(target_info)

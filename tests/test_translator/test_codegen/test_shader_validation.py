@@ -3293,10 +3293,14 @@ shader MetalMeshOutputVariableMemberWritesValidation {
             uint primitiveIndex = 0u;
             SetMeshOutputCounts(4, 2);
             verts[vertexIndex].position = vec4(1.0, 0.0, 0.0, 1.0);
+            verts[vertexIndex].position += vec4(0.0, 1.0, 0.0, 0.0);
             verts[vertexIndex].uv = vec2(0.5, 1.0);
+            verts[vertexIndex].uv += vec2(0.25, 0.0);
             tris[primitiveIndex] = uvec3(0u, 1u, 2u);
             prims[primitiveIndex].layer = 2u;
+            prims[primitiveIndex].layer += 3u;
             prims[primitiveIndex].bary = vec2(0.25, 0.75);
+            prims[primitiveIndex].bary += vec2(0.5, 0.0);
         }
     }
 }
@@ -6897,6 +6901,15 @@ def test_generated_metal_mesh_output_variable_member_writes_compile_with_metal3(
 
     assert "MeshVertex _crossglMeshVertices_verts_vertexIndex = {};" in code
     assert "MeshPrimitive _crossglMeshPrimitives_prims_primitiveIndex = {};" in code
+    assert (
+        "_crossglMeshVertices_verts_vertexIndex.position += "
+        "float4(0.0, 1.0, 0.0, 0.0);"
+    ) in code
+    assert ("_crossglMeshVertices_verts_vertexIndex.uv += float2(0.25, 0.0);") in code
+    assert "_crossglMeshPrimitives_prims_primitiveIndex.layer += 3u;" in code
+    assert (
+        "_crossglMeshPrimitives_prims_primitiveIndex.bary += float2(0.5, 0.0);"
+    ) in code
     assert (
         "_crossglMeshOut.set_vertex(vertexIndex, "
         "_crossglMeshVertices_verts_vertexIndex);"

@@ -8714,6 +8714,263 @@ def test_loop_carried_buffer_resource_alias_access_qualifiers_for_mojo_codegen(
         generate_code(parse_code(tokenize_code(source)))
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            PayloadBox makeInputBox(readonly image2D source) {
+                return PayloadBox(source, 1);
+            }
+
+            void invalidForUpdateHelperStore(
+                int count,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                PayloadBox payload = PayloadBox(outputs[0], 0);
+                for (
+                    int i = 0;
+                    i < count;
+                    payload = makeInputBox(inputs[0])
+                ) {
+                    i++;
+                }
+                imageStore(payload.image, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            Result<PayloadBox, int> wrapInput(readonly image2D source) {
+                return Result::Ok(PayloadBox(source, 1));
+            }
+
+            Result<PayloadBox, int> wrapOutput(writeonly image2D target) {
+                return Result::Ok(PayloadBox(target, 2));
+            }
+
+            void invalidForUpdateGenericStore(
+                int count,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                Result<PayloadBox, int> value = wrapOutput(outputs[0]);
+                for (int i = 0; i < count; value = wrapInput(inputs[0])) {
+                    i++;
+                }
+                match value {
+                    Result::Ok(payload) => {
+                        imageStore(payload.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T> struct Option {
+                enum OptionType { Some(T), None }
+                OptionType variant;
+            }
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            writeonly image2D outputs[2];
+
+            Result<Option<PayloadBox>, int> wrapInput(readonly image2D source) {
+                return Result::Ok(Option::Some(PayloadBox(source, 1)));
+            }
+
+            Result<Option<PayloadBox>, int> wrapOutput(writeonly image2D target) {
+                return Result::Ok(Option::Some(PayloadBox(target, 2)));
+            }
+
+            void invalidNestedGenericStore(int count, ivec2 pixel, vec4 color) {
+                Result<Option<PayloadBox>, int> value = wrapOutput(outputs[0]);
+                for (int i = 0; i < count; value = wrapInput(inputs[0])) {
+                    i++;
+                }
+                match value {
+                    Result::Ok(Option::Some(payload)) => {
+                        imageStore(payload.image, pixel, color);
+                    }
+                    Result::Ok(Option::None) => {
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            writeonly image2D outputs[2];
+            image2D images[2];
+
+            Result<PayloadBox, int> wrapOutput(writeonly image2D target) {
+                return Result::Ok(PayloadBox(target, 1));
+            }
+
+            Result<PayloadBox, int> wrapImage(image2D image) {
+                return Result::Ok(PayloadBox(image, 2));
+            }
+
+            vec4 invalidWhileGenericRead(bool skip, int count, ivec2 pixel) {
+                Result<PayloadBox, int> value = wrapOutput(outputs[0]);
+                while (count > 0) {
+                    if (skip) {
+                        count--;
+                        continue;
+                    }
+                    value = wrapImage(images[0]);
+                    count--;
+                }
+                return match value {
+                    Result::Ok(payload) => imageLoad(payload.image, pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            Result<RWStructuredBuffer<int>, int> wrapRead(
+                readonly RWStructuredBuffer<int> source
+            ) {
+                return Result::Ok(source);
+            }
+
+            Result<RWStructuredBuffer<int>, int> wrapWrite(
+                RWStructuredBuffer<int> target
+            ) {
+                return Result::Ok(target);
+            }
+
+            void invalidForUpdateBufferStore(int count, uint index, int scalar) {
+                Result<RWStructuredBuffer<int>, int> value = wrapWrite(values);
+                for (int i = 0; i < count; value = wrapRead(readValues)) {
+                    i++;
+                }
+                match value {
+                    Result::Ok(carried) => {
+                        carried.Store(index, scalar);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+    ],
+)
+def test_loop_carried_helper_generic_resource_aliases_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_loop_carried_helper_generic_resource_aliases_remain_field_specific():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+
+    Result<ImagePair, int> wrapPair(
+        readonly image2D source,
+        writeonly image2D target
+    ) {
+        return Result::Ok(ImagePair(source, target));
+    }
+
+    vec4 readAfterLoop(int count, ivec2 pixel) {
+        Result<ImagePair, int> value = wrapPair(inputs[0], outputs[0]);
+        while (count > 0) {
+            value = wrapPair(inputs[1], outputs[1]);
+            count--;
+        }
+        return match value {
+            Result::Ok(payload) => imageLoad(payload.readable, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void writeAfterLoop(int count, ivec2 pixel, vec4 color) {
+        Result<ImagePair, int> value = wrapPair(inputs[0], outputs[0]);
+        for (int i = 0; i < count; value = wrapPair(inputs[1], outputs[1])) {
+            i++;
+        }
+        match value {
+            Result::Ok(payload) => {
+                imageStore(payload.writable, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "image_load(value.Ok_0.readable, pixel)" in generated_code
+    assert "image_store(value.Ok_0.writable, pixel, color)" in generated_code
+    assert "Result<" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;

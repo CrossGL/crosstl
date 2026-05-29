@@ -6992,6 +6992,70 @@ def test_directx_dispatch_mesh_helper_payloads_participate_in_pipeline_validatio
     assert "in payload MeshPayload payload" in generated
 
 
+def test_directx_dispatch_mesh_helper_parameter_taint_rejects_non_uniform_control_flow():
+    varying_arg_code = """
+    shader DispatchMeshHelperThreadVaryingArg {
+        void launch(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                launch(groupIndex == 0u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(varying_arg_code), "task")
+
+    nested_arg_code = """
+    shader DispatchMeshNestedHelperThreadVaryingArg {
+        void dispatchIf(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        void launch(bool shouldDispatch) {
+            dispatchIf(shouldDispatch);
+        }
+
+        task {
+            void main(uint groupThreadId @ SV_GroupThreadID) @numthreads(1, 1, 1) {
+                launch(groupThreadId == 0u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(nested_arg_code), "task")
+
+    uniform_arg_code = """
+    shader DispatchMeshHelperUniformArg {
+        void launch(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                launch(true);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_arg_code), "task"
+    )
+
+    assert "launch(true);" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
+
+
 def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
     shader = """
     shader RayPayloadStillSemantic {

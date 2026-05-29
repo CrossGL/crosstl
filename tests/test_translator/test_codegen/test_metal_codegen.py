@@ -8161,6 +8161,68 @@ def test_metal_mesh_output_variable_member_writes_use_indexed_accumulators():
     assert "unsupported Metal mesh output assignment" not in generated
 
 
+def test_metal_mesh_output_member_compound_assignments_use_accumulators():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            uint layer @ gl_PrimitiveID;
+            float coverage @ TEXCOORD1;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[2],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(2, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].position += vec4(1.0, 0.0, 0.0, 0.0);
+                verts[0].uv += vec2(0.25, 0.75);
+                prims[0].layer = 1u;
+                prims[0].layer += 2u;
+                prims[0].coverage += 0.5;
+                tris[0] = uvec3(0u, 1u, 0u);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in generated
+    assert "MeshPrimitive _crossglMeshPrimitives_prims_i_0 = {};" in generated
+    assert (
+        "_crossglMeshVertices_verts_i_0.position = " "float4(0.0, 0.0, 0.0, 1.0);"
+    ) in generated
+    assert (
+        "_crossglMeshVertices_verts_i_0.position += " "float4(1.0, 0.0, 0.0, 0.0);"
+    ) in generated
+    assert "_crossglMeshVertices_verts_i_0.uv += float2(0.25, 0.75);" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.layer = 1u;" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.layer += 2u;" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.coverage += 0.5;" in generated
+    assert (
+        generated.count(
+            "_crossglMeshOut.set_vertex(0, _crossglMeshVertices_verts_i_0);"
+        )
+        == 3
+    )
+    assert (
+        generated.count(
+            "_crossglMeshOut.set_primitive(0, _crossglMeshPrimitives_prims_i_0);"
+        )
+        == 3
+    )
+    assert "unsupported Metal mesh output assignment" not in generated
+    assert "verts[0].position +=" not in generated
+    assert "prims[0].layer +=" not in generated
+
+
 def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
     write_before_count_code = """
     shader meshpipe {

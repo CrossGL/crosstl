@@ -8757,6 +8757,68 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     assert "atomicAnd(counters" not in generated_code
 
 
+def test_structured_buffer_atomics_validate_target_result_types():
+    code = """
+    shader InvalidSlangStructuredBufferAtomicTargets {
+        RWStructuredBuffer<uint> counters @binding(24);
+        RWStructuredBuffer<int> signedCounters @binding(25);
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        uint loadOld(uint3 tid) {
+            return atomicAdd(counters[tid.x], 1u);
+        }
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint validUnsigned = atomicAdd(counters[tid.x], 1u);
+                int validSigned = atomicMin(signedCounters[tid.x], -1);
+                float scalarUnsigned = atomicAdd(counters[tid.x], 1u);
+                ivec2 vectorSigned = atomicMin(signedCounters[tid.x], -1);
+                acceptFloat(atomicExchange(counters[tid.x], 4u));
+                float scalarArray[2] = {
+                    atomicCompareExchange(counters[tid.x], 2u, 3u),
+                    1.0
+                };
+                uint stillValid = loadOld(tid);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint validUnsigned = cgl_atomicAdd_original;" in generated_code
+    assert "int validSigned = cgl_atomicMin_original;" in generated_code
+    assert "uint stillValid = loadOld(tid);" in generated_code
+    assert (
+        "float scalarUnsigned = /* unsupported Slang structured buffer: atomicAdd "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorSigned = /* unsupported Slang structured buffer: atomicMin "
+        "returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang structured buffer: atomicExchange "
+        "returns uint but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang structured buffer: "
+        "atomicCompareExchange returns uint but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert "float scalarUnsigned = cgl_atomicAdd_original" not in generated_code
+    assert "int2 vectorSigned = cgl_atomicMin_original" not in generated_code
+    assert "acceptFloat(cgl_atomicExchange_original)" not in generated_code
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicMin(signedCounters" not in generated_code
+    assert "atomicExchange(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+
+
 def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics():
     code = """
     shader SlangStructuredBufferAtomicLoopContexts {
@@ -16502,6 +16564,72 @@ def test_integer_image_atomics_emit_slang_interlocked_helpers():
         "imageAtomicCompSwap",
     ]:
         assert f"{operation}(image" not in generated_code
+
+
+def test_image_atomics_validate_target_result_types():
+    code = """
+    shader InvalidSlangImageAtomicTargets {
+        image2D counters @r32ui;
+        image2D signedCounters @r32i;
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        uint loadOld(image2D image @r32ui, ivec2 pixel) {
+            return imageAtomicAdd(image, pixel, 1u);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint validUnsigned = imageAtomicAdd(counters, pixel, 1u);
+                int validSigned = imageAtomicMin(signedCounters, pixel, -1);
+                float scalarUnsigned = imageAtomicAdd(counters, pixel, 1u);
+                uvec2 vectorUnsigned = imageAtomicExchange(counters, pixel, 4u);
+                acceptFloat(imageAtomicExchange(counters, pixel, 5u));
+                float scalarArray[2] = {
+                    imageAtomicCompSwap(counters, pixel, 2u, 3u),
+                    1.0
+                };
+                uint stillValid = loadOld(counters, pixel);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint validUnsigned = cgl_imageAtomicAdd_original;" in generated_code
+    assert "int validSigned = cgl_imageAtomicMin_original;" in generated_code
+    assert "uint stillValid = loadOld(counters, pixel);" in generated_code
+    assert (
+        "float scalarUnsigned = /* unsupported Slang image atomic: imageAtomicAdd "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "uint2 vectorUnsigned = /* unsupported Slang image atomic: "
+        "imageAtomicExchange returns uint but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang image atomic: imageAtomicExchange "
+        "returns uint but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang image atomic: "
+        "imageAtomicCompSwap returns uint but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert "float scalarUnsigned = cgl_imageAtomicAdd_original" not in generated_code
+    assert (
+        "uint2 vectorUnsigned = cgl_imageAtomicExchange_original" not in generated_code
+    )
+    assert "acceptFloat(cgl_imageAtomicExchange_original)" not in generated_code
+    assert "imageAtomicAdd(counters" not in generated_code
+    assert "imageAtomicMin(signedCounters" not in generated_code
+    assert "imageAtomicExchange(counters" not in generated_code
+    assert "imageAtomicCompSwap(counters" not in generated_code
 
 
 def test_slangc_smoke_compiles_generated_image_atomics_if_available(tmp_path):

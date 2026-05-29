@@ -6739,6 +6739,83 @@ class TestHipCodeGen:
         assert "var manualPriority: i32 = (/* HIP device query:" not in result
         assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
 
+    def test_hip_stream_capture_outputs_clear_stale_metadata(self):
+        """Test stream-capture outputs clear prior address-range metadata."""
+        code = """
+        void inspectCapture(
+            hipDeviceptr_t devicePtr,
+            hipStream_t stream,
+            unsigned long long* out
+        ) {
+            hipStreamCaptureMode mode;
+            hipStreamCaptureStatus captureStatus;
+            hipStreamCaptureStatus statusOnly;
+            unsigned long long captureId = 0;
+            size_t depCount = 0;
+            hipGraph_t graph;
+            hipGraphNode_t* deps;
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&mode, &staleSize, devicePtr);
+            hipThreadExchangeStreamCaptureMode(&mode);
+            out[0] = mode;
+
+            hipMemGetAddressRange((void**)&statusOnly, &staleSize, devicePtr);
+            hipStreamIsCapturing(stream, &statusOnly);
+            out[1] = statusOnly;
+
+            hipMemGetAddressRange((void**)&captureStatus, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&captureId, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&depCount, &staleSize, devicePtr);
+            hipStreamGetCaptureInfo_v2(
+                stream,
+                &captureStatus,
+                &captureId,
+                &graph,
+                &deps,
+                &depCount
+            );
+            out[2] = captureStatus;
+            out[3] = captureId;
+            out[4] = depCount;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP exchange stream capture mode: output: mode" in result
+        assert (
+            "// HIP stream is capturing: stream: stream, output: statusOnly" in result
+        )
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId, "
+            "graph output: graph, dependencies output: deps, "
+            "dependency count output: depCount"
+        ) in result
+        assert "out[0] = mode;" in result
+        assert (
+            "out[1] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[2] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[3] = (/* HIP device query: stream.captureId(stream) */ 0);" in result
+        )
+        assert (
+            "out[4] = (/* HIP device query: "
+            "stream.captureDependencyCount(stream) */ 0);"
+        ) in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_occupancy_output_reads_emit_metadata_expressions(self):
         """Test HIP occupancy scalar outputs lower to explicit metadata."""
         code = """

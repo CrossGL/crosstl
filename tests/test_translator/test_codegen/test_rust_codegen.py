@@ -263,6 +263,68 @@ mod math {
     matrix_constructor!(Mat4x2, _m00, _m01, _m10, _m11, _m20, _m21, _m30, _m31);
     matrix_constructor!(Mat4x3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22, _m30, _m31, _m32);
 
+    macro_rules! matrix_arithmetic {
+        ($name:ident) => {
+            impl<T> Add for $name<T> {
+                type Output = Self;
+
+                fn add(self, _rhs: Self) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Sub for $name<T> {
+                type Output = Self;
+
+                fn sub(self, _rhs: Self) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Mul<T> for $name<T> {
+                type Output = Self;
+
+                fn mul(self, _rhs: T) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Div<T> for $name<T> {
+                type Output = Self;
+
+                fn div(self, _rhs: T) -> Self::Output {
+                    self
+                }
+            }
+
+            impl Mul<$name<f32>> for f32 {
+                type Output = $name<f32>;
+
+                fn mul(self, rhs: $name<f32>) -> Self::Output {
+                    rhs
+                }
+            }
+
+            impl Mul<$name<f64>> for f64 {
+                type Output = $name<f64>;
+
+                fn mul(self, rhs: $name<f64>) -> Self::Output {
+                    rhs
+                }
+            }
+        };
+    }
+
+    matrix_arithmetic!(Mat2);
+    matrix_arithmetic!(Mat3);
+    matrix_arithmetic!(Mat4);
+    matrix_arithmetic!(Mat2x3);
+    matrix_arithmetic!(Mat2x4);
+    matrix_arithmetic!(Mat3x2);
+    matrix_arithmetic!(Mat3x4);
+    matrix_arithmetic!(Mat4x2);
+    matrix_arithmetic!(Mat4x3);
+
     pub trait Transpose {
         type Output;
 
@@ -19013,7 +19075,7 @@ def test_inferred_matrix_constructor_bindings_use_matrix_types(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
+def test_inferred_matrix_binary_bindings_prefer_matrix_operands(tmp_path):
     code = """
     void probe() {
         let leftScaled = mat2(1.0, 0.0, 0.0, 1.0) * 2.0;
@@ -19037,6 +19099,7 @@ def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
     )
     assert "let combined: Mat2<f32> = " in generated_code
     assert "let rightScaled: f32 = " not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():

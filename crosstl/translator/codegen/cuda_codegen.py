@@ -3576,12 +3576,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return_base_expr, return_indices = self.query_array_access_parts(
                 return_expr
             )
-        elif isinstance(return_expr, MemberAccessNode):
+        elif isinstance(return_expr, (MemberAccessNode, PointerAccessNode)):
             return_base_expr = return_expr
         elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
             return None
 
-        if isinstance(return_base_expr, MemberAccessNode):
+        if isinstance(return_base_expr, (MemberAccessNode, PointerAccessNode)):
             return self.query_return_member_source_descriptor(
                 return_base_expr,
                 return_indices,
@@ -3644,11 +3644,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         global_variable_types,
     ):
         """Describe a storage-image struct member returned by a helper."""
-        object_node = getattr(
-            member_expr,
-            "object_expr",
-            getattr(member_expr, "object", None),
-        )
+        if isinstance(member_expr, PointerAccessNode):
+            object_node = getattr(member_expr, "pointer_expr", None)
+        else:
+            object_node = getattr(
+                member_expr,
+                "object_expr",
+                getattr(member_expr, "object", None),
+            )
         member = getattr(member_expr, "member", None)
         member_name = getattr(member, "name", member)
         if object_node is None or not isinstance(member_name, str):
@@ -3934,6 +3937,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if object_expr is None:
                 return None
             return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = self.substitute_query_return_expr(
+                expr.pointer_expr,
+                param_indices,
+                raw_args,
+            )
+            if pointer_expr is None:
+                return None
+            return PointerAccessNode(pointer_expr, expr.member)
 
         if isinstance(expr, FunctionCallNode):
             arguments = []

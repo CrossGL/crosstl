@@ -8709,6 +8709,60 @@ class HLSLCodeGen:
         helper = (self.current_hlsl_available_functions or {}).get(helper_name)
         return self.hlsl_function_contains_dispatch_mesh(helper)
 
+    def hlsl_call_thread_varying_parameter_names(
+        self, call, callee, thread_varying_names
+    ):
+        if not thread_varying_names:
+            return set()
+
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        tainted_parameters = set()
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+            if not self.hlsl_condition_uses_thread_varying_name(
+                args[index], thread_varying_names
+            ):
+                continue
+            parameter_name = getattr(parameter, "name", None)
+            if parameter_name:
+                tainted_parameters.add(parameter_name)
+        return tainted_parameters
+
+    def validate_hlsl_dispatch_mesh_helper_parameter_control_flow(
+        self, stmt, thread_varying_names, shader_type, visited_helper_taints
+    ):
+        if not thread_varying_names:
+            return
+
+        available_functions = self.current_hlsl_available_functions or {}
+        for node in self.walk_ast(stmt):
+            if not isinstance(node, FunctionCallNode):
+                continue
+
+            helper_name = self.function_call_name(node)
+            helper = available_functions.get(helper_name)
+            if helper is None or not self.hlsl_function_contains_dispatch_mesh(helper):
+                continue
+
+            helper_thread_varying_names = self.hlsl_call_thread_varying_parameter_names(
+                node, helper, thread_varying_names
+            )
+            if not helper_thread_varying_names:
+                continue
+
+            visit_key = (id(helper), tuple(sorted(helper_thread_varying_names)))
+            if visit_key in visited_helper_taints:
+                continue
+            visited_helper_taints.add(visit_key)
+            self.validate_hlsl_dispatch_mesh_control_flow(
+                self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                helper_thread_varying_names,
+                shader_type,
+                visited_helper_taints=visited_helper_taints,
+            )
+
     def hlsl_statement_contains_direct_dispatch_mesh(self, stmt):
         return any(
             self.hlsl_expression_is_dispatch_mesh(node) for node in self.walk_ast(stmt)
@@ -8734,7 +8788,11 @@ class HLSLCodeGen:
         shader_type,
         in_loop=False,
         in_thread_varying_branch=False,
+        visited_helper_taints=None,
     ):
+        if visited_helper_taints is None:
+            visited_helper_taints = set()
+
         for stmt in statements:
             contains_dispatch_mesh = self.hlsl_statement_contains_dispatch_mesh(stmt)
             if contains_dispatch_mesh and in_loop:
@@ -8747,6 +8805,9 @@ class HLSLCodeGen:
                     f"DirectX {shader_type} DispatchMesh must not be called from "
                     "thread-varying control flow"
                 )
+            self.validate_hlsl_dispatch_mesh_helper_parameter_control_flow(
+                stmt, thread_varying_names, shader_type, visited_helper_taints
+            )
 
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
                 self.validate_hlsl_dispatch_mesh_control_flow(
@@ -8755,6 +8816,7 @@ class HLSLCodeGen:
                     shader_type,
                     in_loop,
                     in_thread_varying_branch,
+                    visited_helper_taints,
                 )
                 continue
 
@@ -8776,6 +8838,7 @@ class HLSLCodeGen:
                     shader_type,
                     in_loop,
                     branch_is_thread_varying,
+                    visited_helper_taints,
                 )
                 else_branch = getattr(
                     stmt, "else_branch", getattr(stmt, "else_body", None)
@@ -8787,6 +8850,7 @@ class HLSLCodeGen:
                         shader_type,
                         in_loop,
                         branch_is_thread_varying,
+                        visited_helper_taints,
                     )
                 continue
 
@@ -8797,6 +8861,7 @@ class HLSLCodeGen:
                     shader_type,
                     True,
                     in_thread_varying_branch,
+                    visited_helper_taints,
                 )
 
     def validate_hlsl_dispatch_mesh_placement(self, func, shader_type):

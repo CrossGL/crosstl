@@ -1752,7 +1752,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipStreamIsCapturing":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[1])
                 output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1763,8 +1763,8 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipStreamGetCaptureInfo", "hipStreamGetCaptureInfo_v2"}:
             if len(args) >= 3:
-                status_output = self.format_runtime_pointer_target(node.args[1])
-                id_output = self.format_runtime_pointer_target(node.args[2])
+                status_output = self.format_runtime_raw_output_target(node.args[1])
+                id_output = self.format_runtime_raw_output_target(node.args[2])
                 status_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 id_output_name = self.get_runtime_pointer_target_name(node.args[2])
                 if status_output_name is not None:
@@ -1784,7 +1784,7 @@ class HipToCrossGLConverter:
                     dependencies_output = self.format_runtime_raw_output_target(
                         node.args[4]
                     )
-                    count_output = self.format_runtime_pointer_target(node.args[5])
+                    count_output = self.format_runtime_raw_output_target(node.args[5])
                     count_output_name = self.get_runtime_pointer_target_name(
                         node.args[5]
                     )
@@ -3334,7 +3334,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipThreadExchangeStreamCaptureMode":
             if args:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP exchange stream capture mode: output: {output}"]
         if name == "hipGraphCreate":
             if len(args) >= 2:

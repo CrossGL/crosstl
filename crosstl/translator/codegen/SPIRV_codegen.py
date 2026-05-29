@@ -177,6 +177,7 @@ class VulkanSPIRVCodeGen:
         self.function_interface_variables = {}
         self.function_interface_variables_by_name = {}
         self.builtin_interface_variable_ids = set()
+        self.readonly_builtin_pointer_names = {}
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -684,6 +685,14 @@ class VulkanSPIRVCodeGen:
 
     def store_to_variable(self, variable_id: SpirvId, value_id: SpirvId):
         """Store a value to a variable."""
+        readonly_builtin_name = self.readonly_builtin_pointer_names.get(variable_id.id)
+        if readonly_builtin_name is not None:
+            self.emit(
+                f"; WARNING: cannot assign to read-only SPIR-V builtin "
+                f"{readonly_builtin_name}"
+            )
+            return
+
         metadata = self.storage_buffer_access_metadata_for_pointer(variable_id)
         if metadata is not None and metadata.get("readonly"):
             self.emit("; WARNING: storage buffer store requires a writable buffer")
@@ -13229,7 +13238,7 @@ class VulkanSPIRVCodeGen:
             index = self.process_expression(expr.index)
             if index is None:
                 return None
-            access, _ = self.create_array_element_access(expr.array, index)
+            access, _ = self.create_array_element_access(expr.array, index, expr.index)
             return access
         elif isinstance(expr, MemberAccessNode):
             base_pointer = self.variable_pointer_from_expression(expr.object)
@@ -13245,6 +13254,7 @@ class VulkanSPIRVCodeGen:
             or self.global_variables.get(name)
             or self.cbuffer_member_pointer(name)
             or self.ensure_compute_builtin(name)
+            or self.ensure_stage_builtin(name)
         )
 
     def array_element_type_from_type(self, array_type: Optional[SpirvId]):
@@ -13571,7 +13581,7 @@ class VulkanSPIRVCodeGen:
             self.local_variables[name] = mutable_id
             return mutable_id
 
-        return self.global_variables.get(name)
+        return self.global_variables.get(name) or self.ensure_stage_builtin(name)
 
     def assignable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
@@ -13588,6 +13598,10 @@ class VulkanSPIRVCodeGen:
         if isinstance(expr, ArrayAccessNode):
             index = self.process_expression(expr.index)
             if index is None:
+                return None
+            if not self.validate_tessellation_patch_builtin_index(
+                expr.array, index, expr.index
+            ):
                 return None
 
             array_variable = self.assignable_pointer_from_expression(expr.array)
@@ -13618,6 +13632,7 @@ class VulkanSPIRVCodeGen:
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
+            self.propagate_readonly_builtin_pointer_name(array_variable, access)
             return access
         return None
 
@@ -13629,12 +13644,69 @@ class VulkanSPIRVCodeGen:
             element_type = self.array_element_type_from_type(element_type)
         return False
 
-    def create_array_element_access(self, array_expr, index: SpirvId):
+    def tessellation_patch_builtin_size(self, name: Optional[str]) -> Optional[int]:
+        return {"gl_TessLevelOuter": 4, "gl_TessLevelInner": 2}.get(name or "")
+
+    def validate_tessellation_patch_builtin_index(
+        self, array_expr, index: SpirvId, index_expr=None
+    ) -> bool:
+        name = self.direct_expression_name(array_expr)
+        size = self.tessellation_patch_builtin_size(name)
+        if size is None:
+            return True
+
+        index_type = self.value_types.get(
+            index.id
+        ) or self.find_registered_type_by_base(index.type.base_type)
+        index_type_name = (
+            self.normalize_primitive_name(index_type.type.base_type)
+            if index_type is not None
+            else index.type.base_type
+        )
+        if index_type_name not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V tessellation patch builtin {name} component "
+                f"index requires a scalar integer value, got {index.type.base_type}"
+            )
+            return False
+
+        literal_index = self.literal_int_argument(index_expr)
+        if literal_index is not None and not 0 <= literal_index < size:
+            self.emit(
+                f"; WARNING: SPIR-V tessellation patch builtin {name} component "
+                f"index {literal_index} out of range; valid range is 0..{size - 1}"
+            )
+            return False
+
+        return True
+
+    def propagate_readonly_builtin_pointer_name(
+        self, source_pointer: SpirvId, target_pointer: SpirvId
+    ):
+        builtin_name = self.readonly_builtin_pointer_names.get(source_pointer.id)
+        if builtin_name is not None:
+            self.readonly_builtin_pointer_names[target_pointer.id] = builtin_name
+
+    def create_array_element_access(self, array_expr, index: SpirvId, index_expr=None):
+        if not self.validate_tessellation_patch_builtin_index(
+            array_expr, index, index_expr
+        ):
+            return None, None
+
         array_variable = self.variable_pointer_from_expression(array_expr)
         if array_variable is None or not array_variable.type.storage_class:
             addressable_array = self.assignable_pointer_from_expression(array_expr)
             if addressable_array is not None:
                 array_variable = addressable_array
+
+        if (
+            array_variable is None
+            and self.tessellation_patch_builtin_size(
+                self.direct_expression_name(array_expr)
+            )
+            is not None
+        ):
+            return None, None
 
         if array_variable is not None:
             structured_access = self.structured_buffer_element_pointer(
@@ -13663,6 +13735,7 @@ class VulkanSPIRVCodeGen:
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
+            self.propagate_readonly_builtin_pointer_name(array_variable, access)
             return access, element_type
 
         array = self.process_expression(array_expr)
@@ -13690,6 +13763,7 @@ class VulkanSPIRVCodeGen:
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
+            self.propagate_readonly_builtin_pointer_name(array_variable, access)
             return access, element_type
 
         storage_class = array.type.storage_class or "Function"
@@ -13701,6 +13775,7 @@ class VulkanSPIRVCodeGen:
             array, access, index
         )
         self.propagate_resource_access_metadata(array, access, element_type)
+        self.propagate_readonly_builtin_pointer_name(array, access)
         return access, element_type
 
     def process_assignment(self, node: AssignmentNode):
@@ -15434,8 +15509,78 @@ class VulkanSPIRVCodeGen:
                 "Input",
                 {"TessellationEvaluation"},
             ),
+            "gl_TessLevelOuter": (
+                "float[4]",
+                "TessLevelOuter",
+                {
+                    "TessellationControl": "Output",
+                    "TessellationEvaluation": "Input",
+                },
+                {"TessellationControl", "TessellationEvaluation"},
+            ),
+            "gl_TessLevelInner": (
+                "float[2]",
+                "TessLevelInner",
+                {
+                    "TessellationControl": "Output",
+                    "TessellationEvaluation": "Input",
+                },
+                {"TessellationControl", "TessellationEvaluation"},
+            ),
         }
         return builtins.get(name)
+
+    def stage_builtin_execution_label(self, execution_models: set) -> str:
+        order = [
+            "Vertex",
+            "Fragment",
+            "GLCompute",
+            "Geometry",
+            "TessellationControl",
+            "TessellationEvaluation",
+            "MeshEXT",
+            "TaskEXT",
+        ]
+        models = [model for model in order if model in execution_models]
+        models.extend(sorted(execution_models - set(models)))
+        return ", ".join(models)
+
+    def resolve_stage_builtin_storage_class(
+        self, name: str, storage_spec, execution_models: set
+    ) -> Optional[str]:
+        execution_model = self.current_execution_model
+        if execution_model is None and self.current_function_name is not None:
+            function_models = self.function_execution_models.get(
+                self.current_function_name, set()
+            )
+            if len(function_models) == 1:
+                execution_model = next(iter(function_models))
+
+        if execution_model is not None and execution_model not in execution_models:
+            self.emit(
+                f"; WARNING: SPIR-V builtin {name} is only valid in "
+                f"{self.stage_builtin_execution_label(execution_models)} stages"
+            )
+            return None
+
+        if not isinstance(storage_spec, dict):
+            return storage_spec
+
+        if execution_model is None:
+            self.emit(
+                f"; WARNING: SPIR-V builtin {name} requires a single "
+                "tessellation execution model to choose Input or Output storage"
+            )
+            return None
+
+        return storage_spec.get(execution_model)
+
+    def stage_builtin_cache_key(
+        self, name: str, storage_spec, storage_class: str
+    ) -> str:
+        if isinstance(storage_spec, dict):
+            return f"{name}::{storage_class}"
+        return name
 
     def mark_function_interface_variable(self, variable: SpirvId):
         if self.current_function_id is None:
@@ -15500,39 +15645,54 @@ class VulkanSPIRVCodeGen:
         if info is None:
             return None
 
-        type_name, builtin_name, storage_class, execution_models = info
-        if (
-            self.current_execution_model is not None
-            and self.current_execution_model not in execution_models
-        ):
+        type_name, builtin_name, storage_spec, execution_models = info
+        storage_class = self.resolve_stage_builtin_storage_class(
+            name, storage_spec, execution_models
+        )
+        if storage_class is None:
             return None
 
-        if name in self.global_variables:
-            builtin_id = self.global_variables[name]
+        cache_key = self.stage_builtin_cache_key(name, storage_spec, storage_class)
+        if cache_key in self.global_variables:
+            builtin_id = self.global_variables[cache_key]
             self.mark_builtin_interface_variable(builtin_id)
             return builtin_id
 
         type_id = self.map_crossgl_type(type_name)
-        if storage_class != "Input":
+        if storage_class not in {"Input", "Output"}:
             return None
 
-        builtin_id = self.register_builtin_input(name, type_id, builtin_name)
-        self.global_variables[name] = builtin_id
+        if execution_models & {"TessellationControl", "TessellationEvaluation"}:
+            self.require_capability("Tessellation")
+
+        builtin_id = self.register_builtin_variable(
+            name, type_id, builtin_name, storage_class
+        )
+        self.global_variables[cache_key] = builtin_id
         self.mark_builtin_interface_variable(builtin_id)
         return builtin_id
 
     def register_builtin_input(
         self, name: str, type_id: SpirvId, builtin_name: str
     ) -> SpirvId:
-        ptr_type = self.register_pointer_type(type_id, "Input")
+        return self.register_builtin_variable(name, type_id, builtin_name, "Input")
+
+    def register_builtin_variable(
+        self, name: str, type_id: SpirvId, builtin_name: str, storage_class: str
+    ) -> SpirvId:
+        ptr_type = self.register_pointer_type(type_id, storage_class)
         id_value = self.get_id()
-        self.emit(f"%{id_value} = OpVariable %{ptr_type.id} Input")
+        self.emit(f"%{id_value} = OpVariable %{ptr_type.id} {storage_class}")
         self.emit(f'OpName %{id_value} "{name}"')
         self.decorations.append(f"OpDecorate %{id_value} BuiltIn {builtin_name}")
 
         spirv_id = SpirvId(id_value, ptr_type.type, name)
         self.variable_value_types[id_value] = type_id
-        self.inputs.append(spirv_id)
+        if storage_class == "Input":
+            self.inputs.append(spirv_id)
+            self.readonly_builtin_pointer_names[id_value] = name
+        elif storage_class == "Output":
+            self.outputs.append(spirv_id)
         self.builtin_interface_variable_ids.add(id_value)
         return spirv_id
 
