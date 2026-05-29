@@ -129,6 +129,10 @@ class VulkanSPIRVCodeGen:
         self.enum_struct_variant_fields = {}
         self.generic_enum_struct_definitions = {}
         self.generic_enum_specializations = {}
+        self.struct_declarations = {}
+        self.enum_declarations = {}
+        self.struct_registration_stack = set()
+        self.enum_struct_registration_stack = set()
 
         self.required_capabilities = set()
         self.global_variables = {}
@@ -8541,8 +8545,12 @@ class VulkanSPIRVCodeGen:
         if generic_args and generic_base_name in self.struct_types:
             return self.struct_types[generic_base_name]
 
+        declared_struct_type = self.ensure_declared_struct_type(type_str)
+        if declared_struct_type is not None:
+            return declared_struct_type
+
         if type_str in self.enum_struct_type_names:
-            enum_struct_type = self.struct_types.get(type_str)
+            enum_struct_type = self.ensure_enum_struct_type_registered(type_str)
             if enum_struct_type is not None:
                 return enum_struct_type
 
@@ -8566,6 +8574,44 @@ class VulkanSPIRVCodeGen:
             # If type is unknown, return a default float type
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
+
+    def ensure_declared_struct_type(self, type_name: str) -> Optional[SpirvId]:
+        if type_name in self.struct_types:
+            return self.struct_types[type_name]
+
+        struct_node = self.struct_declarations.get(type_name)
+        if struct_node is None:
+            return None
+        if type_name in self.struct_registration_stack:
+            return None
+
+        self.struct_registration_stack.add(type_name)
+        try:
+            return self.process_crossgl_struct(struct_node)
+        finally:
+            self.struct_registration_stack.remove(type_name)
+
+    def ensure_enum_struct_type_registered(self, enum_name: str) -> Optional[SpirvId]:
+        if enum_name in self.struct_types:
+            return self.struct_types[enum_name]
+        if enum_name not in self.enum_struct_type_names:
+            return None
+
+        if (
+            enum_name not in self.enum_declarations
+            or enum_name in self.enum_struct_registration_stack
+        ):
+            return None
+
+        self.enum_struct_registration_stack.add(enum_name)
+        try:
+            int_type = self.register_primitive_type("int")
+            members = [(int_type, "variant")]
+            for field_name, field_type in self.enum_struct_fields.get(enum_name, []):
+                members.append((self.map_crossgl_type(field_type), field_name))
+            return self.register_struct_type(enum_name, members)
+        finally:
+            self.enum_struct_registration_stack.remove(enum_name)
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -8734,15 +8780,7 @@ class VulkanSPIRVCodeGen:
         """Register tagged-struct representations for payload enums."""
         for node in nodes or []:
             if isinstance(node, EnumNode) and node.name in self.enum_struct_type_names:
-                if node.name in self.struct_types:
-                    continue
-                int_type = self.register_primitive_type("int")
-                members = [(int_type, "variant")]
-                for field_name, field_type in self.enum_struct_fields.get(
-                    node.name, []
-                ):
-                    members.append((self.map_crossgl_type(field_type), field_name))
-                self.register_struct_type(node.name, members)
+                self.ensure_enum_struct_type_registered(node.name)
             elif isinstance(node, StructNode):
                 self.process_enum_structs(getattr(node, "members", []) or [])
 
@@ -14555,6 +14593,19 @@ class VulkanSPIRVCodeGen:
         struct_declarations = list(getattr(ast, "structs", []) or [])
         for stage in (getattr(ast, "stages", None) or {}).values():
             struct_declarations.extend(getattr(stage, "local_structs", []) or [])
+
+        self.struct_declarations = {}
+        self.enum_declarations = {}
+
+        def collect_type_declarations(nodes):
+            for node in nodes or []:
+                if isinstance(node, StructNode):
+                    self.struct_declarations.setdefault(node.name, node)
+                    collect_type_declarations(getattr(node, "members", []) or [])
+                elif isinstance(node, EnumNode):
+                    self.enum_declarations.setdefault(node.name, node)
+
+        collect_type_declarations(struct_declarations)
 
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             struct_declarations

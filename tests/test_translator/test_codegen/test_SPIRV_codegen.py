@@ -13089,6 +13089,64 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_match_tuple_payload_enum_struct_pattern_guard_validates(self, tmp_path):
+        source_code = """
+        shader MatchNestedPayloadEnumSmoke {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            enum MaybePair {
+                Value(Pair),
+                Missing
+            }
+
+            int read(MaybePair item) {
+                match item {
+                    MaybePair::Value(Pair { left: 1, right }) if right > 2 => {
+                        return right;
+                    }
+                    MaybePair::Value(Pair { left, right }) => {
+                        return left + right;
+                    }
+                    MaybePair::Missing => {
+                        return 0;
+                    }
+                }
+            }
+
+            MaybePair make_value(Pair pair) {
+                return MaybePair::Value(pair);
+            }
+
+            compute {
+                void main() {
+                    Pair pair = Pair(1, 4);
+                    MaybePair value = make_value(pair);
+                    int selected = read(value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"MaybePair"' in spv_code
+        assert '"Value_0"' in spv_code
+        assert spirv_named_ids(spv_code, "right")
+        assert spirv_named_ids(spv_code, "left")
+        assert spv_code.count("OpCompositeExtract") >= 5
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpLogicalAnd") >= 2
+        assert "OpIAdd" in spv_code
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_match_struct_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
         source_code = """
         shader MatchStructPayloadEnumSmoke {

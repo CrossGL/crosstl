@@ -10696,6 +10696,12 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         image2D colorImage;
 
         compute {
+            void acceptScalarLod(float value) {
+            }
+
+            void acceptWideLod(vec3 value) {
+            }
+
             void main() {
                 float scalarCoord = 0.25;
                 vec2 uv = vec2(0.25, 0.5);
@@ -10720,6 +10726,11 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
                 vec2 shadowLod = textureQueryLod(shadowMap, uv);
                 vec2 msLod = textureQueryLod(msTex, uv);
                 vec2 imageLod = textureQueryLod(colorImage, uv);
+                float scalarTarget = textureQueryLod(colorMap, uv);
+                vec3 wideTarget = textureQueryLod(colorMap, uv);
+                ivec2 integerVectorTarget = textureQueryLod(colorMap, uv);
+                acceptScalarLod(textureQueryLod(colorMap, uv));
+                acceptWideLod(textureQueryLod(colorMap, uv));
             }
         }
     }
@@ -10784,7 +10795,30 @@ def test_invalid_texture_query_lod_calls_emit_slang_diagnostics():
         "textureQueryLod requires a non-shadow non-multisampled sampled texture "
         "resource */ float2(0.0, 0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 11
+    assert (
+        "float scalarTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "float3 wideTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects float3 */ float3(0.0);"
+        in generated_code
+    )
+    assert (
+        "int2 integerVectorTarget = /* unsupported Slang resource query: "
+        "textureQueryLod returns float2 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptScalarLod(/* unsupported Slang resource query: textureQueryLod "
+        "returns float2 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "acceptWideLod(/* unsupported Slang resource query: textureQueryLod "
+        "returns float2 but target expects float3 */ float3(0.0));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang resource query") == 16
     assert "textureQueryLod(" not in generated_code
     assert "CalculateLevelOfDetail(querySampler" not in generated_code
 

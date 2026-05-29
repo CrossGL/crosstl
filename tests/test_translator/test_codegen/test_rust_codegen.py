@@ -20629,7 +20629,9 @@ def test_match_expression_initializer_emits_rust_match_initializer(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types():
+def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types(
+    tmp_path,
+):
     code = """
     shader StageInference {
         generic<T> struct Vec3 {
@@ -20693,6 +20695,7 @@ def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types()
     assert "let world_pos: f32 = " not in generated_code
     assert "let world_normal: f32 = normalize" not in generated_code
     assert "let normal_vec3: Vec3 = Vec3" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_stage_local_uniform_statics_are_emitted_once():

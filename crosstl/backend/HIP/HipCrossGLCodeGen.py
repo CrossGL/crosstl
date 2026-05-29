@@ -184,21 +184,17 @@ class HipToCrossGLConverter:
     HIP_EXTENT_MEMBERS = {"depth", "height", "width"}
     HIP_RESOURCE_DESCRIPTOR_MEMBERS = {"resType"}
     HIP_RESOURCE_DESCRIPTOR_NESTED_MEMBERS = {
-        "res.array.array",
         "res.linear.desc.f",
         "res.linear.desc.w",
         "res.linear.desc.x",
         "res.linear.desc.y",
         "res.linear.desc.z",
-        "res.linear.devPtr",
         "res.linear.sizeInBytes",
-        "res.mipmap.mipmap",
         "res.pitch2D.desc.f",
         "res.pitch2D.desc.w",
         "res.pitch2D.desc.x",
         "res.pitch2D.desc.y",
         "res.pitch2D.desc.z",
-        "res.pitch2D.devPtr",
         "res.pitch2D.height",
         "res.pitch2D.pitchInBytes",
         "res.pitch2D.width",

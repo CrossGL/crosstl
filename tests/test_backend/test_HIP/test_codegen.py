@@ -4005,7 +4005,14 @@ class TestHipCodeGen:
     ):
         """Test nested texture object descriptor output members lower to metadata."""
         code = """
-        void host(hipTextureObject_t texObj, int* ints, size_t* dims) {
+        void host(
+            hipTextureObject_t texObj,
+            int* ints,
+            size_t* dims,
+            void** ptrs,
+            hipArray_t* arrays,
+            hipMipmappedArray_t* mipmaps
+        ) {
             hipResourceDesc resourceDesc;
             hipResourceDesc aliasResourceDesc;
             hipTextureDesc textureDesc;
@@ -4017,6 +4024,8 @@ class TestHipCodeGen:
             dims[3] = resourceDesc.res.linear.sizeInBytes;
             ints[0] = resourceDesc.res.pitch2D.desc.x;
             ints[1] = resourceDesc.res.linear.desc.f;
+            ptrs[0] = resourceDesc.res.linear.devPtr;
+            ptrs[1] = resourceDesc.res.pitch2D.devPtr;
             hipGetTextureObjectTextureDesc(&textureDesc, texObj);
             ints[2] = textureDesc.addressMode[0];
             ints[3] = textureDesc.addressMode[1];
@@ -4028,8 +4037,8 @@ class TestHipCodeGen:
                 &aliasResourceDesc,
                 texObj
             );
-            dims[4] = aliasResourceDesc.res.mipmap.mipmap;
-            ints[4] = aliasResourceDesc.res.array.array;
+            mipmaps[0] = aliasResourceDesc.res.mipmap.mipmap;
+            arrays[0] = aliasResourceDesc.res.array.array;
             ints[5] = aliasResourceDesc.res.pitch2D.desc.y;
             hipError_t texErr = hipTexObjectGetTextureDesc(
                 &aliasTextureDesc,
@@ -4074,16 +4083,15 @@ class TestHipCodeGen:
         assert "var manualAddress: i32 = textureDesc.addressMode[0];" in result
         assert "resourceDesc.res.pitch2D.width = 32;" in result
         assert "var manualPitchWidth: u32 = resourceDesc.res.pitch2D.width;" in result
+        assert "ptrs[0] = resourceDesc.res.linear.devPtr;" in result
+        assert "ptrs[1] = resourceDesc.res.pitch2D.devPtr;" in result
         assert "var resErr: hipError_t = hipSuccess;" in result
+        assert "mipmaps[0] = aliasResourceDesc.res.mipmap.mipmap;" in result
+        assert "arrays[0] = aliasResourceDesc.res.array.array;" in result
         assert (
-            "dims[4] = (/* HIP device query: "
-            "textureObject.resourceDesc.res.mipmap.mipmap(texObj) */ 0);"
+            "ints[5] = (/* HIP device query: "
+            "textureObject.resourceDesc.res.pitch2D.desc.y(texObj) */ 0);"
         ) in result
-        for index, member in [(4, "res.array.array"), (5, "res.pitch2D.desc.y")]:
-            assert (
-                f"ints[{index}] = (/* HIP device query: "
-                f"textureObject.resourceDesc.{member}(texObj) */ 0);"
-            ) in result
         assert "var texErr: hipError_t = hipSuccess;" in result
         assert (
             "ints[6] = (/* HIP device query: "
@@ -4095,11 +4103,44 @@ class TestHipCodeGen:
         )
         assert "dims[0] = resourceDesc.res.pitch2D.width;" not in result
         assert "ints[2] = textureDesc.addressMode[0];" not in result
-        assert "dims[4] = aliasResourceDesc.res.mipmap.mipmap;" not in result
         assert "ints[6] = aliasTextureDesc.addressMode[2];" not in result
+        assert "textureObject.resourceDesc.res.linear.devPtr(texObj)" not in result
+        assert "textureObject.resourceDesc.res.pitch2D.devPtr(texObj)" not in result
+        assert "textureObject.resourceDesc.res.mipmap.mipmap(texObj)" not in result
+        assert "textureObject.resourceDesc.res.array.array(texObj)" not in result
         assert "var manualAddress: i32 = (/* HIP device query:" not in result
         assert "var manualPitchWidth: u32 = (/* HIP device query:" not in result
         assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
+
+    def test_hip_texture_object_descriptor_unmapped_fields_remain_raw(self):
+        """Test unsupported descriptor member paths are not pseudo-queried."""
+        code = """
+        void host(
+            hipTextureObject_t texObj,
+            int* ints,
+            float* floats,
+            int index
+        ) {
+            hipTextureDesc textureDesc;
+            hipGetTextureObjectTextureDesc(&textureDesc, texObj);
+            ints[0] = textureDesc.reserved[0];
+            ints[1] = textureDesc.addressMode[index];
+            floats[0] = textureDesc.borderColor[index];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "ints[0] = textureDesc.reserved[0];" in result
+        assert "ints[1] = textureDesc.addressMode[index];" in result
+        assert "floats[0] = textureDesc.borderColor[index];" in result
+        assert "textureObject.textureDesc.reserved[0](texObj)" not in result
+        assert "textureObject.textureDesc.addressMode[index](texObj)" not in result
+        assert "textureObject.textureDesc.borderColor[index](texObj)" not in result
 
     def test_hip_texture_object_border_color_descriptor_reads_emit_metadata_expressions(
         self,

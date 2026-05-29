@@ -8325,7 +8325,7 @@ class SlangCodeGen:
             return self.unsupported_resource_query_call(func_name, arity_reason)
 
         result_type = self.query_return_type(spec["dimensions"])
-        expected_reason = self.dimension_query_expected_type_unsupported_reason(
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
             func_name, result_type
         )
         if expected_reason:
@@ -8379,7 +8379,7 @@ class SlangCodeGen:
             return self.scalar_texture_mip_unsupported_reason(args[1])
         return None
 
-    def dimension_query_expected_type_unsupported_reason(self, func_name, result_type):
+    def resource_query_expected_type_unsupported_reason(self, func_name, result_type):
         expected_type = self.convert_type(self.current_expression_expected_type)
         if not expected_type or expected_type == "auto":
             return None
@@ -9441,6 +9441,14 @@ class SlangCodeGen:
         )
         if coord_reason:
             return self.unsupported_texture_query_lod_call(coord_reason)
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            "textureQueryLod", "float2"
+        )
+        if expected_reason:
+            return self.unsupported_texture_query_lod_call(
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
         unclamped = f"{texture_name}.CalculateLevelOfDetailUnclamped({coord})"
         clamped = f"{texture_name}.CalculateLevelOfDetail({coord})"
         return f"float2({unclamped}, {clamped})"
@@ -9481,10 +9489,8 @@ class SlangCodeGen:
 
         return "requires texture and coordinate arguments"
 
-    def unsupported_texture_query_lod_call(self, reason):
-        return self.unsupported_resource_query_call(
-            "textureQueryLod", reason, "float2(0.0, 0.0)"
-        )
+    def unsupported_texture_query_lod_call(self, reason, fallback="float2(0.0, 0.0)"):
+        return self.unsupported_resource_query_call("textureQueryLod", reason, fallback)
 
     def register_helper_function(self, name, source):
         if name not in self.helper_functions:
