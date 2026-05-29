@@ -16,10 +16,11 @@ def load_sync_module():
 
 
 class FakeClient:
-    def __init__(self, module, issues=None, assign_errors=None):
+    def __init__(self, module, issues=None, assign_errors=None, pull_files=None):
         self.module = module
         self.issues = dict(issues or {})
         self.assign_errors = dict(assign_errors or {})
+        self.pull_files = list(pull_files or [])
         self.assigned = []
         self.updated_bodies = []
 
@@ -42,6 +43,9 @@ class FakeClient:
 
     def update_pull_body(self, number, body):
         self.updated_bodies.append((number, body))
+
+    def list_pull_files(self, number):
+        return list(self.pull_files)
 
 
 def issue(number, assignees=None, is_pull=False):
@@ -199,3 +203,146 @@ def test_dry_run_does_not_touch_client_but_reports_body_update():
     assert summary["body_updated"] == 1
     assert client.assigned == []
     assert client.updated_bodies == []
+
+
+def test_github_client_lists_pull_files_across_pages():
+    module = load_sync_module()
+    client = module.GitHubClient("CrossGL/crosstl", "token")
+    pages = []
+
+    def fake_request(method, path, payload=None, query=None):
+        assert method == "GET"
+        assert path == "/repos/CrossGL/crosstl/pulls/5/files"
+        assert payload is None
+        pages.append(query["page"])
+        if query["page"] == 1:
+            return [{"filename": "tools/support_matrix.py"}] * 100, {}
+        return [{"filename": "README.md"}], {}
+
+    client.request = fake_request
+
+    assert client.list_pull_files(5) == ["tools/support_matrix.py"] * 100 + [
+        "README.md"
+    ]
+    assert pages == [1, 2]
+
+
+def test_traceability_policy_passes_with_valid_closing_issue_for_support_files():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve DirectX support",
+        body="Fixes #10",
+        author="alice",
+        changed_files=("crosstl/backend/DirectX/DirectxCrossGLCodeGen.py",),
+    )
+    client = FakeClient(module, {10: issue(10)})
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_satisfied"] == 1
+    assert summary["traceability_failed"] == 0
+    assert summary["support_relevant_files"] == 1
+
+
+def test_traceability_policy_passes_with_explicit_no_issue_marker():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Refresh support matrix probes",
+        body="Support issue traceability: no issue closed",
+        author="alice",
+        changed_files=("tools/support_matrix.py",),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_satisfied"] == 1
+    assert summary["traceability_failed"] == 0
+
+
+def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal support",
+        body="No linked issue.",
+        author="alice",
+        changed_files=("tests/test_translator/test_codegen/test_metal_codegen.py",),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_satisfied"] == 0
+    assert summary["traceability_failed"] == 1
+
+
+def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve frontend IR metadata",
+        body="No linked issue.",
+        author="alice",
+        changed_files=(
+            "crosstl/translator/parser.py",
+            "tests/test_translator/test_frontend_parser_property_contracts.py",
+            "docs/source/support-matrix.rst",
+            "examples/test.py",
+        ),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 1
+    assert summary["traceability_failed"] == 1
+    assert summary["support_relevant_files"] == 4
+
+
+def test_traceability_policy_ignores_non_support_paths():
+    module = load_sync_module()
+    pr = module.PullRequestContext(
+        number=5,
+        title="Update docs",
+        body="No linked issue.",
+        author="alice",
+        changed_files=("README.md",),
+    )
+    client = FakeClient(module)
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        enforce_support_traceability=True,
+    )
+
+    assert summary["traceability_required"] == 0
+    assert summary["traceability_satisfied"] == 0
+    assert summary["traceability_failed"] == 0

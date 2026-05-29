@@ -409,6 +409,88 @@ def build_desired_issues(
     return desired
 
 
+def desired_issue_counts(desired: dict[str, DesiredIssue]) -> dict[str, int]:
+    return {
+        "total": len(desired),
+        "parents": sum(1 for key in desired if key.startswith("parent:")),
+        "backlog": sum(1 for key in desired if key.startswith("backlog:")),
+        "extracted": sum(1 for key in desired if key.startswith("extracted:")),
+    }
+
+
+def validate_desired_issues(
+    matrix: dict[str, Any],
+    signals: dict[str, Any] | None,
+    desired: dict[str, DesiredIssue],
+    *,
+    min_desired_issues: int = 1,
+) -> list[str]:
+    errors: list[str] = []
+    if len(desired) < min_desired_issues:
+        errors.append(
+            "desired issue plan has {} issues, below minimum {}".format(
+                len(desired), min_desired_issues
+            )
+        )
+
+    expected_parent_keys = {
+        "parent:{}".format(backend["id"]) for backend in matrix.get("backends", [])
+    }
+    expected_parent_keys.add("parent:{}".format(FRONTEND_ID))
+    for key in sorted(expected_parent_keys - set(desired)):
+        errors.append("missing desired parent issue: {}".format(key))
+
+    for item in matrix.get("backlog", []):
+        if item.get("status") not in BACKLOG_STATUSES:
+            errors.append(
+                "backlog row {}:{} has non-backlog status {}".format(
+                    item.get("backend_id"),
+                    item.get("feature_id"),
+                    item.get("status"),
+                )
+            )
+        key = "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
+        if key not in desired:
+            errors.append("missing desired backlog issue: {}".format(key))
+
+    for issue in (signals or {}).get("issues", []):
+        if issue["key"] not in desired:
+            errors.append("missing desired extracted issue: {}".format(issue["key"]))
+
+    for key, issue in desired.items():
+        if marker_for(key) not in issue.body:
+            errors.append(
+                "desired issue {} body is missing its sync marker".format(key)
+            )
+        if LABEL_MANAGED not in issue.labels:
+            errors.append("desired issue {} is missing managed label".format(key))
+        if issue.parent_key and issue.parent_key not in desired:
+            errors.append(
+                "desired issue {} references missing parent {}".format(
+                    key, issue.parent_key
+                )
+            )
+        if key.startswith("backlog:") and LABEL_BACKLOG not in issue.labels:
+            errors.append(
+                "desired backlog issue {} is missing backlog label".format(key)
+            )
+        if key.startswith("extracted:") and LABEL_EXTRACTED not in issue.labels:
+            errors.append(
+                "desired extracted issue {} is missing extracted label".format(key)
+            )
+
+    return errors
+
+
+def signals_allow_extracted_closure(signals: dict[str, Any] | None) -> bool:
+    if not signals:
+        return False
+    docs_probe = signals.get("summary", {}).get("docs_probe", {})
+    if not docs_probe.get("provided"):
+        return False
+    return int(docs_probe.get("failed", 0)) == 0
+
+
 class GitHubClient:
     def __init__(
         self,
@@ -682,6 +764,18 @@ def closed_body(issue: dict[str, Any], key: str) -> str:
     )
 
 
+def duplicate_closed_body(issue: dict[str, Any], key: str) -> str:
+    return "\n\n".join(
+        [
+            marker_for(key),
+            "# Duplicate Managed Support Issue",
+            "This managed issue was closed because another managed issue already owns the same support sync marker.",
+            "Sync marker: `{}`".format(key),
+            "Previous title: `{}`".format(issue.get("title", "")),
+        ]
+    )
+
+
 def issue_labels(issue: dict[str, Any]) -> set[str]:
     return {label["name"] for label in issue.get("labels", [])}
 
@@ -692,6 +786,7 @@ def sync_issues(
     *,
     dry_run: bool = False,
     manage_sub_issues: bool = True,
+    close_extracted_issues: bool = True,
     throttle_seconds: float = 0.2,
 ) -> dict[str, int]:
     summary = {
@@ -703,9 +798,13 @@ def sync_issues(
     }
     existing_issues = client.list_managed_issues() if not dry_run else []
     existing_by_key = {}
+    duplicate_existing: list[tuple[str, dict[str, Any]]] = []
     for issue in existing_issues:
         key = marker_key(issue.get("body"))
         if key:
+            if key in existing_by_key:
+                duplicate_existing.append((key, issue))
+                continue
             existing_by_key[key] = issue
 
     if dry_run:
@@ -775,12 +874,23 @@ def sync_issues(
     for key, issue in existing_by_key.items():
         if key in desired:
             continue
+        if key.startswith("extracted:") and not close_extracted_issues:
+            summary["unchanged"] += 1
+            continue
         if not key.startswith(("backlog:", "parent:", "extracted:")):
             continue
         if issue.get("state") == "closed":
             summary["unchanged"] += 1
             continue
         client.close_issue(issue, closed_body(issue, key))
+        summary["closed"] += 1
+        time.sleep(throttle_seconds)
+
+    for key, issue in duplicate_existing:
+        if issue.get("state") == "closed":
+            summary["unchanged"] += 1
+            continue
+        client.close_issue(issue, duplicate_closed_body(issue, key))
         summary["closed"] += 1
         time.sleep(throttle_seconds)
 
@@ -820,6 +930,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=4)
     parser.add_argument("--retry-base-seconds", type=float, default=30.0)
     parser.add_argument("--retry-max-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--min-desired-issues",
+        type=int,
+        default=1,
+        help="Fail if the generated issue plan has fewer desired issues than this",
+    )
     return parser.parse_args(argv)
 
 
@@ -832,7 +948,19 @@ def main(argv: list[str] | None = None) -> int:
     signals_path = args.signals
     if signals_path is not None and not signals_path.is_absolute():
         signals_path = ROOT / signals_path
-    desired = build_desired_issues(matrix, load_signals(signals_path))
+    signals = load_signals(signals_path)
+    desired = build_desired_issues(matrix, signals)
+    validation_errors = validate_desired_issues(
+        matrix,
+        signals,
+        desired,
+        min_desired_issues=args.min_desired_issues,
+    )
+    if validation_errors:
+        print("Support issue plan is invalid:", file=sys.stderr)
+        for message in validation_errors:
+            print("- {}".format(message), file=sys.stderr)
+        return 1
 
     token = os.environ.get(args.token_env) or os.environ.get("GH_TOKEN")
     if args.dry_run:
@@ -852,11 +980,23 @@ def main(argv: list[str] | None = None) -> int:
         retry_base_seconds=args.retry_base_seconds,
         retry_max_seconds=args.retry_max_seconds,
     )
+    counts = desired_issue_counts(desired)
+    print(
+        "Desired support issues: total={total}, parents={parents}, backlog={backlog}, extracted={extracted}".format(
+            **counts
+        )
+    )
+    close_extracted_issues = signals_allow_extracted_closure(signals)
+    if not close_extracted_issues:
+        print(
+            "Preserving existing extracted support issues because support signals are missing or documentation probes had failures."
+        )
     summary = sync_issues(
         client,
         desired,
         dry_run=args.dry_run,
         manage_sub_issues=not args.no_sub_issues,
+        close_extracted_issues=close_extracted_issues,
         throttle_seconds=args.throttle_seconds,
     )
     print(

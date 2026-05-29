@@ -56,6 +56,43 @@ CLOSING_BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 ISSUE_REF_RE = re.compile(ISSUE_REF_PATTERN, re.IGNORECASE)
+SUPPORT_TRACEABILITY_RE = re.compile(
+    r"^\s*Support issue traceability\s*:\s*(?P<value>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+SUPPORT_TRACEABILITY_OPT_OUTS = {
+    "coverage only",
+    "no issue closed",
+    "not closing an issue",
+    "not linked",
+    "none",
+}
+SUPPORT_RELEVANT_PATH_PREFIXES = (
+    ".github/workflows/",
+    "crosstl/backend/",
+    "crosstl/translator/codegen/",
+    "support/",
+    "tests/test_backend/",
+    "tests/test_translator/test_codegen/",
+    "tests/test_translator/test_frontend_",
+    "tools/",
+)
+SUPPORT_RELEVANT_PATHS = (
+    "crosstl/translator/ast.py",
+    "crosstl/translator/lexer.py",
+    "crosstl/translator/parser.py",
+    "crosstl/translator/validation.py",
+    "docs/source/support-matrix.rst",
+    "examples/test.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "tests/test_translator/test_ast_ir_contracts.py",
+    "tests/test_translator/test_backend_contract.py",
+    "tests/test_translator/test_ir_legacy_alias_contracts.py",
+    "tests/test_translator/test_lexer.py",
+    "tests/test_translator/test_parser.py",
+    "tests/test_translator/test_translation_pipeline.py",
+)
 
 
 class GitHubApiError(RuntimeError):
@@ -75,6 +112,7 @@ class PullRequestContext:
     title: str
     body: str
     author: str
+    changed_files: tuple[str, ...] = ()
 
 
 class GitHubClient:
@@ -133,6 +171,21 @@ class GitHubClient:
             "/repos/{}/pulls/{}".format(self.repo, number),
             {"body": body},
         )
+
+    def list_pull_files(self, number: int) -> list[str]:
+        files: list[str] = []
+        page = 1
+        while True:
+            payload, _ = self.request(
+                "GET",
+                "/repos/{}/pulls/{}/files".format(self.repo, number),
+                query={"per_page": 100, "page": page},
+            )
+            batch = payload or []
+            files.extend(item["filename"] for item in batch if item.get("filename"))
+            if len(batch) < 100:
+                return files
+            page += 1
 
 
 def load_pr_context(event_path: Path) -> PullRequestContext:
@@ -205,6 +258,27 @@ def extract_closing_issue_numbers(title: str, body: str, repo: str) -> list[int]
     return numbers
 
 
+def is_support_relevant_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lstrip("/")
+    return normalized in SUPPORT_RELEVANT_PATHS or normalized.startswith(
+        SUPPORT_RELEVANT_PATH_PREFIXES
+    )
+
+
+def support_relevant_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
+    return [path for path in paths if is_support_relevant_path(path)]
+
+
+def has_support_traceability_opt_out(body: str) -> bool:
+    match = SUPPORT_TRACEABILITY_RE.search(
+        strip_code_spans(strip_managed_section(body))
+    )
+    if not match:
+        return False
+    value = match.group("value").strip().lower().rstrip(".")
+    return value in SUPPORT_TRACEABILITY_OPT_OUTS
+
+
 def managed_section(issue_numbers: list[int]) -> str:
     lines = [
         SECTION_BEGIN,
@@ -237,6 +311,7 @@ def sync_pr_issue_links(
     repo: str,
     *,
     dry_run: bool = False,
+    enforce_support_traceability: bool = False,
 ) -> dict[str, int]:
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
     summary = {
@@ -277,6 +352,22 @@ def sync_pr_issue_links(
         if not dry_run:
             client.update_pull_body(pr.number, new_body)
 
+    if enforce_support_traceability:
+        changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
+        relevant_paths = support_relevant_paths(changed_files)
+        traceability_required = bool(relevant_paths)
+        traceability_satisfied = bool(
+            valid_issue_numbers
+        ) or has_support_traceability_opt_out(pr.body)
+        summary["traceability_required"] = int(traceability_required)
+        summary["traceability_satisfied"] = int(
+            traceability_required and traceability_satisfied
+        )
+        summary["traceability_failed"] = int(
+            traceability_required and not traceability_satisfied
+        )
+        summary["support_relevant_files"] = len(relevant_paths)
+
     return summary
 
 
@@ -306,6 +397,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--api-url", default=os.environ.get("GITHUB_API_URL", "https://api.github.com")
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--enforce-support-traceability",
+        action="store_true",
+        help=(
+            "Fail when support-relevant PR files lack closing issue refs or an "
+            "explicit 'Support issue traceability: no issue closed' marker"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -326,12 +425,32 @@ def main(argv: list[str] | None = None) -> int:
 
     pr = load_pr_context(args.event_path)
     client = GitHubClient(args.repo, token, api_url=args.api_url)
-    summary = sync_pr_issue_links(client, pr, args.repo, dry_run=args.dry_run)
+    summary = sync_pr_issue_links(
+        client,
+        pr,
+        args.repo,
+        dry_run=args.dry_run,
+        enforce_support_traceability=args.enforce_support_traceability,
+    )
     print(
         "PR issue link sync: linked={linked}, assigned={assigned}, assignment_skipped={assignment_skipped}, missing_or_pull={missing_or_pull}, body_updated={body_updated}".format(
             **summary
         )
     )
+    if args.enforce_support_traceability:
+        print(
+            "Support traceability: required={traceability_required}, satisfied={traceability_satisfied}, failed={traceability_failed}, support_relevant_files={support_relevant_files}".format(
+                **summary
+            )
+        )
+    if summary.get("traceability_failed"):
+        print(
+            "Support-relevant PR changes must include a same-repo closing issue "
+            "reference or an explicit 'Support issue traceability: no issue closed' "
+            "line in the PR body.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

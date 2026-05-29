@@ -1097,6 +1097,7 @@ def build_report(
     issues.sort(
         key=lambda item: (item["backend_id"], item["category"], item["feature_id"])
     )
+    docs_summary = (docs_report or {}).get("summary", {})
     return {
         "schema_version": 1,
         "generator": "tools/support_signals.py",
@@ -1112,6 +1113,13 @@ def build_report(
             "feature_count": len(features),
             "state_counts": dict(sorted(state_counts.items())),
             "issue_count": len(issues),
+            "docs_probe": {
+                "provided": docs_report is not None,
+                "total": int(docs_summary.get("total", 0)),
+                "ok": int(docs_summary.get("ok", 0)),
+                "failed": int(docs_summary.get("failed", 0)),
+                "linked_documents": int(docs_summary.get("linked_documents", 0)),
+            },
         },
         "backends": [
             {
