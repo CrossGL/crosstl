@@ -337,6 +337,140 @@ class TestCudaCodeGen:
         assert "memoryBarrierImage();" not in cuda_code
         assert "workgroupBarrier();" not in cuda_code
 
+    def test_user_defined_synchronization_names_are_not_lowered(self):
+        """Test CUDA does not remap user-defined synchronization names."""
+        source_code = """
+        shader SynchronizationShadowing {
+            compute {
+                void barrier() {
+                    return;
+                }
+
+                void memoryBarrier() {
+                    return;
+                }
+
+                void workgroupBarrier() {
+                    return;
+                }
+
+                void groupMemoryBarrier() {
+                    return;
+                }
+
+                void memoryBarrierShared() {
+                    return;
+                }
+
+                void memoryBarrierBuffer() {
+                    return;
+                }
+
+                void memoryBarrierImage() {
+                    return;
+                }
+
+                void main() {
+                    barrier();
+                    memoryBarrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "void barrier()" in cuda_code
+        assert "void memoryBarrier()" in cuda_code
+        assert "void workgroupBarrier()" in cuda_code
+        assert "void groupMemoryBarrier()" in cuda_code
+        assert "void memoryBarrierShared()" in cuda_code
+        assert "void memoryBarrierBuffer()" in cuda_code
+        assert "void memoryBarrierImage()" in cuda_code
+        assert "barrier();" in cuda_code
+        assert "memoryBarrier();" in cuda_code
+        assert "workgroupBarrier();" in cuda_code
+        assert "groupMemoryBarrier();" in cuda_code
+        assert "memoryBarrierShared();" in cuda_code
+        assert "memoryBarrierBuffer();" in cuda_code
+        assert "memoryBarrierImage();" in cuda_code
+        assert "__syncthreads();" not in cuda_code
+        assert "__threadfence();" not in cuda_code
+        assert "__threadfence_block();" not in cuda_code
+
+    @pytest.mark.parametrize(
+        "builtin",
+        [
+            "barrier",
+            "groupMemoryBarrier",
+            "memoryBarrier",
+            "memoryBarrierShared",
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "workgroupBarrier",
+        ],
+    )
+    def test_synchronization_builtins_reject_arguments(self, builtin):
+        """Test CUDA synchronization builtins reject invalid arguments."""
+        source_code = f"""
+        shader BadSynchronizationBuiltinArgs {{
+            compute {{
+                void main() {{
+                    {builtin}(1);
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"CUDA synchronization builtin '{builtin}' requires 0 argument",
+        ):
+            CudaCodeGen().generate(ast)
+
+    def test_shared_memory_synchronization_helper_lowers_to_cuda(self):
+        """Test shared memory and barriers lower through compute helpers."""
+        source_code = """
+        shader SharedSynchronizationHelper {
+            compute {
+                void synchronizeTile() {
+                    shared float tile[32];
+                    tile[gl_LocalInvocationID.x] = 0.0;
+                    barrier();
+                    memoryBarrierShared();
+                }
+
+                void main() {
+                    synchronizeTile();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        helper_signature = "__device__ void synchronizeTile()"
+        kernel_signature = "__global__ void main()"
+        assert helper_signature in cuda_code
+        assert kernel_signature in cuda_code
+        assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
+        assert "__shared__ float tile[32];" in cuda_code
+        assert "tile[threadIdx.x] = 0.0;" in cuda_code
+        assert "__syncthreads();" in cuda_code
+        assert "__threadfence_block();" in cuda_code
+        assert "synchronizeTile();" in cuda_code
+        assert "__syncthreads(1)" not in cuda_code
+        assert "memoryBarrierShared();" not in cuda_code
+
     def test_builtin_invocation_ids_emit_cuda_names(self):
         """Test CUDA maps CrossGL invocation built-ins in member access form."""
         source_code = """

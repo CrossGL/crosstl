@@ -4848,6 +4848,12 @@ def _generic_payload_enum_direct_resource_payload_source():
         int tag;
     };
 
+    struct MSArrayBox {
+        sampler2DMSArray tex;
+        image2DMSArray image;
+        int tag;
+    };
+
     readonly image2D readonlyImages[2];
 
     Result<sampler2D, int> makeTexture(sampler2D texture) {
@@ -4919,6 +4925,10 @@ def _generic_payload_enum_direct_resource_payload_source():
     }
 
     Result<ResourceBox, int> makeBox(ResourceBox payload) {
+        return Result::Ok(payload);
+    }
+
+    Result<MSArrayBox, int> makeMSArrayBox(MSArrayBox payload) {
         return Result::Ok(payload);
     }
 
@@ -5265,6 +5275,51 @@ def _generic_payload_enum_direct_resource_payload_source():
             Result::Err(_) => vec4(0.0)
         };
     }
+
+    int queryNestedMSArrayPayload(Result<MSArrayBox, int> value) {
+        return match value {
+            Result::Ok(box) => textureSamples(box.tex) + imageSamples(box.image)
+                + box.tag,
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchNestedMSArrayTexturePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(box) => box.tex.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadNestedMSArrayImagePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(box) => box.image.Load(pixelLayer, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void storeNestedMSArrayImagePayload(
+        Result<MSArrayBox, int> value,
+        ivec3 pixelLayer,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(box) => {
+                box.image.Store(pixelLayer, sampleIndex, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
     """
 
 
@@ -5295,6 +5350,8 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "var Ok_0: Texture2DMSArray" in generated_code
     assert "struct Result_image2DMSArray_int:" in generated_code
     assert "var Ok_0: Image2DMSArray" in generated_code
+    assert "struct Result_MSArrayBox_int:" in generated_code
+    assert "var Ok_0: MSArrayBox" in generated_code
     assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
     assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
     assert "struct Result_ByteAddressBuffer_int:" in generated_code
@@ -5337,6 +5394,14 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "buffer_store4(value.Ok_0[int(slot)], offset, data)" in generated_code
     assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
     assert "image_load(value.Ok_0.image, pixel)" in generated_code
+    assert "texture_samples(value.Ok_0.tex)" in generated_code
+    assert "image_samples(value.Ok_0.image)" in generated_code
+    assert "texel_fetch(value.Ok_0.tex, pixelLayer, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0.image, pixelLayer, sampleIndex)" in generated_code
+    assert (
+        "image_store(value.Ok_0.image, pixelLayer, sampleIndex, color)"
+        in generated_code
+    )
     assert "fn reassignDirectPayloadWrapper() -> None:" in generated_code
     assert "value = Result_image2D_int_Err_make(0)" in generated_code
     assert "fn texture_size(tex: Texture2D, lod: Int32)" in generated_code
@@ -5786,6 +5851,94 @@ def test_generic_payload_enum_helper_returned_global_multisample_payload_access_
     ],
 )
 def test_generic_payload_enum_multisample_array_payload_argument_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            vec4 invalidNestedTextureArrayCoord(
+                Result<MSArrayBox, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(box) => box.tex.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"texel_fetch.*coordinate.*Texture2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            vec4 invalidNestedImageArrayCoord(
+                Result<MSArrayBox, int> value,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                return match value {
+                    Result::Ok(box) => box.image.Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"image_load.*coordinate.*Image2DMSArray.*SIMD\[DType\.int32, 4\]",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct MSArrayBox {
+                sampler2DMSArray tex;
+                image2DMSArray image;
+                int tag;
+            };
+            void invalidNestedImageArrayStoreSample(
+                Result<MSArrayBox, int> value,
+                ivec3 pixelLayer,
+                float sampleIndex,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(box) => {
+                        box.image.Store(pixelLayer, sampleIndex, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"image_store.*sample.*Image2DMSArray.*Int32",
+        ),
+    ],
+)
+def test_generic_payload_enum_nested_multisample_array_struct_diagnostics(
     source, pattern
 ):
     with pytest.raises(ValueError, match=pattern):

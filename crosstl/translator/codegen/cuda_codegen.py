@@ -39,6 +39,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     resource_diagnostic_backend = "CUDA"
     query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
+    synchronization_builtins = {
+        "barrier",
+        "groupMemoryBarrier",
+        "memoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+        "workgroupBarrier",
+    }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
         "Texture1DArray": "sampler1DArray",
@@ -795,6 +804,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         args = self.cuda_user_function_call_arguments(func_name, raw_args, args)
         if is_user_function:
             return f"{func_name}({', '.join(args)})"
+
+        if func_name in self.synchronization_builtins and raw_args:
+            raise ValueError(
+                f"CUDA synchronization builtin '{func_name}' requires 0 "
+                f"arguments; got {len(raw_args)}"
+            )
 
         if func_name == "abs" and len(args) == 1:
             abs_call = self.generate_abs_call(raw_args, args)

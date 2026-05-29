@@ -4559,6 +4559,11 @@ class MojoCodeGen:
         if isinstance(pattern, WildcardPatternNode):
             return conditions
         if isinstance(pattern, LiteralPatternNode):
+            binding_name = self.literal_pattern_binding_name(pattern)
+            if binding_name is not None:
+                if not top_level:
+                    replacements[binding_name] = expression
+                return conditions
             if collect_conditions:
                 conditions.append(
                     f"{expression} == {self.generate_expression(pattern.literal)}"
@@ -4643,6 +4648,18 @@ class MojoCodeGen:
                     )
                 )
         return conditions
+
+    def literal_pattern_binding_name(self, pattern):
+        literal = getattr(pattern, "literal", None)
+        value = getattr(literal, "value", None)
+        literal_type = getattr(getattr(literal, "literal_type", None), "name", None)
+        if (
+            literal_type == "unknown"
+            and isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z_]\w*", value)
+        ):
+            return value
+        return None
 
     def match_arm_rejection_reason(self, arms, subject_type=None):
         wildcard_index = None
@@ -4861,6 +4878,8 @@ class MojoCodeGen:
     def is_unconstrained_match_pattern(self, pattern, subject_type=None):
         if isinstance(pattern, WildcardPatternNode):
             return True
+        if isinstance(pattern, LiteralPatternNode):
+            return self.literal_pattern_binding_name(pattern) is not None
         if isinstance(pattern, IdentifierPatternNode):
             return not self.is_enum_identifier_pattern(pattern)
         if isinstance(pattern, StructPatternNode):
