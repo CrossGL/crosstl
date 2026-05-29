@@ -5981,7 +5981,9 @@ class SlangCodeGen:
                     return resource_call
             if isinstance(func_expr, MemberAccessNode):
                 resource_member_call = self.generate_resource_member_call(
-                    func_expr, node.args
+                    func_expr,
+                    node.args,
+                    statement_context=self.is_direct_statement_expression(node),
                 )
                 if resource_member_call is not None:
                     return resource_member_call
@@ -8191,7 +8193,7 @@ class SlangCodeGen:
             return None
         return self.structured_buffer_element_type(receiver_type) or "uint"
 
-    def generate_resource_member_call(self, func_expr, args):
+    def generate_resource_member_call(self, func_expr, args, statement_context=False):
         receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         receiver_type = self.structured_buffer_resource_type(receiver)
 
@@ -8242,6 +8244,12 @@ class SlangCodeGen:
             if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires RWByteAddressBuffer receiver"
+                )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)

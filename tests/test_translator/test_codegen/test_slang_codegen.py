@@ -9396,6 +9396,92 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
     assert "None(" not in generated_code
 
 
+def test_byte_address_interlocked_member_calls_reject_value_contexts():
+    code = """
+    shader SlangByteAddressInterlockedValueContexts {
+        RWByteAddressBuffer rawOutput @binding(24);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint offset, uint value) {
+            uint oldValue = 0u;
+            return rawOutput.InterlockedAdd(offset, value, oldValue);
+        }
+
+        compute {
+            void main(uint offset, uint value) {
+                uint oldValue = 0u;
+                rawOutput.InterlockedAdd(offset, value, oldValue);
+                uint initBlocked =
+                    rawOutput.InterlockedAdd(offset + 4u, value, oldValue);
+                oldValue =
+                    rawOutput.InterlockedExchange(offset + 8u, value, oldValue);
+                passUint(rawOutput.InterlockedOr(offset + 12u, value, oldValue));
+                uint binaryBlocked =
+                    rawOutput.InterlockedXor(offset + 16u, value, oldValue) + 1u;
+                if (rawOutput.InterlockedAnd(offset + 20u, value, oldValue) != 0u) {
+                    oldValue = returnBlocked(offset, value);
+                }
+                for (
+                    rawOutput.InterlockedAdd(offset + 24u, value, oldValue);
+                    oldValue < 8u;
+                    rawOutput.InterlockedExchange(offset + 28u, oldValue, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang byte-address buffer: "
+        "InterlockedAdd cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang byte-address buffer: "
+        "InterlockedExchange cannot be used as a value expression */ 0u;"
+        in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: InterlockedOr "
+        "cannot be used as a value expression */ 0u);" in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang byte-address buffer: "
+        "InterlockedXor cannot be used as a value expression */ 0u + 1u;"
+        in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang byte-address buffer: InterlockedAnd cannot "
+        "be used as a value expression */ 0u != 0u)" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: InterlockedAdd "
+        "cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "for (rawOutput.InterlockedAdd(offset + 24u, value, oldValue); "
+        "oldValue < 8u; rawOutput.InterlockedExchange(offset + 28u, oldValue, "
+        "oldValue))" in generated_code
+    )
+    assert "uint initBlocked = rawOutput.InterlockedAdd" not in generated_code
+    assert "oldValue = rawOutput.InterlockedExchange" not in generated_code
+    assert "passUint(rawOutput.InterlockedOr" not in generated_code
+    assert (
+        "rawOutput.InterlockedXor(offset + 16u, value, oldValue) + 1u"
+        not in generated_code
+    )
+    assert "if (rawOutput.InterlockedAnd" not in generated_code
+    assert "return rawOutput.InterlockedAdd" not in generated_code
+    assert "None(" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("resource_source", "message"),
     [

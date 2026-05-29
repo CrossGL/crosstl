@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 684
+        "test_count": 685
       },
       "translator_codegen": {
         "exists": true,
@@ -921,7 +921,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 313,
+        "unsupported_marker_count": 314,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 391
+        "test_count": 392
       },
       "translator_codegen": {
         "exists": true,

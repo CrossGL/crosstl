@@ -6456,6 +6456,89 @@ def test_directx_mesh_output_writes_validate_order_and_indices():
         )
 
 
+def test_directx_mesh_output_writes_track_helper_calls():
+    helper_write_before_count_code = """
+    shader MeshOutputHelperWriteBeforeCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                writeVertex(verts);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(helper_write_before_count_code), "mesh"
+        )
+
+    helper_write_after_count_code = """
+    shader MeshOutputHelperWriteAfterCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(helper_write_after_count_code), "mesh"
+    )
+    assert "writeVertex(verts);" in generated
+
+    helper_bound_code = """
+    shader MeshOutputHelperWriteBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[3].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(helper_bound_code), "mesh"
+        )
+
+
 def test_directx_mesh_output_writes_track_literal_branch_dominance():
     true_branch_code = """
     shader MeshOutputCountDominatesAfterTrueBranch {

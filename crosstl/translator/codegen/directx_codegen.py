@@ -8196,7 +8196,11 @@ class HLSLCodeGen:
         role_by_name,
         declared_counts,
         set_count_literals,
+        active_helper_calls=None,
     ):
+        if active_helper_calls is None:
+            active_helper_calls = set()
+
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
             return set_mesh_output_counts_seen
@@ -8213,6 +8217,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
                 )
             )
 
@@ -8252,15 +8257,88 @@ class HLSLCodeGen:
         role = role_by_name.get(array_name)
         if role is None:
             return None
+        parameter_name = array_name
+        if isinstance(role, dict):
+            parameter_name = role.get("name", array_name)
+            role = role.get("role")
+        if role is None:
+            return None
 
         return {
             "role": role,
-            "name": array_name,
+            "name": parameter_name,
             "index": getattr(
                 array_access, "index", getattr(array_access, "index_expr", None)
             ),
             "member_path": member_path,
         }
+
+    def hlsl_mesh_output_call_role_mapping(self, call, callee, role_by_name):
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        callee_role_by_name = {}
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+
+            parameter_name = getattr(parameter, "name", None)
+            argument_name = self.expression_name(args[index])
+            if not parameter_name or not argument_name:
+                continue
+
+            role = role_by_name.get(argument_name)
+            if role is None:
+                continue
+
+            display_name = argument_name
+            if isinstance(role, dict):
+                display_name = role.get("name", argument_name)
+                role = role.get("role")
+            if role is None:
+                continue
+
+            callee_role_by_name[parameter_name] = {
+                "role": role,
+                "name": display_name,
+            }
+        return callee_role_by_name
+
+    def validate_hlsl_mesh_output_helper_call(
+        self,
+        call,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls,
+    ):
+        helper_name = self.function_call_name(call)
+        helper = (self.current_hlsl_available_functions or {}).get(helper_name)
+        if helper is None:
+            return
+
+        helper_role_by_name = self.hlsl_mesh_output_call_role_mapping(
+            call, helper, role_by_name
+        )
+        if not helper_role_by_name:
+            return
+
+        helper_id = id(helper)
+        if helper_id in active_helper_calls:
+            return
+
+        active_helper_calls.add(helper_id)
+        try:
+            self.validate_hlsl_mesh_output_write_sequence(
+                self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                set_mesh_output_counts_seen,
+                helper_role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+            )
+        finally:
+            active_helper_calls.remove(helper_id)
 
     def validate_hlsl_mesh_output_assignment(
         self,
@@ -8323,7 +8401,11 @@ class HLSLCodeGen:
         role_by_name,
         declared_counts,
         set_count_literals,
+        active_helper_calls=None,
     ):
+        if active_helper_calls is None:
+            active_helper_calls = set()
+
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
@@ -8333,6 +8415,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
                 )
                 continue
 
@@ -8353,6 +8436,7 @@ class HLSLCodeGen:
                         role_by_name,
                         declared_counts,
                         set_count_literals,
+                        active_helper_calls,
                     )
                     continue
 
@@ -8364,6 +8448,7 @@ class HLSLCodeGen:
                             role_by_name,
                             declared_counts,
                             set_count_literals,
+                            active_helper_calls,
                         )
                     continue
 
@@ -8373,6 +8458,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
                 )
                 if else_branch is not None:
                     self.validate_hlsl_mesh_output_write_sequence(
@@ -8381,6 +8467,7 @@ class HLSLCodeGen:
                         role_by_name,
                         declared_counts,
                         set_count_literals,
+                        active_helper_calls,
                     )
                 continue
 
@@ -8391,6 +8478,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
                 )
                 continue
 
@@ -8401,6 +8489,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
                 )
                 continue
 
@@ -8412,6 +8501,18 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                )
+
+            for node in self.walk_ast(stmt):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                self.validate_hlsl_mesh_output_helper_call(
+                    node,
+                    counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                    active_helper_calls,
                 )
 
             if self.hlsl_statement_contains_set_mesh_output_counts(stmt):
