@@ -2324,7 +2324,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipBindTexture":
             if len(args) >= 5:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference bind: "
                     f"offset output: {offset}, texture: {args[1]}, "
@@ -2332,7 +2332,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipBindTexture2D":
             if len(args) >= 7:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference bind 2D: "
                     f"offset output: {offset}, texture: {args[1]}, "
@@ -2362,7 +2362,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetTextureAlignmentOffset":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2386,7 +2386,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetAddressMode":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2409,7 +2409,7 @@ class HipToCrossGLConverter:
             "hipTexRefGetMipmappedArray",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 labels = {
                     "hipTexRefGetArray": "array",
@@ -2453,8 +2453,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetFormat":
             if len(args) >= 3:
-                format_output = self.format_runtime_pointer_target(node.args[0])
-                channels_output = self.format_runtime_pointer_target(node.args[1])
+                format_output = self.format_runtime_raw_output_target(node.args[0])
+                channels_output = self.format_runtime_raw_output_target(node.args[1])
                 format_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 channels_output_name = self.get_runtime_pointer_target_name(
                     node.args[1]
@@ -2476,8 +2476,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetMipmapLevelClamp":
             if len(args) >= 3:
-                min_output = self.format_runtime_pointer_target(node.args[0])
-                max_output = self.format_runtime_pointer_target(node.args[1])
+                min_output = self.format_runtime_raw_output_target(node.args[0])
+                max_output = self.format_runtime_raw_output_target(node.args[1])
                 min_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 max_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if min_output_name is not None:
@@ -2497,7 +2497,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefSetAddress":
             if len(args) >= 4:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference set address: "
                     f"offset output: {offset}, texture: {args[1]}, "

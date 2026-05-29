@@ -10899,6 +10899,130 @@ class TestHipCodeGen:
         assert "textureReference.array(texRef)" not in result
         assert "textureReference.mipmappedArray(texRef)" not in result
 
+    def test_hip_texture_reference_array_outputs_clear_stale_metadata(self):
+        """Test texture-reference array-element outputs clear stale metadata."""
+        code = """
+        void queryTextureReferenceArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            textureReference* texRef,
+            hipChannelFormatDesc* desc,
+            size_t* sizes,
+            hipTextureAddressMode* addressModes,
+            hipTextureFilterMode* filterModes,
+            unsigned int* flagsOut,
+            int* ints,
+            float* floats,
+            hipArray_Format* formats
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipGetTextureAlignmentOffset(&sizes[0], texRef);
+            sizes[2] = sizes[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipBindTexture(&sizes[1], texRef, devicePtr, desc, 256);
+            sizes[3] = sizes[1];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipTexRefSetAddress(&sizes[4], texRef, devicePtr, 512);
+            sizes[5] = sizes[4];
+
+            hipMemGetAddressRange((void**)&addressModes, &staleSize, devicePtr);
+            hipTexRefGetAddressMode(&addressModes[0], texRef, 1);
+            addressModes[1] = addressModes[0];
+
+            hipMemGetAddressRange((void**)&filterModes, &staleSize, devicePtr);
+            hipTexRefGetFilterMode(&filterModes[0], texRef);
+            filterModes[1] = filterModes[0];
+
+            hipMemGetAddressRange((void**)&flagsOut, &staleSize, devicePtr);
+            hipTexRefGetFlags(&flagsOut[0], texRef);
+            flagsOut[1] = flagsOut[0];
+
+            hipMemGetAddressRange((void**)&ints, &staleSize, devicePtr);
+            hipTexRefGetMaxAnisotropy(&ints[0], texRef);
+            ints[1] = ints[0];
+
+            hipMemGetAddressRange((void**)&floats, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelBias(&floats[0], texRef);
+            floats[1] = floats[0];
+
+            hipMemGetAddressRange((void**)&formats, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&ints, &staleSize, devicePtr);
+            hipTexRefGetFormat(&formats[0], &ints[2], texRef);
+            formats[1] = formats[0];
+            ints[3] = ints[2];
+
+            hipMemGetAddressRange((void**)&floats, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelClamp(&floats[2], &floats[3], texRef);
+            floats[4] = floats[2];
+            floats[5] = floats[3];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            "HIP texture alignment offset query: output: sizes[0], texture: texRef",
+            (
+                "HIP texture reference bind: offset output: sizes[1], "
+                "texture: texRef, pointer: devicePtr, desc: desc, bytes: 256"
+            ),
+            (
+                "HIP texture reference set address: offset output: sizes[4], "
+                "texture: texRef, pointer: devicePtr, bytes: 512"
+            ),
+            (
+                "HIP texture reference get address mode: output: addressModes[0], "
+                "texture: texRef, dim: 1"
+            ),
+            (
+                "HIP texture reference get filter mode: output: filterModes[0], "
+                "texture: texRef"
+            ),
+            "HIP texture reference get flags: output: flagsOut[0], texture: texRef",
+            (
+                "HIP texture reference get max anisotropy: output: ints[0], "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level bias: output: floats[0], "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get format: format output: formats[0], "
+                "channels output: ints[2], texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level clamp: min output: "
+                "floats[2], max output: floats[3], texture: texRef"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for assignment in [
+            "sizes[2] = sizes[0];",
+            "sizes[3] = sizes[1];",
+            "sizes[5] = sizes[4];",
+            "addressModes[1] = addressModes[0];",
+            "filterModes[1] = filterModes[0];",
+            "flagsOut[1] = flagsOut[0];",
+            "ints[1] = ints[0];",
+            "floats[1] = floats[0];",
+            "formats[1] = formats[0];",
+            "ints[3] = ints[2];",
+            "floats[4] = floats[2];",
+            "floats[5] = floats[3];",
+        ]:
+            assert assignment in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_callback_activity_expression_conversion(self):
         """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """
