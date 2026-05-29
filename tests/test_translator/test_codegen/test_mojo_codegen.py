@@ -633,15 +633,130 @@ def test_integer_enum_underlying_types_are_preserved():
     assert "return UInt16(Small_Auto)" in generated_code
 
 
-def test_payload_enums_are_rejected_for_mojo_codegen():
+def test_payload_enum_variants_lower_to_tagged_mojo_struct_constructors():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { value: float, flag: bool },
+        None
+    };
+
+    MaybeInt makeSome(int value) {
+        return MaybeInt::Some(value);
+    }
+
+    MaybeInt makeNamed(float value) {
+        return MaybeInt::Named(value, true);
+    }
+
+    MaybeInt makeNone() {
+        return MaybeInt::None;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct MaybeInt:" in generated_code
+    assert "var variant: Int32" in generated_code
+    assert "var Some_0: Int32" in generated_code
+    assert "var value: Float32" in generated_code
+    assert "var flag: Bool" in generated_code
+    assert "alias MaybeInt_Some = 0" in generated_code
+    assert "alias MaybeInt_Named = 1" in generated_code
+    assert "alias MaybeInt_None = 2" in generated_code
+    assert "fn MaybeInt_Some_make(payload0: Int32) -> MaybeInt:" in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_Some, Some_0=payload0, "
+        "value=0.0, flag=False)"
+    ) in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_Named, Some_0=0, "
+        "value=payload0, flag=payload1)"
+    ) in generated_code
+    assert (
+        "return MaybeInt(variant=MaybeInt_None, Some_0=0, value=0.0, " "flag=False)"
+    ) in generated_code
+    assert "return MaybeInt_Some_make(value)" in generated_code
+    assert "return MaybeInt_Named_make(value, True)" in generated_code
+    assert "return MaybeInt_None_make()" in generated_code
+
+
+def test_payload_enum_variants_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    MaybeInt makeSome(int value) {
+        return MaybeInt::Some(value);
+    }
+
+    MaybeInt makeNamed(int value) {
+        return MaybeInt::Named(value, true);
+    }
+
+    MaybeInt makeNone() {
+        return MaybeInt::None;
+    }
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some => value.Some_0,
+            MaybeInt::Named => value.count,
+            _ => -1
+        };
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(makeSome(7)))\n"
+        "    print(inspect(makeNamed(3)))\n"
+        "    print(inspect(makeNone()))\n"
+    )
+
+    source_path = tmp_path / "payload_enums.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["7", "3", "-1"]
+
+
+def test_payload_enum_invalid_shapes_are_rejected_for_mojo_codegen():
+    code = """
+    enum Bad {
+        IntValue { value: int },
+        FloatValue { value: float }
+    };
+    """
+
+    with pytest.raises(ValueError, match="payload fields must"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_payload_enum_constructor_arity_is_validated_for_mojo_codegen():
     code = """
     enum MaybeInt {
         Some(int),
         None
     };
+
+    MaybeInt broken() {
+        return MaybeInt::Some();
+    }
     """
 
-    with pytest.raises(ValueError, match="Unsupported enum payload for Mojo"):
+    with pytest.raises(ValueError, match="MaybeInt::Some expects 1 arguments, got 0"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -3860,6 +3975,272 @@ def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen(
 
     with pytest.raises(ValueError, match=message):
         generate_code(ast)
+
+
+def test_match_expression_lowers_guarded_bindings_and_enum_identifier_patterns():
+    code = """
+    enum Mode {
+        Add,
+        Multiply
+    };
+
+    int guardedValue(int value) {
+        return match value {
+            zero if zero == 0 => zero + 1,
+            _ => 2
+        };
+    }
+
+    int guardedStatement(int value) {
+        int output = 0;
+        match value {
+            bound if bound > 0 => {
+                output = bound;
+            }
+            _ => {
+                output = -1;
+            }
+        }
+        return output;
+    }
+
+    int enumValue(Mode mode) {
+        return match mode {
+            Mode::Add => 10,
+            Mode::Multiply => 20,
+            _ => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if (value == 0):" in generated_code
+    assert "__cgl_match_value_0 = (value + 1)" in generated_code
+    assert "if (value > 0):" in generated_code
+    assert "output = value" in generated_code
+    assert "zero +" not in generated_code
+    assert "bound" not in generated_code
+    assert "if mode == Mode_Add:" in generated_code
+    assert "elif mode == Mode_Multiply:" in generated_code
+    assert "identifier binding patterns cannot be lowered" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_expression_lowers_payload_enum_destructuring_patterns():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) if payload > 4 => payload + 1,
+            MaybeInt::Named { count, flag } if flag => count,
+            MaybeInt::None => -1,
+            _ => -2
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "if (value.variant == MaybeInt_Some) and ((value.Some_0 > 4)):"
+        in generated_code
+    )
+    assert "__cgl_match_value_0 = (value.Some_0 + 1)" in generated_code
+    assert "elif (value.variant == MaybeInt_Named) and (value.flag):" in generated_code
+    assert "__cgl_match_value_0 = value.count" in generated_code
+    assert "elif value.variant == MaybeInt_None:" in generated_code
+    assert "payload + 1" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_expression_payload_enum_destructuring_patterns_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) if payload > 4 => payload + 1,
+            MaybeInt::Named { count, flag } if flag => count,
+            MaybeInt::None => -1,
+            _ => -2
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspect(MaybeInt_Some_make(5)))\n"
+        "    print(inspect(MaybeInt_Some_make(3)))\n"
+        "    print(inspect(MaybeInt_Named_make(8, True)))\n"
+        "    print(inspect(MaybeInt_None_make()))\n"
+    )
+
+    source_path = tmp_path / "payload_enum_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["6", "-2", "8", "-1"]
+
+
+def test_match_expression_allows_exhaustive_payload_enum_patterns_without_wildcard():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        Named { count: int, flag: bool },
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(payload) => payload,
+            MaybeInt::Named { count, flag } => count,
+            MaybeInt::None => -1
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if value.variant == MaybeInt_Some:" in generated_code
+    assert "elif value.variant == MaybeInt_Named:" in generated_code
+    assert "elif value.variant == MaybeInt_None:" in generated_code
+    assert "match expressions must include a final wildcard arm" not in generated_code
+
+
+def test_match_expression_allows_final_struct_destructuring_without_wildcard():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int sum(Point point) {
+        return match point {
+            Point { x, y } => x + y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if True:" in generated_code
+    assert "__cgl_match_value_0 = (point.x + point.y)" in generated_code
+    assert "match expressions must include a final wildcard arm" not in generated_code
+
+
+def test_match_expression_struct_destructuring_patterns_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int sum(Point point) {
+        return match point {
+            Point { x, y } => x + y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n" "    var point = Point(x=4, y=9)\n" "    print(sum(point))\n"
+    )
+
+    source_path = tmp_path / "struct_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["13"]
+
+
+def test_match_expression_guarded_bindings_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    enum Mode {
+        Add,
+        Multiply
+    };
+
+    int guardedValue(int value) {
+        return match value {
+            zero if zero == 0 => zero + 1,
+            _ => 2
+        };
+    }
+
+    int guardedStatement(int value) {
+        int output = 0;
+        match value {
+            bound if bound > 0 => {
+                output = bound;
+            }
+            _ => {
+                output = -1;
+            }
+        }
+        return output;
+    }
+
+    int enumValue(Mode mode) {
+        return match mode {
+            Mode::Add => 10,
+            Mode::Multiply => 20,
+            _ => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(guardedValue(0))\n"
+        "    print(guardedValue(4))\n"
+        "    print(guardedStatement(5))\n"
+        "    print(enumValue(Mode_Multiply))\n"
+    )
+
+    source_path = tmp_path / "guarded_match_patterns.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["1", "2", "5", "20"]
 
 
 def test_match_argument_nested_array_resource_size_target_shape_direct_ir_for_mojo_codegen():
@@ -16140,7 +16521,7 @@ def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen():
         generate_code(ast)
 
 
-def test_match_guarded_arm_is_rejected_for_mojo_codegen():
+def test_match_guarded_literal_arm_lowers_for_mojo_codegen():
     code = """
     shader main {
         compute {
@@ -16163,8 +16544,12 @@ def test_match_guarded_arm_is_rejected_for_mojo_codegen():
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
 
-    with pytest.raises(ValueError, match="Unsupported match arm for Mojo"):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+
+    assert "if (mode == 0) and ((mode > 0)):" in generated_code
+    assert "value = 1" in generated_code
+    assert "else:\n        value = 2" in generated_code
+    assert "Unsupported match arm" not in generated_code
 
 
 def test_mojo_imports():
