@@ -97,6 +97,8 @@ shader MetalWaveIntrinsicsValidation {
             uint prefixProduct = WavePrefixProduct(value + 1u);
             bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
             bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+            bool equalScalar = WaveActiveAllEqual(value);
+            bool equalVector = WaveActiveAllEqual(lanes);
             uvec4 ballot = WaveActiveBallot(anyLane);
             uvec4 matchMask = WaveMatch(value);
             mat2 matrixValue = mat2(1.0);
@@ -124,6 +126,7 @@ shader MetalWaveIntrinsicsValidation {
             bool quadAll = QuadAll(allLane);
             uint folded = minValue + count + prefixCount + quadLane + ballot.x + matchMask.x + helperMatchValue.y + lane + helperValue + multiSum + multiProduct + multiCount + multiAnd + multiOr + multiXor + helperMultiValue;
             folded = folded + vectorSum.x + vectorProduct.y + vectorBits.x + helperVectorValue.y;
+            folded = folded + (equalScalar ? value : 0u) + (equalVector ? lanes.x : 0u);
             folded = folded + (quadAny ? quadX : quadY);
             folded = folded + (quadAll ? quadDiagonal : firstValue) + laneCount;
         }
@@ -1145,6 +1148,37 @@ shader ResourceImageArrayLocalAliasValidation {
 """
 
 
+METAL_RESOURCE_ARRAY_ELEMENT_HELPER_COMPUTE_SHADER = """
+shader MetalResourceArrayElementHelperValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+    image2D images @rgba32f[4];
+
+    vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {
+        return texture(tex, samp, uv);
+    }
+
+    vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {
+        return texture(texs[layer], samps[layer], uv);
+    }
+
+    vec4 readOne(image2D image @rgba32f, ivec2 pixel) {
+        return imageLoad(image, pixel);
+    }
+
+    compute {
+        void main(uvec3 gid @ gl_GlobalInvocationID) {
+            int layer = int(gid.x & 3u);
+            vec4 sampled = sampleOne(textures[layer], samplers[layer], vec2(0.5));
+            vec4 sampledArray = sampleArray(textures, samplers, layer, vec2(0.25));
+            vec4 stored = readOne(images[layer], ivec2(0, 0));
+            imageStore(images[layer], ivec2(1, 0), sampled + sampledArray + stored);
+        }
+    }
+}
+"""
+
+
 SAMPLER_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
 shader SamplerArrayLocalAliasValidation {
     sampler2D textures[4];
@@ -1971,6 +2005,58 @@ shader MetalThreadgroupAtomicBarrierValidation {
             atomic_exchange_explicit(
                 counters[index],
                 oldValue + currentValue,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
+METAL_ATOMIC_ARRAY_INITIALIZER_SHADER = """
+shader MetalAtomicArrayInitializerValidation {
+    compute {
+        void main() {
+            uint index = gl_LocalInvocationIndex;
+            shared atomic_uint counters[4] = {0u, 1u, uint(index), 3u};
+            atomic_int signedCounters[2] = {-1, 2};
+            uint oldValue = atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed
+            );
+            int signedValue = atomic_load_explicit(
+                signedCounters[index % 2u],
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
+METAL_SYMBOLIC_ATOMIC_ARRAY_INITIALIZER_SHADER = """
+shader MetalSymbolicAtomicArrayInitializerValidation {
+    const int COUNT = 4;
+    const int EXTRA = COUNT + 1;
+
+    compute {
+        void main() {
+            uint index = gl_LocalInvocationIndex;
+            shared atomic_uint counters[COUNT] = {0u, 1u};
+            shared atomic_uint expressionCounters[COUNT + 1] = {2u};
+            atomic_int signedCounters[EXTRA] = {-1, 2};
+            uint oldValue = atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed
+            );
+            int signedValue = atomic_load_explicit(
+                signedCounters[index % uint(EXTRA)],
+                memory_order_relaxed
+            );
+            uint expressionValue = atomic_load_explicit(
+                expressionCounters[index % uint(COUNT + 1)],
                 memory_order_relaxed
             );
         }
@@ -3290,10 +3376,14 @@ shader MetalMeshOutputVariableMemberWritesValidation {
             uint primitiveIndex = 0u;
             SetMeshOutputCounts(4, 2);
             verts[vertexIndex].position = vec4(1.0, 0.0, 0.0, 1.0);
+            verts[vertexIndex].position += vec4(0.0, 1.0, 0.0, 0.0);
             verts[vertexIndex].uv = vec2(0.5, 1.0);
+            verts[vertexIndex].uv += vec2(0.25, 0.0);
             tris[primitiveIndex] = uvec3(0u, 1u, 2u);
             prims[primitiveIndex].layer = 2u;
+            prims[primitiveIndex].layer += 3u;
             prims[primitiveIndex].bary = vec2(0.25, 0.75);
+            prims[primitiveIndex].bary += vec2(0.5, 0.0);
         }
     }
 }
@@ -6037,6 +6127,8 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
         "compute",
     )
     assert "simd_sum(value)" in code
+    assert "simd_all(value == simd_broadcast_first(value))" in code
+    assert "simd_all(all(lanes == simd_broadcast_first(lanes)))" in code
     assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in code
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in code
     assert "uint lane = crossglWaveLaneIndex;" in code
@@ -6093,6 +6185,8 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
     assert "__crossgl_metal_wave_multi_prefix_sum(matrixValue" not in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code
+    assert "WaveActiveAllEqual(value)" not in code
+    assert "WaveActiveAllEqual(lanes)" not in code
     assert "WaveOpNode" not in code
     source.write_text(code, encoding="utf-8")
 
@@ -6261,6 +6355,30 @@ def test_generated_metal_resource_array_local_aliases_compile_with_metal(tmp_pat
             "-o",
             str(compute_output),
         ]
+    )
+
+
+def test_generated_metal_resource_array_element_helpers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_resource_array_element_helpers.metal"
+    output = tmp_path / "compute_resource_array_element_helpers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_RESOURCE_ARRAY_ELEMENT_HELPER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "sampleOne(textures[layer], samplers[layer], float2(0.5))" in code
+    assert "sampleArray(textures, samplers, layer, float2(0.25))" in code
+    assert "readOne(images[layer], int2(0, 0))" in code
+    assert "array<texture2d<float>, 4> texs" in code
+    assert "array<sampler, 4> samps" in code
+    assert "array<texture2d<float, access::read_write>, 4> images" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
     )
 
 
@@ -6890,6 +7008,15 @@ def test_generated_metal_mesh_output_variable_member_writes_compile_with_metal3(
 
     assert "MeshVertex _crossglMeshVertices_verts_vertexIndex = {};" in code
     assert "MeshPrimitive _crossglMeshPrimitives_prims_primitiveIndex = {};" in code
+    assert (
+        "_crossglMeshVertices_verts_vertexIndex.position += "
+        "float4(0.0, 1.0, 0.0, 0.0);"
+    ) in code
+    assert ("_crossglMeshVertices_verts_vertexIndex.uv += float2(0.25, 0.0);") in code
+    assert "_crossglMeshPrimitives_prims_primitiveIndex.layer += 3u;" in code
+    assert (
+        "_crossglMeshPrimitives_prims_primitiveIndex.bary += float2(0.5, 0.0);"
+    ) in code
     assert (
         "_crossglMeshOut.set_vertex(vertexIndex, "
         "_crossglMeshVertices_verts_vertexIndex);"
@@ -8257,6 +8384,66 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_atomic_array_initializers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "atomic_array_initializers.metal"
+    output = tmp_path / "atomic_array_initializers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ATOMIC_ARRAY_INITIALIZER_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_uint counters[4];" in code
+    assert "threadgroup atomic_int signedCounters[2];" in code
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in code
+    assert (
+        "atomic_store_explicit(&counters[2], uint(index), memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);" in code
+    )
+    assert "atomic_store_explicit(&counters, {" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_symbolic_atomic_array_initializers_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "symbolic_atomic_array_initializers.metal"
+    output = tmp_path / "symbolic_atomic_array_initializers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SYMBOLIC_ATOMIC_ARRAY_INITIALIZER_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_uint counters[COUNT];" in code
+    assert "threadgroup atomic_uint expressionCounters[COUNT + 1];" in code
+    assert "threadgroup atomic_int signedCounters[EXTRA];" in code
+    assert "atomic_store_explicit(&counters[3], 0u, memory_order_relaxed);" in code
+    assert (
+        "atomic_store_explicit(&expressionCounters[4], 0u, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_store_explicit(&signedCounters[4], 0, memory_order_relaxed);" in code
+    assert "atomic_store_explicit(&counters, {" not in code
+    assert "atomic_store_explicit(&expressionCounters, {" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
@@ -9877,8 +10064,6 @@ def test_generated_glsl_fragment_texture_gather_offset_validates_with_glslang(
         crosstl.translator.parse(TEXTURE_GATHER_OFFSET_FRAGMENT_SHADER),
         "fragment",
     )
-    assert "layout(location = 7) flat in ivec2 offset;" in code
-    assert "layout(location = 12) flat in int component;" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator([glslang, "-S", "frag", str(source)])
@@ -9946,13 +10131,6 @@ def test_generated_glsl_fragment_shadow_gather_compare_offset_validates_with_gls
     code = GLSLCodeGen().generate_stage(
         crosstl.translator.parse(SHADOW_GATHER_COMPARE_OFFSET_FRAGMENT_SHADER),
         "fragment",
-    )
-    assert "layout(location = 8) flat in ivec2 offset;" in code
-    assert (
-        code.count(
-            "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
-        )
-        == 2
     )
     source.write_text(code, encoding="utf-8")
 

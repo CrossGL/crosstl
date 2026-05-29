@@ -4,7 +4,23 @@ from typing import List
 import pytest
 
 import crosstl.translator
-from crosstl.translator.ast import PrimitiveType, StructMemberNode, StructNode
+from crosstl.translator.ast import (
+    BlockNode,
+    ConstructorNode,
+    ExecutionModel,
+    FunctionNode,
+    IdentifierNode,
+    LiteralNode,
+    PrimitiveType,
+    ShaderNode,
+    ShaderStage,
+    StageNode,
+    StructMemberNode,
+    StructNode,
+    VariableNode,
+    VectorType,
+    WaveOpNode,
+)
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
@@ -162,6 +178,7 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
         compute {
             void main() {
                 uint value = 1u;
+                uvec2 lanes = uvec2(value, value + 1u);
                 uint sumValue = WaveActiveSum(value);
                 uint productValue = WaveActiveProduct(value + 1u);
                 uint minValue = WaveActiveMin(sumValue);
@@ -173,6 +190,8 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
                 uint prefixProduct = WavePrefixProduct(value + 1u);
                 bool anyLane = WaveActiveAnyTrue(prefixSum > 0u);
                 bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
+                bool equalScalar = WaveActiveAllEqual(value);
+                bool equalVector = WaveActiveAllEqual(lanes);
                 uvec4 ballot = WaveActiveBallot(anyLane);
                 uvec4 matchMask = WaveMatch(value);
                 uint count = WaveActiveCountBits(allLane);
@@ -221,6 +240,14 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     )
     assert "bool anyLane = simd_any(prefixSum > 0u);" in generated_code
     assert "bool allLane = simd_all(prefixProduct > 0u);" in generated_code
+    assert (
+        "bool equalScalar = simd_all(value == simd_broadcast_first(value));"
+        in generated_code
+    )
+    assert (
+        "bool equalVector = simd_all(all(lanes == simd_broadcast_first(lanes)));"
+        in generated_code
+    )
     assert "uint4 ballot = __crossgl_metal_wave_ballot(anyLane);" in generated_code
     assert (
         "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
@@ -254,9 +281,104 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
     assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
     assert "WaveActiveSum(value)" not in generated_code
+    assert "WaveActiveAllEqual(value)" not in generated_code
+    assert "WaveActiveAllEqual(lanes)" not in generated_code
     assert "WaveActiveBallot(anyLane)" not in generated_code
     assert "WaveMatch(value)" not in generated_code
     assert "WaveOpNode" not in generated_code
+
+
+def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics():
+    uint_type = PrimitiveType("uint")
+    bool_type = PrimitiveType("bool")
+    uint2_type = VectorType(uint_type, 2)
+    uint4_type = VectorType(uint_type, 4)
+    entry = FunctionNode(
+        "main",
+        PrimitiveType("void"),
+        [],
+        BlockNode(
+            [
+                VariableNode("value", uint_type, LiteralNode(1, uint_type)),
+                VariableNode(
+                    "lanes",
+                    uint2_type,
+                    ConstructorNode(
+                        uint2_type,
+                        [IdentifierNode("value"), IdentifierNode("value")],
+                    ),
+                ),
+                VariableNode(
+                    "ballot",
+                    uint4_type,
+                    WaveOpNode("WaveActiveBallot", [LiteralNode(True, bool_type)]),
+                ),
+                VariableNode(
+                    "sumValue",
+                    uint_type,
+                    WaveOpNode("WaveActiveSum", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "lane",
+                    uint_type,
+                    WaveOpNode("WaveGetLaneIndex", []),
+                ),
+                VariableNode(
+                    "equalScalar",
+                    bool_type,
+                    WaveOpNode("WaveActiveAllEqual", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "equalVector",
+                    bool_type,
+                    WaveOpNode("WaveActiveAllEqual", [IdentifierNode("lanes")]),
+                ),
+                VariableNode(
+                    "matchMask",
+                    uint4_type,
+                    WaveOpNode("WaveMatch", [IdentifierNode("value")]),
+                ),
+                VariableNode(
+                    "partitioned",
+                    uint_type,
+                    WaveOpNode(
+                        "WaveMultiPrefixSum",
+                        [IdentifierNode("value"), IdentifierNode("ballot")],
+                    ),
+                ),
+            ]
+        ),
+    )
+    shader = ShaderNode(
+        "MetalWaveOpIR",
+        ExecutionModel.COMPUTE_KERNEL,
+        stages={ShaderStage.COMPUTE: StageNode(ShaderStage.COMPUTE, entry)},
+    ).bind_parent_links()
+
+    generated_code = MetalCodeGen().generate_stage(shader, "compute")
+
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert "uint sumValue = simd_sum(value);" in generated_code
+    assert "uint lane = crossglWaveLaneIndex;" in generated_code
+    assert (
+        "bool equalScalar = simd_all(value == simd_broadcast_first(value));"
+        in generated_code
+    )
+    assert (
+        "bool equalVector = simd_all(all(lanes == simd_broadcast_first(lanes)));"
+        in generated_code
+    )
+    assert (
+        "uint4 matchMask = __crossgl_metal_wave_match(value, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert (
+        "uint partitioned = __crossgl_metal_wave_multi_prefix_sum(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+    assert "WaveActiveAllEqual" not in generated_code
 
 
 def test_metal_wave_lane_builtins_use_compute_stage_parameters():
@@ -592,6 +714,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
                 uvec4 mask = uvec4(1u, 0u, 0u, 0u);
                 mat2 matrixValue = mat2(1.0);
                 uint missing = WaveActiveSum();
+                bool badEqualMatrix = WaveActiveAllEqual(matrixValue);
                 bool badAnyValue = WaveActiveAnyTrue(value);
                 uvec4 badBallotVector =
                     WaveActiveBallot(lanes == uvec2(1u, 2u));
@@ -614,6 +737,11 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     assert (
         "uint missing = /* unsupported Metal wave intrinsic: WaveActiveSum "
         "expects 1 arguments, got 0 */ 0u;" in generated_code
+    )
+    assert (
+        "bool badEqualMatrix = /* unsupported Metal wave intrinsic: "
+        "WaveActiveAllEqual value argument must be numeric scalar or vector, "
+        "got float2x2 */ false;" in generated_code
     )
     assert (
         "bool badAnyValue = /* unsupported Metal wave intrinsic: "
@@ -669,6 +797,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
         "quad lane index must be in the range 0 to 3, got 4 */ 0u;" in generated_code
     )
     assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveAllEqual(matrixValue)" not in generated_code
     assert "WaveActiveAnyTrue(value)" not in generated_code
     assert "WaveMatch(badAnyValue)" not in generated_code
     assert "WaveMultiPrefixSum(badAnyValue, mask)" not in generated_code
@@ -8032,6 +8161,68 @@ def test_metal_mesh_output_variable_member_writes_use_indexed_accumulators():
     assert "unsupported Metal mesh output assignment" not in generated
 
 
+def test_metal_mesh_output_member_compound_assignments_use_accumulators():
+    code = """
+    shader meshpipe {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            uint layer @ gl_PrimitiveID;
+            float coverage @ TEXCOORD1;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[2],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(2, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].position += vec4(1.0, 0.0, 0.0, 0.0);
+                verts[0].uv += vec2(0.25, 0.75);
+                prims[0].layer = 1u;
+                prims[0].layer += 2u;
+                prims[0].coverage += 0.5;
+                tris[0] = uvec3(0u, 1u, 0u);
+            }
+        }
+    }
+    """
+    generated = MetalCodeGen().generate_stage(parse_code(tokenize_code(code)), "mesh")
+
+    assert "MeshVertex _crossglMeshVertices_verts_i_0 = {};" in generated
+    assert "MeshPrimitive _crossglMeshPrimitives_prims_i_0 = {};" in generated
+    assert (
+        "_crossglMeshVertices_verts_i_0.position = " "float4(0.0, 0.0, 0.0, 1.0);"
+    ) in generated
+    assert (
+        "_crossglMeshVertices_verts_i_0.position += " "float4(1.0, 0.0, 0.0, 0.0);"
+    ) in generated
+    assert "_crossglMeshVertices_verts_i_0.uv += float2(0.25, 0.75);" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.layer = 1u;" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.layer += 2u;" in generated
+    assert "_crossglMeshPrimitives_prims_i_0.coverage += 0.5;" in generated
+    assert (
+        generated.count(
+            "_crossglMeshOut.set_vertex(0, _crossglMeshVertices_verts_i_0);"
+        )
+        == 3
+    )
+    assert (
+        generated.count(
+            "_crossglMeshOut.set_primitive(0, _crossglMeshPrimitives_prims_i_0);"
+        )
+        == 3
+    )
+    assert "unsupported Metal mesh output assignment" not in generated
+    assert "verts[0].position +=" not in generated
+    assert "prims[0].layer +=" not in generated
+
+
 def test_metal_mesh_output_writes_validate_order_and_literal_bounds():
     write_before_count_code = """
     shader meshpipe {
@@ -8928,6 +9119,129 @@ def test_metal_atomic_local_initializers_use_atomic_store():
         in generated
     )
     assert "threadgroup atomic_uint counter = 0;" not in generated
+
+
+def test_metal_atomic_array_initializers_use_element_stores():
+    code = """
+    shader MetalAtomicArrayInitializerValidation {
+        compute {
+            void main() {
+                uint index = gl_LocalInvocationIndex;
+                shared atomic_uint counters[4] = {0u, 1u, uint(index), 3u};
+                atomic_int signedCounters[2] = {-1, 2};
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed
+                );
+                int signedValue = atomic_load_explicit(
+                    signedCounters[index % 2u],
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_uint counters[4];" in generated
+    assert "threadgroup atomic_int signedCounters[2];" in generated
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[1], 1u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&counters[2], uint(index), memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters[3], 3u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[1], 2, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "int signedValue = atomic_load_explicit(&signedCounters[index % 2u], memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters, {" not in generated
+    assert "threadgroup atomic_uint counters[4] = {" not in generated
+
+
+def test_metal_symbolic_atomic_array_initializers_zero_fill_declared_size():
+    code = """
+    shader MetalSymbolicAtomicArrayInitializerValidation {
+        const int COUNT = 4;
+        const int EXTRA = COUNT + 1;
+
+        compute {
+            void main() {
+                uint index = gl_LocalInvocationIndex;
+                shared atomic_uint counters[COUNT] = {0u, 1u};
+                shared atomic_uint expressionCounters[COUNT + 1] = {2u};
+                atomic_int signedCounters[EXTRA] = {-1, 2};
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed
+                );
+                int signedValue = atomic_load_explicit(
+                    signedCounters[index % uint(EXTRA)],
+                    memory_order_relaxed
+                );
+                uint expressionValue = atomic_load_explicit(
+                    expressionCounters[index % uint(COUNT + 1)],
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_uint counters[COUNT];" in generated
+    assert "threadgroup atomic_uint expressionCounters[COUNT + 1];" in generated
+    assert "threadgroup atomic_int signedCounters[EXTRA];" in generated
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[1], 1u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[2], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[3], 0u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&expressionCounters[0], 2u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&expressionCounters[4], 0u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[1], 2, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[2], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[3], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[4], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters, {" not in generated
+    assert "atomic_store_explicit(&expressionCounters, {" not in generated
+    assert "atomic_store_explicit(&signedCounters, {" not in generated
 
 
 def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
@@ -11287,6 +11601,133 @@ def test_metal_transitively_threads_global_texture_parameter():
     assert "float4 shade(float2 uv, texture2d<float> colorMap)" in generated_code
     assert "return sampleColor(uv, colorMap);" in generated_code
     assert "return shade(input.uv, colorMap);" in generated_code
+
+
+def test_metal_resource_array_elements_pass_to_scalar_helper_parameters():
+    code = """
+    shader ResourceArrayElementHelperScope {
+        sampler2D textures[4];
+        sampler samplers[4];
+        image2D images @rgba32f[4];
+
+        vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {
+            return texture(tex, samp, uv);
+        }
+
+        vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {
+            return texture(texs[layer], samps[layer], uv);
+        }
+
+        vec4 readOne(image2D image @rgba32f, ivec2 pixel) {
+            return imageLoad(image, pixel);
+        }
+
+        compute {
+            void main(uvec3 gid @gl_GlobalInvocationID) {
+                int layer = int(gid.x);
+                vec4 sampled = sampleOne(textures[layer], samplers[layer], vec2(0.5));
+                vec4 sampledArray = sampleArray(textures, samplers, layer, vec2(0.25));
+                vec4 stored = readOne(images[layer], ivec2(0, 0));
+                imageStore(images[layer], ivec2(1, 0), sampled + sampledArray + stored);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(code)
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "float4 sampleOne(texture2d<float> tex, sampler samp, float2 uv)" in (
+        generated_code
+    )
+    assert (
+        "float4 sampleArray(array<texture2d<float>, 4> texs, "
+        "array<sampler, 4> samps, int layer, float2 uv)"
+    ) in generated_code
+    assert (
+        "float4 readOne(texture2d<float, access::read_write> image, int2 pixel)"
+        in generated_code
+    )
+    assert "sampleOne(textures[layer], samplers[layer], float2(0.5))" in generated_code
+    assert "sampleArray(textures, samplers, layer, float2(0.25))" in generated_code
+    assert "readOne(images[layer], int2(0, 0))" in generated_code
+    assert "imageStore(" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "vec4 value = sampleOne(textures, samplers[0], vec2(0.5));",
+            "resource parameter tex of type texture2d<float>: "
+            "argument textures has array<texture2d<float>, 4>",
+        ),
+        (
+            "vec4 value = sampleOne(textures[0], samplers, vec2(0.5));",
+            "resource parameter samp of type sampler: "
+            "argument samplers has array<sampler, 4>",
+        ),
+        (
+            "vec4 value = sampleArray(singleTexture, samplers, 0, vec2(0.5));",
+            "resource parameter texs of type array<texture2d<float>, 4>: "
+            "argument singleTexture has texture2d<float>",
+        ),
+        (
+            "vec4 value = sampleArray(textures, singleSampler, 0, vec2(0.5));",
+            "resource parameter samps of type array<sampler, 4>: "
+            "argument singleSampler has sampler",
+        ),
+        (
+            "vec4 value = readOne(images, ivec2(0, 0));",
+            "resource parameter image of type texture2d<float, access::read_write>: "
+            "argument images has array<texture2d<float, access::read_write>, 4>",
+        ),
+        (
+            "vec4 value = readArray(singleImage, 0, ivec2(0, 0));",
+            "resource parameter imgs of type "
+            "array<texture2d<float, access::read_write>, 4>: "
+            "argument singleImage has texture2d<float, access::read_write>",
+        ),
+    ],
+)
+def test_metal_resource_helper_calls_reject_array_scalar_mismatches(call, match):
+    code = f"""
+    shader ResourceArrayHelperMismatch {{
+        sampler2D textures[4];
+        sampler2D singleTexture;
+        sampler samplers[4];
+        sampler singleSampler;
+        image2D images @rgba32f[4];
+        image2D singleImage @rgba32f;
+
+        vec4 sampleOne(sampler2D tex, sampler samp, vec2 uv) {{
+            return texture(tex, samp, uv);
+        }}
+
+        vec4 sampleArray(sampler2D texs[4], sampler samps[4], int layer, vec2 uv) {{
+            return texture(texs[layer], samps[layer], uv);
+        }}
+
+        vec4 readOne(image2D image @rgba32f, ivec2 pixel) {{
+            return imageLoad(image, pixel);
+        }}
+
+        vec4 readArray(image2D imgs[4] @rgba32f, int layer, ivec2 pixel) {{
+            return imageLoad(imgs[layer], pixel);
+        }}
+
+        compute {{
+            void main() {{
+                {call}
+            }}
+        }}
+    }}
+    """
+
+    ast = crosstl.translator.parse(code)
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate_stage(ast, "compute")
 
 
 def test_metal_ambiguous_cbuffer_member_reference_errors():

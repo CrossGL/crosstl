@@ -263,6 +263,68 @@ mod math {
     matrix_constructor!(Mat4x2, _m00, _m01, _m10, _m11, _m20, _m21, _m30, _m31);
     matrix_constructor!(Mat4x3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22, _m30, _m31, _m32);
 
+    macro_rules! matrix_arithmetic {
+        ($name:ident) => {
+            impl<T> Add for $name<T> {
+                type Output = Self;
+
+                fn add(self, _rhs: Self) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Sub for $name<T> {
+                type Output = Self;
+
+                fn sub(self, _rhs: Self) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Mul<T> for $name<T> {
+                type Output = Self;
+
+                fn mul(self, _rhs: T) -> Self::Output {
+                    self
+                }
+            }
+
+            impl<T> Div<T> for $name<T> {
+                type Output = Self;
+
+                fn div(self, _rhs: T) -> Self::Output {
+                    self
+                }
+            }
+
+            impl Mul<$name<f32>> for f32 {
+                type Output = $name<f32>;
+
+                fn mul(self, rhs: $name<f32>) -> Self::Output {
+                    rhs
+                }
+            }
+
+            impl Mul<$name<f64>> for f64 {
+                type Output = $name<f64>;
+
+                fn mul(self, rhs: $name<f64>) -> Self::Output {
+                    rhs
+                }
+            }
+        };
+    }
+
+    matrix_arithmetic!(Mat2);
+    matrix_arithmetic!(Mat3);
+    matrix_arithmetic!(Mat4);
+    matrix_arithmetic!(Mat2x3);
+    matrix_arithmetic!(Mat2x4);
+    matrix_arithmetic!(Mat3x2);
+    matrix_arithmetic!(Mat3x4);
+    matrix_arithmetic!(Mat4x2);
+    matrix_arithmetic!(Mat4x3);
+
     pub trait Transpose {
         type Output;
 
@@ -18981,7 +19043,7 @@ def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_matrix_constructor_bindings_use_matrix_types():
+def test_inferred_matrix_constructor_bindings_use_matrix_types(tmp_path):
     code = """
     void probe() {
         let transform = mat2(1.0, 0.0, 0.0, 1.0);
@@ -19010,9 +19072,10 @@ def test_inferred_matrix_constructor_bindings_use_matrix_types():
     assert "let transform: f32 = Mat2" not in generated_code
     assert "let affine: f32 = Mat3x4" not in generated_code
     assert "let precise: f32 = Mat2::<f64>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
+def test_inferred_matrix_binary_bindings_prefer_matrix_operands(tmp_path):
     code = """
     void probe() {
         let leftScaled = mat2(1.0, 0.0, 0.0, 1.0) * 2.0;
@@ -19036,6 +19099,7 @@ def test_inferred_matrix_binary_bindings_prefer_matrix_operands():
     )
     assert "let combined: Mat2<f32> = " in generated_code
     assert "let rightScaled: f32 = " not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_vector_and_matrix_binary_operands_promote_before_operator():
@@ -19251,7 +19315,7 @@ def test_matrix_vector_binary_operands_promote_components_and_result_size():
     assert "{ let __cgl_mat_arg_" not in generated_code
 
 
-def test_vector_comparison_binary_operands_emit_boolean_lanes():
+def test_vector_comparison_binary_operands_emit_boolean_lanes(tmp_path):
     code = """
     float makeWeight() {
         return 0.5;
@@ -19330,9 +19394,10 @@ def test_vector_comparison_binary_operands_emit_boolean_lanes():
     assert "let vectorEqual: Vec2<i32>" not in generated_code
     assert "let vectorNotEqual: Vec2<f32>" not in generated_code
     assert "(pixel < amount)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_logical_binary_operands_emit_boolean_lanes():
+def test_bool_vector_logical_binary_operands_emit_boolean_lanes(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -19388,9 +19453,10 @@ def test_bool_vector_logical_binary_operands_emit_boolean_lanes():
     assert "let either: Vec3<bool> = (a || b);" not in generated_code
     assert "let scalarRight: Vec3<bool> = (a && ready);" not in generated_code
     assert "let scalarLeft: Vec3<bool> = (makeFlag() || b);" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_unary_not_emits_boolean_lanes():
+def test_bool_vector_unary_not_emits_boolean_lanes(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -19426,6 +19492,7 @@ def test_bool_vector_unary_not_emits_boolean_lanes():
     assert "let inv2: Vec2<bool> = (!mask2);" not in generated_code
     assert "let inv3: Vec3<bool> = (!mask3);" not in generated_code
     assert "!{ let __cgl_swizzle_" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_scalar_constructor_bindings_use_cast_types():

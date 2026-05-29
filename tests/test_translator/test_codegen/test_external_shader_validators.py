@@ -368,11 +368,37 @@ shader GLSLDynamicImageArrayHelperValidator {
         return queryElement(images[layer]);
     }
 
+    int queryViaInitializer(image2D images[] @r32ui, int layer) {
+        int count = queryElement(images[layer]);
+        return count;
+    }
+
+    int queryViaAssignment(image2D images[] @r32ui, int layer) {
+        int count = 0;
+        count = queryElement(images[layer]);
+        return count;
+    }
+
+    void storeElement(image2D image @r32ui, ivec2 pixel, uint value) {
+        imageStore(image, pixel, value);
+    }
+
+    void storeViaExpression(image2D images[] @r32ui, int layer) {
+        storeElement(images[layer], ivec2(0, 0), uint(layer));
+    }
+
     compute {
         void main() {
             int directCount = queryElement(counters[0]);
             int nestedCount = queryViaDynamic(counters, 1);
-            imageStore(counters[1], ivec2(0, 0), uint(directCount + nestedCount));
+            int initializedCount = queryViaInitializer(counters, 0);
+            int assignedCount = queryViaAssignment(counters, 1);
+            storeViaExpression(counters, 1);
+            imageStore(
+                counters[1],
+                ivec2(0, 0),
+                uint(directCount + nestedCount + initializedCount + assignedCount)
+            );
         }
     }
 }
@@ -434,6 +460,63 @@ shader GLSLAdvancedImageArraySpecializationValidator {
             vec4 nestedCube = viaCube(cubeImages, ivec3(2, 3, 4), directCube);
             vec4 directLayer = touchCubeLayer(cubeLayerImages[0], ivec3(1, 2, 3), nestedCube);
             vec4 nestedLayer = viaCubeLayer(cubeLayerImages, ivec3(3, 4, 5), directLayer + vec4(float(nestedCounter)));
+        }
+    }
+}
+"""
+
+
+GLSL_DYNAMIC_ADVANCED_IMAGE_ARRAY_HELPER_COMPUTE_SHADER = """
+shader GLSLDynamicAdvancedImageArrayHelperValidator {
+    image2DMS msImages @rgba16f[2];
+    uimage2DMS msCounters @r32ui[2];
+    imageCube cubeImages @rgba16f[2];
+    imageCubeArray cubeLayerImages @rgba16f[2];
+
+    vec4 touchMS(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+        vec4 oldValue = imageLoad(image, pixel, sampleIndex);
+        imageStore(image, pixel, sampleIndex, oldValue + value);
+        return oldValue;
+    }
+
+    uint bumpMS(uimage2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+        return imageAtomicAdd(image, pixel, sampleIndex, value);
+    }
+
+    vec4 touchCube(imageCube image @rgba16f, ivec3 coord, vec4 value) {
+        vec4 oldValue = imageLoad(image, coord);
+        imageStore(image, coord, oldValue + value);
+        return oldValue;
+    }
+
+    vec4 touchCubeLayer(imageCubeArray image @rgba16f, ivec3 coord, vec4 value) {
+        vec4 oldValue = imageLoad(image, coord);
+        imageStore(image, coord, oldValue + value);
+        return oldValue;
+    }
+
+    vec4 viaMS(image2DMS images[] @rgba16f, int layer, ivec2 pixel, int sampleIndex, vec4 value) {
+        return touchMS(images[layer], pixel, sampleIndex, value);
+    }
+
+    uint viaCounter(uimage2DMS counters[] @r32ui, int layer, ivec2 pixel, int sampleIndex, uint value) {
+        return bumpMS(counters[layer], pixel, sampleIndex, value);
+    }
+
+    vec4 viaCube(imageCube images[] @rgba16f, int layer, ivec3 coord, vec4 value) {
+        return touchCube(images[layer], coord, value);
+    }
+
+    vec4 viaCubeLayer(imageCubeArray images[] @rgba16f, int layer, ivec3 coord, vec4 value) {
+        return touchCubeLayer(images[layer], coord, value);
+    }
+
+    compute {
+        void main() {
+            vec4 msValue = viaMS(msImages, 1, ivec2(2, 3), 0, vec4(1.0));
+            uint count = viaCounter(msCounters, 1, ivec2(3, 4), 1, 5u);
+            vec4 cubeValue = viaCube(cubeImages, 1, ivec3(2, 3, 4), msValue);
+            vec4 layerValue = viaCubeLayer(cubeLayerImages, 1, ivec3(3, 4, 5), cubeValue + vec4(float(count)));
         }
     }
 }
@@ -1814,6 +1897,64 @@ def test_generated_glsl_projected_gradient_offsets_validate_with_glslangvalidato
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 
 
+def test_generated_glsl_const_gather_offsets_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "const_gather_offsets.frag"
+    shader = """
+    shader ConstGatherOffsets {
+        sampler2D colorMap;
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            int component @ TEXCOORD2;
+        };
+
+        vec4 gatherColor(sampler2D tex, vec2 uv, int component) {
+            const ivec2 offsets[4] = {
+                ivec2(-1, -1),
+                ivec2(1, -1),
+                ivec2(-1, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherOffsets(tex, uv, offsets, component);
+        }
+
+        vec4 gatherShadow(sampler2DShadow tex, sampler s, vec2 uv, float depth) {
+            const int left = -1;
+            const ivec2 offsets[4] = {
+                ivec2(left, -1),
+                ivec2(1, -1),
+                ivec2(left, 1),
+                ivec2(1, 1)
+            };
+            return textureGatherCompareOffsets(tex, s, uv, depth, offsets);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return gatherColor(colorMap, input.uv, input.component)
+                    + gatherShadow(shadowMap, compareSampler, input.uv, input.depth);
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
+
+    assert "textureGatherOffsets(" not in code
+    assert "textureGatherCompareOffsets(" not in code
+    assert "unsupported GLSL texture gather" not in code
+    assert "textureGatherOffset" in code
+
+    shader_path.write_text(code, encoding="utf-8")
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
 def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     tmp_path,
 ):
@@ -2576,10 +2717,22 @@ def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidat
     )
     assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
     assert "int queryElement__glsl_image_counters_0()" in code
-    assert "int queryElement__glsl_image_counters_layer(int layer)" in code
-    assert "return imageSize(counters[layer]).x;" in code
+    assert "int queryElement__glsl_image_counters_1()" in code
     assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
-    assert "return queryElement__glsl_image_counters_layer(layer);" in code
+    assert "switch (layer)" in code
+    assert "return queryElement__glsl_image_counters_0();" in code
+    assert "return queryElement__glsl_image_counters_1();" in code
+    assert "int queryViaInitializer__glsl_images_counters(int layer)" in code
+    assert "int count;\n    switch (layer)" in code
+    assert "count = queryElement__glsl_image_counters_0();" in code
+    assert "count = queryElement__glsl_image_counters_1();" in code
+    assert "int queryViaAssignment__glsl_images_counters(int layer)" in code
+    assert "void storeViaExpression__glsl_images_counters(int layer)" in code
+    assert "storeElement__glsl_image_counters_0(" in code
+    assert "storeElement__glsl_image_counters_1(" in code
+    assert "storeElement__glsl_image_counters_layer" not in code
+    assert "queryElement__glsl_image_counters_layer" not in code
+    assert "return imageSize(counters[layer]).x;" not in code
     assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
 
@@ -2610,6 +2763,45 @@ def test_generated_glsl_advanced_image_array_specialization_validates_with_glsla
     assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
     assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
     assert "imageAtomicAdd(msCounters[1], pixel, sampleIndex, value)" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_dynamic_advanced_image_array_helper_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "dynamic_advanced_image_array_helper.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(
+            GLSL_DYNAMIC_ADVANCED_IMAGE_ARRAY_HELPER_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "layout(rgba16f, binding = 0) uniform image2DMS msImages[2];" in code
+    assert "layout(r32ui, binding = 2) uniform uimage2DMS msCounters[2];" in code
+    assert "layout(rgba16f, binding = 4) uniform imageCube cubeImages[2];" in code
+    assert (
+        "layout(rgba16f, binding = 6) uniform imageCubeArray cubeLayerImages[2];"
+        in code
+    )
+    assert "switch (layer)" in code
+    assert "return touchMS__glsl_image_msImages_0(pixel, sampleIndex, value);" in code
+    assert "return touchMS__glsl_image_msImages_1(pixel, sampleIndex, value);" in code
+    assert "return bumpMS__glsl_image_msCounters_0(pixel, sampleIndex, value);" in code
+    assert "return bumpMS__glsl_image_msCounters_1(pixel, sampleIndex, value);" in code
+    assert "return touchCube__glsl_image_cubeImages_0(coord, value);" in code
+    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in code
+    assert "return touchCubeLayer__glsl_image_cubeLayerImages_0(coord, value);" in code
+    assert "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);" in code
+    assert "return touchMS(msImages[layer], pixel, sampleIndex, value);" not in code
+    assert "return bumpMS(msCounters[layer], pixel, sampleIndex, value);" not in code
+    assert "return touchCube(cubeImages[layer], coord, value);" not in code
+    assert "return touchCubeLayer(cubeLayerImages[layer], coord, value);" not in code
+    assert "touchMS__glsl_image_msImages_layer" not in code
+    assert "imageLoad(msImages[layer], pixel, sampleIndex)" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

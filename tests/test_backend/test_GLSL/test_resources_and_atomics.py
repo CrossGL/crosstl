@@ -59,6 +59,14 @@ def normalize_codegen_snapshot(code: str):
     return "\n".join(line.rstrip() for line in dedent(code).strip().splitlines())
 
 
+def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
+    return (
+        f"/* unsupported GLSL {category}: {operation} "
+        "texel offsets must be compile-time integer constants */ "
+        f"{zero_value}"
+    )
+
+
 def test_parse_resources_and_atomics():
     ast = parse_glsl(RESOURCE_GLSL, "fragment")
     assert ast is not None
@@ -4740,12 +4748,19 @@ def test_codegen_native_shadow_gather_imports_compare_helpers():
         regenerated_glsl
     )
     assert "textureGather(maps[layer], uv, depth)" in regenerated_glsl
-    assert "textureGatherOffset(maps[0], uv, depth, offset)" in regenerated_glsl
     assert "textureGather(arrays[layer], uvLayer, depth)" in regenerated_glsl
-    assert "textureGatherOffset(arrays[0], uvLayer, depth, offset)" in (
-        regenerated_glsl
+    assert (
+        regenerated_glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+        )
+        == 2
     )
-    assert "textureGatherCompare" not in regenerated_glsl
+    assert "textureGatherOffset(" not in regenerated_glsl
+    assert "textureGatherCompare(" not in regenerated_glsl
 
 
 def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
@@ -4781,19 +4796,18 @@ def test_codegen_native_shadow_gather_offsets_imports_compare_helper():
     shader_ast = parse_crossgl(output)
     regenerated_glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "textureGatherCompareOffsets" not in regenerated_glsl
+    assert "textureGatherCompareOffsets(" not in regenerated_glsl
     assert "textureGatherOffsets(" not in regenerated_glsl
-    assert "textureGatherOffset(maps[layer], uv, depth, offsets[0]).x" in (
-        regenerated_glsl
-    )
-    assert "textureGatherOffset(maps[layer], uv, depth, offsets[3]).w" in (
-        regenerated_glsl
-    )
-    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[0]).x" in (
-        regenerated_glsl
-    )
-    assert "textureGatherOffset(arrays[layer], uvLayer, depth, offsets[3]).w" in (
-        regenerated_glsl
+    assert "textureGatherOffset(" not in regenerated_glsl
+    assert (
+        regenerated_glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffsets",
+                "vec4(0.0)",
+            )
+        )
+        == 2
     )
 
 
@@ -15789,37 +15803,41 @@ def test_codegen_mixed_ssbo_unsupported_sampling_offsets_are_typed_diagnostics()
     assert "offsetBlock.offset" not in metal
 
     assert (
-        "vec4 lodDirect = textureLodOffset(textures[0], offsetBlock.uv, "
-        "2.0, offsetBlock.offset);" in glsl
+        glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureLodOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 lodCall = textureLodOffset(textures[0], readUv(offsetBlock), "
-        "2.0, readOffset(offsetBlock));" in glsl
+        glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureGradOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 gradDirect = textureGradOffset(textures[0], offsetBlock.uv, "
-        "offsetBlock.dx, offsetBlock.dy, offsetBlock.offset);" in glsl
+        glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather", "textureGatherOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 gradCall = textureGradOffset(textures[0], readUv(offsetBlock), "
-        "readUv(offsetBlock), offsetBlock.dy, readOffset(offsetBlock));" in glsl
+        glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
-    assert (
-        "vec4 gatheredDirect = textureGatherOffset(textures[0], "
-        "offsetBlock.uv, offsetBlock.offset);" in glsl
-    )
-    assert (
-        "vec4 gatheredCall = textureGatherOffset(textures[0], "
-        "readUv(offsetBlock), readOffset(offsetBlock));" in glsl
-    )
-    assert (
-        "vec4 fetchedDirect = texelFetchOffset(textures[0], offsetBlock.pixel, "
-        "0, offsetBlock.offset);" in glsl
-    )
-    assert (
-        "vec4 fetchedCall = texelFetchOffset(textures[0], readPixel(offsetBlock), "
-        "0, readOffset(offsetBlock));" in glsl
-    )
+    assert "textureLodOffset(" not in glsl
+    assert "textureGradOffset(" not in glsl
+    assert "textureGatherOffset(" not in glsl
+    assert "texelFetchOffset(" not in glsl
 
 
 def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
@@ -15968,22 +15986,48 @@ def test_codegen_mixed_ssbo_unsupported_projected_compare_calls_infer_types():
     assert "shadowBlock.offset" not in metal
 
     assert (
-        "vec4 projectedCall = textureProjGradOffset(colorMap, "
-        "readUvq(shadowBlock), shadowBlock.dx, shadowBlock.dy, "
-        "readOffset(shadowBlock));" in glsl
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        in glsl
     )
     assert (
-        "float compareCall = textureGradOffset(shadowMap, "
-        "vec3(readUv(shadowBlock), readDepth(shadowBlock)), "
-        "shadowBlock.dx, shadowBlock.dy, readOffset(shadowBlock));" in glsl
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
+        in glsl
     )
     assert (
-        "float compareProjCall = textureGradOffset(shadowMap, "
-        "vec3((readUvq(shadowBlock)).xy / (readUvq(shadowBlock)).z, "
-        "readDepth(shadowBlock)), shadowBlock.dx, shadowBlock.dy, "
-        "readOffset(shadowBlock));" in glsl
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareOffset", "0.0"
+        )
+        in glsl
     )
-    assert "unsupported GLSL texture compare: textureCompareProjGradOffset" not in glsl
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        in glsl
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjOffset", "0.0"
+        )
+        in glsl
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
+        )
+        in glsl
+    )
+    assert "textureProjOffset(" not in glsl
+    assert "textureProjGradOffset(" not in glsl
+    assert "textureCompareOffset(" not in glsl
+    assert "textureCompareGradOffset(" not in glsl
+    assert "textureCompareProjOffset(" not in glsl
+    assert "textureCompareProjGradOffset(" not in glsl
+    assert "textureGradOffset(" not in glsl
 
 
 def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
@@ -16130,20 +16174,22 @@ def test_codegen_mixed_ssbo_unsupported_gather_compare_calls_infer_types():
         "readUv(gatherBlock), readDepth(gatherBlock));" in glsl
     )
     assert (
-        "vec4 planarOffsetCall = textureGatherOffset(shadowMap, "
-        "readUv(gatherBlock), readDepth(gatherBlock), readOffset(gatherBlock));" in glsl
-    )
-    assert (
         "vec4 arrayCall = textureGather(shadowArray, "
         "readUvLayer(gatherBlock), readDepth(gatherBlock));" in glsl
     )
     assert (
-        "vec4 arrayOffsetCall = textureGatherOffset(shadowArray, "
-        "readUvLayer(gatherBlock), readDepth(gatherBlock), readOffset(gatherBlock));"
-        in glsl
+        glsl.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+        )
+        == 4
     )
     assert "textureGatherCompare(" not in glsl
     assert "textureGatherCompareOffset(" not in glsl
+    assert "textureGatherOffset(" not in glsl
 
 
 def test_codegen_mixed_ssbo_cube_gather_compare_calls_use_fixed_block_offsets():

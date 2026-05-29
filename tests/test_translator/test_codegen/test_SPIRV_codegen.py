@@ -4539,6 +4539,576 @@ class TestVulkanSPIRVCodeGen:
         assert "Invocations 1" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_geometry_tessellation_stage_builtins_emit_interface_and_stream_ops(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GeometryTessellationBuiltins {
+            geometry {
+                layout(points) in;
+                layout(point, max_vertices = 1) out;
+
+                void main() @invocations(2) {
+                    int invocation = gl_InvocationID;
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main() {
+                    int invocation = gl_InvocationID;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main() {
+                    float u = gl_TessCoord.x;
+                    int primitive = gl_PrimitiveID;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        geometry_entry = re.search(
+            r'OpEntryPoint Geometry %\d+ "main"([^\n]*)', spv_code
+        )
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert geometry_entry is not None
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        invocation_id = spirv_named_variable(
+            spv_code, "gl_InvocationID", storage_class="Input"
+        )
+        tess_coord_id = spirv_named_variable(
+            spv_code, "gl_TessCoord", storage_class="Input"
+        )
+        primitive_id = spirv_named_variable(
+            spv_code, "gl_PrimitiveID", storage_class="Input"
+        )
+
+        assert f"OpDecorate {invocation_id} BuiltIn InvocationId" in spv_code
+        assert f"OpDecorate {tess_coord_id} BuiltIn TessCoord" in spv_code
+        assert f"OpDecorate {primitive_id} BuiltIn PrimitiveId" in spv_code
+        assert invocation_id in geometry_entry.group(1)
+        assert invocation_id in control_entry.group(1)
+        assert invocation_id not in evaluation_entry.group(1)
+        assert tess_coord_id not in geometry_entry.group(1)
+        assert tess_coord_id not in control_entry.group(1)
+        assert tess_coord_id in evaluation_entry.group(1)
+        assert primitive_id not in geometry_entry.group(1)
+        assert primitive_id not in control_entry.group(1)
+        assert primitive_id in evaluation_entry.group(1)
+        assert "OpEmitVertex" in spv_code
+        assert "OpEndPrimitive" in spv_code
+        assert "Unknown variable gl_InvocationID" not in spv_code
+        assert "Unknown variable gl_TessCoord" not in spv_code
+        assert "unknown function 'EmitVertex'" not in spv_code
+        assert "unknown function 'EndPrimitive'" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patch_builtins_emit_stage_specific_interfaces(self, tmp_path):
+        source_code = """
+        shader TessellationPatchBuiltins {
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main() {
+                    gl_TessLevelOuter[0] = 2.0;
+                    gl_TessLevelInner[0] = 1.0;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main() {
+                    float edge = gl_TessLevelOuter[1];
+                    float inner = gl_TessLevelInner[0];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        outer_output = spirv_named_variable(
+            spv_code, "gl_TessLevelOuter", storage_class="Output"
+        )
+        inner_output = spirv_named_variable(
+            spv_code, "gl_TessLevelInner", storage_class="Output"
+        )
+        outer_input = spirv_named_variable(
+            spv_code, "gl_TessLevelOuter", storage_class="Input"
+        )
+        inner_input = spirv_named_variable(
+            spv_code, "gl_TessLevelInner", storage_class="Input"
+        )
+
+        assert outer_output != outer_input
+        assert inner_output != inner_input
+        assert f"OpDecorate {outer_output} BuiltIn TessLevelOuter" in spv_code
+        assert f"OpDecorate {outer_input} BuiltIn TessLevelOuter" in spv_code
+        assert f"OpDecorate {inner_output} BuiltIn TessLevelInner" in spv_code
+        assert f"OpDecorate {inner_input} BuiltIn TessLevelInner" in spv_code
+        assert outer_output in control_entry.group(1)
+        assert inner_output in control_entry.group(1)
+        assert outer_input not in control_entry.group(1)
+        assert inner_input not in control_entry.group(1)
+        assert outer_input in evaluation_entry.group(1)
+        assert inner_input in evaluation_entry.group(1)
+        assert outer_output not in evaluation_entry.group(1)
+        assert inner_output not in evaluation_entry.group(1)
+
+        outer_type = re.search(
+            rf"{re.escape(outer_output)} = OpVariable (%\d+) Output", spv_code
+        ).group(1)
+        inner_type = re.search(
+            rf"{re.escape(inner_output)} = OpVariable (%\d+) Output", spv_code
+        ).group(1)
+        outer_array_type = re.search(
+            rf"{re.escape(outer_type)} = OpTypePointer Output (%\d+)", spv_code
+        ).group(1)
+        inner_array_type = re.search(
+            rf"{re.escape(inner_type)} = OpTypePointer Output (%\d+)", spv_code
+        ).group(1)
+        outer_size = re.search(
+            rf"{re.escape(outer_array_type)} = OpTypeArray %\d+ (%\d+)", spv_code
+        ).group(1)
+        inner_size = re.search(
+            rf"{re.escape(inner_array_type)} = OpTypeArray %\d+ (%\d+)", spv_code
+        ).group(1)
+        assert re.search(rf"{re.escape(outer_size)} = OpConstant %\d+ 4\b", spv_code)
+        assert re.search(rf"{re.escape(inner_size)} = OpConstant %\d+ 2\b", spv_code)
+        assert "Unknown variable gl_TessLevelOuter" not in spv_code
+        assert "Unknown variable gl_TessLevelInner" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patch_builtins_reject_invalid_contexts(self, tmp_path):
+        source_code = """
+        shader InvalidTessellationPatchBuiltins {
+            vertex {
+                void main() {
+                    float bad = gl_TessLevelOuter[0];
+                }
+            }
+
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main() {
+                    gl_TessLevelOuter[4] = 1.0;
+                    gl_TessLevelInner[2] = 1.0;
+                    gl_TessLevelOuter[1.0] = 1.0;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main() {
+                    gl_TessLevelInner[0] = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V builtin gl_TessLevelOuter is only valid in "
+            "TessellationControl, TessellationEvaluation stages"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelOuter "
+            "component index 4 out of range; valid range is 0..3"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelInner "
+            "component index 2 out of range; valid range is 0..1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation patch builtin gl_TessLevelOuter "
+            "component index requires a scalar integer value, got float"
+        ) in spv_code
+        readonly_warning = (
+            "; WARNING: cannot assign to read-only SPIR-V builtin " "gl_TessLevelInner"
+        )
+        assert readonly_warning in spv_code
+
+        inner_input = spirv_named_variable(
+            spv_code, "gl_TessLevelInner", storage_class="Input"
+        )
+        input_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(inner_input)}\b", spv_code
+        )
+        assert input_accesses
+        for access_id in input_accesses:
+            assert f"OpStore {access_id} " not in spv_code
+        assert f"OpStore {inner_input} " not in spv_code
+        assert "Unknown variable gl_TessLevelOuter" not in spv_code
+        assert "Unknown variable gl_TessLevelInner" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patch_parameters_emit_stage_specific_interfaces(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationPatchParameters {
+            struct HSInput {
+                vec4 position;
+                vec2 uv;
+            };
+
+            struct HSOutput {
+                vec4 position;
+                vec2 uv;
+            };
+
+            tessellation_control {
+                layout(vertices = 3) out;
+
+                void main(
+                    InputPatch<HSInput, 3> inputPatch,
+                    OutputPatch<HSOutput, 3> outputPatch
+                ) @outputcontrolpoints(3) {
+                    outputPatch[gl_InvocationID].position =
+                        inputPatch[gl_InvocationID].position;
+                    outputPatch[gl_InvocationID].uv = inputPatch[0].uv;
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main(OutputPatch<HSOutput, 3> patch) @domain(tri) {
+                    vec4 position = patch[0].position;
+                    vec2 uv = patch[1].uv;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        input_patch = spirv_named_variable(
+            spv_code, "inputPatch", storage_class="Input"
+        )
+        output_patch = spirv_named_variable(
+            spv_code, "outputPatch", storage_class="Output"
+        )
+        evaluation_patch = spirv_named_variable(
+            spv_code, "patch", storage_class="Input"
+        )
+
+        assert input_patch in control_entry.group(1)
+        assert output_patch in control_entry.group(1)
+        assert evaluation_patch not in control_entry.group(1)
+        assert evaluation_patch in evaluation_entry.group(1)
+        assert input_patch not in evaluation_entry.group(1)
+        assert output_patch not in evaluation_entry.group(1)
+        assert f"OpDecorate {input_patch} Location 0" in spv_code
+        assert f"OpDecorate {output_patch} Location 0" in spv_code
+        assert f"OpDecorate {evaluation_patch} Location 0" in spv_code
+
+        for variable_id, storage_class in (
+            (input_patch, "Input"),
+            (output_patch, "Output"),
+            (evaluation_patch, "Input"),
+        ):
+            pointer_type = re.search(
+                rf"{re.escape(variable_id)} = OpVariable (%\d+) {storage_class}",
+                spv_code,
+            ).group(1)
+            array_type = re.search(
+                rf"{re.escape(pointer_type)} = OpTypePointer "
+                rf"{storage_class} (%\d+)",
+                spv_code,
+            ).group(1)
+            size_id = re.search(
+                rf"{re.escape(array_type)} = OpTypeArray %\d+ (%\d+)",
+                spv_code,
+            ).group(1)
+            assert re.search(rf"{re.escape(size_id)} = OpConstant %\d+ 3\b", spv_code)
+
+        assert not spirv_named_parameters(spv_code, "inputPatch")
+        assert not spirv_named_parameters(spv_code, "outputPatch")
+        assert not spirv_named_parameters(spv_code, "patch")
+        assert "Unknown type InputPatch" not in spv_code
+        assert "Unknown type OutputPatch" not in spv_code
+        assert "Unknown variable inputPatch" not in spv_code
+        assert "Unknown variable outputPatch" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patch_parameters_reject_invalid_contexts(self, tmp_path):
+        source_code = """
+        shader InvalidTessellationPatchParameters {
+            struct HSInput {
+                vec4 position;
+            };
+
+            struct HSOutput {
+                vec4 position;
+            };
+
+            tessellation_control {
+                layout(vertices = 2) out;
+
+                void main(
+                    InputPatch<HSInput, 2> inputPatch,
+                    OutputPatch<HSOutput, 2> outputPatch
+                ) @outputcontrolpoints(2) {
+                    outputPatch[2].position = vec4(1.0);
+                    outputPatch[1.0].position = vec4(1.0);
+                    inputPatch[0].position = vec4(1.0);
+                }
+            }
+
+            tessellation_evaluation {
+                layout(triangles) in;
+
+                void main(OutputPatch<HSOutput, 2> patch) @domain(tri) {
+                    patch[0].position = vec4(1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "control-point index 2 out of range; valid range is 0..1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V tessellation patch parameter outputPatch "
+            "control-point index requires a scalar integer value, got float"
+        ) in spv_code
+        assert (
+            "; WARNING: cannot assign to read-only SPIR-V pointer inputPatch"
+        ) in spv_code
+        assert (
+            "; WARNING: cannot assign to read-only SPIR-V pointer patch"
+        ) in spv_code
+
+        input_pointer_types = set(
+            re.findall(r"(%\d+) = OpTypePointer Input \S+", spv_code)
+        )
+        input_accesses = {
+            access_id
+            for access_id, pointer_type in re.findall(
+                r"(%\d+) = OpAccessChain (%\d+) ", spv_code
+            )
+            if pointer_type in input_pointer_types
+        }
+        assert input_accesses
+        for access_id in input_accesses:
+            assert f"OpStore {access_id} " not in spv_code
+
+        assert "Unknown type InputPatch" not in spv_code
+        assert "Unknown type OutputPatch" not in spv_code
+        assert "Could not determine array element type" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patchconstantfunc_stores_tess_factor_builtins(self, tmp_path):
+        source_code = """
+        shader TessellationPatchConstantFunction {
+            struct VSOut {
+                vec4 position;
+            };
+
+            struct PatchConstants {
+                float outer[3] @ gl_TessLevelOuter;
+                float inner[1] @ gl_TessLevelInner;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                    PatchConstants patch;
+                    VSOut first = inputPatch[0];
+                    patch.outer[0] = first.position.x;
+                    patch.outer[1] = 2.0;
+                    patch.outer[2] = 3.0;
+                    patch.inner[0] = 1.0;
+                    return patch;
+                }
+
+                void main(InputPatch<VSOut, 3> inputPatch)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        input_patch = spirv_named_variable(
+            spv_code, "inputPatch", storage_class="Input"
+        )
+        outer_output = spirv_named_variable(
+            spv_code, "gl_TessLevelOuter", storage_class="Output"
+        )
+        inner_output = spirv_named_variable(
+            spv_code, "gl_TessLevelInner", storage_class="Output"
+        )
+
+        assert input_patch in control_entry.group(1)
+        assert outer_output in control_entry.group(1)
+        assert inner_output in control_entry.group(1)
+        assert f"OpDecorate {outer_output} BuiltIn TessLevelOuter" in spv_code
+        assert f"OpDecorate {inner_output} BuiltIn TessLevelInner" in spv_code
+        assert re.search(r"%\d+ = OpFunctionCall %\d+ %\d+ %\d+\b", spv_code)
+        assert not re.search(r'OpEntryPoint \w+ %\d+ "HSConst"', spv_code)
+
+        outer_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(outer_output)}\b", spv_code
+        )
+        inner_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(inner_output)}\b", spv_code
+        )
+        outer_stores = [
+            access_id
+            for access_id in outer_accesses
+            if f"OpStore {access_id} " in spv_code
+        ]
+        inner_stores = [
+            access_id
+            for access_id in inner_accesses
+            if f"OpStore {access_id} " in spv_code
+        ]
+        assert len(outer_stores) == 3
+        assert len(inner_stores) == 1
+        assert "patchconstantfunc" not in spv_code
+        assert "Unknown variable" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("attribute", "warning"),
+        [
+            (
+                "@patchconstantfunc(Missing)",
+                "patchconstantfunc 'Missing' does not reference a generated function",
+            ),
+            (
+                "@patchconstantfunc(HSConst, Other)",
+                "patchconstantfunc requires exactly one function name",
+            ),
+        ],
+    )
+    def test_tessellation_patchconstantfunc_rejects_invalid_metadata(
+        self, tmp_path, attribute, warning
+    ):
+        source_code = f"""
+        shader InvalidTessellationPatchConstantFunction {{
+            tessellation_control {{
+                void main() @outputcontrolpoints(3) {attribute} {{
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert warning in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_geometry_stream_builtins_reject_invalid_stage_and_arity(self, tmp_path):
+        source_code = """
+        shader InvalidGeometryStreamBuiltins {
+            geometry {
+                layout(points) in;
+                layout(point, max_vertices = 1) out;
+
+                void main() {
+                    EmitVertex(1);
+                    EndPrimitive(1);
+                }
+            }
+
+            fragment {
+                void main() {
+                    EmitVertex();
+                    EndPrimitive();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "; WARNING: SPIR-V geometry EmitVertex requires no arguments"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EndPrimitive requires no arguments"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EmitVertex is only valid in geometry stages"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V geometry EndPrimitive is only valid in geometry stages"
+        ) in spv_code
+        assert "OpEmitVertex" not in spv_code
+        assert "OpEndPrimitive" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
         self, tmp_path
     ):

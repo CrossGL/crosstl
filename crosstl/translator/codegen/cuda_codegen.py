@@ -3074,6 +3074,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, MemberAccessNode):
+            member_type = self.member_access_member_type(node)
+            if member_type is not None:
+                return member_type
         if isinstance(node, PointerAccessNode):
             member_type = self.pointer_access_member_type(node)
             if member_type is not None:
@@ -3084,6 +3088,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return buffer_result_type
         return super().expression_result_type(node)
 
+    def struct_member_lookup_type(self, type_name):
+        """Return the struct key after CUDA pointer/reference wrappers."""
+        return self.strip_cuda_indirect_type_qualifiers(type_name)
+
+    def member_access_member_type(self, node):
+        """Return the member type for ``object.field`` expressions."""
+        object_node = getattr(
+            node,
+            "object_expr",
+            getattr(node, "object", None),
+        )
+        object_type = self.struct_member_lookup_type(
+            self.expression_result_type(object_node)
+        )
+        return self.struct_member_types.get(object_type, {}).get(
+            getattr(node, "member", "")
+        )
+
     def pointer_access_member_type(self, node):
         """Return the member type for ``ptr->field`` expressions."""
         pointer_expr = getattr(node, "pointer_expr", None)
@@ -3092,9 +3114,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if pointer_info is None:
             return None
 
-        struct_type = pointer_info["pointee_type"]
-        if struct_type.startswith("const "):
-            struct_type = struct_type[len("const ") :].strip()
+        struct_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
         return self.struct_member_types.get(struct_type, {}).get(
             getattr(node, "member", "")
         )
@@ -3347,6 +3367,73 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return assignment_sources
 
+    def is_query_return_alias_type(self, type_name):
+        """Return whether a local type can participate in resource-return tracing."""
+        if self.is_queryable_resource_type(type_name):
+            return True
+
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return False
+
+        if self.struct_member_lookup_type(type_name) in self.struct_member_types:
+            return True
+
+        indirect_info = self.cuda_indirect_type_info(type_name)
+        if indirect_info is None:
+            return False
+        pointee_type = self.struct_member_lookup_type(indirect_info["pointee_type"])
+        return pointee_type in self.struct_member_types
+
+    def collect_query_return_local_alias_sources(self, statements):
+        """Collect simple local aliases before a traceable resource return."""
+        local_alias_types = {}
+        local_alias_sources = {}
+        assigned_names = set()
+
+        for statement in statements:
+            if isinstance(statement, VariableNode):
+                var_type = self.get_variable_node_type(statement)
+                if not self.is_query_return_alias_type(var_type):
+                    return None
+                name = getattr(statement, "name", None)
+                if not name or name in local_alias_types:
+                    return None
+
+                local_alias_types[name] = var_type
+                initial_value = getattr(
+                    statement,
+                    "initial_value",
+                    getattr(statement, "value", None),
+                )
+                if initial_value is not None:
+                    local_alias_sources[name] = initial_value
+                    assigned_names.add(name)
+                continue
+
+            assignment = statement
+            if isinstance(statement, ExpressionStatementNode):
+                assignment = getattr(statement, "expression", None)
+            if not isinstance(assignment, AssignmentNode):
+                return None
+            if getattr(assignment, "operator", "=") != "=":
+                return None
+
+            target = getattr(assignment, "target", None)
+            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+                return None
+            target_name = self.get_expression_name(target)
+            if target_name not in local_alias_types or target_name in assigned_names:
+                return None
+
+            value = getattr(assignment, "value", None)
+            if value is None:
+                return None
+            local_alias_sources[target_name] = value
+            assigned_names.add(target_name)
+
+        return local_alias_sources
+
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
         return_sources = {}
@@ -3380,27 +3467,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if not statements or not isinstance(statements[-1], ReturnNode):
                 continue
 
-            local_alias_sources = {}
-            supported_return_body = True
-            for statement in statements[:-1]:
-                if not isinstance(statement, VariableNode):
-                    supported_return_body = False
-                    break
-                var_type = self.get_variable_node_type(statement)
-                if not self.is_queryable_resource_type(var_type):
-                    supported_return_body = False
-                    break
-                name = getattr(statement, "name", None)
-                initial_value = getattr(
-                    statement,
-                    "initial_value",
-                    getattr(statement, "value", None),
-                )
-                if not name or initial_value is None:
-                    supported_return_body = False
-                    break
-                local_alias_sources[name] = initial_value
-            if not supported_return_body:
+            local_alias_sources = self.collect_query_return_local_alias_sources(
+                statements[:-1]
+            )
+            if local_alias_sources is None:
                 continue
 
             return_expr = getattr(statements[-1], "value", None)
@@ -3556,18 +3626,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return_base_expr, return_indices = self.query_array_access_parts(
                 return_expr
             )
-        elif isinstance(return_expr, MemberAccessNode):
+        elif isinstance(return_expr, (MemberAccessNode, PointerAccessNode)):
             return_base_expr = return_expr
         elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
             return None
 
-        if isinstance(return_base_expr, MemberAccessNode):
+        if isinstance(return_base_expr, (MemberAccessNode, PointerAccessNode)):
             return self.query_return_member_source_descriptor(
                 return_base_expr,
                 return_indices,
                 all_param_indices,
                 param_types,
                 global_variable_types,
+                local_alias_sources,
+                local_visited,
             )
 
         return_name = self.get_expression_name(return_base_expr)
@@ -3622,21 +3694,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         all_param_indices,
         param_types,
         global_variable_types,
+        local_alias_sources=None,
+        local_visited=None,
     ):
         """Describe a storage-image struct member returned by a helper."""
-        object_node = getattr(
-            member_expr,
-            "object_expr",
-            getattr(member_expr, "object", None),
-        )
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
+
+        if isinstance(member_expr, PointerAccessNode):
+            object_node = getattr(member_expr, "pointer_expr", None)
+        else:
+            object_node = getattr(
+                member_expr,
+                "object_expr",
+                getattr(member_expr, "object", None),
+            )
         member = getattr(member_expr, "member", None)
         member_name = getattr(member, "name", member)
         if object_node is None or not isinstance(member_name, str):
             return None
 
         object_name = self.get_expression_name(object_node)
-        if not object_name:
-            return None
 
         object_kind = None
         object_type = None
@@ -3646,7 +3726,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "indices": return_indices,
             "param_indices": all_param_indices,
         }
-        if object_name in param_types:
+        if object_name in local_alias_sources:
+            if object_name in local_visited:
+                return None
+            object_kind = "expression"
+            object_type = self.query_return_expression_type(
+                local_alias_sources[object_name],
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited | {object_name},
+            )
+        elif object_name in param_types:
             object_kind = "parameter"
             object_type = param_types[object_name]
             descriptor["object_index"] = all_param_indices.get(object_name)
@@ -3655,9 +3746,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             object_type = global_variable_types[object_name]
             descriptor["object_name"] = object_name
         else:
-            return None
+            object_kind = "expression"
+            object_type = self.query_return_expression_type(
+                object_node,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited,
+            )
+        if isinstance(member_expr, PointerAccessNode):
+            pointer_info = self.cuda_indirect_type_info(object_type)
+            if pointer_info is None:
+                return None
+            object_type = pointer_info["pointee_type"]
 
-        object_type = self.type_name_string(object_type)
+        object_type = self.struct_member_lookup_type(object_type)
         member_type = self.struct_member_types.get(object_type, {}).get(member_name)
         if not self.is_storage_image_type(member_type):
             return None
@@ -3670,6 +3773,85 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         descriptor["object_kind"] = object_kind
         descriptor["object_type"] = object_type
         return descriptor
+
+    def query_return_expression_type(
+        self,
+        expr,
+        param_types,
+        global_variable_types,
+        local_alias_sources=None,
+        local_visited=None,
+    ):
+        """Infer expression types for returned-resource tracing without scope."""
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
+
+        expr_name = self.get_expression_name(expr)
+        if expr_name in local_alias_sources:
+            if expr_name in local_visited:
+                return None
+            return self.query_return_expression_type(
+                local_alias_sources[expr_name],
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited | {expr_name},
+            )
+        if expr_name in param_types:
+            return param_types[expr_name]
+        if expr_name in global_variable_types:
+            return global_variable_types[expr_name]
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = getattr(expr, "pointer_expr", None)
+            pointer_type = self.query_return_expression_type(
+                pointer_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited,
+            )
+            pointer_info = self.cuda_indirect_type_info(pointer_type)
+            if pointer_info is None:
+                return None
+            object_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+            return self.struct_member_types.get(object_type, {}).get(
+                getattr(expr, "member", "")
+            )
+
+        if isinstance(expr, MemberAccessNode):
+            object_node = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", None),
+            )
+            object_type = self.struct_member_lookup_type(
+                self.query_return_expression_type(
+                    object_node,
+                    param_types,
+                    global_variable_types,
+                    local_alias_sources,
+                    local_visited,
+                )
+            )
+            return self.struct_member_types.get(object_type, {}).get(
+                getattr(expr, "member", "")
+            )
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            array_type = self.query_return_expression_type(
+                array_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited,
+            )
+            return self.array_access_element_type(array_type)
+
+        return self.expression_result_type(expr)
 
     def inline_query_return_source_descriptor(
         self,
@@ -3914,6 +4096,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if object_expr is None:
                 return None
             return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = self.substitute_query_return_expr(
+                expr.pointer_expr,
+                param_indices,
+                raw_args,
+            )
+            if pointer_expr is None:
+                return None
+            return PointerAccessNode(pointer_expr, expr.member)
 
         if isinstance(expr, FunctionCallNode):
             arguments = []
@@ -5249,13 +5441,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "object_expr",
                 getattr(image_arg, "object", None),
             )
-            object_type = self.type_name_string(
+            object_type = self.struct_member_lookup_type(
                 self.expression_result_type(object_node)
             )
             member = getattr(image_arg, "member", None)
             access = self.struct_member_image_accesses.get(object_type, {}).get(member)
             if access is not None:
                 return access
+
+        if isinstance(image_arg, PointerAccessNode):
+            pointer_expr = getattr(image_arg, "pointer_expr", None)
+            pointer_type = self.expression_result_type(pointer_expr)
+            pointer_info = self.cuda_indirect_type_info(pointer_type)
+            if pointer_info is not None:
+                object_type = self.struct_member_lookup_type(
+                    pointer_info["pointee_type"]
+                )
+                member = getattr(image_arg, "member", None)
+                access = self.struct_member_image_accesses.get(object_type, {}).get(
+                    member
+                )
+                if access is not None:
+                    return access
 
         image_name = self.get_expression_name(image_arg)
         if not image_name:

@@ -8757,6 +8757,153 @@ def test_structured_buffer_explicit_result_atomics_emit_slang_interlocked():
     assert "atomicAnd(counters" not in generated_code
 
 
+def test_structured_buffer_atomics_validate_target_result_types():
+    code = """
+    shader InvalidSlangStructuredBufferAtomicTargets {
+        RWStructuredBuffer<uint> counters @binding(24);
+        RWStructuredBuffer<int> signedCounters @binding(25);
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        uint loadOld(uint3 tid) {
+            return atomicAdd(counters[tid.x], 1u);
+        }
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint validUnsigned = atomicAdd(counters[tid.x], 1u);
+                int validSigned = atomicMin(signedCounters[tid.x], -1);
+                float scalarUnsigned = atomicAdd(counters[tid.x], 1u);
+                ivec2 vectorSigned = atomicMin(signedCounters[tid.x], -1);
+                acceptFloat(atomicExchange(counters[tid.x], 4u));
+                float scalarArray[2] = {
+                    atomicCompareExchange(counters[tid.x], 2u, 3u),
+                    1.0
+                };
+                uint stillValid = loadOld(tid);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint validUnsigned = cgl_atomicAdd_original;" in generated_code
+    assert "int validSigned = cgl_atomicMin_original;" in generated_code
+    assert "uint stillValid = loadOld(tid);" in generated_code
+    assert (
+        "float scalarUnsigned = /* unsupported Slang structured buffer: atomicAdd "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorSigned = /* unsupported Slang structured buffer: atomicMin "
+        "returns int but target expects int2 */ int2(0);" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang structured buffer: atomicExchange "
+        "returns uint but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang structured buffer: "
+        "atomicCompareExchange returns uint but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert "float scalarUnsigned = cgl_atomicAdd_original" not in generated_code
+    assert "int2 vectorSigned = cgl_atomicMin_original" not in generated_code
+    assert "acceptFloat(cgl_atomicExchange_original)" not in generated_code
+    assert "atomicAdd(counters" not in generated_code
+    assert "atomicMin(signedCounters" not in generated_code
+    assert "atomicExchange(counters" not in generated_code
+    assert "atomicCompareExchange(counters" not in generated_code
+
+
+def test_structured_buffer_explicit_result_atomics_reject_value_contexts():
+    code = """
+    shader InvalidSlangStructuredBufferExplicitAtomicValues {
+        RWStructuredBuffer<uint> counters @binding(29);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint3 tid) {
+            uint oldValue = 0u;
+            return atomicAdd(counters[tid.x], 1u, oldValue);
+        }
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint oldValue = 0u;
+                atomicAdd(counters[tid.x], 1u, oldValue);
+                uint initBlocked = atomicAdd(counters[tid.x], 2u, oldValue);
+                oldValue = atomicExchange(counters[tid.x], 3u, oldValue);
+                passUint(atomicOr(counters[tid.x], 4u, oldValue));
+                uint binaryBlocked =
+                    atomicXor(counters[tid.x], 5u, oldValue) + 1u;
+                if (atomicAnd(counters[tid.x], 1u, oldValue) != 0u) {
+                    oldValue = returnBlocked(tid);
+                }
+                for (
+                    atomicAdd(counters[tid.x], 6u, oldValue);
+                    oldValue < 8u;
+                    atomicExchange(counters[tid.x], oldValue, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang structured buffer: atomicAdd "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang structured buffer: atomicExchange "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang structured buffer: atomicOr explicit "
+        "original output atomic cannot be used as a value expression */ 0u);"
+        in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang structured buffer: atomicXor "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u + 1u;" in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang structured buffer: atomicAnd explicit original "
+        "output atomic cannot be used as a value expression */ 0u != 0u)"
+        in generated_code
+    )
+    assert (
+        "return /* unsupported Slang structured buffer: atomicAdd explicit "
+        "original output atomic cannot be used as a value expression */ 0u;"
+        in generated_code
+    )
+    assert (
+        "for (InterlockedAdd(counters[tid.x], 6u, oldValue); oldValue < 8u; "
+        "InterlockedExchange(counters[tid.x], oldValue, oldValue))" in generated_code
+    )
+    assert "uint initBlocked = InterlockedAdd" not in generated_code
+    assert "oldValue = InterlockedExchange" not in generated_code
+    assert "passUint(InterlockedOr" not in generated_code
+    assert "InterlockedXor(counters[tid.x], 5u, oldValue) + 1u" not in generated_code
+    assert (
+        "if (InterlockedAnd(counters[tid.x], 1u, oldValue) != 0u)" not in generated_code
+    )
+    assert "return InterlockedAdd" not in generated_code
+
+
 def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics():
     code = """
     shader SlangStructuredBufferAtomicLoopContexts {
@@ -9183,6 +9330,208 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
     assert "buffer_store(" not in generated_code
 
 
+def test_byte_address_load_calls_validate_target_result_types():
+    code = """
+    shader SlangByteAddressLoadTargetContexts {
+        ByteAddressBuffer rawInput @binding(25);
+        RWByteAddressBuffer rawRW @binding(26);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint2 passUint2(uint2 value) {
+            return value;
+        }
+
+        float returnBlockedFloat(uint offset) {
+            return rawInput.Load(offset);
+        }
+
+        uint4 returnBlockedVector(uint offset) {
+            return rawInput.Load2(offset);
+        }
+
+        compute {
+            void main(uint offset) {
+                uint scalar = rawInput.Load(offset);
+                uint helperScalar = buffer_load(rawInput, offset + 4u);
+                uint2 pair = rawInput.Load2(offset + 8u);
+                uint3 triple = rawRW.Load3(offset + 16u);
+                uint4 quad = rawInput.Load4(offset + 32u);
+                float castScalar = asfloat(rawInput.Load(offset + 48u));
+                vec2 castPair = asfloat(rawInput.Load2(offset + 52u));
+                ivec3 signedTriple = asint(rawRW.Load3(offset + 60u));
+                float invalidFloat = rawInput.Load(offset + 72u);
+                uint2 invalidVectorFromHelper =
+                    buffer_load(rawInput, offset + 76u);
+                uint invalidScalarFromVector =
+                    rawInput.Load2(offset + 80u);
+                vec2 invalidFloatVector = rawInput.Load2(offset + 84u);
+                vec2 invalidBinary =
+                    rawInput.Load2(offset + 88u) + vec2(1.0);
+                mat2 invalidMatrix = rawInput.Load2(offset + 92u);
+                passUint(rawInput.Load3(offset + 108u));
+                passUint2(buffer_load(rawInput, offset + 112u));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint scalar = rawInput.Load(offset);" in generated_code
+    assert "uint helperScalar = rawInput.Load(offset + 4u);" in generated_code
+    assert "uint2 pair = rawInput.Load2(offset + 8u);" in generated_code
+    assert "uint3 triple = rawRW.Load3(offset + 16u);" in generated_code
+    assert "uint4 quad = rawInput.Load4(offset + 32u);" in generated_code
+    assert "float castScalar = asfloat(rawInput.Load(offset + 48u));" in generated_code
+    assert "float2 castPair = asfloat(rawInput.Load2(offset + 52u));" in generated_code
+    assert "int3 signedTriple = asint(rawRW.Load3(offset + 60u));" in generated_code
+    assert (
+        "float invalidFloat = /* unsupported Slang byte-address buffer: Load "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "uint2 invalidVectorFromHelper = /* unsupported Slang byte-address "
+        "buffer: buffer_load returns uint but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "uint invalidScalarFromVector = /* unsupported Slang byte-address "
+        "buffer: Load2 returns uint2 but target expects uint */ 0u;" in generated_code
+    )
+    assert (
+        "float2 invalidFloatVector = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2 */ float2(0.0);"
+        in generated_code
+    )
+    assert (
+        "float2 invalidBinary = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2 */ float2(0.0) + "
+        "float2(1.0);" in generated_code
+    )
+    assert (
+        "float2x2 invalidMatrix = /* unsupported Slang byte-address buffer: "
+        "Load2 returns uint2 but target expects float2x2 */ float2x2(0.0);"
+        in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: Load3 returns "
+        "uint3 but target expects uint */ 0u);" in generated_code
+    )
+    assert (
+        "passUint2(/* unsupported Slang byte-address buffer: buffer_load "
+        "returns uint but target expects uint2 */ uint2(0u));" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: Load returns uint "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: Load2 returns uint2 "
+        "but target expects uint4 */ uint4(0u);" in generated_code
+    )
+    assert "float invalidFloat = rawInput.Load" not in generated_code
+    assert "uint invalidScalarFromVector = rawInput.Load2" not in generated_code
+    assert "float2 invalidFloatVector = rawInput.Load2" not in generated_code
+    assert "float2x2 invalidMatrix = rawInput.Load2" not in generated_code
+    assert "passUint(rawInput.Load3" not in generated_code
+    assert "passUint2(rawInput.Load" not in generated_code
+    assert "return rawInput.Load" not in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "None(" not in generated_code
+
+
+def test_byte_address_store_calls_reject_value_contexts():
+    code = """
+    shader SlangByteAddressStoreValueContexts {
+        RWByteAddressBuffer rawOutput @binding(24);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint offset, uint value) {
+            return buffer_store(rawOutput, offset, value);
+        }
+
+        compute {
+            void main(uint offset, uint value) {
+                uint oldValue = 0u;
+                buffer_store(rawOutput, offset, value);
+                rawOutput.Store2(offset + 4u, uint2(value, value));
+                uint initBlocked =
+                    buffer_store(rawOutput, offset + 8u, value);
+                oldValue = rawOutput.Store(offset + 12u, value);
+                passUint(
+                    rawOutput.Store3(offset + 16u, uint3(value, value, value))
+                );
+                uint binaryBlocked =
+                    rawOutput.Store4(
+                        offset + 20u,
+                        uint4(value, value, value, value)
+                    ) + 1u;
+                if (buffer_store(rawOutput, offset + 24u, value) != 0u) {
+                    oldValue = returnBlocked(offset, value);
+                }
+                for (
+                    buffer_store(rawOutput, offset + 28u, value);
+                    oldValue < 8u;
+                    rawOutput.Store(offset + 32u, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rawOutput.Store(offset, value);" in generated_code
+    assert "rawOutput.Store2(offset + 4u, uint2(value, value));" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang byte-address buffer: "
+        "buffer_store cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang byte-address buffer: Store cannot be "
+        "used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: Store3 cannot be "
+        "used as a value expression */ 0u);" in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang byte-address buffer: Store4 "
+        "cannot be used as a value expression */ 0u + 1u;" in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang byte-address buffer: buffer_store cannot be "
+        "used as a value expression */ 0u != 0u)" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: buffer_store cannot "
+        "be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "for (rawOutput.Store(offset + 28u, value); oldValue < 8u; "
+        "rawOutput.Store(offset + 32u, oldValue))" in generated_code
+    )
+    assert "uint initBlocked = rawOutput.Store" not in generated_code
+    assert "oldValue = rawOutput.Store" not in generated_code
+    assert "passUint(rawOutput.Store3" not in generated_code
+    assert (
+        "rawOutput.Store4(offset + 20u, uint4(value, value, value, value)) + 1u"
+        not in generated_code
+    )
+    assert "if (rawOutput.Store" not in generated_code
+    assert "return rawOutput.Store" not in generated_code
+    assert "return buffer_store(" not in generated_code
+    assert "None(" not in generated_code
+
+
 def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
     code = """
     shader SlangByteAddressInterlockedMembers {
@@ -9246,6 +9595,92 @@ def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
     assert "helper.InterlockedAdd(value);" in generated_code
     assert "readOnlyRaw.InterlockedOr" not in generated_code
     assert "attrReadOnlyRaw.InterlockedXor" not in generated_code
+    assert "None(" not in generated_code
+
+
+def test_byte_address_interlocked_member_calls_reject_value_contexts():
+    code = """
+    shader SlangByteAddressInterlockedValueContexts {
+        RWByteAddressBuffer rawOutput @binding(24);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint offset, uint value) {
+            uint oldValue = 0u;
+            return rawOutput.InterlockedAdd(offset, value, oldValue);
+        }
+
+        compute {
+            void main(uint offset, uint value) {
+                uint oldValue = 0u;
+                rawOutput.InterlockedAdd(offset, value, oldValue);
+                uint initBlocked =
+                    rawOutput.InterlockedAdd(offset + 4u, value, oldValue);
+                oldValue =
+                    rawOutput.InterlockedExchange(offset + 8u, value, oldValue);
+                passUint(rawOutput.InterlockedOr(offset + 12u, value, oldValue));
+                uint binaryBlocked =
+                    rawOutput.InterlockedXor(offset + 16u, value, oldValue) + 1u;
+                if (rawOutput.InterlockedAnd(offset + 20u, value, oldValue) != 0u) {
+                    oldValue = returnBlocked(offset, value);
+                }
+                for (
+                    rawOutput.InterlockedAdd(offset + 24u, value, oldValue);
+                    oldValue < 8u;
+                    rawOutput.InterlockedExchange(offset + 28u, oldValue, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rawOutput.InterlockedAdd(offset, value, oldValue);" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang byte-address buffer: "
+        "InterlockedAdd cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang byte-address buffer: "
+        "InterlockedExchange cannot be used as a value expression */ 0u;"
+        in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: InterlockedOr "
+        "cannot be used as a value expression */ 0u);" in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang byte-address buffer: "
+        "InterlockedXor cannot be used as a value expression */ 0u + 1u;"
+        in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang byte-address buffer: InterlockedAnd cannot "
+        "be used as a value expression */ 0u != 0u)" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: InterlockedAdd "
+        "cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "for (rawOutput.InterlockedAdd(offset + 24u, value, oldValue); "
+        "oldValue < 8u; rawOutput.InterlockedExchange(offset + 28u, oldValue, "
+        "oldValue))" in generated_code
+    )
+    assert "uint initBlocked = rawOutput.InterlockedAdd" not in generated_code
+    assert "oldValue = rawOutput.InterlockedExchange" not in generated_code
+    assert "passUint(rawOutput.InterlockedOr" not in generated_code
+    assert (
+        "rawOutput.InterlockedXor(offset + 16u, value, oldValue) + 1u"
+        not in generated_code
+    )
+    assert "if (rawOutput.InterlockedAnd" not in generated_code
+    assert "return rawOutput.InterlockedAdd" not in generated_code
     assert "None(" not in generated_code
 
 
@@ -10948,6 +11383,98 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
     assert ".Gather(sampleState" not in generated_code
     assert ".GatherBlue(sampleState" not in generated_code
     assert ".GatherAlpha(sampleState" not in generated_code
+
+
+def test_texture_gather_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(sampler2d tex, vec2 uv) {
+                return textureGather(tex, uv);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                ivec2 offset = ivec2(1, 0);
+                int component = 2;
+                bool take = true;
+                vec4 validGather = textureGather(colorMap, uv);
+                float scalarGather = textureGather(colorMap, uv);
+                ivec2 vectorOffsetGather =
+                    textureGatherOffset(colorMap, uv, offset, 1);
+                acceptFloat(
+                    textureGatherOffsets(
+                        colorMap,
+                        uv,
+                        offset,
+                        offset,
+                        offset,
+                        offset
+                    )
+                );
+                float scalarTernary =
+                    take ? textureGather(colorMap, uv, component) : 1.0;
+                float scalarArray[2] = {
+                    textureGatherOffset(colorMap, uv, offset),
+                    1.0
+                };
+                float missingOffset = textureGatherOffset(colorMap, uv);
+                float badComponent = textureGather(colorMap, uv, 4);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validGather = colorMap.Gather(uv);" in generated_code
+    assert (
+        "float scalarGather = /* unsupported Slang texture gather: "
+        "textureGather returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorOffsetGather = /* unsupported Slang texture gather: "
+        "textureGatherOffset returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang texture gather: textureGatherOffsets "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang texture gather: textureGather returns "
+        "float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang texture gather: "
+        "textureGather returns float4 but target expects float */ 0 : 1.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang texture gather: "
+        "textureGatherOffset returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingOffset = /* unsupported Slang texture gather: "
+        "textureGatherOffset requires offset and optional component arguments */ 0;"
+        in generated_code
+    )
+    assert (
+        "float badComponent = /* unsupported Slang texture gather: "
+        "textureGather component literal must be 0, 1, 2, or 3 */ 0;" in generated_code
+    )
+    assert "float scalarGather = colorMap.Gather(uv);" not in generated_code
+    assert "int2 vectorOffsetGather = colorMap.GatherGreen" not in generated_code
+    assert "acceptFloat(colorMap.Gather" not in generated_code
+    assert "float scalarTernary = (take ? (component == 0 ?" not in generated_code
 
 
 def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
@@ -16410,6 +16937,72 @@ def test_integer_image_atomics_emit_slang_interlocked_helpers():
         "imageAtomicCompSwap",
     ]:
         assert f"{operation}(image" not in generated_code
+
+
+def test_image_atomics_validate_target_result_types():
+    code = """
+    shader InvalidSlangImageAtomicTargets {
+        image2D counters @r32ui;
+        image2D signedCounters @r32i;
+
+        float acceptFloat(float value) {
+            return value;
+        }
+
+        uint loadOld(image2D image @r32ui, ivec2 pixel) {
+            return imageAtomicAdd(image, pixel, 1u);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint validUnsigned = imageAtomicAdd(counters, pixel, 1u);
+                int validSigned = imageAtomicMin(signedCounters, pixel, -1);
+                float scalarUnsigned = imageAtomicAdd(counters, pixel, 1u);
+                uvec2 vectorUnsigned = imageAtomicExchange(counters, pixel, 4u);
+                acceptFloat(imageAtomicExchange(counters, pixel, 5u));
+                float scalarArray[2] = {
+                    imageAtomicCompSwap(counters, pixel, 2u, 3u),
+                    1.0
+                };
+                uint stillValid = loadOld(counters, pixel);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint validUnsigned = cgl_imageAtomicAdd_original;" in generated_code
+    assert "int validSigned = cgl_imageAtomicMin_original;" in generated_code
+    assert "uint stillValid = loadOld(counters, pixel);" in generated_code
+    assert (
+        "float scalarUnsigned = /* unsupported Slang image atomic: imageAtomicAdd "
+        "returns uint but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "uint2 vectorUnsigned = /* unsupported Slang image atomic: "
+        "imageAtomicExchange returns uint but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang image atomic: imageAtomicExchange "
+        "returns uint but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang image atomic: "
+        "imageAtomicCompSwap returns uint but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert "float scalarUnsigned = cgl_imageAtomicAdd_original" not in generated_code
+    assert (
+        "uint2 vectorUnsigned = cgl_imageAtomicExchange_original" not in generated_code
+    )
+    assert "acceptFloat(cgl_imageAtomicExchange_original)" not in generated_code
+    assert "imageAtomicAdd(counters" not in generated_code
+    assert "imageAtomicMin(signedCounters" not in generated_code
+    assert "imageAtomicExchange(counters" not in generated_code
+    assert "imageAtomicCompSwap(counters" not in generated_code
 
 
 def test_slangc_smoke_compiles_generated_image_atomics_if_available(tmp_path):

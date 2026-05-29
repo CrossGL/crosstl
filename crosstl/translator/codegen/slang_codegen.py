@@ -147,6 +147,7 @@ class SlangCodeGen:
         self.expression_prelude_result_stack = []
         self.expression_temp_names = set()
         self.atomic_value_context_stack = []
+        self.statement_expression_node_stack = []
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -244,6 +245,7 @@ class SlangCodeGen:
             self.expression_prelude_result_stack = []
             self.expression_temp_names = set()
             self.atomic_value_context_stack = []
+            self.statement_expression_node_stack = []
             self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
@@ -5159,6 +5161,20 @@ class SlangCodeGen:
             self.expression_prelude_stack.pop()
             self.expression_prelude_result_stack.pop()
 
+    def generate_statement_expression_with_prelude(self, expr):
+        self.statement_expression_node_stack.append(expr)
+        try:
+            return self.generate_expression_with_prelude(expr)
+        finally:
+            self.statement_expression_node_stack.pop()
+
+    def is_direct_statement_expression(self, node):
+        return (
+            self.current_expression_expected_type is None
+            and bool(self.statement_expression_node_stack)
+            and self.statement_expression_node_stack[-1] is node
+        )
+
     def statement_with_prelude(self, prelude, statement):
         if not prelude:
             return statement
@@ -5187,8 +5203,8 @@ class SlangCodeGen:
             )
             if synchronization_statement is not None:
                 return synchronization_statement
-            prelude, result_names, expr = self.generate_expression_with_prelude(
-                node.expression
+            prelude, result_names, expr = (
+                self.generate_statement_expression_with_prelude(node.expression)
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
@@ -5218,7 +5234,9 @@ class SlangCodeGen:
             )
             if synchronization_statement is not None:
                 return synchronization_statement
-            prelude, result_names, expr = self.generate_expression_with_prelude(node)
+            prelude, result_names, expr = (
+                self.generate_statement_expression_with_prelude(node)
+            )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
 
@@ -5303,7 +5321,14 @@ class SlangCodeGen:
                 )
                 return f"{declaration} = {initial_expr}"
             return declaration
-        return self.generate_expression(node)
+        statement_expr = (
+            node.expression if isinstance(node, ExpressionStatementNode) else node
+        )
+        self.statement_expression_node_stack.append(statement_expr)
+        try:
+            return self.generate_expression(node)
+        finally:
+            self.statement_expression_node_stack.pop()
 
     def generate_loop_condition_expression(self, node, atomic_value_context):
         self.atomic_value_context_stack.append(atomic_value_context)
@@ -5352,6 +5377,14 @@ class SlangCodeGen:
     def generate_expression_with_expected(self, expr, expected_type):
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
+
+    def generate_expression_without_expected(self, expr):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = None
         try:
             return self.generate_expression(expr)
         finally:
@@ -5697,9 +5730,10 @@ class SlangCodeGen:
                     self.image_resource_type(expr.args[0])
                 )
             if func_name == "buffer_load" and getattr(expr, "args", None):
-                return self.structured_buffer_element_type(
-                    self.structured_buffer_resource_type(expr.args[0])
-                )
+                buffer_type = self.structured_buffer_resource_type(expr.args[0])
+                if self.is_byte_address_buffer_resource_type(buffer_type):
+                    return "uint"
+                return self.structured_buffer_element_type(buffer_type)
             if func_name == "buffer_consume" and getattr(expr, "args", None):
                 return self.structured_buffer_element_type(
                     self.structured_buffer_resource_type(expr.args[0])
@@ -5947,12 +5981,18 @@ class SlangCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
             if callee not in self.user_function_names:
-                resource_call = self.generate_resource_call(callee, node.args)
+                resource_call = self.generate_resource_call(
+                    callee,
+                    node.args,
+                    statement_context=self.is_direct_statement_expression(node),
+                )
                 if resource_call is not None:
                     return resource_call
             if isinstance(func_expr, MemberAccessNode):
                 resource_member_call = self.generate_resource_member_call(
-                    func_expr, node.args
+                    func_expr,
+                    node.args,
+                    statement_context=self.is_direct_statement_expression(node),
                 )
                 if resource_member_call is not None:
                     return resource_member_call
@@ -5973,6 +6013,13 @@ class SlangCodeGen:
                 return f"{self.convert_type(callee)}({args})"
             if isinstance(callee, str) and callee in self.user_function_names:
                 args = self.generate_user_function_arguments(callee, node.args)
+            elif isinstance(callee, str) and callee in {"asfloat", "asint", "asuint"}:
+                args = ", ".join(
+                    [
+                        self.generate_expression_without_expected(arg)
+                        for arg in node.args
+                    ]
+                )
             else:
                 args = ", ".join([self.generate_expression(arg) for arg in node.args])
             callee = self.convert_type(callee)
@@ -7787,7 +7834,9 @@ class SlangCodeGen:
         )
         return original_name
 
-    def structured_buffer_atomic_expression(self, func_name, args):
+    def structured_buffer_atomic_expression(
+        self, func_name, args, statement_context=False
+    ):
         operation = self.structured_buffer_atomic_operations().get(func_name)
         if operation is None or not args:
             return None
@@ -7823,6 +7872,15 @@ class SlangCodeGen:
         expression_args = 1 + value_arg_count
         explicit_result_args = expression_args + 1
         if len(args) == expression_args:
+            target_reason = self.atomic_result_expected_type_unsupported_reason(
+                func_name, result_type
+            )
+            if target_reason:
+                return diagnostic(
+                    func_name,
+                    target_reason,
+                    self.atomic_result_diagnostic_fallback_type(result_type),
+                )
             return self.structured_buffer_atomic_value_expression(
                 func_name, intrinsic, target, args[1:], element_type
             )
@@ -7836,6 +7894,13 @@ class SlangCodeGen:
                 func_name,
                 f"requires {required_shape}",
                 result_type,
+            )
+
+        if not statement_context:
+            return diagnostic(
+                func_name,
+                "explicit original output atomic cannot be used as a value expression",
+                self.atomic_result_diagnostic_fallback_type(result_type),
             )
 
         target_expr = self.generate_expression(target)
@@ -7861,6 +7926,48 @@ class SlangCodeGen:
             f"/* unsupported Slang byte-address buffer: {operation} {reason} */ "
             f"{self.zero_value_for_type(result_type)}"
         )
+
+    def atomic_result_expected_type(self):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type == "auto":
+            return None
+        if self.is_scalar_value_type(expected_type) or self.is_vector_value_type(
+            expected_type
+        ):
+            return expected_type
+        return None
+
+    def atomic_result_expected_type_unsupported_reason(self, operation, result_type):
+        expected_type = self.atomic_result_expected_type()
+        result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def atomic_result_diagnostic_fallback_type(self, result_type):
+        return self.atomic_result_expected_type() or result_type
+
+    def byte_address_load_expected_type(self):
+        expected_type = self.convert_type(self.current_expression_expected_type)
+        if not expected_type or expected_type in {"auto", "void"}:
+            return None
+        return expected_type
+
+    def byte_address_load_expected_type_unsupported_reason(
+        self, operation, result_type
+    ):
+        expected_type = self.byte_address_load_expected_type()
+        result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def byte_address_load_diagnostic_fallback_type(self, result_type):
+        return self.byte_address_load_expected_type() or result_type
 
     def zero_value_for_type(self, type_name):
         type_name = self.convert_type(type_name)
@@ -7929,6 +8036,15 @@ class SlangCodeGen:
                 element_type,
             )
         if self.is_byte_address_buffer_resource_type(buffer_type):
+            target_reason = self.byte_address_load_expected_type_unsupported_reason(
+                "buffer_load", "uint"
+            )
+            if target_reason is not None:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_load",
+                    target_reason,
+                    self.byte_address_load_diagnostic_fallback_type("uint"),
+                )
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
             return f"{buffer}.Load({index})"
@@ -7944,7 +8060,7 @@ class SlangCodeGen:
         index = self.generate_expression(args[1])
         return f"{buffer}.Load({index})"
 
-    def buffer_store_expression(self, args):
+    def buffer_store_expression(self, args, statement_context=False):
         if len(args) < 3:
             return self.unsupported_structured_buffer_call(
                 "buffer_store", "requires buffer, index, and value arguments"
@@ -7959,6 +8075,12 @@ class SlangCodeGen:
             if not self.is_writable_byte_address_buffer_resource_type(buffer_type):
                 return self.unsupported_byte_address_buffer_call(
                     "buffer_store", "requires RWByteAddressBuffer resource"
+                )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_store",
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
@@ -8122,7 +8244,7 @@ class SlangCodeGen:
             return None
         return self.structured_buffer_element_type(receiver_type) or "uint"
 
-    def generate_resource_member_call(self, func_expr, args):
+    def generate_resource_member_call(self, func_expr, args, statement_context=False):
         receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         receiver_type = self.structured_buffer_resource_type(receiver)
 
@@ -8139,6 +8261,16 @@ class SlangCodeGen:
                     member,
                     "requires readable byte-address buffer receiver",
                     result_type or "uint",
+                )
+            result_type = self.byte_address_member_call_result_type(func_expr) or "uint"
+            target_reason = self.byte_address_load_expected_type_unsupported_reason(
+                member, result_type
+            )
+            if target_reason is not None:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    target_reason,
+                    self.byte_address_load_diagnostic_fallback_type(result_type),
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
@@ -8158,6 +8290,12 @@ class SlangCodeGen:
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires RWByteAddressBuffer receiver"
                 )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
+                )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
             return f"{receiver_expr}.{member}({args_expr})"
@@ -8173,6 +8311,12 @@ class SlangCodeGen:
             if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires RWByteAddressBuffer receiver"
+                )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
@@ -8325,7 +8469,13 @@ class SlangCodeGen:
             return None
         return f"cgl_{operation}_{suffix}"
 
-    def image_atomic_zero_value(self, image_type=None):
+    def image_atomic_zero_value(self, image_type=None, result_type=None):
+        expected_type = self.atomic_result_expected_type()
+        if expected_type:
+            return self.zero_value_for_type(expected_type)
+        if result_type:
+            return self.zero_value_for_type(result_type)
+
         element_type = self.image_resource_element_type(image_type)
         if isinstance(element_type, str) and element_type.startswith("uint"):
             return "0u"
@@ -8335,10 +8485,12 @@ class SlangCodeGen:
             return "0u"
         return "0"
 
-    def unsupported_image_atomic_call(self, operation, reason, image_type=None):
+    def unsupported_image_atomic_call(
+        self, operation, reason, image_type=None, result_type=None
+    ):
         return (
             f"/* unsupported Slang image atomic: {operation} {reason} */ "
-            f"{self.image_atomic_zero_value(image_type)}"
+            f"{self.image_atomic_zero_value(image_type, result_type)}"
         )
 
     def image_atomic_required_args_reason(self, operation):
@@ -8415,6 +8567,17 @@ class SlangCodeGen:
             )
 
         return_type = self.image_atomic_return_type(image_type)
+        target_reason = self.atomic_result_expected_type_unsupported_reason(
+            operation, return_type
+        )
+        if target_reason:
+            return self.unsupported_image_atomic_call(
+                operation,
+                target_reason,
+                image_type,
+                self.atomic_result_diagnostic_fallback_type(return_type),
+            )
+
         intrinsic = self.image_atomic_intrinsic(operation)
         value_expr = self.image_atomic_value_expression(
             operation,
@@ -8489,7 +8652,7 @@ class SlangCodeGen:
             for char in str(resource_slang_type).strip("_")
         ).strip("_")
 
-    def generate_resource_call(self, func_name, args):
+    def generate_resource_call(self, func_name, args, statement_context=False):
         if func_name == "imageLoad" and len(args) >= 2:
             return self.image_load_expression(args)
 
@@ -8500,7 +8663,7 @@ class SlangCodeGen:
             return self.buffer_load_expression(args)
 
         if func_name == "buffer_store":
-            return self.buffer_store_expression(args)
+            return self.buffer_store_expression(args, statement_context)
 
         if func_name == "buffer_append":
             return self.buffer_append_expression(args)
@@ -8524,7 +8687,7 @@ class SlangCodeGen:
             return self.image_atomic_expression(func_name, args)
 
         structured_buffer_atomic = self.structured_buffer_atomic_expression(
-            func_name, args
+            func_name, args, statement_context=statement_context
         )
         if structured_buffer_atomic is not None:
             return structured_buffer_atomic
@@ -9332,11 +9495,22 @@ class SlangCodeGen:
         ]
         method = self.texture_gather_method(component_arg)
         if method is not None:
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_gather_call(func_name, expected_reason)
             return f"{texture_name}.{method}({', '.join(method_args)})"
         if isinstance(component_arg, LiteralNode):
             return self.unsupported_texture_gather_call(
                 func_name, "component literal must be 0, 1, 2, or 3"
             )
+
+        expected_reason = self.texture_result_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_gather_call(func_name, expected_reason)
 
         component = self.generate_expression(component_arg)
         return self.texture_gather_component_expression(
@@ -9401,8 +9575,10 @@ class SlangCodeGen:
         )
 
     def unsupported_texture_gather_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
-            f"/* unsupported Slang texture gather: {func_name} {reason} */ float4(0.0)"
+            f"/* unsupported Slang texture gather: {func_name} {reason} */ "
+            f"{fallback}"
         )
 
     def generate_texture_compare(self, func_name, args):

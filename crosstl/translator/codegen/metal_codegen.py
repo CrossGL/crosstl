@@ -1,5 +1,6 @@
 """CrossGL-to-Metal code generator."""
 
+import ast as py_ast
 from hashlib import sha1
 
 from ..ast import (
@@ -3592,6 +3593,13 @@ class MetalCodeGen:
                     self.local_variable_address_space_mismatch_diagnostic(stmt)
                 )
                 if is_atomic_local:
+                    array_initializer = (
+                        self.generate_metal_atomic_array_initializer_stores(
+                            stmt.name, var_type, initial_value, indent_str
+                        )
+                    )
+                    if array_initializer is not None:
+                        return f"{indent_str}{declaration};\n{array_initializer}"
                     return (
                         f"{indent_str}{declaration};\n"
                         f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
@@ -3959,6 +3967,22 @@ class MetalCodeGen:
                 return array_size
         return None
 
+    def sampler_argument_resource_type(self, sampler_arg):
+        sampler_name = self.expression_name(sampler_arg)
+        if sampler_name in self.sampler_variable_names():
+            return "sampler"
+
+        arg_type = self.expression_result_type(sampler_arg)
+        array_element_type = self.metal_array_element_type(arg_type)
+        if self.is_sampler_type(arg_type) or self.is_sampler_type(array_element_type):
+            return "sampler"
+
+        if self.struct_member_is_sampler_resource(
+            self.struct_resource_member_node(sampler_arg)
+        ):
+            return "sampler"
+        return None
+
     def record_local_texture_alias_sampler_source(self, node):
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
@@ -4302,6 +4326,87 @@ class MetalCodeGen:
             "atomic_int",
             "atomic_uint",
         }
+
+    def metal_atomic_array_type_parts(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if type_name is None or "[" not in type_name:
+            return None
+
+        atomic_type = type_name.split("[", 1)[0].strip()
+        if not self.is_metal_atomic_value_type(atomic_type):
+            return None
+
+        size = None
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            size = evaluate_literal_int_expression(
+                getattr(vtype, "size", None),
+                self.literal_int_constants,
+            )
+        if size is None:
+            _base_type, size = parse_array_type(type_name)
+        if size is None:
+            size = self.literal_int_array_size_from_type_name(type_name)
+        return atomic_type, size
+
+    def literal_int_array_size_from_type_name(self, type_name):
+        if not isinstance(type_name, str) or "[" not in type_name:
+            return None
+
+        _base_type, array_suffix = split_array_type_suffix(type_name)
+        close_bracket = array_suffix.find("]")
+        if close_bracket == -1:
+            return None
+
+        size_expr = array_suffix[1:close_bracket].strip()
+        if not size_expr:
+            return None
+        return self.literal_int_resource_array_size(size_expr)
+
+    def metal_atomic_value_type(self, atomic_type):
+        return {
+            "atomic_bool": "bool",
+            "atomic_int": "int",
+            "atomic_uint": "uint",
+        }.get(str(atomic_type), atomic_type)
+
+    def metal_atomic_zero_value(self, atomic_type):
+        return {
+            "atomic_bool": "false",
+            "atomic_int": "0",
+            "atomic_uint": "0u",
+        }.get(str(atomic_type), "0")
+
+    def generate_metal_atomic_array_initializer_stores(
+        self, name, var_type, initial_value, indent_str
+    ):
+        array_parts = self.metal_atomic_array_type_parts(var_type)
+        if array_parts is None or not isinstance(initial_value, ArrayLiteralNode):
+            return None
+
+        atomic_type, declared_size = array_parts
+        elements = list(getattr(initial_value, "elements", []) or [])
+        store_count = declared_size if declared_size is not None else len(elements)
+        value_type = self.metal_atomic_value_type(atomic_type)
+        zero_value = self.metal_atomic_zero_value(atomic_type)
+        lines = []
+        for index in range(store_count):
+            if index < len(elements):
+                value = self.generate_expression_with_expected(
+                    elements[index], value_type
+                )
+            else:
+                value = zero_value
+            lines.append(
+                f"{indent_str}atomic_store_explicit(&{name}[{index}], {value}, "
+                "memory_order_relaxed);\n"
+            )
+        if declared_size is not None and len(elements) > declared_size:
+            lines.append(
+                f"{indent_str}/* unsupported Metal atomic array initializer: "
+                f"'{name}' has {len(elements)} initializers for {declared_size} "
+                "elements; extra values were ignored */\n"
+            )
+        return "".join(lines)
 
     def type_name_string(self, vtype):
         if vtype is None:
@@ -5671,6 +5776,19 @@ class MetalCodeGen:
             self.required_metal_wave_ballot_helper = True
             predicate = self.generate_expression(arguments[0])
             return f"__crossgl_metal_wave_ballot({predicate})"
+        if operation == "WaveActiveAllEqual":
+            value = self.generate_expression(arguments[0])
+            mapped_type, component_type, _array_suffix = (
+                self.metal_wave_argument_mapped_type(arguments[0])
+            )
+            equality = f"{value} == simd_broadcast_first({value})"
+            if (
+                mapped_type is not None
+                and component_type is not None
+                and mapped_type != component_type
+            ):
+                equality = f"all({equality})"
+            return f"simd_all({equality})"
         if operation == "WaveMatch":
             lane_count_parameter = self.current_metal_wave_lane_count_parameter
             if lane_count_parameter is None:
@@ -5913,6 +6031,13 @@ class MetalCodeGen:
                 arguments[0],
                 self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
                 "integer scalar or vector",
+            )
+        if operation == "WaveActiveAllEqual":
+            return self.metal_wave_validate_non_matrix_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
             )
         if operation in self.METAL_WAVE_SIMDGROUP_VALUE_INTRINSICS:
             diagnostic = self.metal_wave_validate_value_argument(
@@ -7117,7 +7242,12 @@ class MetalCodeGen:
         if target_info is None:
             return None
 
-        if operator != "=":
+        compound_member_assignment = (
+            operator != "="
+            and target_info["member"] is not None
+            and target_info["role"] in {"vertices", "primitives"}
+        )
+        if operator != "=" and not compound_member_assignment:
             return self.unsupported_metal_mesh_output_assignment_diagnostic(
                 target_info, "compound mesh output assignments are not supported"
             )
@@ -7127,7 +7257,7 @@ class MetalCodeGen:
         if role == "vertices":
             if target_info["member"] is not None:
                 return self.generate_metal_mesh_single_member_output_assignment(
-                    target_info, rendered_value, "set_vertex"
+                    target_info, rendered_value, "set_vertex", operator
                 )
             value = self.metal_mesh_vertex_output_value_from_rendered(
                 value_expr, rendered_value, self.current_metal_mesh_output_config
@@ -7150,7 +7280,7 @@ class MetalCodeGen:
         if role == "primitives":
             if target_info["member"] is not None:
                 return self.generate_metal_mesh_single_member_output_assignment(
-                    target_info, rendered_value, "set_primitive"
+                    target_info, rendered_value, "set_primitive", operator
                 )
             index = self.generate_expression(index_expr)
             return (
@@ -7161,23 +7291,27 @@ class MetalCodeGen:
         return None
 
     def generate_metal_mesh_single_member_output_assignment(
-        self, target_info, rendered_value, setter
+        self, target_info, rendered_value, setter, operator="="
     ):
         output_info = target_info["output"]
         member_name = target_info["member"]
         element_type = output_info["element_type"]
         member_types = self.struct_member_types.get(element_type, {})
-        if list(member_types) != [member_name]:
+        if operator != "=" or list(member_types) != [member_name]:
             accumulator = self.metal_mesh_output_accumulator(target_info)
             if accumulator is None:
+                reason = (
+                    "compound member writes require an output accumulator"
+                    if operator != "="
+                    else "partial member writes require an output accumulator"
+                )
                 return self.unsupported_metal_mesh_output_assignment_diagnostic(
-                    target_info,
-                    "partial member writes require an output accumulator",
+                    target_info, reason
                 )
             index = self.generate_expression(target_info["index"])
             temp_name = accumulator["name"]
             return (
-                f"{temp_name}.{member_name} = {rendered_value}\n"
+                f"{temp_name}.{member_name} {operator} {rendered_value}\n"
                 f"{self.current_metal_mesh_output_parameter}"
                 f".{setter}({index}, {temp_name})"
             )
@@ -7209,7 +7343,8 @@ class MetalCodeGen:
 
             element_type = target_info["output"]["element_type"]
             member_types = self.struct_member_types.get(element_type, {})
-            if list(member_types) == [target_info["member"]]:
+            operator = getattr(node, "operator", "=")
+            if operator == "=" and list(member_types) == [target_info["member"]]:
                 continue
 
             key = self.metal_mesh_output_accumulator_key(target_info)
@@ -13366,9 +13501,16 @@ class MetalCodeGen:
 
     def function_argument_resource_type(self, arg):
         resource_type = self.texture_argument_resource_type(arg)
+        if resource_type is not None:
+            array_size = self.texture_argument_resource_array_size(arg)
+            if array_size is not None:
+                return self.metal_array_resource_type(resource_type, array_size)
+            return resource_type
+
+        resource_type = self.sampler_argument_resource_type(arg)
         if resource_type is None:
             return None
-        array_size = self.texture_argument_resource_array_size(arg)
+        array_size = self.sampler_argument_resource_array_size(arg)
         if array_size is not None:
             return self.metal_array_resource_type(resource_type, array_size)
         return resource_type
@@ -13379,18 +13521,68 @@ class MetalCodeGen:
             element_type, array_size = array_resource
             return self.metal_array_resource_type(
                 self.normalize_function_resource_compatibility_type(element_type),
-                array_size,
+                self.normalize_function_resource_array_size(array_size),
             )
         if self.is_storage_image_resource(resource_type):
             return self.storage_image_access_agnostic_type(resource_type)
         return self.resource_base_type(resource_type)
 
-    def resource_type_mentions_multisample_storage_image(self, resource_type):
+    def normalize_function_resource_array_size(self, array_size):
+        literal_size = self.literal_int_resource_array_size(array_size)
+        if literal_size is not None:
+            return str(literal_size)
+        return str(array_size or "")
+
+    def literal_int_resource_array_size(self, array_size):
+        value = self.literal_int_value(array_size, self.literal_int_constants)
+        if value is not None:
+            return value
+
+        if not isinstance(array_size, str):
+            return None
+        try:
+            parsed = py_ast.parse(array_size, mode="eval")
+        except SyntaxError:
+            return None
+        return self.literal_int_python_expression_value(parsed.body)
+
+    def literal_int_python_expression_value(self, expr):
+        if isinstance(expr, py_ast.Constant) and isinstance(expr.value, int):
+            return expr.value
+        if isinstance(expr, py_ast.Name):
+            return self.literal_int_constants.get(expr.id)
+        if isinstance(expr, py_ast.UnaryOp):
+            operand = self.literal_int_python_expression_value(expr.operand)
+            if operand is None:
+                return None
+            if isinstance(expr.op, py_ast.UAdd):
+                return operand
+            if isinstance(expr.op, py_ast.USub):
+                return -operand
+            return None
+        if isinstance(expr, py_ast.BinOp):
+            left = self.literal_int_python_expression_value(expr.left)
+            right = self.literal_int_python_expression_value(expr.right)
+            if left is None or right is None:
+                return None
+            if isinstance(expr.op, py_ast.Add):
+                return left + right
+            if isinstance(expr.op, py_ast.Sub):
+                return left - right
+            if isinstance(expr.op, py_ast.Mult):
+                return left * right
+        return None
+
+    def resource_type_requires_function_resource_compatibility(self, resource_type):
         array_resource = self.split_metal_array_resource_type(resource_type)
         if array_resource is not None:
             element_type, _ = array_resource
-            return self.resource_type_mentions_multisample_storage_image(element_type)
-        return self.is_multisample_storage_image_resource(resource_type)
+            return self.resource_type_requires_function_resource_compatibility(
+                element_type
+            )
+
+        base_type = self.resource_base_type(resource_type)
+        return self.is_sampler_type(base_type) or str(base_type).startswith("texture")
 
     def validate_function_resource_argument_types(self, func_name, args):
         parameter_nodes = self.function_parameter_nodes.get(func_name)
@@ -13405,9 +13597,8 @@ class MetalCodeGen:
                 continue
 
             actual_type = self.function_argument_resource_type(args[index])
-            if not (
-                self.resource_type_mentions_multisample_storage_image(expected_type)
-                or self.resource_type_mentions_multisample_storage_image(actual_type)
+            if not self.resource_type_requires_function_resource_compatibility(
+                expected_type
             ):
                 continue
 

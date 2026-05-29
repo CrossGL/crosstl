@@ -26,6 +26,7 @@ from crosstl.backend.common_ast import (
     BreakNode,
     ContinueNode,
     DiscardNode,
+    InitializerListNode,
 )
 
 # GLSL-specific nodes

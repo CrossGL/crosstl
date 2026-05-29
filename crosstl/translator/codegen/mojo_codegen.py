@@ -885,6 +885,7 @@ class MojoCodeGen:
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
+        self.function_return_resource_static_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1090,6 +1091,7 @@ class MojoCodeGen:
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
         self.function_return_resource_field_aliases = {}
+        self.function_return_resource_static_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1430,6 +1432,7 @@ class MojoCodeGen:
         aliases = []
         static_aliases = []
         field_aliases = []
+        static_field_aliases = {}
         for return_node in self.return_nodes(getattr(func, "body", [])):
             value = getattr(return_node, "value", None)
             for index in self.return_resource_alias_param_indices(
@@ -1447,12 +1450,20 @@ class MojoCodeGen:
             ):
                 if candidate not in static_aliases:
                     static_aliases.append(candidate)
+            static_field_aliases = self.merge_resource_field_alias_maps(
+                static_field_aliases,
+                self.return_resource_static_field_alias_candidates(
+                    value, param_indices, target_type=return_type
+                ),
+            )
         if (
             aliases == self.function_return_resource_aliases.get(func.name)
             and static_aliases
             == self.function_return_resource_static_aliases.get(func.name)
             and field_aliases
             == self.function_return_resource_field_aliases.get(func.name)
+            and static_field_aliases
+            == self.function_return_resource_static_field_aliases.get(func.name)
         ):
             return False
         if aliases:
@@ -1467,6 +1478,12 @@ class MojoCodeGen:
             self.function_return_resource_static_aliases[func.name] = static_aliases
         else:
             self.function_return_resource_static_aliases.pop(func.name, None)
+        if static_field_aliases:
+            self.function_return_resource_static_field_aliases[func.name] = (
+                static_field_aliases
+            )
+        else:
+            self.function_return_resource_static_field_aliases.pop(func.name, None)
         return True
 
     def return_nodes(self, body):
@@ -1516,6 +1533,17 @@ class MojoCodeGen:
                     continue
                 for index in self.return_resource_alias_param_indices(
                     arm_expr, param_indices, target_type=target_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            indices = []
+            for element in getattr(expr, "elements", []) or []:
+                for index in self.return_resource_alias_param_indices(
+                    element, param_indices, target_type=element_type
                 ):
                     if index not in indices:
                         indices.append(index)
@@ -1595,6 +1623,22 @@ class MojoCodeGen:
                     if ref not in refs:
                         refs.append(ref)
             return refs
+
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            refs = []
+            for element in getattr(expr, "elements", []) or []:
+                for ref in self.return_resource_alias_field_paths(
+                    element, param_indices, target_type=element_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, ConstructorNode):
+            return self.return_constructor_node_resource_field_alias_paths(
+                expr, param_indices, target_type
+            )
 
         if isinstance(expr, FunctionCallNode):
             return self.return_resource_alias_field_paths_from_call(
@@ -1684,6 +1728,58 @@ class MojoCodeGen:
                     refs.append(ref)
         return refs
 
+    def constructor_node_struct_type(self, expr, target_type=None):
+        constructor_type = self.convert_type_node_to_string(expr.constructor_type)
+        target_name = self.type_name(target_type)
+        target_base, _ = self.resource_base_type_and_count(target_name)
+        if target_base in self.struct_types:
+            return target_base
+        if target_name in self.struct_types:
+            return target_name
+        if constructor_type in self.struct_types:
+            return constructor_type
+        return None
+
+    def constructor_node_field_bindings(self, expr, struct_type):
+        fields = self.struct_types.get(struct_type, {})
+        field_items = list(fields.items())
+        for index, arg in enumerate(getattr(expr, "arguments", []) or []):
+            if index >= len(field_items):
+                continue
+            field_name, field_type = field_items[index]
+            yield field_name, field_type, arg
+        for field_name, arg in (getattr(expr, "named_arguments", {}) or {}).items():
+            field_type = fields.get(field_name)
+            if field_type is None:
+                continue
+            yield field_name, field_type, arg
+
+    def return_constructor_node_resource_field_alias_paths(
+        self, expr, param_indices, target_type=None
+    ):
+        struct_type = self.constructor_node_struct_type(expr, target_type)
+        if struct_type not in self.struct_types:
+            return []
+
+        refs = []
+        for field_name, field_type, arg in self.constructor_node_field_bindings(
+            expr, struct_type
+        ):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            for (
+                return_path,
+                alias_index,
+                arg_path,
+            ) in self.return_resource_alias_field_paths(
+                arg, param_indices, target_type=field_type
+            ):
+                path = f"{field_name}.{return_path}" if return_path else field_name
+                ref = (path, alias_index, arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
     def return_resource_alias_field_paths_for_relative_path(
         self, expr, param_indices, relative_path, target_type=None
     ):
@@ -1722,9 +1818,32 @@ class MojoCodeGen:
                         refs.append(ref)
             return refs
 
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            refs = []
+            for element in getattr(expr, "elements", []) or []:
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    element, param_indices, relative_path, element_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
         root_name = self.resource_access_root_name(expr)
         if root_name in param_indices:
             return [(param_indices[root_name], relative_path)]
+
+        if isinstance(expr, ConstructorNode):
+            struct_type = self.constructor_node_struct_type(expr, target_type)
+            if struct_type in self.struct_types:
+                first, _, rest = relative_path.partition(".")
+                for field_name, field_type, arg in self.constructor_node_field_bindings(
+                    expr, struct_type
+                ):
+                    if field_name == first:
+                        return self.return_resource_alias_field_paths_for_relative_path(
+                            arg, param_indices, rest, field_type
+                        )
 
         if isinstance(expr, FunctionCallNode):
             func_name = self.function_call_name(expr)
@@ -1814,6 +1933,17 @@ class MojoCodeGen:
                 )
             return self.unique_resource_access_qualifiers(candidates)
 
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            candidates = []
+            for element in getattr(expr, "elements", []) or []:
+                candidates.extend(
+                    self.return_resource_static_alias_candidates(
+                        element, param_indices, target_type=element_type
+                    )
+                )
+            return self.unique_resource_access_qualifiers(candidates)
+
         if isinstance(expr, FunctionCallNode):
             return self.return_resource_static_alias_candidates_from_call(
                 expr, param_indices, target_type=target_type
@@ -1826,6 +1956,30 @@ class MojoCodeGen:
         if root_name is not None:
             candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
         return self.unique_resource_access_qualifiers(candidates)
+
+    def return_resource_static_field_alias_candidates(
+        self, expr, param_indices, target_type=None
+    ):
+        aliases = {}
+        for path, candidates in self.resource_access_field_alias_candidates(
+            expr, target_type=target_type
+        ).items():
+            for candidate in candidates:
+                if self.resource_access_candidate_references_param(
+                    candidate, param_indices
+                ):
+                    continue
+                aliases.setdefault(path, [])
+                if candidate not in aliases[path]:
+                    aliases[path].append(candidate)
+        return aliases
+
+    def resource_access_candidate_references_param(self, candidate, param_indices):
+        _, resource_name = candidate
+        if not isinstance(resource_name, str):
+            return False
+        match = re.match(r"\s*([A-Za-z_]\w*)", resource_name)
+        return match is not None and match.group(1) in param_indices
 
     def return_resource_static_alias_candidates_from_call(
         self, expr, param_indices, target_type=None
@@ -2448,6 +2602,17 @@ class MojoCodeGen:
             return base_type, size or 1
         return type_name, 1
 
+    def user_defined_type_base(self, type_name):
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        generic = self.parse_generic_type_name(base_type)
+        if generic is not None:
+            return generic[0]
+        return base_type
+
+    def is_user_defined_type_name(self, type_name):
+        base_type = self.user_defined_type_base(type_name)
+        return base_type in self.struct_types or base_type in self.enum_types
+
     def is_glsl_buffer_block_node(self, node):
         attributes = {
             str(getattr(attr, "name", "")).lower()
@@ -2480,6 +2645,8 @@ class MojoCodeGen:
         if node is not None and self.is_glsl_buffer_block_node(node):
             return "glsl_buffer_block"
         base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.is_user_defined_type_name(base_type):
+            return None
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"
         mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
@@ -2804,6 +2971,10 @@ class MojoCodeGen:
         return self._resource_access_aliasable_type(self.type_name(type_name), set())
 
     def _resource_access_aliasable_type(self, type_name, seen):
+        if self.is_array_type_name(type_name):
+            base_type, _ = self.parse_array_type_name(type_name)
+            return self._resource_access_aliasable_type(base_type, seen)
+
         base_type, _ = self.resource_base_type_and_count(type_name)
         if self.mojo_resource_kind(base_type) is not None:
             return True
@@ -2901,6 +3072,18 @@ class MojoCodeGen:
                 )
             return merged
 
+        if isinstance(expr, ArrayLiteralNode):
+            element_type = self.array_element_type(target_type)
+            merged = {}
+            for element in getattr(expr, "elements", []) or []:
+                merged = self.merge_resource_field_alias_maps(
+                    merged,
+                    self.resource_access_field_alias_candidates(
+                        element, target_type=element_type
+                    ),
+                )
+            return merged
+
         if isinstance(expr, FunctionCallNode):
             aliases = self.generic_enum_field_alias_candidates(expr, target_type)
             if aliases:
@@ -2911,6 +3094,11 @@ class MojoCodeGen:
             return self.function_return_resource_field_alias_candidates(
                 expr, target_type
             )
+
+        if isinstance(expr, ConstructorNode):
+            aliases = self.constructor_node_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
 
         candidates = self.resource_access_qualifier_candidates(
             expr, target_type=target_type
@@ -3025,13 +3213,34 @@ class MojoCodeGen:
                 aliases[field_path] = candidates
         return aliases
 
-    def function_return_resource_field_alias_candidates(self, expr, target_type=None):
-        func_name = self.function_call_name(expr)
-        refs = self.function_return_resource_field_aliases.get(func_name) or []
-        if not refs:
+    def constructor_node_field_alias_candidates(self, expr, target_type):
+        struct_type = self.constructor_node_struct_type(expr, target_type)
+        if struct_type not in self.struct_types:
             return {}
 
         aliases = {}
+        for field_name, field_type, arg in self.constructor_node_field_bindings(
+            expr, struct_type
+        ):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def function_return_resource_field_alias_candidates(self, expr, target_type=None):
+        func_name = self.function_call_name(expr)
+        refs = self.function_return_resource_field_aliases.get(func_name) or []
+        aliases = {
+            path: list(candidates)
+            for path, candidates in (
+                self.function_return_resource_static_field_aliases.get(func_name) or {}
+            ).items()
+        }
         parameter_types = self.function_parameter_types.get(func_name, [])
         for return_path, alias_index, arg_path in refs:
             if alias_index >= len(expr.args):
@@ -4655,6 +4864,7 @@ class MojoCodeGen:
         arms = getattr(node, "arms", []) or []
         self.validate_match_arms(arms, subject_type)
         code = ""
+        subject_temp_state = None
         if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
             subject_name = self.next_match_subject_temp_name()
             code += (
@@ -4662,32 +4872,43 @@ class MojoCodeGen:
                 f"{expression}\n"
             )
             expression = subject_name
+            subject_temp_state = self.register_match_subject_temp_metadata(
+                subject_name, subject_type, subject_expr
+            )
         emitted_condition = False
 
-        for arm_index, arm in enumerate(arms):
-            pattern = getattr(arm, "pattern", None)
-            guard = getattr(arm, "guard", None)
-            body = getattr(arm, "body", [])
-            replacements = self.match_arm_identifier_replacements(
-                pattern, expression, guard, subject_type
-            )
-            if self.is_unconditional_final_match_arm(
-                arms, arm_index, pattern, guard, subject_type
-            ):
-                if emitted_condition:
-                    code += f"{indent_str}else:\n"
-                    code += self.generate_match_arm_body(body, indent + 1, replacements)
-                else:
-                    code += self.generate_match_arm_body(body, indent, replacements)
-                continue
+        try:
+            for arm_index, arm in enumerate(arms):
+                pattern = getattr(arm, "pattern", None)
+                guard = getattr(arm, "guard", None)
+                body = getattr(arm, "body", [])
+                replacements = self.match_arm_identifier_replacements(
+                    pattern, expression, guard, subject_type
+                )
+                if self.is_unconditional_final_match_arm(
+                    arms, arm_index, pattern, guard, subject_type
+                ):
+                    if emitted_condition:
+                        code += f"{indent_str}else:\n"
+                        code += self.generate_match_arm_body(
+                            body, indent + 1, replacements
+                        )
+                    else:
+                        code += self.generate_match_arm_body(body, indent, replacements)
+                    continue
 
-            keyword = "if" if not emitted_condition else "elif"
-            condition = self.match_arm_condition(
-                pattern, expression, guard, replacements, subject_type
-            )
-            code += f"{indent_str}{keyword} {condition}:\n"
-            code += self.generate_match_arm_body(body, indent + 1, replacements)
-            emitted_condition = True
+                keyword = "if" if not emitted_condition else "elif"
+                condition = self.match_arm_condition(
+                    pattern, expression, guard, replacements, subject_type
+                )
+                code += f"{indent_str}{keyword} {condition}:\n"
+                code += self.generate_match_arm_body(body, indent + 1, replacements)
+                emitted_condition = True
+        finally:
+            if subject_temp_state is not None:
+                self.restore_match_subject_temp_metadata(
+                    subject_name, subject_temp_state
+                )
 
         if not code and not emitted_condition:
             code += f"{indent_str}pass\n"
@@ -4703,6 +4924,38 @@ class MojoCodeGen:
         name = f"__cgl_match_subject_{self.match_subject_counter}"
         self.match_subject_counter += 1
         return name
+
+    def register_match_subject_temp_metadata(self, name, subject_type, subject_expr):
+        path_prefix = f"{name}."
+        state = {
+            "had_type": name in self.variable_types,
+            "type": self.variable_types.get(name),
+            "had_aliases": name in self.resource_access_qualifier_aliases,
+            "aliases": list(self.resource_access_qualifier_aliases.get(name, [])),
+            "path_aliases": {
+                path: list(candidates)
+                for path, candidates in (
+                    self.resource_access_path_qualifier_aliases.items()
+                )
+                if path == name or path.startswith(path_prefix)
+            },
+        }
+        self.register_variable_type(name, subject_type)
+        self.register_resource_access_alias_metadata(name, subject_type, subject_expr)
+        return state
+
+    def restore_match_subject_temp_metadata(self, name, state):
+        if state["had_type"]:
+            self.variable_types[name] = state["type"]
+        else:
+            self.variable_types.pop(name, None)
+
+        self.clear_resource_access_path_aliases(name)
+        self.resource_access_path_qualifier_aliases.update(state["path_aliases"])
+        if state["had_aliases"]:
+            self.resource_access_qualifier_aliases[name] = state["aliases"]
+        else:
+            self.resource_access_qualifier_aliases.pop(name, None)
 
     def match_subject_needs_temp(self, subject_expr):
         if isinstance(subject_expr, (str, VariableNode, IdentifierNode)):
@@ -4791,6 +5044,7 @@ class MojoCodeGen:
         temp_name = self.next_match_expression_temp_name()
         expression = self.generate_expression(subject_expr)
         lines = []
+        subject_temp_state = None
         if self.match_subject_needs_temp(subject_expr) and subject_type is not None:
             subject_name = self.next_match_subject_temp_name()
             lines.append(
@@ -4798,54 +5052,63 @@ class MojoCodeGen:
                 f"{expression}\n"
             )
             expression = subject_name
+            subject_temp_state = self.register_match_subject_temp_metadata(
+                subject_name, subject_type, subject_expr
+            )
         lines.append(
             f"{indent_str}var {temp_name}: {self.map_type(match_type)} = "
             f"{self.zero_value_for_type(match_type)}\n"
         )
 
-        emitted_condition = False
-        for arm_index, arm in enumerate(arms, start=1):
-            pattern = getattr(arm, "pattern", None)
-            guard = getattr(arm, "guard", None)
-            replacements = self.match_arm_identifier_replacements(
-                pattern, expression, guard, subject_type
-            )
-            if self.is_unconditional_final_match_arm(
-                arms, arm_index - 1, pattern, guard, subject_type
-            ):
-                if emitted_condition:
-                    lines.append(f"{indent_str}else:\n")
-                    assignment_indent = branch_indent
-                else:
-                    assignment_indent = indent
+        try:
+            emitted_condition = False
+            for arm_index, arm in enumerate(arms, start=1):
+                pattern = getattr(arm, "pattern", None)
+                guard = getattr(arm, "guard", None)
+                replacements = self.match_arm_identifier_replacements(
+                    pattern, expression, guard, subject_type
+                )
+                if self.is_unconditional_final_match_arm(
+                    arms, arm_index - 1, pattern, guard, subject_type
+                ):
+                    if emitted_condition:
+                        lines.append(f"{indent_str}else:\n")
+                        assignment_indent = branch_indent
+                    else:
+                        assignment_indent = indent
+                    lines.append(
+                        self.generate_match_value_arm_assignment(
+                            arm,
+                            match_type,
+                            f"{context} match arm {arm_index}",
+                            temp_name,
+                            assignment_indent,
+                            replacements,
+                        )
+                    )
+                    continue
+
+                keyword = "if" if not emitted_condition else "elif"
+                condition = self.match_arm_condition(
+                    pattern, expression, guard, replacements, subject_type
+                )
+                lines.append(f"{indent_str}{keyword} {condition}:\n")
                 lines.append(
                     self.generate_match_value_arm_assignment(
                         arm,
                         match_type,
                         f"{context} match arm {arm_index}",
                         temp_name,
-                        assignment_indent,
+                        branch_indent,
                         replacements,
                     )
                 )
-                continue
-
-            keyword = "if" if not emitted_condition else "elif"
-            condition = self.match_arm_condition(
-                pattern, expression, guard, replacements, subject_type
-            )
-            lines.append(f"{indent_str}{keyword} {condition}:\n")
-            lines.append(
-                self.generate_match_value_arm_assignment(
-                    arm,
-                    match_type,
-                    f"{context} match arm {arm_index}",
-                    temp_name,
-                    branch_indent,
-                    replacements,
+                emitted_condition = True
+        finally:
+            if subject_temp_state is not None:
+                self.restore_match_subject_temp_metadata(
+                    subject_name, subject_temp_state
                 )
-            )
-            emitted_condition = True
 
         prelude_context["lines"].extend(lines)
         return temp_name

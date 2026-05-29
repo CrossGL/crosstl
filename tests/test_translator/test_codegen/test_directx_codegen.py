@@ -6456,6 +6456,89 @@ def test_directx_mesh_output_writes_validate_order_and_indices():
         )
 
 
+def test_directx_mesh_output_writes_track_helper_calls():
+    helper_write_before_count_code = """
+    shader MeshOutputHelperWriteBeforeCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                writeVertex(verts);
+                SetMeshOutputCounts(3, 1);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(helper_write_before_count_code), "mesh"
+        )
+
+    helper_write_after_count_code = """
+    shader MeshOutputHelperWriteAfterCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(helper_write_after_count_code), "mesh"
+    )
+    assert "writeVertex(verts);" in generated
+
+    helper_bound_code = """
+    shader MeshOutputHelperWriteBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void writeVertex(@vertices out MeshVertex outVerts[3]) {
+            outVerts[3].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(helper_bound_code), "mesh"
+        )
+
+
 def test_directx_mesh_output_writes_track_literal_branch_dominance():
     true_branch_code = """
     shader MeshOutputCountDominatesAfterTrueBranch {
@@ -6532,6 +6615,64 @@ def test_directx_mesh_output_writes_track_literal_branch_dominance():
         crosstl.translator.parse(else_branch_code), "mesh"
     )
     assert "SetMeshOutputCounts(3, 1);" in generated
+
+
+def test_directx_mesh_output_writes_track_early_return_dominance():
+    early_return_code = """
+    shader MeshOutputCountDominatesAfterEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (selector == 0u) {
+                    return;
+                } else {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(early_return_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+
+    continuing_path_without_count_code = """
+    shader MeshOutputCountMissingAfterEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (selector == 0u) {
+                    SetMeshOutputCounts(3, 1);
+                    return;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(continuing_path_without_count_code), "mesh"
+        )
 
 
 def test_directx_mesh_output_writes_reject_switch_count_without_full_dominance():
@@ -6628,6 +6769,171 @@ def test_directx_mesh_output_writes_track_switch_count_dominance():
     assert "default:" in generated
     assert generated.count("SetMeshOutputCounts(3, 1);") == 1
     assert "verts[0].position" in generated
+
+
+def test_directx_mesh_output_writes_track_switch_early_return_dominance():
+    early_return_code = """
+    shader MeshOutputCountDominatesThroughSwitchEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        return;
+                    default:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(early_return_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+
+    continuing_path_without_count_code = """
+    shader MeshOutputCountMissingThroughSwitchEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        return;
+                    default:
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(continuing_path_without_count_code), "mesh"
+        )
+
+
+def test_directx_mesh_output_writes_ignore_unreachable_loop_exit_writes():
+    loop_exit_code = """
+    shader MeshOutputWriteSkippedByLoopExit {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    if (true) {
+                        break;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                for (int j = 0; j < 1; j++) {
+                    if (true) {
+                        continue;
+                    }
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(loop_exit_code), "mesh"
+    )
+    assert "break;" in generated
+    assert "continue;" in generated
+    assert "SetMeshOutputCounts(3, 1);" in generated
+
+    reachable_write_code = """
+    shader MeshOutputWriteReachableAfterLoopContinueBranch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    if (selector == 0u) {
+                        continue;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(reachable_write_code), "mesh"
+        )
+
+    switch_break_still_reaches_write_code = """
+    shader MeshOutputSwitchBreakStillReachesLoopWrite {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                for (int i = 0; i < 1; i++) {
+                    switch (selector) {
+                        case 0:
+                            break;
+                        default:
+                            break;
+                    }
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(switch_break_still_reaches_write_code), "mesh"
+        )
 
 
 def test_directx_mesh_output_writes_validate_literal_bounds():
@@ -6864,6 +7170,290 @@ def test_directx_mesh_payload_requires_amplification_dispatch_payload():
 
     with pytest.raises(ValueError, match="DispatchMesh call must pass a payload"):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_dispatch_mesh_helper_reachable_calls_are_validated():
+    compute_helper_code = """
+    shader ComputeHelperDispatchMesh {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        compute {
+            void main() {
+                launch();
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="compute.*cannot call DispatchMesh"):
+        HLSLCodeGen().generate(crosstl.translator.parse(compute_helper_code))
+
+    loop_helper_code = """
+    shader LoopHelperDispatchMesh {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                for (int i = 0; i < 1; i++) {
+                    launch();
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*loop control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(loop_helper_code), "task")
+
+
+def test_directx_dispatch_mesh_helper_payloads_participate_in_pipeline_validation():
+    missing_payload_code = """
+    shader HelperDispatchMeshMissingPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void launch() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                launch();
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh call must pass a payload"):
+        HLSLCodeGen().generate(crosstl.translator.parse(missing_payload_code))
+
+    valid_helper_code = """
+    shader HelperDispatchMeshPayload {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        groupshared MeshPayload payload;
+
+        void launch() {
+            DispatchMesh(1, 1, 1, payload);
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.meshlet = 7u;
+                launch();
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(valid_helper_code))
+
+    assert "void launch() {" in generated
+    assert "DispatchMesh(1, 1, 1, payload);" in generated
+    assert "in payload MeshPayload payload" in generated
+
+
+def test_directx_dispatch_mesh_helper_parameter_taint_rejects_non_uniform_control_flow():
+    varying_arg_code = """
+    shader DispatchMeshHelperThreadVaryingArg {
+        void launch(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                launch(groupIndex == 0u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(varying_arg_code), "task")
+
+    nested_arg_code = """
+    shader DispatchMeshNestedHelperThreadVaryingArg {
+        void dispatchIf(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        void launch(bool shouldDispatch) {
+            dispatchIf(shouldDispatch);
+        }
+
+        task {
+            void main(uint groupThreadId @ SV_GroupThreadID) @numthreads(1, 1, 1) {
+                launch(groupThreadId == 0u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(nested_arg_code), "task")
+
+    uniform_arg_code = """
+    shader DispatchMeshHelperUniformArg {
+        void launch(bool enabled) {
+            if (enabled) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                launch(true);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_arg_code), "task"
+    )
+
+    assert "launch(true);" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
+
+
+def test_directx_dispatch_mesh_local_alias_taint_rejects_non_uniform_control_flow():
+    direct_alias_code = """
+    shader DispatchMeshLocalAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = groupIndex == 0u;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(direct_alias_code), "task"
+        )
+
+    chained_alias_code = """
+    shader DispatchMeshChainedLocalAlias {
+        task {
+            void main(uvec3 groupThreadId @ SV_GroupThreadID) @numthreads(1, 1, 1) {
+                bool enabled = groupThreadId.x == 0u;
+                bool shouldDispatch = enabled;
+                if (shouldDispatch) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(chained_alias_code), "task"
+        )
+
+    assignment_alias_code = """
+    shader DispatchMeshAssignmentLocalAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = false;
+                enabled = groupIndex == 0u;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(assignment_alias_code), "task"
+        )
+
+    uniform_alias_code = """
+    shader DispatchMeshUniformLocalAlias {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                bool enabled = true;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_alias_code), "task"
+    )
+
+    assert "bool enabled = true;" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
+
+    uniform_reassignment_code = """
+    shader DispatchMeshUniformReassignmentAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = groupIndex == 0u;
+                enabled = true;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_reassignment_code), "task"
+    )
+
+    assert "enabled = true;" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
 
 
 def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():

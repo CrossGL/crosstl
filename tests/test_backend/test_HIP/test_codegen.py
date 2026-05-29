@@ -6483,6 +6483,170 @@ class TestHipCodeGen:
         assert "var manualLinkType: u32 = (/* HIP device query:" not in result
         assert "var manualHopCount: u32 = (/* HIP device query:" not in result
 
+    def test_hip_device_context_array_outputs_clear_stale_metadata(self):
+        """Test device/context array outputs clear prior query metadata."""
+        code = """
+        void queryDeviceContextArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipCtx_t ctx,
+            int ordinal,
+            hipDevice_t peerDevice,
+            char* pciBusId,
+            hipDevice_t* devices,
+            int* values,
+            size_t* sizes,
+            hipFuncCache_t* cacheConfigs,
+            hipSharedMemConfig* sharedConfigs,
+            unsigned int* flags,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&devices, &staleSize, devicePtr);
+            hipGetDevice(&devices[0]);
+            out[0] = devices[0];
+            hipDeviceGetByPCIBusId(&devices[1], pciBusId);
+            out[1] = devices[1];
+            hipDeviceGet(&devices[2], ordinal);
+            out[2] = devices[2];
+            hipCtxGetDevice(&devices[3]);
+            out[3] = devices[3];
+
+            hipMemGetAddressRange((void**)&values, &staleSize, devicePtr);
+            hipGetDeviceCount(&values[0]);
+            out[4] = values[0];
+            hipDeviceGetAttribute(
+                &values[1],
+                hipDeviceAttributeWarpSize,
+                ordinal
+            );
+            out[5] = values[1];
+            hipDeviceComputeCapability(&values[2], &values[3], ordinal);
+            out[6] = values[2];
+            out[7] = values[3];
+            hipDeviceCanAccessPeer(&values[4], devices[0], peerDevice);
+            out[8] = values[4];
+            hipDeviceGetP2PAttribute(
+                &values[5],
+                hipDevP2PAttrAccessSupported,
+                devices[0],
+                peerDevice
+            );
+            out[9] = values[5];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipDeviceTotalMem(&sizes[0], ordinal);
+            out[10] = sizes[0];
+            hipDeviceGetLimit(&sizes[1], hipLimitMallocHeapSize);
+            out[11] = sizes[1];
+
+            hipMemGetAddressRange((void**)&cacheConfigs, &staleSize, devicePtr);
+            hipDeviceGetCacheConfig(&cacheConfigs[0]);
+            out[12] = cacheConfigs[0];
+            hipCtxGetCacheConfig(&cacheConfigs[1]);
+            out[13] = cacheConfigs[1];
+
+            hipMemGetAddressRange((void**)&sharedConfigs, &staleSize, devicePtr);
+            hipDeviceGetSharedMemConfig(&sharedConfigs[0]);
+            out[14] = sharedConfigs[0];
+            hipCtxGetSharedMemConfig(&sharedConfigs[1]);
+            out[15] = sharedConfigs[1];
+
+            hipMemGetAddressRange((void**)&flags, &staleSize, devicePtr);
+            hipGetDeviceFlags(&flags[0]);
+            out[16] = flags[0];
+            hipCtxGetApiVersion(ctx, &flags[1]);
+            out[17] = flags[1];
+            hipCtxGetFlags(&flags[2]);
+            out[18] = flags[2];
+            hipDevicePrimaryCtxGetState(devices[0], &flags[3], &values[6]);
+            out[19] = flags[3];
+            out[20] = values[6];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get current device: output: devices[0]" in result
+        assert "out[0] = devices[0];" in result
+        assert (
+            "// HIP get device by PCI bus id: output: devices[1], " "bus id: pciBusId"
+        ) in result
+        assert "out[1] = devices[1];" in result
+        assert (
+            "// HIP get device handle: output: devices[2], ordinal: ordinal" in result
+        )
+        assert "out[2] = devices[2];" in result
+        assert "// HIP context get device: output: devices[3]" in result
+        assert "out[3] = devices[3];" in result
+        assert "// HIP get device count: output: values[0]" in result
+        assert "out[4] = values[0];" in result
+        assert (
+            "// HIP get device attribute: output: values[1], "
+            "attribute: hipDeviceAttributeWarpSize, device: ordinal"
+        ) in result
+        assert "out[5] = values[1];" in result
+        assert (
+            "// HIP get device compute capability: major output: values[2], "
+            "minor output: values[3], device: ordinal"
+        ) in result
+        assert "out[6] = values[2];" in result
+        assert "out[7] = values[3];" in result
+        assert (
+            "// HIP device can access peer: output: values[4], "
+            "device: devices[0], peer device: peerDevice"
+        ) in result
+        assert "out[8] = values[4];" in result
+        assert (
+            "// HIP get P2P attribute: output: values[5], "
+            "attribute: hipDevP2PAttrAccessSupported, "
+            "source device: devices[0], destination device: peerDevice"
+        ) in result
+        assert "out[9] = values[5];" in result
+        assert (
+            "// HIP get device total memory: output: sizes[0], device: ordinal"
+            in result
+        )
+        assert "out[10] = sizes[0];" in result
+        assert (
+            "// HIP get device limit: output: sizes[1], "
+            "limit: hipLimitMallocHeapSize"
+        ) in result
+        assert "out[11] = sizes[1];" in result
+        assert "// HIP get device cache config: output: cacheConfigs[0]" in result
+        assert "out[12] = cacheConfigs[0];" in result
+        assert "// HIP context get cache config: output: cacheConfigs[1]" in result
+        assert "out[13] = cacheConfigs[1];" in result
+        assert (
+            "// HIP get device shared memory config: output: sharedConfigs[0]" in result
+        )
+        assert "out[14] = sharedConfigs[0];" in result
+        assert (
+            "// HIP context get shared memory config: output: sharedConfigs[1]"
+            in result
+        )
+        assert "out[15] = sharedConfigs[1];" in result
+        assert "// HIP get device flags: output: flags[0]" in result
+        assert "out[16] = flags[0];" in result
+        assert (
+            "// HIP context get API version: context: ctx, output: flags[1]" in result
+        )
+        assert "out[17] = flags[1];" in result
+        assert "// HIP context get flags: output: flags[2]" in result
+        assert "out[18] = flags[2];" in result
+        assert (
+            "// HIP primary context get state: device: devices[0], "
+            "flags output: flags[3], active output: values[6]"
+        ) in result
+        assert "out[19] = flags[3];" in result
+        assert "out[20] = values[6];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_version_output_reads_emit_metadata_expressions(self):
         """Test HIP runtime version outputs lower to explicit metadata."""
         code = """
@@ -6547,6 +6711,58 @@ class TestHipCodeGen:
         assert "out[3] = statusRuntimeVersion;" not in result
         assert "var manualDriverVersion: i32 = (/* HIP device query:" not in result
         assert "var manualRuntimeVersion: i32 = (/* HIP device query:" not in result
+
+    def test_hip_runtime_version_proc_array_outputs_clear_stale_metadata(self):
+        """Test version/proc-address array outputs clear prior query metadata."""
+        code = """
+        void queryVersionProcArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            void** procs,
+            hipDriverProcAddressQueryResult* statuses,
+            int* versions,
+            int* out
+        ) {
+            size_t staleSize = 0;
+            unsigned int flags = 0;
+
+            hipMemGetAddressRange((void**)&versions, &staleSize, devicePtr);
+            hipDriverGetVersion(&versions[0]);
+            out[0] = versions[0];
+            hipRuntimeGetVersion(&versions[1]);
+            out[1] = versions[1];
+
+            hipMemGetAddressRange((void**)&procs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&statuses, &staleSize, devicePtr);
+            hipGetProcAddress(
+                "hipMalloc",
+                &procs[0],
+                versions[1],
+                flags,
+                &statuses[0]
+            );
+            void* selected = procs[0];
+            out[2] = statuses[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get driver version: output: versions[0]" in result
+        assert "out[0] = versions[0];" in result
+        assert "// HIP get runtime version: output: versions[1]" in result
+        assert "out[1] = versions[1];" in result
+        assert (
+            '// HIP get proc address: symbol: "hipMalloc", output: procs[0], '
+            "version: versions[1], flags: flags, status output: statuses[0]"
+        ) in result
+        assert "var selected: ptr<void> = procs[0];" in result
+        assert "out[2] = statuses[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_stream_scalar_output_reads_emit_metadata_expressions(self):
         """Test HIP stream scalar outputs lower to explicit metadata."""
@@ -6739,6 +6955,141 @@ class TestHipCodeGen:
         assert "var manualPriority: i32 = (/* HIP device query:" not in result
         assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
 
+    def test_hip_stream_capture_outputs_clear_stale_metadata(self):
+        """Test stream-capture outputs clear prior address-range metadata."""
+        code = """
+        void inspectCapture(
+            hipDeviceptr_t devicePtr,
+            hipStream_t stream,
+            unsigned long long* out
+        ) {
+            hipStreamCaptureMode mode;
+            hipStreamCaptureStatus captureStatus;
+            hipStreamCaptureStatus statusOnly;
+            unsigned long long captureId = 0;
+            size_t depCount = 0;
+            hipGraph_t graph;
+            hipGraphNode_t* deps;
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&mode, &staleSize, devicePtr);
+            hipThreadExchangeStreamCaptureMode(&mode);
+            out[0] = mode;
+
+            hipMemGetAddressRange((void**)&statusOnly, &staleSize, devicePtr);
+            hipStreamIsCapturing(stream, &statusOnly);
+            out[1] = statusOnly;
+
+            hipMemGetAddressRange((void**)&captureStatus, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&captureId, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&depCount, &staleSize, devicePtr);
+            hipStreamGetCaptureInfo_v2(
+                stream,
+                &captureStatus,
+                &captureId,
+                &graph,
+                &deps,
+                &depCount
+            );
+            out[2] = captureStatus;
+            out[3] = captureId;
+            out[4] = depCount;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP exchange stream capture mode: output: mode" in result
+        assert (
+            "// HIP stream is capturing: stream: stream, output: statusOnly" in result
+        )
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId, "
+            "graph output: graph, dependencies output: deps, "
+            "dependency count output: depCount"
+        ) in result
+        assert "out[0] = mode;" in result
+        assert (
+            "out[1] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[2] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[3] = (/* HIP device query: stream.captureId(stream) */ 0);" in result
+        )
+        assert (
+            "out[4] = (/* HIP device query: "
+            "stream.captureDependencyCount(stream) */ 0);"
+        ) in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_stream_event_array_outputs_clear_stale_metadata(self):
+        """Test stream/event scalar array outputs clear prior query metadata."""
+        code = """
+        void queryStreamEventArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipStream_t stream,
+            hipEvent_t start,
+            hipEvent_t stop,
+            int* priorities,
+            unsigned int* flagsOut,
+            float* times,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&priorities, &staleSize, devicePtr);
+            hipDeviceGetStreamPriorityRange(&priorities[0], &priorities[1]);
+            out[0] = priorities[0];
+            out[1] = priorities[1];
+
+            hipMemGetAddressRange((void**)&flagsOut, &staleSize, devicePtr);
+            hipStreamGetFlags(stream, &flagsOut[0]);
+            out[2] = flagsOut[0];
+
+            hipMemGetAddressRange((void**)&priorities, &staleSize, devicePtr);
+            hipStreamGetPriority(stream, &priorities[2]);
+            out[3] = priorities[2];
+
+            hipMemGetAddressRange((void**)&times, &staleSize, devicePtr);
+            hipEventElapsedTime(&times[0], start, stop);
+            float manualTime = times[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get stream priority range: least output: priorities[0], "
+            "greatest output: priorities[1]"
+        ) in result
+        assert "out[0] = priorities[0];" in result
+        assert "out[1] = priorities[1];" in result
+        assert "// HIP get stream flags: stream: stream, output: flagsOut[0]" in result
+        assert "out[2] = flagsOut[0];" in result
+        assert (
+            "// HIP get stream priority: stream: stream, output: priorities[2]"
+            in result
+        )
+        assert "out[3] = priorities[2];" in result
+        assert "// HIP event elapsed time: start -> stop, output: times[0]" in result
+        assert "var manualTime: f32 = times[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_occupancy_output_reads_emit_metadata_expressions(self):
         """Test HIP occupancy scalar outputs lower to explicit metadata."""
         code = """
@@ -6930,6 +7281,91 @@ class TestHipCodeGen:
         assert "var manualGridSize: i32 = (/* HIP device query:" not in result
         assert "var manualBlockSize: i32 = (/* HIP device query:" not in result
         assert "var manualActiveBlocks: i32 = (/* HIP device query:" not in result
+
+    def test_hip_occupancy_function_array_outputs_clear_stale_metadata(self):
+        """Test occupancy/function array outputs clear prior query metadata."""
+        code = """
+        void queryOccupancyFunctionArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            void* kernel,
+            void* dynamicSmem,
+            hipFunction_t function,
+            int* grids,
+            int* blocks,
+            int* active,
+            int* values,
+            hipFuncAttributes* attrs,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&grids, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&blocks, &staleSize, devicePtr);
+            hipOccupancyMaxPotentialBlockSize(
+                &grids[0],
+                &blocks[0],
+                kernel,
+                dynamicSmem,
+                256
+            );
+            out[0] = grids[0];
+            out[1] = blocks[0];
+
+            hipMemGetAddressRange((void**)&active, &staleSize, devicePtr);
+            hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                &active[0],
+                kernel,
+                blocks[0],
+                0,
+                1
+            );
+            out[2] = active[0];
+
+            hipMemGetAddressRange((void**)&values, &staleSize, devicePtr);
+            hipFuncGetAttribute(
+                &values[0],
+                HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                function
+            );
+            out[3] = values[0];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipFuncGetAttributes(&attrs[0], function);
+            out[4] = attrs[0].maxThreadsPerBlock;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP occupancy max potential block size: grid output: grids[0], "
+            "block output: blocks[0], kernel: kernel, dynamic shared memory: "
+            "dynamicSmem, block size limit: 256"
+        ) in result
+        assert "out[0] = grids[0];" in result
+        assert "out[1] = blocks[0];" in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: output: active[0], "
+            "kernel: kernel, block size: blocks[0], dynamic shared memory: 0, "
+            "flags: 1"
+        ) in result
+        assert "out[2] = active[0];" in result
+        assert (
+            "// HIP function get attribute: output: values[0], attribute: "
+            "HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, function: function"
+        ) in result
+        assert "out[3] = values[0];" in result
+        assert (
+            "// HIP function get attributes: output: attrs[0], function: function"
+            in result
+        )
+        assert "out[4] = attrs[0].maxThreadsPerBlock;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_memory_event_output_reads_emit_metadata_expressions(self):
         """Test HIP memory and event outputs lower to explicit metadata."""

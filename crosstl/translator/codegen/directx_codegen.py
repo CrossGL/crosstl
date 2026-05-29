@@ -7914,6 +7914,41 @@ class HLSLCodeGen:
             self.hlsl_expression_identifier_names(condition) & thread_varying_names
         )
 
+    def hlsl_update_thread_varying_alias_names(self, stmt, thread_varying_names):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+            if self.hlsl_condition_uses_thread_varying_name(
+                getattr(stmt, "initial_value", None), thread_varying_names
+            ):
+                thread_varying_names.add(name)
+            else:
+                thread_varying_names.discard(name)
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if not target_name:
+            return
+
+        value_uses_thread_varying = self.hlsl_condition_uses_thread_varying_name(
+            getattr(assignment, "value", getattr(assignment, "right", None)),
+            thread_varying_names,
+        )
+        operator = getattr(assignment, "operator", "=")
+        if value_uses_thread_varying or (
+            operator != "=" and target_name in thread_varying_names
+        ):
+            thread_varying_names.add(target_name)
+        else:
+            thread_varying_names.discard(target_name)
+
     def validate_hlsl_set_mesh_output_counts_control_flow(
         self,
         statements,
@@ -8161,29 +8196,69 @@ class HLSLCodeGen:
         role_by_name,
         declared_counts,
         set_count_literals,
+        active_helper_calls=None,
     ):
+        counts_seen, _ = self.validate_hlsl_mesh_output_write_switch_result(
+            switch_node,
+            set_mesh_output_counts_seen,
+            role_by_name,
+            declared_counts,
+            set_count_literals,
+            active_helper_calls,
+        )
+        return counts_seen
+
+    def validate_hlsl_mesh_output_write_switch_result(
+        self,
+        switch_node,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls=None,
+        loop_exit_nodes=None,
+    ):
+        if active_helper_calls is None:
+            active_helper_calls = set()
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
+
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
-            return set_mesh_output_counts_seen
+            return set_mesh_output_counts_seen, True
 
         start_indices, covers_all_paths = self.hlsl_switch_possible_start_indices(
             switch_node, case_entries
         )
         path_results = []
+        case_loop_exit_nodes = tuple(
+            exit_node for exit_node in loop_exit_nodes if exit_node is not BreakNode
+        )
         for start_index in start_indices:
             path_results.append(
-                self.validate_hlsl_mesh_output_write_sequence(
+                self.validate_hlsl_mesh_output_write_sequence_result(
                     self.hlsl_switch_fallthrough_path_body(case_entries, start_index),
                     set_mesh_output_counts_seen,
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
+                    case_loop_exit_nodes,
                 )
             )
 
-        if covers_all_paths and path_results and all(path_results):
-            return True
-        return set_mesh_output_counts_seen
+        if not covers_all_paths:
+            path_results.append((set_mesh_output_counts_seen, True))
+        if not path_results:
+            return set_mesh_output_counts_seen, True
+
+        continuing_counts = [
+            counts_seen for counts_seen, can_continue in path_results if can_continue
+        ]
+        if not continuing_counts:
+            return set_mesh_output_counts_seen, False
+
+        return all(continuing_counts), True
 
     def hlsl_assignment_from_statement(self, stmt):
         if isinstance(stmt, AssignmentNode):
@@ -8217,15 +8292,88 @@ class HLSLCodeGen:
         role = role_by_name.get(array_name)
         if role is None:
             return None
+        parameter_name = array_name
+        if isinstance(role, dict):
+            parameter_name = role.get("name", array_name)
+            role = role.get("role")
+        if role is None:
+            return None
 
         return {
             "role": role,
-            "name": array_name,
+            "name": parameter_name,
             "index": getattr(
                 array_access, "index", getattr(array_access, "index_expr", None)
             ),
             "member_path": member_path,
         }
+
+    def hlsl_mesh_output_call_role_mapping(self, call, callee, role_by_name):
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        callee_role_by_name = {}
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+
+            parameter_name = getattr(parameter, "name", None)
+            argument_name = self.expression_name(args[index])
+            if not parameter_name or not argument_name:
+                continue
+
+            role = role_by_name.get(argument_name)
+            if role is None:
+                continue
+
+            display_name = argument_name
+            if isinstance(role, dict):
+                display_name = role.get("name", argument_name)
+                role = role.get("role")
+            if role is None:
+                continue
+
+            callee_role_by_name[parameter_name] = {
+                "role": role,
+                "name": display_name,
+            }
+        return callee_role_by_name
+
+    def validate_hlsl_mesh_output_helper_call(
+        self,
+        call,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls,
+    ):
+        helper_name = self.function_call_name(call)
+        helper = (self.current_hlsl_available_functions or {}).get(helper_name)
+        if helper is None:
+            return
+
+        helper_role_by_name = self.hlsl_mesh_output_call_role_mapping(
+            call, helper, role_by_name
+        )
+        if not helper_role_by_name:
+            return
+
+        helper_id = id(helper)
+        if helper_id in active_helper_calls:
+            return
+
+        active_helper_calls.add(helper_id)
+        try:
+            self.validate_hlsl_mesh_output_write_sequence(
+                self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                set_mesh_output_counts_seen,
+                helper_role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+            )
+        finally:
+            active_helper_calls.remove(helper_id)
 
     def validate_hlsl_mesh_output_assignment(
         self,
@@ -8288,84 +8436,92 @@ class HLSLCodeGen:
         role_by_name,
         declared_counts,
         set_count_literals,
+        active_helper_calls=None,
     ):
+        counts_seen, _ = self.validate_hlsl_mesh_output_write_sequence_result(
+            statements,
+            set_mesh_output_counts_seen,
+            role_by_name,
+            declared_counts,
+            set_count_literals,
+            active_helper_calls,
+        )
+        return counts_seen
+
+    def validate_hlsl_mesh_output_write_sequence_result(
+        self,
+        statements,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls=None,
+        loop_exit_nodes=None,
+    ):
+        if active_helper_calls is None:
+            active_helper_calls = set()
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
+
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
-                counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                    self.hlsl_statement_body_items(stmt),
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_sequence_result(
+                        self.hlsl_statement_body_items(stmt),
+                        counts_seen,
+                        role_by_name,
+                        declared_counts,
+                        set_count_literals,
+                        active_helper_calls,
+                        loop_exit_nodes,
+                    )
                 )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, IfNode):
-                then_statements = self.hlsl_statement_body_items(
-                    getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
-                )
-                else_branch = getattr(
-                    stmt, "else_branch", getattr(stmt, "else_body", None)
-                )
-                condition_value = self.hlsl_bool_constant_value(
-                    getattr(stmt, "condition", getattr(stmt, "if_condition", None))
-                )
-                if condition_value is True:
-                    counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                        then_statements,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_if_result(
+                        stmt,
                         counts_seen,
                         role_by_name,
                         declared_counts,
                         set_count_literals,
+                        active_helper_calls,
+                        loop_exit_nodes,
                     )
-                    continue
-
-                if condition_value is False:
-                    if else_branch is not None:
-                        counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                            self.hlsl_statement_body_items(else_branch),
-                            counts_seen,
-                            role_by_name,
-                            declared_counts,
-                            set_count_literals,
-                        )
-                    continue
-
-                self.validate_hlsl_mesh_output_write_sequence(
-                    then_statements,
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
                 )
-                if else_branch is not None:
-                    self.validate_hlsl_mesh_output_write_sequence(
-                        self.hlsl_statement_body_items(else_branch),
-                        counts_seen,
-                        role_by_name,
-                        declared_counts,
-                        set_count_literals,
-                    )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, SwitchNode):
-                counts_seen = self.validate_hlsl_mesh_output_write_switch(
-                    stmt,
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_switch_result(
+                        stmt,
+                        counts_seen,
+                        role_by_name,
+                        declared_counts,
+                        set_count_literals,
+                        active_helper_calls,
+                        loop_exit_nodes,
+                    )
                 )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
-                self.validate_hlsl_mesh_output_write_sequence(
+                self.validate_hlsl_mesh_output_write_sequence_result(
                     self.hlsl_statement_body_items(getattr(stmt, "body", None)),
                     counts_seen,
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    active_helper_calls,
+                    (BreakNode, ContinueNode),
                 )
                 continue
 
@@ -8379,10 +8535,109 @@ class HLSLCodeGen:
                     set_count_literals,
                 )
 
+            for node in self.walk_ast(stmt):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                self.validate_hlsl_mesh_output_helper_call(
+                    node,
+                    counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                    active_helper_calls,
+                )
+
             if self.hlsl_statement_contains_set_mesh_output_counts(stmt):
                 counts_seen = True
 
-        return counts_seen
+            if isinstance(stmt, ReturnNode):
+                return counts_seen, False
+            if loop_exit_nodes and isinstance(stmt, loop_exit_nodes):
+                return counts_seen, False
+
+        return counts_seen, True
+
+    def validate_hlsl_mesh_output_write_if_result(
+        self,
+        if_node,
+        counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls,
+        loop_exit_nodes=None,
+    ):
+        if loop_exit_nodes is None:
+            loop_exit_nodes = ()
+
+        then_statements = self.hlsl_statement_body_items(
+            getattr(if_node, "then_branch", getattr(if_node, "if_body", None))
+        )
+        else_branch = getattr(
+            if_node, "else_branch", getattr(if_node, "else_body", None)
+        )
+        condition_value = self.hlsl_bool_constant_value(
+            getattr(if_node, "condition", getattr(if_node, "if_condition", None))
+        )
+        if condition_value is True:
+            return self.validate_hlsl_mesh_output_write_sequence_result(
+                then_statements,
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+                loop_exit_nodes,
+            )
+
+        if condition_value is False:
+            if else_branch is None:
+                return counts_seen, True
+            return self.validate_hlsl_mesh_output_write_sequence_result(
+                self.hlsl_statement_body_items(else_branch),
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+                loop_exit_nodes,
+            )
+
+        branch_results = [
+            self.validate_hlsl_mesh_output_write_sequence_result(
+                then_statements,
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+                loop_exit_nodes,
+            )
+        ]
+        if else_branch is not None:
+            branch_results.append(
+                self.validate_hlsl_mesh_output_write_sequence_result(
+                    self.hlsl_statement_body_items(else_branch),
+                    counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                    active_helper_calls,
+                    loop_exit_nodes,
+                )
+            )
+        else:
+            branch_results.append((counts_seen, True))
+
+        continuing_counts = [
+            branch_counts
+            for branch_counts, can_continue in branch_results
+            if can_continue
+        ]
+        if not continuing_counts:
+            return counts_seen, False
+
+        return all(continuing_counts), True
 
     def validate_hlsl_mesh_output_writes(self, func, role_parameters):
         role_by_name = self.hlsl_mesh_output_role_by_parameter_name(role_parameters)
@@ -8605,6 +8860,39 @@ class HLSLCodeGen:
                     calls.append(getattr(node, "arguments", []))
         return calls
 
+    def hlsl_function_call_names(self, func):
+        names = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name:
+                names.append(name)
+        return names
+
+    def hlsl_function_and_reachable_helpers(self, func):
+        available_functions = self.current_hlsl_available_functions or {}
+        reachable = []
+        visited = set()
+
+        def visit(current):
+            if current is None:
+                return
+            current_id = id(current)
+            if current_id in visited:
+                return
+            visited.add(current_id)
+            reachable.append(current)
+
+            for name in self.hlsl_function_call_names(current):
+                helper = available_functions.get(name)
+                if helper is None or helper is current:
+                    continue
+                visit(helper)
+
+        visit(func)
+        return reachable
+
     def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
         literal_counts = []
@@ -8645,9 +8933,107 @@ class HLSLCodeGen:
             return getattr(expr, "operation", None) == "DispatchMesh"
         return False
 
-    def hlsl_statement_contains_dispatch_mesh(self, stmt):
+    def hlsl_function_contains_dispatch_mesh(self, func, visited=None):
+        if func is None:
+            return False
+        if visited is None:
+            visited = set()
+        func_id = id(func)
+        if func_id in visited:
+            return False
+        visited.add(func_id)
+
+        if self.hlsl_statement_contains_direct_dispatch_mesh(getattr(func, "body", [])):
+            return True
+
+        available_functions = self.current_hlsl_available_functions or {}
+        for name in self.hlsl_function_call_names(func):
+            helper = available_functions.get(name)
+            if helper is None or helper is func:
+                continue
+            if self.hlsl_function_contains_dispatch_mesh(helper, visited):
+                return True
+        return False
+
+    def hlsl_expression_is_dispatch_mesh_or_helper(self, expr):
+        if self.hlsl_expression_is_dispatch_mesh(expr):
+            return True
+        if not isinstance(expr, FunctionCallNode):
+            return False
+        helper_name = self.function_call_name(expr)
+        helper = (self.current_hlsl_available_functions or {}).get(helper_name)
+        return self.hlsl_function_contains_dispatch_mesh(helper)
+
+    def hlsl_call_thread_varying_parameter_names(
+        self, call, callee, thread_varying_names
+    ):
+        if not thread_varying_names:
+            return set()
+
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        tainted_parameters = set()
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+            if not self.hlsl_condition_uses_thread_varying_name(
+                args[index], thread_varying_names
+            ):
+                continue
+            parameter_name = getattr(parameter, "name", None)
+            if parameter_name:
+                tainted_parameters.add(parameter_name)
+        return tainted_parameters
+
+    def validate_hlsl_dispatch_mesh_helper_parameter_control_flow(
+        self, stmt, thread_varying_names, shader_type, visited_helper_taints
+    ):
+        if not thread_varying_names:
+            return
+
+        available_functions = self.current_hlsl_available_functions or {}
+        for node in self.walk_ast(stmt):
+            if not isinstance(node, FunctionCallNode):
+                continue
+
+            helper_name = self.function_call_name(node)
+            helper = available_functions.get(helper_name)
+            if helper is None or not self.hlsl_function_contains_dispatch_mesh(helper):
+                continue
+
+            helper_thread_varying_names = self.hlsl_call_thread_varying_parameter_names(
+                node, helper, thread_varying_names
+            )
+            if not helper_thread_varying_names:
+                continue
+
+            visit_key = (id(helper), tuple(sorted(helper_thread_varying_names)))
+            if visit_key in visited_helper_taints:
+                continue
+            visited_helper_taints.add(visit_key)
+            self.validate_hlsl_dispatch_mesh_control_flow(
+                self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                helper_thread_varying_names,
+                shader_type,
+                visited_helper_taints=visited_helper_taints,
+            )
+
+    def hlsl_statement_contains_direct_dispatch_mesh(self, stmt):
         return any(
             self.hlsl_expression_is_dispatch_mesh(node) for node in self.walk_ast(stmt)
+        )
+
+    def hlsl_statement_contains_dispatch_mesh(self, stmt):
+        return any(
+            self.hlsl_expression_is_dispatch_mesh_or_helper(node)
+            for node in self.walk_ast(stmt)
+        )
+
+    def hlsl_dispatch_mesh_invocation_site_count(self, func):
+        return sum(
+            1
+            for node in self.walk_ast(getattr(func, "body", []))
+            if self.hlsl_expression_is_dispatch_mesh_or_helper(node)
         )
 
     def validate_hlsl_dispatch_mesh_control_flow(
@@ -8657,8 +9043,16 @@ class HLSLCodeGen:
         shader_type,
         in_loop=False,
         in_thread_varying_branch=False,
+        visited_helper_taints=None,
     ):
+        if visited_helper_taints is None:
+            visited_helper_taints = set()
+
+        current_thread_varying_names = set(thread_varying_names)
         for stmt in statements:
+            self.hlsl_update_thread_varying_alias_names(
+                stmt, current_thread_varying_names
+            )
             contains_dispatch_mesh = self.hlsl_statement_contains_dispatch_mesh(stmt)
             if contains_dispatch_mesh and in_loop:
                 raise ValueError(
@@ -8670,14 +9064,21 @@ class HLSLCodeGen:
                     f"DirectX {shader_type} DispatchMesh must not be called from "
                     "thread-varying control flow"
                 )
+            self.validate_hlsl_dispatch_mesh_helper_parameter_control_flow(
+                stmt,
+                current_thread_varying_names,
+                shader_type,
+                visited_helper_taints,
+            )
 
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(stmt),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     in_loop,
                     in_thread_varying_branch,
+                    visited_helper_taints,
                 )
                 continue
 
@@ -8688,17 +9089,18 @@ class HLSLCodeGen:
                 branch_is_thread_varying = (
                     in_thread_varying_branch
                     or self.hlsl_condition_uses_thread_varying_name(
-                        condition, thread_varying_names
+                        condition, current_thread_varying_names
                     )
                 )
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(
                         getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
                     ),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     in_loop,
                     branch_is_thread_varying,
+                    visited_helper_taints,
                 )
                 else_branch = getattr(
                     stmt, "else_branch", getattr(stmt, "else_body", None)
@@ -8706,20 +9108,22 @@ class HLSLCodeGen:
                 if else_branch is not None:
                     self.validate_hlsl_dispatch_mesh_control_flow(
                         self.hlsl_statement_body_items(else_branch),
-                        thread_varying_names,
+                        current_thread_varying_names,
                         shader_type,
                         in_loop,
                         branch_is_thread_varying,
+                        visited_helper_taints,
                     )
                 continue
 
             if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(getattr(stmt, "body", None)),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     True,
                     in_thread_varying_branch,
+                    visited_helper_taints,
                 )
 
     def validate_hlsl_dispatch_mesh_placement(self, func, shader_type):
@@ -8730,7 +9134,12 @@ class HLSLCodeGen:
         )
 
     def validate_hlsl_dispatch_mesh_calls(self, func, shader_type):
-        calls = self.hlsl_dispatch_mesh_calls(func)
+        reachable_functions = self.hlsl_function_and_reachable_helpers(func)
+        calls = [
+            args
+            for reachable_func in reachable_functions
+            for args in self.hlsl_dispatch_mesh_calls(reachable_func)
+        ]
         if not calls:
             return
 
@@ -8743,10 +9152,11 @@ class HLSLCodeGen:
                 )
             return
 
-        if len(calls) > 1:
-            raise ValueError(
-                f"DirectX {shader_type} stage must call DispatchMesh at most once"
-            )
+        for reachable_func in reachable_functions:
+            if self.hlsl_dispatch_mesh_invocation_site_count(reachable_func) > 1:
+                raise ValueError(
+                    f"DirectX {shader_type} stage must call DispatchMesh at most once"
+                )
 
         for args in calls:
             if len(args) not in {3, 4}:
@@ -8756,20 +9166,22 @@ class HLSLCodeGen:
                     "mesh payload argument"
                 )
             self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
-        self.validate_hlsl_dispatch_mesh_placement(func, shader_type)
+        for reachable_func in reachable_functions:
+            self.validate_hlsl_dispatch_mesh_placement(reachable_func, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):
         payload_types = set()
-        variable_types = self.hlsl_function_visible_variable_types(func)
-        for args in self.hlsl_dispatch_mesh_calls(func):
-            if len(args) < 4:
-                payload_types.add(None)
-                continue
+        for reachable_func in self.hlsl_function_and_reachable_helpers(func):
+            variable_types = self.hlsl_function_visible_variable_types(reachable_func)
+            for args in self.hlsl_dispatch_mesh_calls(reachable_func):
+                if len(args) < 4:
+                    payload_types.add(None)
+                    continue
 
-            payload_type = self.hlsl_expression_user_struct_type(
-                args[3], variable_types
-            )
-            payload_types.add(payload_type)
+                payload_type = self.hlsl_expression_user_struct_type(
+                    args[3], variable_types
+                )
+                payload_types.add(payload_type)
         return payload_types
 
     def hlsl_function_visible_variable_declarations(self, func):
@@ -8833,7 +9245,8 @@ class HLSLCodeGen:
         payload_types = self.hlsl_dispatch_mesh_payload_types_for_function(func)
         if not payload_types:
             return
-        self.validate_hlsl_dispatch_mesh_payload_storage(func)
+        for reachable_func in self.hlsl_function_and_reachable_helpers(func):
+            self.validate_hlsl_dispatch_mesh_payload_storage(reachable_func)
 
         mesh_payload_types = self.current_hlsl_mesh_payload_types
         for payload_type in payload_types:
@@ -9450,11 +9863,40 @@ class HLSLCodeGen:
 
     def hlsl_program_dispatch_mesh_payload_types(self, ast):
         payload_types = set()
+        global_functions_by_name = {
+            func.name: func
+            for func in getattr(ast, "functions", []) or []
+            if getattr(func, "name", None)
+        }
+        stages = getattr(ast, "stages", {}) or {}
+        previous_available_functions = self.current_hlsl_available_functions
         for stage_name in ("task", "amplification", "object"):
             for func in self.hlsl_stage_entry_functions(ast, stage_name):
-                payload_types.update(
-                    self.hlsl_dispatch_mesh_payload_types_for_function(func)
-                )
+                stage_functions_by_name = dict(global_functions_by_name)
+                for stage_type, stage in stages.items():
+                    if normalize_stage_name(stage_type) != stage_name:
+                        continue
+                    if getattr(stage, "entry_point", None) is not func:
+                        continue
+                    stage_functions_by_name.update(
+                        {
+                            helper.name: helper
+                            for helper in getattr(stage, "local_functions", []) or []
+                            if getattr(helper, "name", None)
+                        }
+                    )
+
+                self.current_hlsl_available_functions = {
+                    name: helper
+                    for name, helper in stage_functions_by_name.items()
+                    if helper is not func
+                }
+                try:
+                    payload_types.update(
+                        self.hlsl_dispatch_mesh_payload_types_for_function(func)
+                    )
+                finally:
+                    self.current_hlsl_available_functions = previous_available_functions
         return payload_types
 
     def hlsl_program_has_amplification_stage(self, ast):
