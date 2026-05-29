@@ -10084,6 +10084,137 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_ternary_resource_aliases_forward_cuda_metadata(self):
+        """Test CUDA sidecars follow ternary-selected resource aliases safely."""
+        source_code = """
+        shader ResourceQueryTernaryAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            image2D imageMap;
+            image2D fallbackImage;
+            sampler2d textureGrid[2][4];
+            image2D imageGrid[2][4];
+
+            bool choosePrimary() {
+                return true;
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(bool usePrimary, int layer, int slot) {
+                    sampler2d selectedTex =
+                        usePrimary ? colorMap : fallbackMap;
+                    image2D selectedImage =
+                        usePrimary ? imageMap : fallbackImage;
+                    ivec2 selectedTexSize = textureSize(selectedTex, 0);
+                    ivec2 selectedImageSize = imageSize(selectedImage);
+                    consume(selectedTex, selectedImage);
+
+                    ivec2 directTexSize =
+                        textureSize(
+                            usePrimary
+                                ? textureGrid[layer][slot]
+                                : textureGrid[layer][slot + 1],
+                            0
+                        );
+                    ivec2 directImageSize =
+                        imageSize(
+                            usePrimary
+                                ? imageGrid[layer][slot]
+                                : imageGrid[layer][slot + 1]
+                        );
+                    consume(
+                        usePrimary ? colorMap : fallbackMap,
+                        usePrimary ? imageMap : fallbackImage
+                    );
+
+                    sampler2d unsafeTex =
+                        choosePrimary() ? colorMap : fallbackMap;
+                    image2D unsafeImage =
+                        choosePrimary() ? imageMap : fallbackImage;
+                    ivec2 unsafeTexSize = textureSize(unsafeTex, 0);
+                    ivec2 unsafeImageSize = imageSize(unsafeImage);
+                    consume(
+                        choosePrimary() ? colorMap : fallbackMap,
+                        choosePrimary() ? imageMap : fallbackImage
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[2][4] = {};" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[2][4] = {};" in cuda_code
+        assert (
+            "int2 selectedTexSize = cgl_textureSize_sampler2D"
+            "((usePrimary ? colorMap_metadata : fallbackMap_metadata), 0);" in cuda_code
+        )
+        assert (
+            "int2 selectedImageSize = cgl_imageSize_image2D"
+            "((usePrimary ? imageMap_metadata : fallbackImage_metadata));" in cuda_code
+        )
+        assert (
+            "consume(selectedTex, "
+            "(usePrimary ? colorMap_metadata : fallbackMap_metadata), "
+            "selectedImage, "
+            "(usePrimary ? imageMap_metadata : fallbackImage_metadata));" in cuda_code
+        )
+        assert (
+            "int2 directTexSize = cgl_textureSize_sampler2D"
+            "((usePrimary ? textureGrid_metadata[layer][slot] : "
+            "textureGrid_metadata[layer][(slot + 1)]), 0);" in cuda_code
+        )
+        assert (
+            "int2 directImageSize = cgl_imageSize_image2D"
+            "((usePrimary ? imageGrid_metadata[layer][slot] : "
+            "imageGrid_metadata[layer][(slot + 1)]));" in cuda_code
+        )
+        assert (
+            "consume((usePrimary ? colorMap : fallbackMap), "
+            "(usePrimary ? colorMap_metadata : fallbackMap_metadata), "
+            "(usePrimary ? imageMap : fallbackImage), "
+            "(usePrimary ? imageMap_metadata : fallbackImage_metadata));" in cuda_code
+        )
+        assert (
+            "int2 unsafeTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int2 unsafeImageSize = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "metadata unavailable for sampler2D argument tex */ "
+            "CglResourceQueryInfo{}" in cuda_code
+        )
+        assert (
+            "metadata unavailable for image2D argument img */ "
+            "CglResourceQueryInfo{}" in cuda_code
+        )
+        assert "choosePrimary() ? colorMap_metadata" not in cuda_code
+        assert "choosePrimary() ? imageMap_metadata" not in cuda_code
+        assert "selectedTex_metadata" not in cuda_code
+        assert "selectedImage_metadata" not in cuda_code
+        assert "unsafeTex_metadata" not in cuda_code
+        assert "unsafeImage_metadata" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """

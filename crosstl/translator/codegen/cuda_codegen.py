@@ -3113,6 +3113,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         def mark_resolved_resource(func_name, resource_expr, visited=None):
             if visited is None:
                 visited = set()
+            if isinstance(resource_expr, TernaryOpNode):
+                if not self.is_safe_query_return_actual_index(resource_expr.condition):
+                    return False
+                true_changed = mark_resolved_resource(
+                    func_name,
+                    resource_expr.true_expr,
+                    visited.copy(),
+                )
+                false_changed = mark_resolved_resource(
+                    func_name,
+                    resource_expr.false_expr,
+                    visited.copy(),
+                )
+                return true_changed or false_changed
+
             if isinstance(resource_expr, FunctionCallNode):
                 callee_name = self.raw_function_call_name(resource_expr)
                 return_source = self.query_return_sources.get(callee_name)
@@ -3228,6 +3243,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def query_metadata_expression(self, resource_expr):
         """Return CUDA query metadata paired with a resource expression."""
+        if isinstance(resource_expr, TernaryOpNode):
+            if not self.is_safe_query_return_actual_index(resource_expr.condition):
+                return None
+            true_type = self.resource_base_type(
+                self.resource_expression_type(resource_expr.true_expr)
+            )
+            false_type = self.resource_base_type(
+                self.resource_expression_type(resource_expr.false_expr)
+            )
+            if true_type is None or false_type is None or true_type != false_type:
+                return None
+            true_metadata = self.query_metadata_expression(resource_expr.true_expr)
+            false_metadata = self.query_metadata_expression(resource_expr.false_expr)
+            if true_metadata is None or false_metadata is None:
+                return None
+            condition = self.visit(resource_expr.condition)
+            return f"({condition} ? {true_metadata} : {false_metadata})"
+
         if isinstance(resource_expr, FunctionCallNode):
             callee_name = self.raw_function_call_name(resource_expr)
             return_source = self.query_return_sources.get(callee_name)
