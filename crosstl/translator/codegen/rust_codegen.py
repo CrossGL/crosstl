@@ -3120,6 +3120,8 @@ class RustCodeGen:
     def statement_terminates(self, tail):
         if isinstance(tail, ReturnNode):
             return True
+        if isinstance(tail, BlockNode):
+            return self.statement_body_terminates(tail)
         if isinstance(tail, MatchNode):
             return self.match_statement_terminates_all_arms(tail)
         if isinstance(tail, IfNode):

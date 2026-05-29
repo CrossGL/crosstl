@@ -63,7 +63,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install vulkan-sdk --version=1.4.341 -y --no-progress
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            choco install vulkan-sdk --version=1.4.341 -y --no-progress
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq $maxAttempts) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds (20 * $attempt)
+          }
           $sdkRoot = Get-ChildItem "C:\VulkanSDK" -Directory |
             Sort-Object Name -Descending |
             Select-Object -First 1

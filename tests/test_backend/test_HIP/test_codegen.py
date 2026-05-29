@@ -5980,6 +5980,71 @@ class TestHipCodeGen:
         assert "var manualLinkType: u32 = (/* HIP device query:" not in result
         assert "var manualHopCount: u32 = (/* HIP device query:" not in result
 
+    def test_hip_runtime_version_output_reads_emit_metadata_expressions(self):
+        """Test HIP runtime version outputs lower to explicit metadata."""
+        code = """
+        void host(int* out) {
+            int driverVersion = 0;
+            int runtimeVersion = 0;
+            int statusDriverVersion = 0;
+            int statusRuntimeVersion = 0;
+            void* proc = 0;
+            unsigned int procFlags = 0;
+            hipDriverProcAddressQueryResult procStatus;
+            hipDriverGetVersion(&driverVersion);
+            hipRuntimeGetVersion(&runtimeVersion);
+            out[0] = driverVersion;
+            out[1] = runtimeVersion;
+            hipGetProcAddress(
+                "hipMalloc",
+                &proc,
+                runtimeVersion,
+                procFlags,
+                &procStatus
+            );
+            driverVersion = 1;
+            runtimeVersion = 2;
+            int manualDriverVersion = driverVersion;
+            int manualRuntimeVersion = runtimeVersion;
+            hipError_t errDriver = hipDriverGetVersion(&statusDriverVersion);
+            hipError_t errRuntime = hipRuntimeGetVersion(&statusRuntimeVersion);
+            out[2] = statusDriverVersion;
+            out[3] = statusRuntimeVersion;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get driver version: output: driverVersion" in result
+        assert "// HIP get runtime version: output: runtimeVersion" in result
+        assert "out[0] = (/* HIP device query: driver.version */ 0);" in result
+        assert "out[1] = (/* HIP device query: runtime.version */ 0);" in result
+        assert (
+            '// HIP get proc address: symbol: "hipMalloc", output: proc, '
+            "version: runtimeVersion, flags: procFlags, "
+            "status output: procStatus"
+        ) in result
+        assert "driverVersion = 1;" in result
+        assert "runtimeVersion = 2;" in result
+        assert "var manualDriverVersion: i32 = driverVersion;" in result
+        assert "var manualRuntimeVersion: i32 = runtimeVersion;" in result
+        assert "// HIP get driver version: output: statusDriverVersion" in result
+        assert "// HIP get runtime version: output: statusRuntimeVersion" in result
+        assert "var errDriver: hipError_t = hipSuccess;" in result
+        assert "var errRuntime: hipError_t = hipSuccess;" in result
+        assert "out[2] = (/* HIP device query: driver.version */ 0);" in result
+        assert "out[3] = (/* HIP device query: runtime.version */ 0);" in result
+        assert "out[0] = driverVersion;" not in result
+        assert "out[1] = runtimeVersion;" not in result
+        assert "out[2] = statusDriverVersion;" not in result
+        assert "out[3] = statusRuntimeVersion;" not in result
+        assert "var manualDriverVersion: i32 = (/* HIP device query:" not in result
+        assert "var manualRuntimeVersion: i32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

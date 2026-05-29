@@ -2598,6 +2598,11 @@ class HipToCrossGLConverter:
             if args:
                 output = self.format_runtime_pointer_target(raw_args[0])
                 version_kind = "driver" if name == "hipDriverGetVersion" else "runtime"
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"{version_kind}.version"
+                    )
                 return [f"// HIP get {version_kind} version: output: {output}"]
         if name == "hipDeviceGet":
             if len(args) >= 2:
