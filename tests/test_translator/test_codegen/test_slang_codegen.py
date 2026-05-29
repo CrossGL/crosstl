@@ -8819,6 +8819,91 @@ def test_structured_buffer_atomics_validate_target_result_types():
     assert "atomicCompareExchange(counters" not in generated_code
 
 
+def test_structured_buffer_explicit_result_atomics_reject_value_contexts():
+    code = """
+    shader InvalidSlangStructuredBufferExplicitAtomicValues {
+        RWStructuredBuffer<uint> counters @binding(29);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint3 tid) {
+            uint oldValue = 0u;
+            return atomicAdd(counters[tid.x], 1u, oldValue);
+        }
+
+        compute {
+            void main(uint3 tid @gl_GlobalInvocationID) {
+                uint oldValue = 0u;
+                atomicAdd(counters[tid.x], 1u, oldValue);
+                uint initBlocked = atomicAdd(counters[tid.x], 2u, oldValue);
+                oldValue = atomicExchange(counters[tid.x], 3u, oldValue);
+                passUint(atomicOr(counters[tid.x], 4u, oldValue));
+                uint binaryBlocked =
+                    atomicXor(counters[tid.x], 5u, oldValue) + 1u;
+                if (atomicAnd(counters[tid.x], 1u, oldValue) != 0u) {
+                    oldValue = returnBlocked(tid);
+                }
+                for (
+                    atomicAdd(counters[tid.x], 6u, oldValue);
+                    oldValue < 8u;
+                    atomicExchange(counters[tid.x], oldValue, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "InterlockedAdd(counters[tid.x], 1u, oldValue);" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang structured buffer: atomicAdd "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang structured buffer: atomicExchange "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang structured buffer: atomicOr explicit "
+        "original output atomic cannot be used as a value expression */ 0u);"
+        in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang structured buffer: atomicXor "
+        "explicit original output atomic cannot be used as a value expression */ "
+        "0u + 1u;" in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang structured buffer: atomicAnd explicit original "
+        "output atomic cannot be used as a value expression */ 0u != 0u)"
+        in generated_code
+    )
+    assert (
+        "return /* unsupported Slang structured buffer: atomicAdd explicit "
+        "original output atomic cannot be used as a value expression */ 0u;"
+        in generated_code
+    )
+    assert (
+        "for (InterlockedAdd(counters[tid.x], 6u, oldValue); oldValue < 8u; "
+        "InterlockedExchange(counters[tid.x], oldValue, oldValue))" in generated_code
+    )
+    assert "uint initBlocked = InterlockedAdd" not in generated_code
+    assert "oldValue = InterlockedExchange" not in generated_code
+    assert "passUint(InterlockedOr" not in generated_code
+    assert "InterlockedXor(counters[tid.x], 5u, oldValue) + 1u" not in generated_code
+    assert (
+        "if (InterlockedAnd(counters[tid.x], 1u, oldValue) != 0u)" not in generated_code
+    )
+    assert "return InterlockedAdd" not in generated_code
+
+
 def test_structured_buffer_expression_atomics_in_loop_contexts_emit_diagnostics():
     code = """
     shader SlangStructuredBufferAtomicLoopContexts {

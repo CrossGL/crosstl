@@ -147,6 +147,7 @@ class SlangCodeGen:
         self.expression_prelude_result_stack = []
         self.expression_temp_names = set()
         self.atomic_value_context_stack = []
+        self.statement_expression_node_stack = []
         self.current_hull_output_rewrite = None
         self._generating = False
         self.semantic_map = {
@@ -244,6 +245,7 @@ class SlangCodeGen:
             self.expression_prelude_result_stack = []
             self.expression_temp_names = set()
             self.atomic_value_context_stack = []
+            self.statement_expression_node_stack = []
             self.reserve_explicit_slang_resource_declarations(ast)
 
         if isinstance(ast, list):
@@ -5159,6 +5161,20 @@ class SlangCodeGen:
             self.expression_prelude_stack.pop()
             self.expression_prelude_result_stack.pop()
 
+    def generate_statement_expression_with_prelude(self, expr):
+        self.statement_expression_node_stack.append(expr)
+        try:
+            return self.generate_expression_with_prelude(expr)
+        finally:
+            self.statement_expression_node_stack.pop()
+
+    def is_direct_statement_expression(self, node):
+        return (
+            self.current_expression_expected_type is None
+            and bool(self.statement_expression_node_stack)
+            and self.statement_expression_node_stack[-1] is node
+        )
+
     def statement_with_prelude(self, prelude, statement):
         if not prelude:
             return statement
@@ -5187,8 +5203,8 @@ class SlangCodeGen:
             )
             if synchronization_statement is not None:
                 return synchronization_statement
-            prelude, result_names, expr = self.generate_expression_with_prelude(
-                node.expression
+            prelude, result_names, expr = (
+                self.generate_statement_expression_with_prelude(node.expression)
             )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
@@ -5218,7 +5234,9 @@ class SlangCodeGen:
             )
             if synchronization_statement is not None:
                 return synchronization_statement
-            prelude, result_names, expr = self.generate_expression_with_prelude(node)
+            prelude, result_names, expr = (
+                self.generate_statement_expression_with_prelude(node)
+            )
             statement = "" if prelude and expr in result_names else f"{expr};"
             return self.statement_with_prelude(prelude, statement)
 
@@ -5303,7 +5321,14 @@ class SlangCodeGen:
                 )
                 return f"{declaration} = {initial_expr}"
             return declaration
-        return self.generate_expression(node)
+        statement_expr = (
+            node.expression if isinstance(node, ExpressionStatementNode) else node
+        )
+        self.statement_expression_node_stack.append(statement_expr)
+        try:
+            return self.generate_expression(node)
+        finally:
+            self.statement_expression_node_stack.pop()
 
     def generate_loop_condition_expression(self, node, atomic_value_context):
         self.atomic_value_context_stack.append(atomic_value_context)
@@ -5947,7 +5972,11 @@ class SlangCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
             if callee not in self.user_function_names:
-                resource_call = self.generate_resource_call(callee, node.args)
+                resource_call = self.generate_resource_call(
+                    callee,
+                    node.args,
+                    statement_context=self.is_direct_statement_expression(node),
+                )
                 if resource_call is not None:
                     return resource_call
             if isinstance(func_expr, MemberAccessNode):
@@ -7787,7 +7816,9 @@ class SlangCodeGen:
         )
         return original_name
 
-    def structured_buffer_atomic_expression(self, func_name, args):
+    def structured_buffer_atomic_expression(
+        self, func_name, args, statement_context=False
+    ):
         operation = self.structured_buffer_atomic_operations().get(func_name)
         if operation is None or not args:
             return None
@@ -7820,19 +7851,18 @@ class SlangCodeGen:
             )
 
         intrinsic, value_arg_count = operation
-        target_reason = self.atomic_result_expected_type_unsupported_reason(
-            func_name, result_type
-        )
-        if target_reason:
-            return diagnostic(
-                func_name,
-                target_reason,
-                self.atomic_result_diagnostic_fallback_type(result_type),
-            )
-
         expression_args = 1 + value_arg_count
         explicit_result_args = expression_args + 1
         if len(args) == expression_args:
+            target_reason = self.atomic_result_expected_type_unsupported_reason(
+                func_name, result_type
+            )
+            if target_reason:
+                return diagnostic(
+                    func_name,
+                    target_reason,
+                    self.atomic_result_diagnostic_fallback_type(result_type),
+                )
             return self.structured_buffer_atomic_value_expression(
                 func_name, intrinsic, target, args[1:], element_type
             )
@@ -7846,6 +7876,13 @@ class SlangCodeGen:
                 func_name,
                 f"requires {required_shape}",
                 result_type,
+            )
+
+        if not statement_context:
+            return diagnostic(
+                func_name,
+                "explicit original output atomic cannot be used as a value expression",
+                self.atomic_result_diagnostic_fallback_type(result_type),
             )
 
         target_expr = self.generate_expression(target)
@@ -8540,7 +8577,7 @@ class SlangCodeGen:
             for char in str(resource_slang_type).strip("_")
         ).strip("_")
 
-    def generate_resource_call(self, func_name, args):
+    def generate_resource_call(self, func_name, args, statement_context=False):
         if func_name == "imageLoad" and len(args) >= 2:
             return self.image_load_expression(args)
 
@@ -8575,7 +8612,7 @@ class SlangCodeGen:
             return self.image_atomic_expression(func_name, args)
 
         structured_buffer_atomic = self.structured_buffer_atomic_expression(
-            func_name, args
+            func_name, args, statement_context=statement_context
         )
         if structured_buffer_atomic is not None:
             return structured_buffer_atomic

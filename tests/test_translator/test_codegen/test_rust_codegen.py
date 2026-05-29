@@ -19315,7 +19315,7 @@ def test_matrix_vector_binary_operands_promote_components_and_result_size():
     assert "{ let __cgl_mat_arg_" not in generated_code
 
 
-def test_vector_comparison_binary_operands_emit_boolean_lanes():
+def test_vector_comparison_binary_operands_emit_boolean_lanes(tmp_path):
     code = """
     float makeWeight() {
         return 0.5;
@@ -19394,6 +19394,7 @@ def test_vector_comparison_binary_operands_emit_boolean_lanes():
     assert "let vectorEqual: Vec2<i32>" not in generated_code
     assert "let vectorNotEqual: Vec2<f32>" not in generated_code
     assert "(pixel < amount)" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_bool_vector_logical_binary_operands_emit_boolean_lanes():

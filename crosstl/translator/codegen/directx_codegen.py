@@ -7914,6 +7914,41 @@ class HLSLCodeGen:
             self.hlsl_expression_identifier_names(condition) & thread_varying_names
         )
 
+    def hlsl_update_thread_varying_alias_names(self, stmt, thread_varying_names):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+            if self.hlsl_condition_uses_thread_varying_name(
+                getattr(stmt, "initial_value", None), thread_varying_names
+            ):
+                thread_varying_names.add(name)
+            else:
+                thread_varying_names.discard(name)
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if not target_name:
+            return
+
+        value_uses_thread_varying = self.hlsl_condition_uses_thread_varying_name(
+            getattr(assignment, "value", getattr(assignment, "right", None)),
+            thread_varying_names,
+        )
+        operator = getattr(assignment, "operator", "=")
+        if value_uses_thread_varying or (
+            operator != "=" and target_name in thread_varying_names
+        ):
+            thread_varying_names.add(target_name)
+        else:
+            thread_varying_names.discard(target_name)
+
     def validate_hlsl_set_mesh_output_counts_control_flow(
         self,
         statements,
@@ -8793,7 +8828,11 @@ class HLSLCodeGen:
         if visited_helper_taints is None:
             visited_helper_taints = set()
 
+        current_thread_varying_names = set(thread_varying_names)
         for stmt in statements:
+            self.hlsl_update_thread_varying_alias_names(
+                stmt, current_thread_varying_names
+            )
             contains_dispatch_mesh = self.hlsl_statement_contains_dispatch_mesh(stmt)
             if contains_dispatch_mesh and in_loop:
                 raise ValueError(
@@ -8806,13 +8845,16 @@ class HLSLCodeGen:
                     "thread-varying control flow"
                 )
             self.validate_hlsl_dispatch_mesh_helper_parameter_control_flow(
-                stmt, thread_varying_names, shader_type, visited_helper_taints
+                stmt,
+                current_thread_varying_names,
+                shader_type,
+                visited_helper_taints,
             )
 
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(stmt),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     in_loop,
                     in_thread_varying_branch,
@@ -8827,14 +8869,14 @@ class HLSLCodeGen:
                 branch_is_thread_varying = (
                     in_thread_varying_branch
                     or self.hlsl_condition_uses_thread_varying_name(
-                        condition, thread_varying_names
+                        condition, current_thread_varying_names
                     )
                 )
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(
                         getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
                     ),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     in_loop,
                     branch_is_thread_varying,
@@ -8846,7 +8888,7 @@ class HLSLCodeGen:
                 if else_branch is not None:
                     self.validate_hlsl_dispatch_mesh_control_flow(
                         self.hlsl_statement_body_items(else_branch),
-                        thread_varying_names,
+                        current_thread_varying_names,
                         shader_type,
                         in_loop,
                         branch_is_thread_varying,
@@ -8857,7 +8899,7 @@ class HLSLCodeGen:
             if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
                 self.validate_hlsl_dispatch_mesh_control_flow(
                     self.hlsl_statement_body_items(getattr(stmt, "body", None)),
-                    thread_varying_names,
+                    current_thread_varying_names,
                     shader_type,
                     True,
                     in_thread_varying_branch,

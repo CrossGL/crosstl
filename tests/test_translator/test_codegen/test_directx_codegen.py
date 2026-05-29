@@ -7056,6 +7056,100 @@ def test_directx_dispatch_mesh_helper_parameter_taint_rejects_non_uniform_contro
     assert "DispatchMesh(1, 1, 1);" in generated
 
 
+def test_directx_dispatch_mesh_local_alias_taint_rejects_non_uniform_control_flow():
+    direct_alias_code = """
+    shader DispatchMeshLocalAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = groupIndex == 0u;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(direct_alias_code), "task"
+        )
+
+    chained_alias_code = """
+    shader DispatchMeshChainedLocalAlias {
+        task {
+            void main(uvec3 groupThreadId @ SV_GroupThreadID) @numthreads(1, 1, 1) {
+                bool enabled = groupThreadId.x == 0u;
+                bool shouldDispatch = enabled;
+                if (shouldDispatch) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(chained_alias_code), "task"
+        )
+
+    assignment_alias_code = """
+    shader DispatchMeshAssignmentLocalAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = false;
+                enabled = groupIndex == 0u;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*thread-varying control flow"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(assignment_alias_code), "task"
+        )
+
+    uniform_alias_code = """
+    shader DispatchMeshUniformLocalAlias {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                bool enabled = true;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_alias_code), "task"
+    )
+
+    assert "bool enabled = true;" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
+
+    uniform_reassignment_code = """
+    shader DispatchMeshUniformReassignmentAlias {
+        task {
+            void main(uint groupIndex @ SV_GroupIndex) @numthreads(1, 1, 1) {
+                bool enabled = groupIndex == 0u;
+                enabled = true;
+                if (enabled) {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(uniform_reassignment_code), "task"
+    )
+
+    assert "enabled = true;" in generated
+    assert "DispatchMesh(1, 1, 1);" in generated
+
+
 def test_directx_mesh_payload_does_not_capture_ray_payload_semantic():
     shader = """
     shader RayPayloadStillSemantic {

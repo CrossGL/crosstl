@@ -8971,6 +8971,287 @@ def test_loop_carried_helper_generic_resource_aliases_remain_field_specific():
     assert "imageStore(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct ImageArrayBox {
+                RWTexture2D<float2> images[2];
+                int tag;
+            };
+            readonly RWTexture2D<float2> inputs[2];
+            writeonly RWTexture2D<float2> outputs[2];
+
+            ImageArrayBox makeReadArray(
+                readonly RWTexture2D<float2> source[2]
+            ) {
+                return ImageArrayBox(source, 1);
+            }
+
+            ImageArrayBox makeWriteArray(
+                writeonly RWTexture2D<float2> target[2]
+            ) {
+                return ImageArrayBox(target, 2);
+            }
+
+            void invalidForUpdateStore(
+                int count,
+                int mode,
+                int slot,
+                int2 pixel,
+                float2 value
+            ) {
+                ImageArrayBox payload = makeWriteArray(outputs);
+                for (
+                    int i = 0;
+                    i < count;
+                    payload = match mode {
+                        0 => makeReadArray(inputs),
+                        _ => makeWriteArray(outputs)
+                    }
+                ) {
+                    if (mode > 2) {
+                        payload = makeWriteArray(outputs);
+                    }
+                    i++;
+                }
+                payload.images[slot].Store(pixel, value);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            struct ImageArrayBox {
+                RWTexture2D<float2> images[2];
+                int tag;
+            };
+            readonly RWTexture2D<float2> inputs[2];
+            writeonly RWTexture2D<float2> outputs[2];
+
+            ImageArrayBox makeReadArray(
+                readonly RWTexture2D<float2> source[2]
+            ) {
+                return ImageArrayBox(source, 1);
+            }
+
+            ImageArrayBox makeWriteArray(
+                writeonly RWTexture2D<float2> target[2]
+            ) {
+                return ImageArrayBox(target, 2);
+            }
+
+            float2 invalidWhileLoad(
+                bool skip,
+                int count,
+                int mode,
+                int slot,
+                int2 pixel
+            ) {
+                ImageArrayBox payload = makeWriteArray(outputs);
+                while (count > 0) {
+                    if (skip) {
+                        count--;
+                        continue;
+                    }
+                    payload = match mode {
+                        0 => makeReadArray(inputs),
+                        _ => makeWriteArray(outputs)
+                    };
+                    count--;
+                }
+                return payload.images[slot].Load(pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ImageArrayBox {
+                RWTexture2D<float2> images[2];
+                int tag;
+            };
+            readonly RWTexture2D<float2> inputs[2];
+            writeonly RWTexture2D<float2> outputs[2];
+
+            Result<ImageArrayBox, int> wrapRead(
+                readonly RWTexture2D<float2> source[2]
+            ) {
+                return Result::Ok(ImageArrayBox(source, 1));
+            }
+
+            Result<ImageArrayBox, int> wrapWrite(
+                writeonly RWTexture2D<float2> target[2]
+            ) {
+                return Result::Ok(ImageArrayBox(target, 2));
+            }
+
+            void invalidGenericMatchStore(
+                int count,
+                int mode,
+                int slot,
+                int2 pixel,
+                float2 value
+            ) {
+                Result<ImageArrayBox, int> wrapped = wrapWrite(outputs);
+                for (int i = 0; i < count; i++) {
+                    if (mode > 0) {
+                        wrapped = match mode {
+                            1 => wrapRead(inputs),
+                            _ => wrapWrite(outputs)
+                        };
+                    }
+                }
+                match wrapped {
+                    Result::Ok(payload) => {
+                        payload.images[slot].Store(pixel, value);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct RawArrayBox {
+                RWByteAddressBuffer raw[2];
+                int tag;
+            };
+            writeonly RWByteAddressBuffer writeRaw[2];
+            RWByteAddressBuffer rawBytes[2];
+
+            Result<RawArrayBox, int> wrapWrite(
+                writeonly RWByteAddressBuffer target[2]
+            ) {
+                return Result::Ok(RawArrayBox(target, 1));
+            }
+
+            Result<RawArrayBox, int> wrapRaw(
+                RWByteAddressBuffer source[2]
+            ) {
+                return Result::Ok(RawArrayBox(source, 2));
+            }
+
+            uint invalidRawArrayLoad(
+                bool skip,
+                int count,
+                int mode,
+                int slot,
+                uint offset
+            ) {
+                Result<RawArrayBox, int> wrapped = wrapWrite(writeRaw);
+                while (count > 0) {
+                    if (skip) {
+                        count--;
+                        continue;
+                    }
+                    wrapped = match mode {
+                        0 => wrapRaw(rawBytes),
+                        _ => wrapWrite(writeRaw)
+                    };
+                    count--;
+                }
+                return match wrapped {
+                    Result::Ok(payload) => payload.raw[slot].Load(offset),
+                    Result::Err(err) => uint(err)
+                };
+            }
+            """,
+            r"Load.*writeRaw.*writeonly",
+        ),
+    ],
+)
+def test_match_selected_resource_array_aliases_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_match_selected_resource_array_aliases_remain_field_specific():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct ImageArrayPair {
+        RWTexture2D<float2> readable[2];
+        RWTexture2D<float2> writable[2];
+    };
+    readonly RWTexture2D<float2> inputs[2];
+    writeonly RWTexture2D<float2> outputs[2];
+
+    Result<ImageArrayPair, int> wrapPair(
+        readonly RWTexture2D<float2> source[2],
+        writeonly RWTexture2D<float2> target[2]
+    ) {
+        return Result::Ok(ImageArrayPair(source, target));
+    }
+
+    float2 readAfterMatchLoop(int count, int mode, int slot, int2 pixel) {
+        Result<ImageArrayPair, int> wrapped = wrapPair(inputs, outputs);
+        while (count > 0) {
+            wrapped = match mode {
+                0 => wrapPair(inputs, outputs),
+                _ => wrapPair(inputs, outputs)
+            };
+            count--;
+        }
+        return match wrapped {
+            Result::Ok(payload) => payload.readable[slot].Load(pixel),
+            Result::Err(_) => float2(0.0)
+        };
+    }
+
+    void writeAfterMatchLoop(
+        int count,
+        int mode,
+        int slot,
+        int2 pixel,
+        float2 value
+    ) {
+        Result<ImageArrayPair, int> wrapped = wrapPair(inputs, outputs);
+        for (
+            int i = 0;
+            i < count;
+            wrapped = match mode {
+                0 => wrapPair(inputs, outputs),
+                _ => wrapPair(inputs, outputs)
+            }
+        ) {
+            i++;
+        }
+        match wrapped {
+            Result::Ok(payload) => {
+                payload.writable[slot].Store(pixel, value);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "image_load(wrapped.Ok_0.readable[int(slot)], pixel)" in generated_code
+    assert (
+        "image_store(wrapped.Ok_0.writable[int(slot)], pixel, value)" in generated_code
+    )
+    assert "wrapped = __cgl_match_value_" in generated_code
+    assert "Result<" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;
