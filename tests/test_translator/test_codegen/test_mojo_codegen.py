@@ -5675,6 +5675,55 @@ def test_generic_payload_enum_helper_returned_struct_payload_aliases_are_field_s
     assert "imageStore(" not in generated_code
 
 
+def test_generic_payload_enum_nested_helper_struct_payload_aliases_are_field_specific():
+    source = """
+    generic<T, E> struct Result {
+        enum ResultType { Ok(T), Err(E) }
+        ResultType variant;
+    }
+    struct ImagePair {
+        image2D readable;
+        image2D writable;
+    };
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+    ImagePair makePair(readonly image2D source, writeonly image2D target) {
+        return ImagePair(source, target);
+    }
+    Result<ImagePair, int> wrapPair(ImagePair payload) {
+        return Result::Ok(payload);
+    }
+    Result<ImagePair, int> chainPair(int slot) {
+        return wrapPair(makePair(inputs[slot], outputs[slot]));
+    }
+    vec4 readAllowed(int slot, ivec2 pixel) {
+        Result<ImagePair, int> value = chainPair(slot);
+        return match value {
+            Result::Ok(carried) => imageLoad(carried.readable, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+    void writeAllowed(int slot, ivec2 pixel, vec4 color) {
+        Result<ImagePair, int> value = chainPair(slot);
+        match value {
+            Result::Ok(carried) => {
+                imageStore(carried.writable, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "image_load(value.Ok_0.readable, pixel)" in generated_code
+    assert "image_store(value.Ok_0.writable, pixel, color)" in generated_code
+    assert "Result<" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("source", "pattern"),
     [
@@ -5765,6 +5814,126 @@ def test_generic_payload_enum_helper_returned_struct_payload_aliases_are_field_s
     ],
 )
 def test_generic_payload_enum_helper_returned_struct_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            PayloadBox makeBox(readonly image2D source) {
+                return PayloadBox(source, 1);
+            }
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> chainPayload(readonly image2D source) {
+                return wrapPayload(makeBox(source));
+            }
+            void invalidNestedHelperStore(int slot, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value = chainPayload(inputs[slot]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> choosePayload(
+                bool choose,
+                readonly image2D first,
+                readonly image2D second
+            ) {
+                return wrapPayload(
+                    choose ? PayloadBox(first, 1) : PayloadBox(second, 2)
+                );
+            }
+            void invalidTernaryHelperStore(bool choose, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value =
+                    choosePayload(choose, inputs[0], inputs[1]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct PayloadBox {
+                image2D image;
+                int tag;
+            };
+            readonly image2D inputs[2];
+            Result<PayloadBox, int> wrapPayload(PayloadBox payload) {
+                return Result::Ok(payload);
+            }
+            Result<PayloadBox, int> matchPayload(
+                int mode,
+                readonly image2D first,
+                readonly image2D second
+            ) {
+                return wrapPayload(match mode {
+                    0 => PayloadBox(first, 1),
+                    _ => PayloadBox(second, 2)
+                });
+            }
+            void invalidMatchHelperStore(int mode, ivec2 pixel, vec4 color) {
+                Result<PayloadBox, int> value =
+                    matchPayload(mode, inputs[0], inputs[1]);
+                match value {
+                    Result::Ok(carried) => {
+                        imageStore(carried.image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_nested_helper_struct_payload_access_diagnostics(
     source, pattern
 ):
     with pytest.raises(ValueError, match=pattern):

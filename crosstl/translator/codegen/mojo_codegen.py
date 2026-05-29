@@ -1696,6 +1696,30 @@ class MojoCodeGen:
                 if not return_path
             ]
 
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    branch, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    arm_expr, param_indices, relative_path, target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
         root_name = self.resource_access_root_name(expr)
         if root_name in param_indices:
             return [(param_indices[root_name], relative_path)]
@@ -1714,6 +1738,43 @@ class MojoCodeGen:
                         return self.return_resource_alias_field_paths_for_relative_path(
                             arg, param_indices, rest, field_type
                         )
+
+            refs = []
+            callee_refs = self.function_return_resource_field_aliases.get(func_name)
+            parameter_types = self.function_parameter_types.get(func_name, [])
+            for return_path, alias_index, callee_arg_path in callee_refs or []:
+                if alias_index >= len(expr.args):
+                    continue
+
+                if relative_path == return_path:
+                    next_relative_path = callee_arg_path
+                elif return_path and relative_path.startswith(f"{return_path}."):
+                    remaining_path = relative_path[len(return_path) + 1 :]
+                    next_relative_path = (
+                        f"{callee_arg_path}.{remaining_path}"
+                        if callee_arg_path
+                        else remaining_path
+                    )
+                elif not return_path:
+                    next_relative_path = relative_path
+                else:
+                    continue
+
+                arg_type = (
+                    parameter_types[alias_index]
+                    if alias_index < len(parameter_types)
+                    else None
+                )
+                for ref in self.return_resource_alias_field_paths_for_relative_path(
+                    expr.args[alias_index],
+                    param_indices,
+                    next_relative_path,
+                    arg_type,
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            if refs:
+                return refs
 
         return []
 

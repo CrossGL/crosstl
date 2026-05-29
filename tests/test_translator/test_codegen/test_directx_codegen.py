@@ -18683,6 +18683,81 @@ def test_directx_projected_texture_variants_use_sample_projection():
     assert "textureProjGradOffset(" not in generated_code
 
 
+def test_directx_projected_1d_texture_variants_use_sample_projection():
+    shader = """
+    shader Projected1DTexture {
+        sampler1D lineMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uq @ TEXCOORD0;
+            vec4 uxwq @ TEXCOORD1;
+            float lod;
+            float ddx;
+            float ddy;
+            int offset;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(lineMap, input.uq);
+                vec4 biased = textureProj(lineMap, linearSampler, input.uxwq, 0.5);
+                vec4 offset = textureProjOffset(lineMap, linearSampler, input.uq, input.offset);
+                vec4 lodOffset = textureProjLodOffset(
+                    lineMap,
+                    linearSampler,
+                    input.uq,
+                    input.lod,
+                    input.offset
+                );
+                vec4 gradOffset = textureProjGradOffset(
+                    lineMap,
+                    linearSampler,
+                    input.uq,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                return projected + biased + offset + lodOffset + gradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "SamplerState lineMapSampler : register(s0);" in generated_code
+    assert "SamplerState linearSampler : register(s1);" in generated_code
+    assert (
+        "float4 projected = lineMap.Sample(lineMapSampler, input.uq.x / input.uq.y);"
+        in generated_code
+    )
+    assert (
+        "float4 biased = lineMap.SampleBias(linearSampler, input.uxwq.x / input.uxwq.w, 0.5);"
+        in generated_code
+    )
+    assert (
+        "float4 offset = lineMap.Sample(linearSampler, input.uq.x / input.uq.y, input.offset);"
+        in generated_code
+    )
+    assert (
+        "float4 lodOffset = lineMap.SampleLevel(linearSampler, input.uq.x / input.uq.y, input.lod, input.offset);"
+        in generated_code
+    )
+    assert (
+        "float4 gradOffset = lineMap.SampleGrad(linearSampler, input.uq.x / input.uq.y, input.ddx, input.ddy, input.offset);"
+        in generated_code
+    )
+    assert "unsupported DirectX projected texture" not in generated_code
+    assert "textureProj(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+
+
 def test_directx_direct_projected_texture_stage_input_members():
     shader = """
     shader DirectProjectedTexture {
@@ -20496,6 +20571,55 @@ def test_directx_projected_cube_sampler_role_conflicts_and_compare_diagnostics()
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(comparison_diagnostic_shader), "fragment"
         )
+
+
+def test_directx_unsupported_projected_cube_array_diagnostic_keeps_sampler_role():
+    shader = """
+    shader UnsupportedProjectedCubeArraySamplerRole {
+        samplerCubeArray cubeArray;
+        sampler2DShadow shadowMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            float depth;
+        };
+
+        fragment {
+            float main(FSInput input) @ gl_FragDepth {
+                vec4 bad = textureProj(cubeArray, sharedSampler, input.cubeLayer);
+                float ok = textureCompare(
+                    shadowMap,
+                    sharedSampler,
+                    input.uv,
+                    input.depth
+                );
+                return ok + bad.x;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported DirectX projected texture: textureProj requires 1D, "
+        "2D, or 3D projection coordinates */ float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "TextureCubeArray cubeArray : register(t0);" in generated_code
+    assert "Texture2D shadowMap : register(t1);" in generated_code
+    assert "SamplerComparisonState sharedSampler : register(s0);" in generated_code
+    assert "SamplerState sharedSampler" not in generated_code
+    assert diagnostic in generated_code
+    assert (
+        "float ok = shadowMap.SampleCmp(sharedSampler, input.uv, input.depth);"
+        in generated_code
+    )
+    assert ".Sample(sharedSampler" not in generated_code
+    assert "textureProj(" not in generated_code
 
 
 def test_directx_projected_cube_struct_sampler_member_role_conflict_is_reported():
