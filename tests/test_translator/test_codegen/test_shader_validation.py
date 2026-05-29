@@ -99,6 +99,8 @@ shader MetalWaveIntrinsicsValidation {
             bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
             uvec4 ballot = WaveActiveBallot(anyLane);
             uvec4 matchMask = WaveMatch(value);
+            mat2 matrixValue = mat2(1.0);
+            mat2 matrixDiagnostic = WaveMultiPrefixSum(matrixValue, ballot);
             uint multiSum = WaveMultiPrefixSum(value, ballot);
             uint multiProduct = WaveMultiPrefixProduct(value + 1u, ballot);
             uint multiCount = WaveMultiPrefixCountBits(anyLane, ballot);
@@ -6015,6 +6017,11 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
         "__crossgl_metal_wave_multi_prefix_bit_xor(lanes, ballot, "
         "crossglWaveLaneIndex, crossglWaveLaneCount)" in code
     )
+    assert (
+        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got float2x2"
+        in code
+    )
+    assert "__crossgl_metal_wave_multi_prefix_sum(matrixValue" not in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code
     assert "WaveOpNode" not in code

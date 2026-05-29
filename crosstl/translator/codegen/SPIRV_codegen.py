@@ -4688,6 +4688,8 @@ class VulkanSPIRVCodeGen:
             argument_exprs=arguments,
         ):
             return self.register_constant(0, uint_type)
+        if not self.validate_mesh_set_output_count_limits(arguments):
+            return self.register_constant(0, uint_type)
 
         vertex_count = self.convert_value_to_type(vertex_count, uint_type)
         primitive_count = self.convert_value_to_type(primitive_count, uint_type)
@@ -4710,6 +4712,38 @@ class VulkanSPIRVCodeGen:
             )
 
         return self.register_constant(0, uint_type)
+
+    def validate_mesh_set_output_count_limits(self, arguments: List) -> bool:
+        """Reject literal mesh output counts above declared stage limits."""
+        vertex_limit = self.mesh_stage_limit(self.current_stage, "max_vertices")
+        primitive_limit = self.mesh_stage_limit(self.current_stage, "max_primitives")
+        requested_vertices = self.literal_int_argument(arguments[0])
+        requested_primitives = self.literal_int_argument(arguments[1])
+        valid = True
+
+        if (
+            vertex_limit is not None
+            and requested_vertices is not None
+            and requested_vertices > vertex_limit
+        ):
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts vertex count "
+                "exceeds declared max_vertices"
+            )
+            valid = False
+
+        if (
+            primitive_limit is not None
+            and requested_primitives is not None
+            and requested_primitives > primitive_limit
+        ):
+            self.emit(
+                "; WARNING: SPIR-V mesh SetMeshOutputCounts primitive count "
+                "exceeds declared max_primitives"
+            )
+            valid = False
+
+        return valid
 
     def validate_mesh_count_operands(
         self,

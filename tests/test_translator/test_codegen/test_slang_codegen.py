@@ -4871,6 +4871,59 @@ def test_slang_ray_tracing_intrinsics_validate_target_result_types():
     assert "RayTracingOpNode" not in generated_code
 
 
+def test_user_defined_ray_tracing_intrinsic_names_are_not_validated_as_native_calls():
+    code = """
+    shader SlangUserDefinedRayIntrinsicNames {
+        bool TraceRay(uint value) {
+            return value != 0u;
+        }
+
+        float CallShader(float value) {
+            return value + 1.0;
+        }
+
+        float ReportHit(float distance) {
+            return distance * 2.0;
+        }
+
+        bool IgnoreHit(uint value) {
+            return value == 0u;
+        }
+
+        vec2 AcceptHitAndEndSearch(vec2 value) {
+            return value;
+        }
+
+        compute {
+            void main() {
+                bool traced = TraceRay(1u);
+                float callableValue = CallShader(2.0);
+                float reported = ReportHit(3.0);
+                bool ignored = IgnoreHit(0u);
+                vec2 accepted = AcceptHitAndEndSearch(vec2(1.0, 2.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "bool TraceRay(uint value)" in generated_code
+    assert "float CallShader(float value)" in generated_code
+    assert "float ReportHit(float distance)" in generated_code
+    assert "bool IgnoreHit(uint value)" in generated_code
+    assert "float2 AcceptHitAndEndSearch(float2 value)" in generated_code
+    assert "bool traced = TraceRay(1u);" in generated_code
+    assert "float callableValue = CallShader(2.0);" in generated_code
+    assert "float reported = ReportHit(3.0);" in generated_code
+    assert "bool ignored = IgnoreHit(0u);" in generated_code
+    assert (
+        "float2 accepted = AcceptHitAndEndSearch(float2(1.0, 2.0));" in generated_code
+    )
+    assert "unsupported Slang ray tracing intrinsic" not in generated_code
+    assert "RayTracingOpNode" not in generated_code
+
+
 def test_slang_report_hit_helper_return_attributes_emit_native_calls():
     code = """
     shader SlangReportHitHelperReturnAttributes {

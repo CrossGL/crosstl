@@ -4256,6 +4256,31 @@ class MetalCodeGen:
             "bool4",
         }
 
+    def is_matrix_value_type(self, vtype):
+        vtype = self.type_name_string(vtype)
+        if not vtype:
+            return False
+        mapped_type, array_suffix = split_array_type_suffix(self.map_type(vtype))
+        if array_suffix:
+            return False
+        for prefix in ("float", "half", "double"):
+            if not mapped_type.startswith(prefix):
+                continue
+            dimensions = mapped_type[len(prefix) :].split("x", 1)
+            return (
+                len(dimensions) == 2
+                and dimensions[0] in {"2", "3", "4"}
+                and dimensions[1] in {"2", "3", "4"}
+            )
+        return False
+
+    def is_builtin_value_constructor_type(self, vtype):
+        return (
+            self.is_scalar_value_type(vtype)
+            or self.is_vector_value_type(vtype)
+            or self.is_matrix_value_type(vtype)
+        )
+
     def vector_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
         if mapped_type.startswith("float"):
@@ -4509,6 +4534,18 @@ class MetalCodeGen:
                 "f16vec2",
                 "f16vec3",
                 "f16vec4",
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
                 "f16mat2",
                 "f16mat3",
                 "f16mat4",
@@ -5033,6 +5070,14 @@ class MetalCodeGen:
             constructor = generate_struct_constructor_expression(self, expr)
             if constructor is not None:
                 return constructor
+            constructor_type = getattr(expr, "constructor_type", None)
+            if self.is_builtin_value_constructor_type(constructor_type):
+                metal_type = self.map_type(constructor_type)
+                args = ", ".join(
+                    self.generate_expression_with_expected(arg, None)
+                    for arg in getattr(expr, "arguments", [])
+                )
+                return f"{metal_type}({args})"
             return str(expr)
         elif isinstance(expr, FunctionCallNode):
             # Resolve callee expression (can be Identifier/Member/Array access)
@@ -5198,6 +5243,18 @@ class MetalCodeGen:
                 "f16vec2",
                 "f16vec3",
                 "f16vec4",
+                "mat2",
+                "mat3",
+                "mat4",
+                "mat2x2",
+                "mat2x3",
+                "mat2x4",
+                "mat3x2",
+                "mat3x3",
+                "mat3x4",
+                "mat4x2",
+                "mat4x3",
+                "mat4x4",
                 "f16mat2",
                 "f16mat3",
                 "f16mat4",
@@ -5640,6 +5697,29 @@ class MetalCodeGen:
             )
         return None
 
+    def metal_wave_mapped_type_is_matrix(self, mapped_type):
+        return self.is_matrix_value_type(mapped_type)
+
+    def metal_wave_validate_non_matrix_value_argument(
+        self, operation, argument, allowed_components, description
+    ):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if (
+            array_suffix
+            or self.metal_wave_mapped_type_is_matrix(mapped_type)
+            or component_type not in allowed_components
+        ):
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be {description}, got {mapped_type}",
+            )
+        return None
+
     def metal_wave_validate_multi_prefix_mask_argument(
         self, operation, argument, value_argument=None
     ):
@@ -5681,7 +5761,7 @@ class MetalCodeGen:
                 operation, arguments[1], arguments[0]
             )
         if operation in self.METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS:
-            diagnostic = self.metal_wave_validate_value_argument(
+            diagnostic = self.metal_wave_validate_non_matrix_value_argument(
                 operation,
                 arguments[0],
                 self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
@@ -5693,7 +5773,7 @@ class MetalCodeGen:
                 operation, arguments[1], arguments[0]
             )
         if operation in self.METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS:
-            diagnostic = self.metal_wave_validate_value_argument(
+            diagnostic = self.metal_wave_validate_non_matrix_value_argument(
                 operation,
                 arguments[0],
                 self.METAL_WAVE_INTEGER_COMPONENT_TYPES,

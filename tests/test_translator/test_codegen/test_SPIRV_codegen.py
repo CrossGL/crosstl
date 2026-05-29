@@ -4942,6 +4942,53 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_mesh_stage_set_mesh_output_counts_rejects_declared_limit_overflow(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MeshSPIRVCountLimitOverflow {
+            mesh {
+                layout(triangles, max_vertices = 1, max_primitives = 1) out;
+
+                void main() {
+                    SetMeshOutputCounts(3, 2);
+                    SetVertex(2, vec4(0.0, 0.0, 0.0, 1.0));
+                    SetPrimitive(1, uvec3(0u, 0u, 0u));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint MeshEXT %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        entry_id = entry_match.group(1)
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts vertex count exceeds "
+            "declared max_vertices"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetMeshOutputCounts primitive count exceeds "
+            "declared max_primitives"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetVertex literal index exceeds the declared "
+            "mesh vertex output limit"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V mesh SetPrimitive literal index exceeds the declared "
+            "mesh primitive output limit"
+        ) in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputVertices 1" in spv_code
+        assert f"OpExecutionMode %{entry_id} OutputPrimitivesEXT 1" in spv_code
+        assert "OpSetMeshOutputsEXT" not in spv_code
+        assert "BuiltIn Position" not in spv_code
+        assert "PrimitiveTriangleIndicesEXT" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mesh_stage_set_vertex_and_primitive_emit_output_stores(self, tmp_path):
         source_code = """
         shader MeshOutputSPIRV {

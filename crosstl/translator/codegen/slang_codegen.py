@@ -3889,7 +3889,7 @@ class SlangCodeGen:
     def slang_ray_tracing_calls(self, func):
         calls = []
         for node in self.walk_ast(getattr(func, "body", [])):
-            call = self.slang_ray_tracing_call_parts(node, include_user_functions=True)
+            call = self.slang_ray_tracing_call_parts(node)
             if call is not None:
                 calls.append(call)
         return calls
@@ -3905,7 +3905,10 @@ class SlangCodeGen:
 
     def slang_ray_tracing_call_parts(self, node, include_user_functions=False):
         if isinstance(node, RayTracingOpNode):
-            return getattr(node, "operation", None), getattr(node, "arguments", [])
+            operation = getattr(node, "operation", None)
+            if not include_user_functions and operation in self.user_function_names:
+                return None
+            return operation, getattr(node, "arguments", [])
 
         if not isinstance(node, FunctionCallNode):
             return None
@@ -5664,6 +5667,8 @@ class SlangCodeGen:
             image_type = self.resource_base_type(self.image_resource_type(expr.target))
             return self.image_atomic_return_type(image_type)
         if isinstance(expr, RayTracingOpNode):
+            if expr.operation in self.user_function_names:
+                return self.user_function_return_types.get(expr.operation)
             return self.slang_ray_tracing_result_type(expr.operation)
         if isinstance(expr, FunctionCallNode):
             ray_query_call = self.slang_ray_query_call_parts(expr)
@@ -6071,6 +6076,9 @@ class SlangCodeGen:
         }.get(callee)
 
     def generate_slang_ray_tracing_op_expression(self, node):
+        if node.operation in self.user_function_names:
+            args = self.generate_user_function_arguments(node.operation, node.arguments)
+            return f"{self.convert_type(node.operation)}({args})"
         return self.generate_slang_ray_tracing_call_expression(
             node.operation, node.arguments
         )

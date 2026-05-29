@@ -590,6 +590,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
                 uint value = 1u;
                 uvec2 lanes = uvec2(1u, 2u);
                 uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                mat2 matrixValue = mat2(1.0);
                 uint missing = WaveActiveSum();
                 bool badAnyValue = WaveActiveAnyTrue(value);
                 uvec4 badBallotVector =
@@ -597,6 +598,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
                 uvec4 badMatchBool = WaveMatch(badAnyValue);
                 uvec4 badMatchVector = WaveMatch(lanes);
                 uint badMultiBool = WaveMultiPrefixSum(badAnyValue, mask);
+                mat2 badMultiMatrix = WaveMultiPrefixSum(matrixValue, mask);
                 uint badMultiMask = WaveMultiPrefixSum(value, value);
                 uint badMultiCount = WaveMultiPrefixCountBits(value, mask);
                 uint badMultiBit = WaveMultiPrefixBitAnd(badAnyValue, mask);
@@ -639,6 +641,11 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
         "0u;" in generated_code
     )
     assert (
+        "float2x2 badMultiMatrix = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum value argument must be numeric scalar or vector, got float2x2 */ "
+        "float2x2(0);" in generated_code
+    )
+    assert (
         "uint badMultiMask = /* unsupported Metal wave intrinsic: "
         "WaveMultiPrefixSum mask argument must be uint4, got uint */ 0u;"
         in generated_code
@@ -665,6 +672,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     assert "WaveActiveAnyTrue(value)" not in generated_code
     assert "WaveMatch(badAnyValue)" not in generated_code
     assert "WaveMultiPrefixSum(badAnyValue, mask)" not in generated_code
+    assert "WaveMultiPrefixSum(matrixValue, mask)" not in generated_code
     assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
     assert "WaveOpNode" not in generated_code
 
@@ -10691,6 +10699,9 @@ def test_metal_vector_type_conversions():
         assert "float2x2 mat2Field" in generated_code
         assert "float3x3 mat3Field" in generated_code
         assert "float4x4 mat4Field" in generated_code
+        assert "output.mat2Field = float2x2(1.0, 0.0, 0.0, 1.0);" in generated_code
+        assert "output.mat3Field = float3x3(1.0);" in generated_code
+        assert "output.mat4Field = float4x4(1.0);" in generated_code
     except SyntaxError as e:
         pytest.fail(f"Metal vector type conversion failed: {e}")
 
