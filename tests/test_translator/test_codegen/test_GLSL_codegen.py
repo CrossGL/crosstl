@@ -1645,6 +1645,7 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
 
         RWStructuredBuffer<int> values @binding(3) @register(u3);
         StructuredBuffer<int> readValues @binding(5) @register(t5);
+        sampler linearSampler @sampler(6) @register(s6);
         sampler2D tex @binding(1) @texture(1) @register(t1);
         image2D img @binding(2) @register(u2);
 
@@ -1670,6 +1671,7 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
     )
     assert "layout(binding = 1) uniform sampler2D tex;" in generated_code
     assert "layout(rgba32f, binding = 2) uniform image2D img;" in generated_code
+    assert "sampler linearSampler" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -1772,6 +1774,38 @@ def test_glsl_resource_binding_aliases_accept_equivalent_metadata():
             "Incompatible OpenGL resource register metadata for 'data': "
             "register t2 uses t-register, expected u-register for buffer binding",
         ),
+        (
+            """
+            shader SamplerUsesTRegister {
+                sampler samp @register(t2);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'samp': "
+            "register t2 uses t-register, expected s-register for sampler binding",
+        ),
+        (
+            """
+            shader StageSamplerUsesURegister {
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(sampler samp @register(u2), vec2 uv @TEXCOORD0)
+                        @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Incompatible OpenGL resource register metadata for 'samp': "
+            "register u2 uses u-register, expected s-register for sampler binding",
+        ),
     ],
 )
 def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, message):
@@ -1795,6 +1829,22 @@ def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, mess
             }
             """,
             "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader SamplerUsesDescriptorSet {
+                sampler samp @set(1) @sampler(2);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'samp': "
             "set 1 is not supported by OpenGL GLSL",
         ),
         (
@@ -1823,6 +1873,22 @@ def test_glsl_resource_register_metadata_rejects_wrong_register_class(code, mess
             }
             """,
             "Unsupported OpenGL resource binding metadata for 'tex': "
+            "set 1 is not supported by OpenGL GLSL",
+        ),
+        (
+            """
+            shader StageSamplerUsesDescriptorSet {
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(sampler samp @set(1) @sampler(2), vec2 uv @TEXCOORD0)
+                        @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Unsupported OpenGL resource binding metadata for 'samp': "
             "set 1 is not supported by OpenGL GLSL",
         ),
     ],

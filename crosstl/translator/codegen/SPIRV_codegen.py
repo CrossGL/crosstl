@@ -8139,6 +8139,21 @@ class VulkanSPIRVCodeGen:
     def is_structured_buffer_type_name(self, type_str: str) -> bool:
         return self.structured_buffer_type_info(type_str) is not None
 
+    def structured_buffer_declared_type_info(self, type_str: str):
+        type_str = re.sub(r"\s+", "", str(type_str))
+        metadata = self.structured_buffer_type_info(type_str)
+        if metadata is not None:
+            return metadata
+
+        base_type = self.array_base_type_name(type_str)
+        if base_type == type_str:
+            return None
+
+        return self.structured_buffer_type_info(base_type)
+
+    def is_structured_buffer_declared_type_name(self, type_str: str) -> bool:
+        return self.structured_buffer_declared_type_info(type_str) is not None
+
     def spirv_image_format_map(self):
         return {
             "r8": "R8",
@@ -9126,7 +9141,7 @@ class VulkanSPIRVCodeGen:
         self, node: VariableNode, type_name: str
     ) -> SpirvId:
         """Emit a StructuredBuffer/RWStructuredBuffer as a Vulkan BufferBlock."""
-        metadata = self.structured_buffer_type_info(type_name)
+        metadata = self.structured_buffer_declared_type_info(type_name)
         if metadata is None:
             raise ValueError(f"Invalid SPIR-V structured buffer type {type_name}")
         memory_flags = self.storage_buffer_memory_flags(
@@ -9150,7 +9165,10 @@ class VulkanSPIRVCodeGen:
         self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
         self.decorate_storage_buffer_member_memory_qualifiers(block_type, memory_flags)
 
-        var_id = self.create_variable(block_type, "Uniform", node.name)
+        variable_type, is_descriptor_array = (
+            self.structured_buffer_descriptor_variable_type(type_name, block_type)
+        )
+        var_id = self.create_variable(variable_type, "Uniform", node.name)
         descriptor_set, binding = self.resource_descriptor_slot(node)
         self.decorations.append(
             f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
@@ -9165,10 +9183,29 @@ class VulkanSPIRVCodeGen:
             "block_type": block_type,
             "member_index": 0,
         }
+        if is_descriptor_array:
+            buffer_metadata["descriptor_array"] = True
+            buffer_metadata["descriptor_array_type"] = variable_type
         self.global_variables[node.name] = var_id
         self.structured_buffer_metadata[var_id.id] = buffer_metadata
         self.structured_buffer_metadata[block_type.id] = buffer_metadata
         return var_id
+
+    def structured_buffer_descriptor_variable_type(
+        self, type_name: str, block_type: SpirvId
+    ) -> Tuple[SpirvId, bool]:
+        array_info = self.split_outer_array_type(type_name)
+        if array_info is None:
+            return block_type, False
+
+        element_type_name, size = array_info
+        element_type, _ = self.structured_buffer_descriptor_variable_type(
+            element_type_name, block_type
+        )
+        if size is None:
+            self.require_capability("RuntimeDescriptorArray")
+            self.require_extension("SPV_EXT_descriptor_indexing")
+        return self.register_array_type(element_type, size), True
 
     def is_glsl_buffer_block_node(self, node: VariableNode) -> bool:
         qualifiers = {
@@ -10181,7 +10218,7 @@ class VulkanSPIRVCodeGen:
         if self.is_glsl_buffer_block_node(node):
             return self.process_glsl_buffer_block_declaration(node, var_type_name)
 
-        if self.is_structured_buffer_type_name(var_type_name):
+        if self.is_structured_buffer_declared_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
@@ -11871,8 +11908,7 @@ class VulkanSPIRVCodeGen:
         if (
             descriptor_array is not None
             and block_type is not None
-            and descriptor_array[0] is not None
-            and descriptor_array[0].id == block_type.id
+            and self.array_type_contains_element_type(pointee_type, block_type)
         ):
             return None
 
@@ -11887,6 +11923,19 @@ class VulkanSPIRVCodeGen:
         access_metadata = {**metadata, "_access_path": "element"}
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
+
+    def array_type_contains_element_type(
+        self, array_type: Optional[SpirvId], target_type: Optional[SpirvId]
+    ) -> bool:
+        if array_type is None or target_type is None:
+            return False
+
+        element_type = self.array_element_type_from_type(array_type)
+        while element_type is not None:
+            if element_type.id == target_type.id:
+                return True
+            element_type = self.array_element_type_from_type(element_type)
+        return False
 
     def byte_address_method_load_width(self, method_name: str) -> Optional[int]:
         return {"Load": 1, "Load2": 2, "Load3": 3, "Load4": 4}.get(method_name)

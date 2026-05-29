@@ -5096,6 +5096,101 @@ def test_generic_payload_enum_local_direct_resource_payload_access_diagnostics(
         generate_code(parse_code(tokenize_code(source)))
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2D inputs[2];
+            Result<image2D, int> wrapImage(image2D image) {
+                return Result::Ok(image);
+            }
+            void invalidHelperWrappedStore(ivec2 pixel, vec4 color) {
+                Result<image2D, int> value = wrapImage(inputs[0]);
+                match value {
+                    Result::Ok(image) => {
+                        imageStore(image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2D outputs[2];
+            Result<image2D, int> chooseImage(
+                bool choose,
+                image2D first,
+                image2D second
+            ) {
+                return choose ? Result::Ok(first) : Result::Ok(second);
+            }
+            vec4 invalidHelperTernaryWrappedRead(bool choose, ivec2 pixel) {
+                Result<image2D, int> value =
+                    chooseImage(choose, outputs[0], outputs[1]);
+                return match value {
+                    Result::Ok(image) => imageLoad(image, pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWStructuredBuffer<int> buffers[2];
+            Result<RWStructuredBuffer<int>, int> pickBuffer(
+                int mode,
+                RWStructuredBuffer<int> first,
+                RWStructuredBuffer<int> second
+            ) {
+                return match mode {
+                    0 => Result::Ok(first),
+                    _ => Result::Ok(second)
+                };
+            }
+            void invalidHelperMatchWrappedBufferStore(
+                int mode,
+                uint index,
+                int scalar
+            ) {
+                Result<RWStructuredBuffer<int>, int> value =
+                    pickBuffer(mode, buffers[0], buffers[1]);
+                match value {
+                    Result::Ok(values) => {
+                        values.Store(index, scalar);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*buffers.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_direct_resource_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def _generic_payload_enum_resource_query_source():
     return """
     generic<T, E> struct Result {

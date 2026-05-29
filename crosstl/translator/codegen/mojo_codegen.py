@@ -1145,7 +1145,6 @@ class MojoCodeGen:
         self.match_subject_counter = 0
         self.dimension_query_counter = 0
         self.expression_prelude_stack = []
-        self.collect_function_return_types(ast)
 
         header = "# Generated Mojo Shader Code\n"
         header += "from math import *\n"
@@ -1155,6 +1154,7 @@ class MojoCodeGen:
 
         structs = getattr(ast, "structs", [])
         self.prepare_generic_enum_metadata(ast, structs)
+        self.collect_function_return_types(ast)
         for node in structs:
             if isinstance(node, EnumNode):
                 code += self.generate_enum(node)
@@ -1408,7 +1408,7 @@ class MojoCodeGen:
             return False
 
         return_type = self.function_return_types.get(func.name)
-        if self.mojo_resource_kind(return_type) is None:
+        if not self.function_return_resource_aliasable_type(return_type):
             return False
 
         params = getattr(func, "parameters", getattr(func, "params", []))
@@ -1420,7 +1420,9 @@ class MojoCodeGen:
         aliases = []
         for return_node in self.return_nodes(getattr(func, "body", [])):
             value = getattr(return_node, "value", None)
-            for index in self.return_resource_alias_param_indices(value, param_indices):
+            for index in self.return_resource_alias_param_indices(
+                value, param_indices, target_type=return_type
+            ):
                 if index not in aliases:
                     aliases.append(index)
         if aliases == self.function_return_resource_aliases.get(func.name):
@@ -1446,7 +1448,24 @@ class MojoCodeGen:
         for child in self.node_children(node):
             self.collect_return_nodes(child, nodes)
 
-    def return_resource_alias_param_indices(self, expr, param_indices):
+    def function_return_resource_aliasable_type(self, return_type):
+        if self.mojo_resource_kind(return_type) is not None:
+            return True
+
+        specialization = self.generic_enum_specialization_for_type(return_type)
+        if specialization is None:
+            return False
+
+        return any(
+            self.resource_access_aliasable_type(field_type)
+            for _field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            )
+        )
+
+    def return_resource_alias_param_indices(
+        self, expr, param_indices, target_type=None
+    ):
         if isinstance(expr, list):
             return []
 
@@ -1458,7 +1477,7 @@ class MojoCodeGen:
             indices = []
             for branch in (expr.true_expr, expr.false_expr):
                 for index in self.return_resource_alias_param_indices(
-                    branch, param_indices
+                    branch, param_indices, target_type=target_type
                 ):
                     if index not in indices:
                         indices.append(index)
@@ -1472,7 +1491,7 @@ class MojoCodeGen:
                 except ValueError:
                     continue
                 for index in self.return_resource_alias_param_indices(
-                    arm_expr, param_indices
+                    arm_expr, param_indices, target_type=target_type
                 ):
                     if index not in indices:
                         indices.append(index)
@@ -1480,13 +1499,28 @@ class MojoCodeGen:
 
         if isinstance(expr, FunctionCallNode):
             return self.return_resource_alias_param_indices_from_call(
-                expr, param_indices
+                expr, param_indices, target_type=target_type
             )
 
         return []
 
-    def return_resource_alias_param_indices_from_call(self, expr, param_indices):
+    def return_resource_alias_param_indices_from_call(
+        self, expr, param_indices, target_type=None
+    ):
         func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            indices = []
+            for arg, (_field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arg, param_indices, target_type=field_type
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
         alias_indices = self.function_return_resource_aliases.get(func_name)
         if not alias_indices:
             return []

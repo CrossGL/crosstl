@@ -8958,6 +8958,102 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hiprtc_size_outputs_replace_stale_metadata(self):
+        """Test HIPRTC artifact size outputs replace prior scalar metadata."""
+        code = """
+        void queryRtcArtifactSizes(
+            hiprtcProgram program,
+            hipDeviceptr_t devicePtr,
+            const void* symbol,
+            size_t* sizes,
+            void** ptrs
+        ) {
+            char* rtcLog = 0;
+            char* rtcCode = 0;
+            char* rtcBitcode = 0;
+            void* rangeBase = 0;
+            size_t logSize = 0;
+            size_t codeSize = 0;
+            size_t bitcodeSize = 0;
+
+            hipGetSymbolSize(&logSize, symbol);
+            hiprtcGetProgramLogSize(program, &logSize);
+            sizes[0] = logSize;
+
+            hipMemGetAddressRange(&rangeBase, &codeSize, devicePtr);
+            hiprtcGetCodeSize(program, &codeSize);
+            sizes[1] = codeSize;
+
+            hipGetSymbolSize(&bitcodeSize, symbol);
+            hiprtcGetBitcodeSize(program, &bitcodeSize);
+            sizes[2] = bitcodeSize;
+
+            hipMemGetAddressRange((void**)&rtcLog, &logSize, devicePtr);
+            hiprtcGetProgramLog(program, rtcLog);
+            ptrs[0] = rtcLog;
+
+            hipMemGetAddressRange((void**)&rtcCode, &codeSize, devicePtr);
+            hiprtcGetCode(program, rtcCode);
+            ptrs[1] = rtcCode;
+
+            hipMemGetAddressRange((void**)&rtcBitcode, &bitcodeSize, devicePtr);
+            hiprtcGetBitcode(program, rtcBitcode);
+            ptrs[2] = rtcBitcode;
+
+            if (hiprtcGetProgramLogSize(program, &logSize) == HIPRTC_SUCCESS) {
+                sizes[3] = logSize;
+            }
+            if (hiprtcGetCodeSize(program, &codeSize) == HIPRTC_SUCCESS) {
+                sizes[4] = codeSize;
+            }
+            if (hiprtcGetBitcodeSize(program, &bitcodeSize) == HIPRTC_SUCCESS) {
+                sizes[5] = bitcodeSize;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIPRTC get program log size: program: program, output: logSize"
+            in result
+        )
+        assert "// HIPRTC get code size: program: program, output: codeSize" in result
+        assert (
+            "// HIPRTC get bitcode size: program: program, output: bitcodeSize"
+            in result
+        )
+        assert (
+            "sizes[0] = (/* HIP device query: " "rtc.program.log.size(program) */ 0);"
+        ) in result
+        assert (
+            "sizes[1] = (/* HIP device query: " "rtc.program.code.size(program) */ 0);"
+        ) in result
+        assert (
+            "sizes[2] = (/* HIP device query: "
+            "rtc.program.bitcode.size(program) */ 0);"
+        ) in result
+        assert (
+            "sizes[3] = (/* HIP device query: " "rtc.program.log.size(program) */ 0);"
+        ) in result
+        assert (
+            "sizes[4] = (/* HIP device query: " "rtc.program.code.size(program) */ 0);"
+        ) in result
+        assert (
+            "sizes[5] = (/* HIP device query: "
+            "rtc.program.bitcode.size(program) */ 0);"
+        ) in result
+        assert "ptrs[0] = rtcLog;" in result
+        assert "ptrs[1] = rtcCode;" in result
+        assert "ptrs[2] = rtcBitcode;" in result
+        assert "symbol.size(symbol)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """

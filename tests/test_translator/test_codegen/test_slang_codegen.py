@@ -5353,6 +5353,75 @@ def test_slang_ray_query_methods_validate_target_result_types():
     assert "RayQueryOpNode" not in generated_code
 
 
+def test_slang_ray_query_void_methods_validate_value_contexts():
+    code = """
+    shader InvalidSlangRayQueryVoidTargets {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void acceptBool(bool value) {
+            }
+
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                rq.CommitProceduralPrimitiveHit(1.0);
+                rq.CommitNonOpaqueTriangleHit();
+                rq.Abort();
+                float traceValue = rq.TraceRayInline(scene, 0, 0xFF, ray);
+                float commitProceduralValue = rq.CommitProceduralPrimitiveHit(1.0);
+                bool commitTriangleValue = rq.CommitNonOpaqueTriangleHit();
+                uint abortValue = rq.Abort();
+                acceptBool(rq.Abort());
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "rq.CommitProceduralPrimitiveHit(1.0);" in generated_code
+    assert "rq.CommitNonOpaqueTriangleHit();" in generated_code
+    assert "rq.Abort();" in generated_code
+    assert (
+        "float traceValue = /* unsupported Slang RayQuery: TraceRayInline returns "
+        "void but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float commitProceduralValue = /* unsupported Slang RayQuery: "
+        "CommitProceduralPrimitiveHit returns void but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "bool commitTriangleValue = /* unsupported Slang RayQuery: "
+        "CommitNonOpaqueTriangleHit returns void but target expects bool */ false;"
+        in generated_code
+    )
+    assert (
+        "uint abortValue = /* unsupported Slang RayQuery: Abort returns void "
+        "but target expects uint */ 0u;" in generated_code
+    )
+    assert (
+        "acceptBool(/* unsupported Slang RayQuery: Abort returns void but target "
+        "expects bool */ false);" in generated_code
+    )
+    assert (
+        "float traceValue = rq.TraceRayInline(scene, 0, 255, ray);"
+        not in generated_code
+    )
+    assert (
+        "float commitProceduralValue = rq.CommitProceduralPrimitiveHit(1.0);"
+        not in generated_code
+    )
+    assert "bool commitTriangleValue = rq.CommitNonOpaqueTriangleHit();" not in (
+        generated_code
+    )
+    assert "uint abortValue = rq.Abort();" not in generated_code
+    assert "acceptBool(rq.Abort());" not in generated_code
+
+
 def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
     code = """
     shader SlangRayQueryAliases {

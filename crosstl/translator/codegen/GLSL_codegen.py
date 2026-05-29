@@ -1901,6 +1901,7 @@ class GLSLCodeGen:
 
             mapped_type = self.map_resource_type_with_format(vtype, node)
             if mapped_type == "sampler":
+                self.explicit_resource_binding_index(node)
                 self.sampler_variables.add(var_name)
                 continue
             if self.is_structured_buffer_type(vtype):
@@ -4007,6 +4008,7 @@ class GLSLCodeGen:
                 continue
 
             if self.is_sampler_type(raw_param_type):
+                self.explicit_resource_binding_index(p)
                 sampler_parameters.add(p.name)
                 continue
 

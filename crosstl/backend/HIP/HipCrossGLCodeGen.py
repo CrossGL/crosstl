@@ -3050,16 +3050,29 @@ class HipToCrossGLConverter:
         }:
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(raw_args[1])
+                output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 artifact = {
                     "hiprtcGetCodeSize": "code size",
                     "hiprtcGetBitcodeSize": "bitcode size",
                     "hiprtcGetProgramLogSize": "program log size",
                 }[name]
+                query = {
+                    "hiprtcGetCodeSize": "rtc.program.code.size",
+                    "hiprtcGetBitcodeSize": "rtc.program.bitcode.size",
+                    "hiprtcGetProgramLogSize": "rtc.program.log.size",
+                }[name]
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"{query}({args[0]})"
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC get {artifact}: program: {args[0]}, output: {output}"
                 ]
         if name in {"hiprtcGetCode", "hiprtcGetBitcode", "hiprtcGetProgramLog"}:
             if len(args) >= 2:
+                self.clear_lvalue_metadata_source(raw_args[1])
                 artifact = {
                     "hiprtcGetCode": "code",
                     "hiprtcGetBitcode": "bitcode",

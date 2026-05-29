@@ -8728,6 +8728,134 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_byte_address_buffer_resource_arrays_emit_element_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressResourceArrays {
+            ByteAddressBuffer rawInputs[2] @set(4) @binding(0);
+            RWByteAddressBuffer rawOutputs[2] @set(4) @binding(2);
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    uint scalar = rawInputs[1].Load(0u);
+                    uvec2 pair = rawInputs[0].Load2(4u);
+                    rawOutputs[0].Store(12u, scalar);
+                    rawOutputs[1].Store2(16u, pair);
+                    rawOutputs[1].InterlockedAdd(24u, scalar, oldValue);
+                    rawOutputs[0].InterlockedCompareStore(28u, oldValue, 7u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        raw_block = spirv_named_id(spv_code, "rawInputsBuffer")
+        out_block = spirv_named_id(spv_code, "rawOutputsBuffer")
+        raw_var = spirv_named_variable(spv_code, "rawInputs", storage_class="Uniform")
+        out_var = spirv_named_variable(spv_code, "rawOutputs", storage_class="Uniform")
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        assert uvec2_type is not None
+
+        raw_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(raw_block)} %\d+",
+            spv_code,
+        )
+        out_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(out_block)} %\d+",
+            spv_code,
+        )
+        assert raw_array is not None
+        assert out_array is not None
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(raw_array.group(1))}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(out_array.group(1))}\b",
+            spv_code,
+        )
+        assert f"OpDecorate {raw_block} BufferBlock" in spv_code
+        assert f"OpDecorate {out_block} BufferBlock" in spv_code
+        assert f"OpDecorate {raw_var} DescriptorSet 4" in spv_code
+        assert f"OpDecorate {raw_var} Binding 0" in spv_code
+        assert f"OpDecorate {out_var} DescriptorSet 4" in spv_code
+        assert f"OpDecorate {out_var} Binding 2" in spv_code
+
+        raw_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(raw_var)} ([^\n]+)",
+            spv_code,
+        )
+        out_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(out_var)} ([^\n]+)",
+            spv_code,
+        )
+        assert any(len(access.split()) == 1 for access in raw_descriptor_accesses)
+        assert any(len(access.split()) == 1 for access in out_descriptor_accesses)
+
+        assert "OpUDiv" in spv_code
+        assert "OpIAdd" in spv_code
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec2_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeExtract {re.escape(uint_type.group(1))} %\d+ 1",
+            spv_code,
+        )
+        assert "OpAtomicIAdd" in spv_code
+        assert "OpAtomicCompareExchange" in spv_code
+        assert "ByteAddressBuffer" not in spv_code
+        assert "RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_resource_array_methods_emit_invalid_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressResourceArrayDiagnostics {
+            ByteAddressBuffer rawInputs[2];
+            RWByteAddressBuffer rawOutputs[2];
+
+            compute {
+                void main() {
+                    uint oldValue = 0u;
+                    rawInputs[0].Store(0u, oldValue);
+                    rawInputs[1].InterlockedAdd(4u, 1u, oldValue);
+                    rawOutputs[0].Store3(8u, uvec2(1u, 2u));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.InterlockedAdd requires a read-write buffer"
+            in spv_code
+        )
+        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomic" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
     ):
