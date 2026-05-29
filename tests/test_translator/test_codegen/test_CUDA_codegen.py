@@ -6443,6 +6443,139 @@ class TestCudaCodeGen:
         assert "imageAtomicAdd(" not in cuda_code
         assert "imageAtomicCompSwap(" not in cuda_code
 
+    def test_image_access_returned_struct_objects_emit_cuda_diagnostics(self):
+        """Test CUDA access checks follow image members on returned structs."""
+        source_code = """
+        struct CounterBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+            writeonly uimage2D writeCounters[4] @r32ui;
+            uimage2D rwCounters[4] @access(read_write) @r32ui;
+        };
+
+        shader ImageAccessReturnedStructObjects {
+            CounterBundle globalBundle;
+
+            CounterBundle chooseParamBundle(CounterBundle bundle) {
+                return bundle;
+            }
+
+            CounterBundle chooseGlobalBundle() {
+                return globalBundle;
+            }
+
+            uimage2D chooseMixedMember(
+                CounterBundle bundle,
+                bool useRead,
+                int slot
+            ) {
+                return useRead
+                    ? bundle.readCounters[slot]
+                    : bundle.rwCounters[slot];
+            }
+
+            uimage2D chooseSameReadMember(
+                CounterBundle left,
+                CounterBundle right,
+                bool useLeft,
+                int slot
+            ) {
+                return useLeft
+                    ? left.readCounters[slot]
+                    : right.readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    CounterBundle bundle,
+                    ivec2 pixel,
+                    int slot,
+                    bool useRead,
+                    uint expected,
+                    uint replacement
+                ) {
+                    uint returnedParamAdd =
+                        imageAtomicAdd(
+                            chooseParamBundle(bundle).readCounters[slot],
+                            pixel,
+                            1
+                        );
+                    uint returnedGlobalCas =
+                        imageAtomicCompSwap(
+                            chooseGlobalBundle().readCounters[slot],
+                            pixel,
+                            expected,
+                            replacement
+                        );
+                    uint mixedAtomic =
+                        imageAtomicAdd(
+                            chooseMixedMember(bundle, useRead, slot),
+                            pixel,
+                            1
+                        );
+                    uint sameReadAtomic =
+                        imageAtomicAdd(
+                            chooseSameReadMember(
+                                bundle,
+                                globalBundle,
+                                useRead,
+                                slot
+                            ),
+                            pixel,
+                            1
+                        );
+                    vec4 blockedLoad =
+                        imageLoad(chooseParamBundle(bundle).writeImage, pixel);
+                    imageStore(
+                        chooseGlobalBundle().readImage,
+                        pixel,
+                        blockedLoad
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "uint returnedParamAdd = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicAdd requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "uint returnedGlobalCas = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicCompSwap requires readwrite image resource on "
+            "uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint mixedAtomic = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAdd on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint sameReadAtomic = /* unsupported CUDA image atomic resource "
+            "call: imageAtomicAdd requires readwrite image resource on uimage2D */ "
+            "0u;" in cuda_code
+        )
+        assert (
+            "float4 blockedLoad = /* unsupported CUDA image access: imageLoad "
+            "requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA image access: imageStore requires writable "
+            "image resource on image2D */ ((void)0);" in cuda_code
+        )
+        assert "imageAtomicAdd(" not in cuda_code
+        assert "imageAtomicCompSwap(" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
     def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
         self,
     ):
