@@ -14,6 +14,7 @@ from crosstl.translator.ast import (
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
+    BreakNode,
     ConstructorNode,
     ConstructorPatternNode,
     ExecutionModel,
@@ -29,6 +30,7 @@ from crosstl.translator.ast import (
     LambdaNode,
     LiteralPatternNode,
     LiteralNode,
+    LoopNode,
     MatchArmNode,
     MatchNode,
     MemberAccessNode,
@@ -4200,6 +4202,359 @@ def test_reference_match_and_block_tails_borrow_without_clones_compile(tmp_path)
     assert "&match flag" not in generated_code
     assert "&mut match flag" not in generated_code
     assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_reference_match_pattern_bindings_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type, payload_type]),
+            EnumVariantNode(
+                "Named",
+                fields=[
+                    ("primary", payload_type),
+                    ("backup", payload_type),
+                ],
+            ),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def selected_decl(name, declared_type, initial_value):
+        return VariableNode(name, declared_type, initial_value)
+
+    def increment_selected(name, value):
+        return AssignmentNode(
+            count_of(IdentifierNode(name)),
+            BinaryOpNode(
+                count_of(IdentifierNode(name)),
+                "+",
+                LiteralNode(value, int_type),
+            ),
+        )
+
+    def immutable_pair_choice():
+        return TernaryOpNode(
+            IdentifierNode("take_first"),
+            IdentifierNode("first"),
+            IdentifierNode("second"),
+        )
+
+    def mutable_pair_choice():
+        return TernaryOpNode(
+            IdentifierNode("take_first"),
+            IdentifierNode("first"),
+            IdentifierNode("second"),
+        )
+
+    immutable_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One", [IdentifierPatternNode("payload")]
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        IdentifierNode("payload"),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [
+                        IdentifierPatternNode("first"),
+                        IdentifierPatternNode("second"),
+                    ],
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        immutable_pair_choice(),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                StructPatternNode(
+                    "Choice::Named",
+                    {
+                        "primary": IdentifierPatternNode("primary"),
+                        "backup": IdentifierPatternNode("backup"),
+                    },
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type),
+                        TernaryOpNode(
+                            IdentifierNode("take_first"),
+                            IdentifierNode("primary"),
+                            IdentifierNode("backup"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    mutable_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One", [IdentifierPatternNode("payload")]
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        IdentifierNode("payload"),
+                    ),
+                    increment_selected("selected", 3),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [
+                        IdentifierPatternNode("first"),
+                        IdentifierPatternNode("second"),
+                    ],
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        mutable_pair_choice(),
+                    ),
+                    increment_selected("selected", 5),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            MatchArmNode(
+                StructPatternNode(
+                    "Choice::Named",
+                    {
+                        "primary": IdentifierPatternNode("primary"),
+                        "backup": IdentifierPatternNode("backup"),
+                    },
+                ),
+                None,
+                [
+                    selected_decl(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        TernaryOpNode(
+                            IdentifierNode("take_first"),
+                            IdentifierNode("primary"),
+                            IdentifierNode("backup"),
+                        ),
+                    ),
+                    increment_selected("selected", 7),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustReferencePatternBindingSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "borrow_pattern_bindings",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("take_first", bool_type),
+                ],
+                [immutable_match],
+            ),
+            FunctionNode(
+                "borrow_mut_pattern_bindings",
+                int_type,
+                [
+                    ParameterNode("choice", choice_type),
+                    ParameterNode("take_first", bool_type),
+                ],
+                [mutable_match],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "Choice::One(payload) =>" in generated_code
+    assert "Choice::Pair(first, second) =>" in generated_code
+    assert "Choice::Named { primary, backup } =>" in generated_code
+    assert "let selected: &Payload = &payload;" in generated_code
+    assert "let selected: &Payload = (if take_first { &first } else { &second });" in (
+        generated_code
+    )
+    assert (
+        "let selected: &Payload = (if take_first { &primary } else { &backup });"
+        in generated_code
+    )
+    assert "Choice::One(mut payload) =>" in generated_code
+    assert "Choice::Pair(mut first, mut second) =>" in generated_code
+    assert "primary: mut primary" in generated_code
+    assert "backup: mut backup" in generated_code
+    assert "let mut selected: &mut Payload = &mut payload;" in generated_code
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if take_first { &mut first } else { &mut second });"
+    ) in generated_code
+    assert (
+        "let mut selected: &mut Payload = "
+        "(if take_first { &mut primary } else { &mut backup });"
+    ) in generated_code
+    assert "&mut (if" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_non_copy_loop_break_match_preserves_scrutinee_for_later_use_compile(
+    tmp_path,
+):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    loop_break_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [BreakNode()],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [BreakNode()],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustLoopBreakMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "break_then_read_choice",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [
+                    LoopNode([loop_break_match]),
+                    ReturnNode(return_match),
+                ],
+            )
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert "loop {" in generated_code
+    assert "match choice.clone() {" in generated_code
+    assert generated_code.count("choice.clone()") == 1
+    assert "return match choice {" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 

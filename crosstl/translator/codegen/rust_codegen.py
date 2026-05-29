@@ -3042,7 +3042,7 @@ class RustCodeGen:
         subject_expr = getattr(node, "expression", "")
         subject_type = self.expression_result_type(subject_expr)
         expression = None
-        if return_context:
+        if return_context or self.match_statement_terminates_all_arms(node):
             expression = self.generate_direct_return_move_expression(subject_expr)
         if expression is None:
             expression = self.generate_expression(subject_expr)
@@ -3099,6 +3099,24 @@ class RustCodeGen:
 
         code += f"{indent_str}}}\n"
         return code
+
+    def match_statement_terminates_all_arms(self, node):
+        arms = getattr(node, "arms", []) or []
+        return bool(arms) and all(
+            self.match_arm_body_terminates(getattr(arm, "body", None)) for arm in arms
+        )
+
+    def match_arm_body_terminates(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return False
+
+        tail = statements[-1]
+        if isinstance(tail, ReturnNode):
+            return True
+        if isinstance(tail, MatchNode):
+            return self.match_statement_terminates_all_arms(tail)
+        return False
 
     def generate_match_expression(
         self,
