@@ -2421,11 +2421,16 @@ class GLSLCodeGen:
         if expression is None:
             return None
 
+        specializable = self.glsl_resource_argument_is_specializable(arg)
+        if alias_binding is not None:
+            specializable = specializable and alias_binding.get("specializable", True)
+
         if alias_binding is not None:
             return {
                 **alias_binding,
                 "expression": expression,
                 "type": resource_type,
+                "specializable": specializable,
             }
 
         return {
@@ -2433,6 +2438,7 @@ class GLSLCodeGen:
             "type": resource_type,
             "format": self.image_resource_format(arg),
             "access": self.image_resource_access(arg),
+            "specializable": specializable,
         }
 
     def glsl_resource_argument_expression(self, arg, aliases):
@@ -2453,6 +2459,19 @@ class GLSLCodeGen:
         if hasattr(arg, "name") and isinstance(arg.name, str):
             return arg.name
         return None
+
+    def glsl_resource_argument_is_specializable(self, arg):
+        if isinstance(arg, ArrayAccessNode) or (
+            hasattr(arg, "__class__") and "ArrayAccess" in str(arg.__class__)
+        ):
+            index_expr = getattr(arg, "index", getattr(arg, "index_expr", None))
+            literal_index = self.literal_int_value(
+                index_expr, self.literal_int_constants
+            )
+            return isinstance(literal_index, int) and not isinstance(
+                literal_index, bool
+            )
+        return True
 
     def glsl_resource_function_specialization_key(self, func_name, args, aliases):
         callee = self.function_definitions.get(func_name)
@@ -2488,6 +2507,8 @@ class GLSLCodeGen:
                 binding.get("access"),
             ):
                 return None, None
+            if not binding.get("specializable", True):
+                continue
             bindings[index] = (param_name, binding)
             key_parts.append((index, binding["expression"]))
 

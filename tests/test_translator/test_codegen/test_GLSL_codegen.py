@@ -24145,6 +24145,43 @@ def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitiv
     assert "int nestedCount = queryViaArray__glsl_images_counters();" in generated_code
 
 
+def test_glsl_storage_image_helper_dynamic_array_elements_keep_index_parameters():
+    shader = """
+    shader StorageImageHelperDynamicArrayElementValid {
+        image2D counters @r32ui[2];
+
+        int queryElement(image2D image @r32ui) {
+            return imageSize(image).x;
+        }
+
+        int queryViaDynamic(image2D images[] @r32ui, int layer) {
+            return queryElement(images[layer]);
+        }
+
+        compute {
+            void main() {
+                int directCount = queryElement(counters[0]);
+                int nestedCount = queryViaDynamic(counters, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in generated_code
+    assert "int queryElement__glsl_image_counters_0()" in generated_code
+    assert "return imageSize(counters[0]).x;" in generated_code
+    assert "int queryViaDynamic__glsl_images_counters(int layer)" in generated_code
+    assert "return queryElement(counters[layer]);" in generated_code
+    assert "queryElement__glsl_image_counters_layer" not in generated_code
+    assert "return imageSize(counters[layer]).x;" not in generated_code
+    assert "int directCount = queryElement__glsl_image_counters_0();" in generated_code
+    assert (
+        "int nestedCount = queryViaDynamic__glsl_images_counters(1);" in generated_code
+    )
+
+
 def test_glsl_multisample_storage_image_helper_array_elements_specialize_operations():
     shader = """
     shader GLSLMultisampleImageArrayElementSpecializationValid {
@@ -24373,6 +24410,29 @@ def test_glsl_cube_storage_image_helper_array_elements_specialize_load_store():
             """,
             "function call 'leaf' requires r32ui storage image format "
             "for argument images\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperDynamicElementFormatContractInvalid {
+                image2D rgImages @rg32f[2];
+
+                int leaf(image2D image @r32ui) {
+                    return imageSize(image).x;
+                }
+
+                int mid(image2D images[], int layer) {
+                    return leaf(images[layer]);
+                }
+
+                compute {
+                    void main() {
+                        int count = mid(rgImages, 1);
+                    }
+                }
+            }
+            """,
+            "function call 'leaf' requires r32ui storage image format "
+            "for argument images\\[layer\\] passed to parameter image: got rg32f",
         ),
         (
             """

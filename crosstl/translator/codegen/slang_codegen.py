@@ -9063,12 +9063,26 @@ class SlangCodeGen:
 
         if func_name == "textureProj":
             if not extra_args:
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, expected_reason
+                    )
                 return f"{texture_name}.Sample({projected_coord})"
             if len(extra_args) == 1:
                 bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[0])
                 if bias_reason:
                     return self.unsupported_texture_projected_call(
                         func_name, bias_reason
+                    )
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, expected_reason
                     )
                 bias = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleBias({projected_coord}, {bias})"
@@ -9085,6 +9099,13 @@ class SlangCodeGen:
                     return self.unsupported_texture_projected_call(
                         func_name, offset_reason
                     )
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, expected_reason
+                    )
                 offset = self.generate_expression(extra_args[0])
                 return f"{texture_name}.Sample({projected_coord}, {offset})"
             if len(extra_args) == 2:
@@ -9099,6 +9120,13 @@ class SlangCodeGen:
                 if bias_reason:
                     return self.unsupported_texture_projected_call(
                         func_name, bias_reason
+                    )
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_texture_projected_call(
+                        func_name, expected_reason
                     )
                 offset = self.generate_expression(extra_args[0])
                 bias = self.generate_expression(extra_args[1])
@@ -9115,6 +9143,13 @@ class SlangCodeGen:
             lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
             if lod_reason:
                 return self.unsupported_texture_projected_call(func_name, lod_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_projected_call(
+                    func_name, expected_reason
+                )
             lod = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleLevel({projected_coord}, {lod})"
 
@@ -9131,6 +9166,13 @@ class SlangCodeGen:
             )
             if offset_reason:
                 return self.unsupported_texture_projected_call(func_name, offset_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_projected_call(
+                    func_name, expected_reason
+                )
             lod = self.generate_expression(extra_args[0])
             offset = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleLevel({projected_coord}, {lod}, {offset})"
@@ -9145,6 +9187,13 @@ class SlangCodeGen:
             ) or self.texture_gradient_rank_unsupported_reason(args[0], extra_args[1])
             if grad_reason:
                 return self.unsupported_texture_projected_call(func_name, grad_reason)
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_texture_projected_call(
+                    func_name, expected_reason
+                )
             ddx = self.generate_expression(extra_args[0])
             ddy = self.generate_expression(extra_args[1])
             return f"{texture_name}.SampleGrad({projected_coord}, {ddx}, {ddy})"
@@ -9163,6 +9212,11 @@ class SlangCodeGen:
         )
         if offset_reason:
             return self.unsupported_texture_projected_call(func_name, offset_reason)
+        expected_reason = self.texture_result_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_projected_call(func_name, expected_reason)
         ddx = self.generate_expression(extra_args[0])
         ddy = self.generate_expression(extra_args[1])
         offset = self.generate_expression(extra_args[2])
@@ -9205,9 +9259,10 @@ class SlangCodeGen:
         return f"{coord}.{numerator} / {coord}.{divisor}"
 
     def unsupported_texture_projected_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
             f"/* unsupported Slang projected texture: "
-            f"{func_name} {reason} */ float4(0.0)"
+            f"{func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_gather(self, func_name, args):

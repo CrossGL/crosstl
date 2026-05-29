@@ -2403,6 +2403,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if crossgl_type is None:
             return "void"
 
+        indirect_info = self.cuda_pointer_or_reference_type_info(crossgl_type)
+        if indirect_info is not None:
+            pointee_type = self.convert_crossgl_type_to_cuda(
+                indirect_info["pointee_type"]
+            )
+            if indirect_info["kind"] == "pointer":
+                prefix = "const " if indirect_info["readonly"] else ""
+                return f"{prefix}{pointee_type}*"
+            if indirect_info["readonly"]:
+                if pointee_type.endswith("*"):
+                    return f"{pointee_type} const&"
+                return f"const {pointee_type}&"
+            return f"{pointee_type}&"
+
         structured_buffer_type = self.cuda_structured_buffer_type(crossgl_type)
         if structured_buffer_type is not None:
             return structured_buffer_type
@@ -2576,6 +2590,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
 
+    def strip_cuda_indirect_type_qualifiers(self, type_name):
+        """Return the underlying type after CUDA pointer/reference wrappers."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name
+
+        stripped = type_name.strip()
+        changed = True
+        while changed and stripped:
+            changed = False
+            if stripped.endswith("&") or stripped.endswith("*"):
+                stripped = stripped[:-1].strip()
+                changed = True
+            if stripped.startswith("const "):
+                stripped = stripped[len("const ") :].strip()
+                changed = True
+            if stripped.endswith(" const"):
+                stripped = stripped[: -len(" const")].strip()
+                changed = True
+        return stripped
+
     def collect_structured_buffer_length_requirements(self, root):
         """Collect buffers that need explicit length sidecar parameters."""
         functions = self.query_collect_functions(root)
@@ -2695,7 +2730,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def generic_type_parts(self, type_name):
         """Split a generic type name into base name and top-level arguments."""
-        type_name = self.type_name_string(type_name)
+        type_name = self.strip_cuda_indirect_type_qualifiers(type_name)
         if not type_name:
             return None
 
@@ -3001,7 +3036,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def byte_address_buffer_base_type(self, type_name):
         """Return the byte-address buffer base type, if applicable."""
-        type_name = self.type_name_string(type_name)
+        type_name = self.strip_cuda_indirect_type_qualifiers(type_name)
         if not type_name:
             return None
         base_type = type_name.split("[", 1)[0].strip()
@@ -3225,12 +3260,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def resource_base_type(self, type_name):
         """Normalize resource aliases before resource dispatch decisions."""
+        type_name = self.strip_cuda_indirect_type_qualifiers(type_name)
         base_type = ResourceDiagnosticMixin.resource_base_type(self, type_name)
         return (
             self.canonical_sampled_resource_type(base_type)
             or self.canonical_storage_resource_type(base_type)
             or base_type
         )
+
+    def query_type_name(self, type_name):
+        """Return a CUDA-aware type string for resource query decisions."""
+        return self.type_name_string(type_name)
 
     def dimension_query_spec(self, type_name):
         """Return CUDA resource query metadata for supported image shapes."""
