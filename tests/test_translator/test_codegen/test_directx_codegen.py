@@ -10561,6 +10561,127 @@ def test_directx_wave_lane_reads_reject_non_numeric_values(body, match):
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_directx_wave_multi_prefix_accepts_vector_values_and_masks():
+    code = """
+    shader WaveMultiPrefixVectorValues {
+        compute {
+            uint main(uvec2 pair, ivec3 lanes, bool predicate, uvec4 mask) {
+                let sumPair = WaveMultiPrefixSum(pair, mask);
+                let productPair = WaveMultiPrefixProduct(pair, mask);
+                let andLanes = WaveMultiPrefixBitAnd(lanes, mask);
+                let xorLanes = WaveMultiPrefixBitXor(lanes, mask);
+                let count = WaveMultiPrefixCountBits(predicate, mask);
+                return sumPair.x + productPair.y + uint(andLanes.x)
+                    + uint(xorLanes.y) + count;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint2 sumPair = WaveMultiPrefixSum(pair, mask);",
+        "uint2 productPair = WaveMultiPrefixProduct(pair, mask);",
+        "int3 andLanes = WaveMultiPrefixBitAnd(lanes, mask);",
+        "int3 xorLanes = WaveMultiPrefixBitXor(lanes, mask);",
+        "uint count = WaveMultiPrefixCountBits(predicate, mask);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "let wrong = WaveMultiPrefixSum(flags, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' value argument must be "
+            "numeric scalar or vector, got bool2",
+        ),
+        (
+            "let wrong = WaveMultiPrefixProduct(matrix, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixProduct' value argument must be "
+            "numeric scalar or vector, got float2x2",
+        ),
+        (
+            "let wrong = WaveMultiPrefixBitAnd(bits, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixBitAnd' value argument must be "
+            "integer scalar or vector, got float",
+        ),
+        (
+            "let wrong = WaveMultiPrefixBitOr(values, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixBitOr' value argument must be "
+            "integer scalar or vector, got uint[2]",
+        ),
+        (
+            "let wrong = WaveMultiPrefixCountBits(value, mask);",
+            "DirectX wave intrinsic 'WaveMultiPrefixCountBits' predicate argument "
+            "must be scalar bool, got uint",
+        ),
+        (
+            "let wrong = WaveMultiPrefixSum(value, raw);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' partition mask argument "
+            "must be uint4, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = WaveMultiPrefixSum(value, masks);",
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' partition mask argument "
+            "must be uint4, got uint4[2]",
+        ),
+    ],
+)
+def test_directx_wave_multi_prefix_rejects_invalid_values_and_masks(body, match):
+    code = f"""
+    shader BadWaveMultiPrefixArguments {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(uint value, float bits, bvec2 flags, mat2 matrix, uvec4 mask) {{
+                uint values[2];
+                uvec4 masks[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            """
+                uint wrong = WaveMultiPrefixSum(pair, mask);
+                return wrong;
+            """,
+            "DirectX wave intrinsic 'WaveMultiPrefixSum' requires "
+            "uint2 result context, got uint",
+        ),
+        (
+            """
+                bool wrong = WaveMultiPrefixCountBits(predicate, mask);
+                return wrong ? 1u : 0u;
+            """,
+            "DirectX wave intrinsic 'WaveMultiPrefixCountBits' requires "
+            "uint result context, got bool",
+        ),
+    ],
+)
+def test_directx_wave_multi_prefix_validates_result_contexts(body, match):
+    code = f"""
+    shader BadWaveMultiPrefixResultContext {{
+        compute {{
+            uint main(uvec2 pair, bool predicate, uvec4 mask) {{
+                {body}
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("body", "match"),
     [
