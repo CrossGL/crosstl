@@ -312,6 +312,37 @@ class HLSLCodeGen:
         "write_sampler_feedback": "WriteSamplerFeedback",
         "write_sampler_feedback_bias": "WriteSamplerFeedbackBias",
     }
+    HLSL_RAY_FLAG_VALUES = {
+        "RAY_FLAG_NONE": 0x00,
+        "RAY_FLAG_FORCE_OPAQUE": 0x01,
+        "RAY_FLAG_FORCE_NON_OPAQUE": 0x02,
+        "RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH": 0x04,
+        "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER": 0x08,
+        "RAY_FLAG_CULL_BACK_FACING_TRIANGLES": 0x10,
+        "RAY_FLAG_CULL_FRONT_FACING_TRIANGLES": 0x20,
+        "RAY_FLAG_CULL_OPAQUE": 0x40,
+        "RAY_FLAG_CULL_NON_OPAQUE": 0x80,
+        "RAY_FLAG_SKIP_TRIANGLES": 0x100,
+        "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES": 0x200,
+    }
+    HLSL_RAY_FLAG_KNOWN_MASK = 0x3FF
+    HLSL_RAY_FLAG_MUTUALLY_EXCLUSIVE_GROUPS = (
+        (
+            "RAY_FLAG_FORCE_OPAQUE",
+            "RAY_FLAG_FORCE_NON_OPAQUE",
+            "RAY_FLAG_CULL_OPAQUE",
+            "RAY_FLAG_CULL_NON_OPAQUE",
+        ),
+        (
+            "RAY_FLAG_CULL_BACK_FACING_TRIANGLES",
+            "RAY_FLAG_CULL_FRONT_FACING_TRIANGLES",
+            "RAY_FLAG_SKIP_TRIANGLES",
+        ),
+        (
+            "RAY_FLAG_SKIP_TRIANGLES",
+            "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES",
+        ),
+    )
     HLSL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -6730,6 +6761,71 @@ class HLSLCodeGen:
             f"must be in the range 0 to 255, got {mask_value}"
         )
 
+    def hlsl_ray_flag_literal_constants(self):
+        constants = dict(self.HLSL_RAY_FLAG_VALUES)
+        constants.update(self.literal_int_constants)
+        return constants
+
+    def hlsl_ray_flag_literal_int_value(self, expr):
+        constants = self.hlsl_ray_flag_literal_constants()
+        value = self.literal_int_value(expr, constants)
+        if value is not None:
+            return value
+
+        class_name = expr.__class__.__name__
+        if "UnaryOp" in class_name:
+            operand = self.hlsl_ray_flag_literal_int_value(
+                getattr(expr, "operand", None)
+            )
+            if operand is None:
+                return None
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator == "~":
+                return ~operand
+            return None
+
+        if "BinaryOp" not in class_name:
+            return None
+
+        left = self.hlsl_ray_flag_literal_int_value(getattr(expr, "left", None))
+        right = self.hlsl_ray_flag_literal_int_value(getattr(expr, "right", None))
+        if left is None or right is None:
+            return None
+
+        operator = getattr(expr, "operator", getattr(expr, "op", None))
+        if operator == "|":
+            return left | right
+        if operator == "&":
+            return left & right
+        if operator == "^":
+            return left ^ right
+        if operator == "<<":
+            return left << right
+        if operator == ">>":
+            return left >> right
+        return None
+
+    def validate_hlsl_ray_flags_argument(self, argument, shader_type, operation):
+        diagnostic = f"DirectX {shader_type} {operation} ray flags argument"
+        self.validate_hlsl_scalar_int_uint_expression(argument, diagnostic)
+
+        flags = self.hlsl_ray_flag_literal_int_value(argument)
+        if flags is None:
+            return
+        if flags < 0 or flags & ~self.HLSL_RAY_FLAG_KNOWN_MASK:
+            raise ValueError(
+                f"{diagnostic} may only use known RAY_FLAG bits "
+                f"0x0 to 0x{self.HLSL_RAY_FLAG_KNOWN_MASK:X}, got {flags}"
+            )
+
+        for group in self.HLSL_RAY_FLAG_MUTUALLY_EXCLUSIVE_GROUPS:
+            active = [name for name in group if flags & self.HLSL_RAY_FLAG_VALUES[name]]
+            if len(active) > 1:
+                raise ValueError(
+                    f"{diagnostic} combines mutually exclusive ray flags: "
+                    f"{', '.join(active)}"
+                )
+
     def validate_hlsl_trace_ray_arguments(self, args, shader_type):
         self.validate_hlsl_trace_ray_exact_type_argument(
             args[0],
@@ -6737,8 +6833,8 @@ class HLSLCodeGen:
             "acceleration structure",
             "RaytracingAccelerationStructure",
         )
+        self.validate_hlsl_ray_flags_argument(args[1], shader_type, "TraceRay")
         for index, role in (
-            (1, "ray flags"),
             (3, "ray contribution to hit group index"),
             (4, "geometry contribution multiplier"),
             (5, "miss shader index"),
@@ -6816,9 +6912,10 @@ class HLSLCodeGen:
                 "acceleration structure",
                 "RaytracingAccelerationStructure",
             )
-            self.validate_hlsl_scalar_int_uint_expression(
+            self.validate_hlsl_ray_flags_argument(
                 args[1],
-                f"DirectX {shader_type} RayQuery.TraceRayInline ray flags argument",
+                shader_type,
+                "RayQuery.TraceRayInline",
             )
             self.validate_hlsl_ray_instance_inclusion_mask_argument(
                 args[2],

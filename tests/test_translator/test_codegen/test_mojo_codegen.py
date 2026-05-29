@@ -4468,6 +4468,264 @@ def test_generic_payload_enum_struct_and_array_payloads_compile_with_mojo(tmp_pa
     assert result.stdout.splitlines() == ["10", "8"]
 
 
+def _generic_payload_enum_resource_struct_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct ResourceSet {
+        sampler2D textures[2];
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    Result<ResourceSet, int> makeResources(ResourceSet resources) {
+        return Result::Ok(resources);
+    }
+
+    vec4 sampleResult(Result<ResourceSet, int> value, int slot, vec2 uv) {
+        return match value {
+            Result::Ok(resources) => texture(
+                resources.textures[slot],
+                resources.state,
+                uv
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadImageResult(Result<ResourceSet, int> value, int slot, ivec2 pixel) {
+        return match value {
+            Result::Ok(resources) => imageLoad(resources.inputs[slot], pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int loadBufferResult(Result<ResourceSet, int> value, int slot, uint index) {
+        return match value {
+            Result::Ok(resources) => resources.values[slot].Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    void storeResult(
+        Result<ResourceSet, int> value,
+        int slot,
+        ivec2 pixel,
+        vec4 color,
+        uint index,
+        int scalar,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(resources) => {
+                imageStore(resources.outputs[slot], pixel, color);
+                resources.values[slot].Store(index, scalar);
+                resources.rawBuffers[slot].Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    Result<ResourceSet[2], int> makeResourceArray(ResourceSet sets[2]) {
+        return Result::Ok(sets);
+    }
+
+    vec4 sampleArrayResult(
+        Result<ResourceSet[2], int> value,
+        int index,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(sets) => texture(
+                sets[index].textures[slot],
+                sets[index].state,
+                uv
+            ),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int loadArrayBufferResult(
+        Result<ResourceSet[2], int> value,
+        int index,
+        int slot,
+        uint bufferIndex
+    ) {
+        return match value {
+            Result::Ok(sets) => sets[index].values[slot].Load(bufferIndex),
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+        )
+    )
+
+    assert "struct Result_ResourceSet_int:" in generated_code
+    assert "var Ok_0: ResourceSet" in generated_code
+    assert "struct Result_ResourceSet_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[ResourceSet, 2]" in generated_code
+    assert (
+        "Ok_0=ResourceSet(InlineArray[Texture2D, 2](Texture2D(), Texture2D()), "
+        "Sampler(), InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    )
+    assert "Ok_0=ResourceSet()" not in generated_code
+    assert "sample(value.Ok_0.textures[int(slot)], uv)" in generated_code
+    assert "image_load(value.Ok_0.inputs[int(slot)], pixel)" in generated_code
+    assert "buffer_load(value.Ok_0.values[int(slot)], index)" in generated_code
+    assert "image_store(value.Ok_0.outputs[int(slot)], pixel, color)" in generated_code
+    assert "buffer_store(value.Ok_0.values[int(slot)], index, scalar)" in generated_code
+    assert (
+        "buffer_store4(value.Ok_0.rawBuffers[int(slot)], offset, data)"
+        in generated_code
+    )
+    assert "sample(value.Ok_0[int(index)].textures[int(slot)], uv)" in generated_code
+    assert (
+        "buffer_load(value.Ok_0[int(index)].values[int(slot)], bufferIndex)"
+        in generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert "fn buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
+    assert "Result<" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+
+def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+        )
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_resource_struct_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                writeonly image2D outputs[2];
+            };
+            vec4 invalidRead(
+                Result<ResourceSet, int> value,
+                int slot,
+                ivec2 pixel
+            ) {
+                return match value {
+                    Result::Ok(resources) => imageLoad(
+                        resources.outputs[slot],
+                        pixel
+                    ),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*resources\.outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                readonly image2D inputs[2];
+            };
+            void invalidWrite(
+                Result<ResourceSet, int> value,
+                int slot,
+                ivec2 pixel,
+                vec4 color
+            ) {
+                match value {
+                    Result::Ok(resources) => {
+                        imageStore(resources.inputs[slot], pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*resources\.inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            struct ResourceSet {
+                readonly RWByteAddressBuffer rawBuffers[2];
+            };
+            void invalidRawStore(
+                Result<ResourceSet, int> value,
+                int slot,
+                uint offset,
+                uint4 data
+            ) {
+                match value {
+                    Result::Ok(resources) => {
+                        resources.rawBuffers[slot].Store4(offset, data);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store4.*resources\.rawBuffers.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_resource_struct_diagnostics_for_mojo_codegen(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_generic_payload_enum_parameterized_specializations_are_rejected_for_mojo_codegen():
     code = """
     generic<T, E> struct Result {

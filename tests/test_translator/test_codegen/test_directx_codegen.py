@@ -10553,6 +10553,101 @@ def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
     assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
 
 
+def test_directx_ray_tracing_validates_literal_ray_flags():
+    unknown_flag_code = """
+    shader BadTraceRayUnknownFlag {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(scene, 0x400, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay ray flags argument.*known RAY_FLAG bits.*1024",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(unknown_flag_code), "ray_generation"
+        )
+
+    mutually_exclusive_query_code = """
+    shader BadRayQueryMutuallyExclusiveFlags {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(
+                    accel,
+                    RAY_FLAG_SKIP_TRIANGLES | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES,
+                    0xFF,
+                    ray
+                );
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RayQuery.TraceRayInline ray flags argument.*mutually exclusive"
+            ".*RAY_FLAG_SKIP_TRIANGLES.*RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES"
+        ),
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(mutually_exclusive_query_code), "compute"
+        )
+
+    valid_code = """
+    shader ValidRayFlags {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(
+                    scene,
+                    RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH
+                        | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+                    0xFF,
+                    0,
+                    1,
+                    0,
+                    ray,
+                    payload
+                );
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "ray_generation"
+    )
+
+    assert (
+        "TraceRay(scene, "
+        "(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | "
+        "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER), 255, 0, 1, 0, ray, payload);"
+    ) in generated
+
+
 def test_else_if_statement():
     code = """
     shader main {
