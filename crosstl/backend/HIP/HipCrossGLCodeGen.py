@@ -3216,6 +3216,7 @@ class HipToCrossGLConverter:
                 return [comment]
         if name == "hipCtxCreate":
             if len(args) >= 3:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [
                     f"// HIP context create: output: {output}, flags: {args[1]}, "
@@ -3226,6 +3227,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context destroy: {args[0]}"]
         if name == "hipCtxPopCurrent":
             if args:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [f"// HIP context pop current: output: {output}"]
         if name == "hipCtxPushCurrent":
@@ -3236,6 +3238,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context set current: {args[0]}"]
         if name == "hipCtxGetCurrent":
             if args:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [f"// HIP context get current: output: {output}"]
         if name == "hipCtxGetDevice":
@@ -3285,6 +3288,7 @@ class HipToCrossGLConverter:
             return ["// HIP context synchronize"]
         if name == "hipDevicePrimaryCtxRetain":
             if len(args) >= 2:
+                self.clear_lvalue_metadata_source(raw_args[0])
                 output = self.format_runtime_pointer_target(raw_args[0])
                 return [
                     f"// HIP primary context retain: output: {output}, "

@@ -669,7 +669,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 413
+        "test_count": 414
       },
       "translator_codegen": {
         "exists": true,

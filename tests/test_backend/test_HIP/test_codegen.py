@@ -10364,6 +10364,84 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_context_raw_outputs_clear_stale_metadata(self):
+        """Test raw context handle outputs clear prior query metadata."""
+        code = """
+        void queryContextHandles(
+            hipDeviceptr_t devicePtr,
+            hipDevice_t device,
+            unsigned int flags,
+            void** ptrs
+        ) {
+            hipCtx_t ctx;
+            hipCtx_t current;
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&ctx, &staleSize, devicePtr);
+            hipCtxCreate(&ctx, flags, device);
+            ptrs[0] = ctx;
+
+            hipMemGetAddressRange((void**)&current, &staleSize, devicePtr);
+            hipCtxGetCurrent(&current);
+            ptrs[1] = current;
+
+            hipMemGetAddressRange((void**)&current, &staleSize, devicePtr);
+            hipCtxPopCurrent(&current);
+            ptrs[2] = current;
+
+            hipMemGetAddressRange((void**)&ctx, &staleSize, devicePtr);
+            hipDevicePrimaryCtxRetain(&ctx, device);
+            ptrs[3] = ctx;
+
+            hipMemGetAddressRange((void**)&ctx, &staleSize, devicePtr);
+            if (hipCtxCreate(&ctx, flags, device) == hipSuccess) {
+                ptrs[4] = ctx;
+            }
+
+            hipMemGetAddressRange((void**)&current, &staleSize, devicePtr);
+            if (hipCtxGetCurrent(&current) == hipSuccess) {
+                ptrs[5] = current;
+            }
+
+            hipMemGetAddressRange((void**)&current, &staleSize, devicePtr);
+            if (hipCtxPopCurrent(&current) == hipSuccess) {
+                ptrs[6] = current;
+            }
+
+            hipMemGetAddressRange((void**)&ctx, &staleSize, devicePtr);
+            if (hipDevicePrimaryCtxRetain(&ctx, device) == hipSuccess) {
+                ptrs[7] = ctx;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP context create: output: ctx, flags: flags, device: device" in result
+        )
+        assert "// HIP context get current: output: current" in result
+        assert "// HIP context pop current: output: current" in result
+        assert "// HIP primary context retain: output: ctx, device: device" in result
+        for index, name in [
+            (0, "ctx"),
+            (1, "current"),
+            (2, "current"),
+            (3, "ctx"),
+            (4, "ctx"),
+            (5, "current"),
+            (6, "current"),
+            (7, "ctx"),
+        ]:
+            assert f"ptrs[{index}] = {name};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_graph_api_conversion(self):
         """Test HIP graph APIs emit metadata comments."""
         code = """
