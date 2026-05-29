@@ -3538,6 +3538,26 @@ class MetalCodeGen:
             )
             if acceleration_structure_alias_type is not None:
                 var_type = acceleration_structure_alias_type
+            initial_value = getattr(stmt, "initial_value", None)
+            acceleration_structure_array_alias = (
+                self.unsupported_metal_acceleration_structure_array_alias_source(
+                    initial_value
+                )
+            )
+            if (
+                acceleration_structure_array_alias is not None
+                and self.is_acceleration_structure_type(var_type)
+            ):
+                self.local_variable_types[stmt.name] = var_type
+                self.unsupported_metal_acceleration_structure_array_variables[
+                    stmt.name
+                ] = self.unsupported_metal_acceleration_structure_array_variables[
+                    acceleration_structure_array_alias
+                ]
+                diagnostic = self.unsupported_metal_acceleration_structure_array_alias_diagnostic(
+                    stmt.name, acceleration_structure_array_alias
+                )
+                return f"{indent_str}{diagnostic}"
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3558,7 +3578,6 @@ class MetalCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
                 code = f"{indent_str}{declaration};\n"
                 code += generate_match_expression_assignment(
@@ -6961,6 +6980,21 @@ class MetalCodeGen:
             "acceleration_structure are not valid Metal buffer parameters "
             f"({name}) */\n"
         )
+
+    def unsupported_metal_acceleration_structure_array_alias_diagnostic(
+        self, name, source_name
+    ):
+        return (
+            "/* unsupported Metal ray tracing resource: local "
+            f"acceleration_structure alias '{name}' cannot be initialized from "
+            f"unsupported acceleration_structure array '{source_name}' */\n"
+        )
+
+    def unsupported_metal_acceleration_structure_array_alias_source(self, expr):
+        source_name = self.expression_name(expr)
+        if source_name in self.unsupported_metal_acceleration_structure_array_variables:
+            return source_name
+        return None
 
     def unsupported_metal_acceleration_structure_array_reason(self, expr):
         resource_name = self.expression_name(expr)
@@ -11686,6 +11720,10 @@ class MetalCodeGen:
             param_name, param_type = (
                 parameter_infos[index] if index < len(parameter_infos) else (None, None)
             )
+            if self.is_unsupported_metal_acceleration_structure_array_parameter(
+                func_name, index
+            ):
+                continue
             args.append(self.generate_expression(arg))
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
@@ -11698,6 +11736,26 @@ class MetalCodeGen:
                 if counter is not None:
                     args.append(counter)
         return args
+
+    def is_unsupported_metal_acceleration_structure_array_parameter(
+        self, func_name, index
+    ):
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        if index >= len(parameter_nodes):
+            return False
+        parameter = parameter_nodes[index]
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        previous_function_name = self.current_function_name
+        self.current_function_name = func_name
+        try:
+            return (
+                self.metal_acceleration_structure_array_parameter_kind(
+                    raw_type, parameter
+                )
+                is not None
+            )
+        finally:
+            self.current_function_name = previous_function_name
 
     def required_function_resource_argument_names(self, func_name):
         names = [

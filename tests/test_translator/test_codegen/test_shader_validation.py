@@ -4312,6 +4312,65 @@ shader MetalRayAccelerationStructureArrayDiagnosticValidation {
 """
 
 
+METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_HELPER_DIAGNOSTIC_SHADER = """
+shader MetalRayAccelerationStructureArrayHelperDiagnosticValidation {
+    accelerationStructureEXT topLevelAS[2] @binding(0);
+    primitive_acceleration_structure primitiveAS[2] @binding(3);
+
+    void shootInstance(
+        accelerationStructureEXT scenes[2],
+        int idx,
+        vec3 origin,
+        vec3 direction
+    ) {
+        let sceneAlias = scenes;
+        TraceRay(
+            sceneAlias[idx],
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    void shootPrimitive(
+        primitive_acceleration_structure primitives[2],
+        int idx,
+        vec3 origin,
+        vec3 direction
+    ) {
+        primitive_acceleration_structure primitiveElement = primitives[idx];
+        TraceRay(
+            primitiveElement,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    ray_generation {
+        void main() {
+            shootInstance(topLevelAS, 0, vec3(0.0), vec3(0.0, 0.0, 1.0));
+            shootPrimitive(primitiveAS, 1, vec3(0.0), vec3(0.0, 1.0, 0.0));
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_PAYLOAD_DIAGNOSTIC_SHADER = """
 shader MetalRayTracingPayloadDiagnosticValidation {
     struct Payload {
@@ -8527,6 +8586,48 @@ def test_generated_metal_ray_acceleration_structure_array_diagnostics_compile_wi
     assert "acceleration structure argument 'topLevelAS' uses an" in code
     assert "acceleration structure argument 'primitiveAS' uses an" in code
     assert "acceleration structure argument 'paramAS' uses an" in code
+    assert "array<instance_acceleration_structure" not in code
+    assert "array<primitive_acceleration_structure" not in code
+    assert ".intersect(" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_acceleration_structure_array_helper_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_acceleration_structure_array_helper_diagnostics.metal"
+    output = tmp_path / "ray_acceleration_structure_array_helper_diagnostics.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(
+            METAL_RAY_ACCELERATION_STRUCTURE_ARRAY_HELPER_DIAGNOSTIC_SHADER
+        )
+    )
+    assert "unsupported acceleration_structure array 'scenes'" in code
+    assert "unsupported acceleration_structure array 'primitives'" in code
+    assert "acceleration structure argument 'sceneAlias' uses an" in code
+    assert "acceleration structure argument 'primitiveElement' uses an" in code
+    assert "shootInstance(topLevelAS" not in code
+    assert "shootPrimitive(primitiveAS" not in code
+    assert "instance_acceleration_structure sceneAlias[2] = scenes;" not in code
+    assert "primitive_acceleration_structure primitiveElement" not in code
     assert "array<instance_acceleration_structure" not in code
     assert "array<primitive_acceleration_structure" not in code
     assert ".intersect(" not in code

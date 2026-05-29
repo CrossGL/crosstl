@@ -10718,6 +10718,83 @@ def test_aggregate_target_shape_preserves_explicit_vector_compound_assignment():
     assert "value += _crossgl_construct_f32_4_vf322_01_s" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badTernaryArrayAssignment(bool choose) {
+                vec3 values[2];
+                values = {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badMatchArrayAssignment(int mode) {
+                vec3 values[2];
+                values = {
+                    match mode {
+                        0 => vec2(1.0, 2.0),
+                        _ => vec3(1.0, 2.0, 3.0)
+                    },
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 1"
+            r" match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badMatrixArrayAssignment() {
+                mat2 transforms[2];
+                transforms = {
+                    mat2(1.0, 0.0, 0.0, 1.0),
+                    vec3(1.0, 2.0, 3.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 2"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_branching_array_elements(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_nested_explicit_constructors():
+    source = """
+    void okNestedConstructors(bool choose, int mode) {
+        vec3 values[2];
+        values = {
+            choose ? vec3(vec2(1.0, 2.0), 3.0) : vec3(4.0, 5.0, 6.0),
+            match mode {
+                0 => vec3(vec2(7.0, 8.0), 9.0),
+                _ => vec3(10.0, 11.0, 12.0)
+            }
+        };
+        mat2 transforms[1];
+        transforms = {mat2(vec2(1.0, 0.0), vec2(0.0, 1.0))};
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "var values = InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "var transforms = InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+
+
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
     source = """
     generic<T, E> struct Result {

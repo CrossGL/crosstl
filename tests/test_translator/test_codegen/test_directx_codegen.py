@@ -7852,6 +7852,71 @@ def test_directx_dispatch_mesh_validates_argument_count_and_group_count_types():
             crosstl.translator.parse(product_too_large_code), "task"
         )
 
+    local_too_large_count_code = """
+    shader DispatchMeshLocalTooLargeCount {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                const int GROUPS_X = 65536;
+                DispatchMesh(GROUPS_X, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*less than 65536"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_too_large_count_code), "task"
+        )
+
+    local_product_too_large_code = """
+    shader DispatchMeshLocalProductTooLarge {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                const int GROUPS_X = 2048;
+                const int GROUPS_Y = 2048;
+                DispatchMesh(GROUPS_X, GROUPS_Y, 2);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="thread group count product"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_product_too_large_code), "task"
+        )
+
+    helper_local_too_large_count_code = """
+    shader DispatchMeshHelperLocalTooLargeCount {
+        task {
+            void launch() {
+                const int GROUPS_X = 65536;
+                DispatchMesh(GROUPS_X, 1, 1);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                launch();
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="ThreadGroupCountX.*less than 65536"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(helper_local_too_large_count_code), "task"
+        )
+
+    local_valid_count_code = """
+    shader DispatchMeshLocalValidCount {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                const int GROUPS_X = 32;
+                DispatchMesh(GROUPS_X, 1, 1);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(local_valid_count_code), "task"
+    )
+    assert "DispatchMesh(GROUPS_X, 1, 1);" in generated
+
 
 def test_directx_dispatch_mesh_rejects_multiple_calls_per_amplification_stage():
     shader = """

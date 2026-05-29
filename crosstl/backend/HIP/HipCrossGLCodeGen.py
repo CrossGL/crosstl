@@ -3021,30 +3021,25 @@ class HipToCrossGLConverter:
     def format_hip_rtc_runtime_call(self, name, raw_args, args):
         if name == "hiprtcVersion":
             if len(args) >= 2:
-                major_output = self.format_runtime_pointer_target(raw_args[0])
-                minor_output = self.format_runtime_pointer_target(raw_args[1])
+                major_output = self.format_runtime_raw_output_target(raw_args[0])
+                minor_output = self.format_runtime_raw_output_target(raw_args[1])
                 major_output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 minor_output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 if major_output_name is not None:
                     self.register_device_query_source(
                         major_output_name, "rtc.version.major"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[0])
                 if minor_output_name is not None:
                     self.register_device_query_source(
                         minor_output_name, "rtc.version.minor"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC version: major output: {major_output}, "
                     f"minor output: {minor_output}"
                 ]
         if name == "hiprtcCreateProgram":
             if len(args) >= 6:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIPRTC create program: output: {output}, source: {args[1]}, "
                     f"name: {args[2]}, headers: {args[3]}, header sources: {args[4]}, "
@@ -3052,8 +3047,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcDestroyProgram":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIPRTC destroy program: output: {output}"]
         if name == "hiprtcCompileProgram":
             if len(args) >= 3:
@@ -3067,7 +3061,7 @@ class HipToCrossGLConverter:
             "hiprtcGetProgramLogSize",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 artifact = {
                     "hiprtcGetCodeSize": "code size",
@@ -3083,8 +3077,6 @@ class HipToCrossGLConverter:
                     self.register_device_query_source(
                         output_name, f"{query}({args[0]})"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC get {artifact}: program: {args[0]}, output: {output}"
                 ]
@@ -3107,16 +3099,14 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcGetLoweredName":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[2])
-                output = self.format_runtime_pointer_target(raw_args[2])
+                output = self.format_runtime_raw_output_target(raw_args[2])
                 return [
                     f"// HIPRTC get lowered name: program: {args[0]}, "
                     f"expression: {args[1]}, output: {output}"
                 ]
         if name == "hiprtcLinkCreate":
             if len(args) >= 4:
-                self.clear_lvalue_metadata_source(raw_args[3])
-                output = self.format_runtime_pointer_target(raw_args[3])
+                output = self.format_runtime_raw_output_target(raw_args[3])
                 return [
                     f"// HIPRTC link create: options: {args[0]}, "
                     f"option keys: {args[1]}, option values: {args[2]}, "
@@ -3139,10 +3129,8 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcLinkComplete":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[1])
-                binary_output = self.format_runtime_pointer_target(raw_args[1])
-                self.clear_lvalue_metadata_source(raw_args[2])
-                size_output = self.format_runtime_pointer_target(raw_args[2])
+                binary_output = self.format_runtime_raw_output_target(raw_args[1])
+                size_output = self.format_runtime_raw_output_target(raw_args[2])
                 size_output_name = self.get_runtime_pointer_target_name(raw_args[2])
                 if size_output_name is not None:
                     self.register_device_query_source(
@@ -3218,8 +3206,7 @@ class HipToCrossGLConverter:
                 return [comment]
         if name == "hipCtxCreate":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP context create: output: {output}, flags: {args[1]}, "
                     f"device: {args[2]}"
@@ -3229,8 +3216,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context destroy: {args[0]}"]
         if name == "hipCtxPopCurrent":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP context pop current: output: {output}"]
         if name == "hipCtxPushCurrent":
             if args:
@@ -3240,8 +3226,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context set current: {args[0]}"]
         if name == "hipCtxGetCurrent":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP context get current: output: {output}"]
         if name == "hipCtxGetDevice":
             if args:
@@ -3290,8 +3275,7 @@ class HipToCrossGLConverter:
             return ["// HIP context synchronize"]
         if name == "hipDevicePrimaryCtxRetain":
             if len(args) >= 2:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP primary context retain: output: {output}, "
                     f"device: {args[1]}"

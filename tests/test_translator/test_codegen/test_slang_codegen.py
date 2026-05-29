@@ -6376,6 +6376,10 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
 def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
     code = """
     shader SlangRayQueryInoutHelper {
+        struct QueryHolder {
+            RayQuery<RAY_FLAG_NONE> query;
+        }
+
         RaytracingAccelerationStructure scene;
 
         void advanceQuery(
@@ -6387,11 +6391,33 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
             let advanced = query.Proceed();
         }
 
+        void advanceQueryPointer(
+            RayQuery<RAY_FLAG_NONE>* query,
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray
+        ) {
+            query->TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            let pointerAdvanced = query->Proceed();
+        }
+
+        void advanceHolderPointer(
+            QueryHolder* holder,
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray
+        ) {
+            holder->query.TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            let candidateType = holder->query.CandidateType();
+        }
+
         compute {
             void main() {
                 RayDesc ray;
                 RayQuery<RAY_FLAG_NONE> rq;
+                QueryHolder holder;
+                holder.query = rq;
                 advanceQuery(rq, scene, ray);
+                advanceQueryPointer(&rq, scene, ray);
+                advanceHolderPointer(&holder, scene, ray);
             }
         }
     }
@@ -6405,7 +6431,30 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
     )
     assert "query.TraceRayInline(accelerationStructure, 0, 255, ray);" in generated_code
     assert "bool advanced = query.Proceed();" in generated_code
+    assert (
+        "void advanceQueryPointer(RayQuery<RAY_FLAG_NONE>* query, "
+        "RaytracingAccelerationStructure accelerationStructure, RayDesc ray)"
+        in generated_code
+    )
+    assert (
+        "query->TraceRayInline(accelerationStructure, 0, 255, ray);" in generated_code
+    )
+    assert "bool pointerAdvanced = query->Proceed();" in generated_code
+    assert (
+        "void advanceHolderPointer(QueryHolder* holder, "
+        "RaytracingAccelerationStructure accelerationStructure, RayDesc ray)"
+        in generated_code
+    )
+    assert (
+        "holder->query.TraceRayInline(accelerationStructure, 0, 255, ray);"
+        in generated_code
+    )
+    assert "uint candidateType = holder->query.CandidateType();" in generated_code
+    assert "QueryHolder holder;" in generated_code
+    assert "holder.query = rq;" in generated_code
     assert "advanceQuery(rq, scene, ray);" in generated_code
+    assert "advanceQueryPointer(&rq, scene, ray);" in generated_code
+    assert "advanceHolderPointer(&holder, scene, ray);" in generated_code
     assert "RayQueryOpNode" not in generated_code
 
 

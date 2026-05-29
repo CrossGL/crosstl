@@ -11159,6 +11159,132 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hiprtc_array_member_outputs_clear_stale_metadata(self):
+        """Test HIPRTC array/member outputs clear prior query metadata."""
+        code = """
+        struct RtcOutputs {
+            hiprtcProgram program;
+            const char* loweredName;
+            hiprtcLinkState linkState;
+            void* linkedBinary;
+            size_t linkedSize;
+            size_t codeSize;
+        };
+
+        void queryRtcArrayMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            const char* source,
+            const char** headers,
+            const char** includeNames,
+            hiprtcJIT_option jitOptions,
+            void* optionValues,
+            hiprtcProgram* programs,
+            const char** names,
+            hiprtcLinkState* links,
+            void** binaries,
+            size_t* sizes,
+            RtcOutputs* holder,
+            void** ptrs,
+            size_t* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&programs, &staleSize, devicePtr);
+            hiprtcCreateProgram(
+                &programs[0],
+                source,
+                "kernel.hip",
+                0,
+                headers,
+                includeNames
+            );
+            ptrs[0] = programs[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcDestroyProgram(&holder->program);
+            ptrs[1] = holder->program;
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hiprtcGetLoweredName(programs[0], "kernel", &names[0]);
+            ptrs[2] = names[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcGetLoweredName(programs[0], "member", &holder->loweredName);
+            ptrs[3] = holder->loweredName;
+
+            hipMemGetAddressRange((void**)&links, &staleSize, devicePtr);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &links[0]);
+            ptrs[4] = links[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &holder->linkState);
+            ptrs[5] = holder->linkState;
+
+            hipMemGetAddressRange((void**)&binaries, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hiprtcLinkComplete(links[0], &binaries[0], &sizes[0]);
+            ptrs[6] = binaries[0];
+            values[0] = sizes[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hiprtcGetCodeSize(programs[0], &sizes[1]);
+            values[1] = sizes[1];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcGetCodeSize(programs[0], &holder->codeSize);
+            values[2] = holder->codeSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIPRTC create program: output: programs[0], source: source, "
+                'name: "kernel.hip"'
+            ),
+            "// HIPRTC destroy program: output: holder->program",
+            (
+                "// HIPRTC get lowered name: program: programs[0], expression: "
+                '"kernel", output: names[0]'
+            ),
+            (
+                "// HIPRTC get lowered name: program: programs[0], expression: "
+                '"member", output: holder->loweredName'
+            ),
+            (
+                "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+                "option values: (&optionValues), state output: links[0]"
+            ),
+            (
+                "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+                "option values: (&optionValues), state output: holder->linkState"
+            ),
+            (
+                "// HIPRTC link complete: state: links[0], "
+                "binary output: binaries[0], size output: sizes[0]"
+            ),
+            "// HIPRTC get code size: program: programs[0], output: sizes[1]",
+            (
+                "// HIPRTC get code size: program: programs[0], "
+                "output: holder->codeSize"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(7):
+            assert f"ptrs[{index}] = " in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        for index in range(3):
+            assert f"values[{index}] = " in result
+            assert f"values[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """
@@ -12515,6 +12641,101 @@ class TestHipCodeGen:
             (7, "ctx"),
         ]:
             assert f"ptrs[{index}] = {name};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_context_array_member_outputs_clear_stale_metadata(self):
+        """Test context array/member outputs clear prior query metadata."""
+        code = """
+        struct ContextOutputs {
+            hipCtx_t ctx;
+            hipCtx_t current;
+        };
+
+        void queryContextArrayMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            hipDevice_t device,
+            unsigned int flags,
+            hipCtx_t* contexts,
+            ContextOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            hipCtxCreate(&contexts[0], flags, device);
+            ptrs[0] = contexts[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipCtxGetCurrent(&holder->current);
+            ptrs[1] = holder->current;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            hipCtxPopCurrent(&contexts[1]);
+            ptrs[2] = contexts[1];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDevicePrimaryCtxRetain(&holder->ctx, device);
+            ptrs[3] = holder->ctx;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            if (hipCtxCreate(&contexts[2], flags, device) == hipSuccess) {
+                ptrs[4] = contexts[2];
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipCtxGetCurrent(&holder->current) == hipSuccess) {
+                ptrs[5] = holder->current;
+            }
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            if (hipCtxPopCurrent(&contexts[3]) == hipSuccess) {
+                ptrs[6] = contexts[3];
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipDevicePrimaryCtxRetain(&holder->ctx, device) == hipSuccess) {
+                ptrs[7] = holder->ctx;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIP context create: output: contexts[0], "
+                "flags: flags, device: device"
+            ),
+            "// HIP context get current: output: holder->current",
+            "// HIP context pop current: output: contexts[1]",
+            "// HIP primary context retain: output: holder->ctx, device: device",
+            (
+                "if (((/* HIP context create: output: contexts[2], "
+                "flags: flags, device: device */ hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP context get current: output: holder->current */ "
+                "hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP context pop current: output: contexts[3] */ "
+                "hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP primary context retain: output: holder->ctx, "
+                "device: device */ hipSuccess) == hipSuccess))"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(8):
+            assert f"ptrs[{index}] = " in result
             assert f"ptrs[{index}] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result

@@ -15977,7 +15977,7 @@ def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
+def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock(tmp_path):
     code = """
     vec3 globalDirs[3] = {
         vec3(1.0, 0.0, 0.0),
@@ -16025,6 +16025,7 @@ def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
         "static GLOBAL_DIRS: [Vec3<f32>; 3] = [Vec3::<f32>::new" not in generated_code
     )
     assert "static DYNAMIC_WEIGHTS: Vec<f32> = vec!" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_legacy_global_array_nodes_emit_static_declarations():

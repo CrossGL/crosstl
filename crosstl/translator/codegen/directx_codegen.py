@@ -9099,15 +9099,7 @@ class HLSLCodeGen:
         return base_type
 
     def hlsl_dispatch_mesh_calls(self, func):
-        calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, FunctionCallNode):
-                if self.function_call_name(node) == "DispatchMesh":
-                    calls.append(getattr(node, "arguments", getattr(node, "args", [])))
-            elif isinstance(node, MeshOpNode):
-                if getattr(node, "operation", None) == "DispatchMesh":
-                    calls.append(getattr(node, "arguments", []))
-        return calls
+        return self.hlsl_dispatch_mesh_args_in_node(getattr(func, "body", []))
 
     def hlsl_function_call_names(self, func):
         names = []
@@ -9142,7 +9134,9 @@ class HLSLCodeGen:
         visit(func)
         return reachable
 
-    def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
+    def validate_hlsl_dispatch_mesh_group_count_arguments(
+        self, args, shader_type, visible_int_constants=None
+    ):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
         literal_counts = []
         for label, argument in zip(labels, args[:3]):
@@ -9150,7 +9144,9 @@ class HLSLCodeGen:
                 argument,
                 f"DirectX {shader_type} DispatchMesh {label} argument",
             )
-            literal_count = self.hlsl_integer_constant_value(argument)
+            literal_count = self.hlsl_integer_constant_value(
+                argument, visible_int_constants
+            )
             literal_counts.append(literal_count)
             if literal_count is None:
                 continue
@@ -9181,6 +9177,78 @@ class HLSLCodeGen:
         if isinstance(expr, MeshOpNode):
             return getattr(expr, "operation", None) == "DispatchMesh"
         return False
+
+    def hlsl_dispatch_mesh_args_in_node(self, root):
+        calls = []
+        for node in self.walk_ast(root):
+            if not self.hlsl_expression_is_dispatch_mesh(node):
+                continue
+            if isinstance(node, FunctionCallNode):
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+            elif isinstance(node, MeshOpNode):
+                calls.append(getattr(node, "arguments", []))
+        return calls
+
+    def validate_hlsl_dispatch_mesh_group_count_sequence(
+        self, statements, shader_type, visible_int_constants=None
+    ):
+        if visible_int_constants is None:
+            visible_int_constants = dict(self.literal_int_constants)
+
+        for stmt in self.hlsl_statement_body_items(statements):
+            if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(stmt),
+                    shader_type,
+                    dict(visible_int_constants),
+                )
+                continue
+
+            if isinstance(stmt, IfNode):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(
+                        getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                    ),
+                    shader_type,
+                    dict(visible_int_constants),
+                )
+                else_branch = getattr(
+                    stmt, "else_branch", getattr(stmt, "else_body", None)
+                )
+                if else_branch is not None:
+                    self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                        self.hlsl_statement_body_items(else_branch),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                continue
+
+            if isinstance(stmt, SwitchNode):
+                case_entries = self.hlsl_switch_case_entries(stmt)
+                for start_index in range(len(case_entries)):
+                    self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                        self.hlsl_switch_fallthrough_path_body(
+                            case_entries, start_index
+                        ),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                continue
+
+            if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                    shader_type,
+                    dict(visible_int_constants),
+                )
+                continue
+
+            for args in self.hlsl_dispatch_mesh_args_in_node(stmt):
+                self.validate_hlsl_dispatch_mesh_group_count_arguments(
+                    args, shader_type, visible_int_constants
+                )
+
+            self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
 
     def hlsl_function_contains_dispatch_mesh(self, func, visited=None):
         if func is None:
@@ -9414,8 +9482,12 @@ class HLSLCodeGen:
                     "three thread group count arguments and an optional "
                     "mesh payload argument"
                 )
-            self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
         for reachable_func in reachable_functions:
+            self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                self.hlsl_statement_body_items(getattr(reachable_func, "body", [])),
+                shader_type,
+                self.hlsl_initial_int_constants(reachable_func),
+            )
             self.validate_hlsl_dispatch_mesh_placement(reachable_func, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):
