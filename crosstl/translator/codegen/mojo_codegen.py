@@ -52,6 +52,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
+from .enum_utils import enum_struct_fields, enum_variant_payload_fields
 
 
 def _matrix_aliases(prefix, dtype, *, rows_first):
@@ -871,9 +872,14 @@ class MojoCodeGen:
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_unit_variant_constructors = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -947,6 +953,7 @@ class MojoCodeGen:
             "min16float": "Float16",
             "bool": "Bool",
             "string": "String",
+            "str": "String",
             "char": "String",
             **{
                 name: f"SIMD[{dtype}, {storage_width}]"
@@ -1060,9 +1067,14 @@ class MojoCodeGen:
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
+        self.enum_variant_constructors = {}
+        self.enum_variant_constructor_fields = {}
+        self.enum_variant_result_types = {}
+        self.enum_unit_variant_constructors = {}
         self.struct_member_semantics = {}
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
+        self.resource_access_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -1203,12 +1215,19 @@ class MojoCodeGen:
 
         # Handle shader stages (new AST structure)
         if hasattr(ast, "stages") and ast.stages:
+            emitted_stage_local_variables = set()
+            emitted_stage_local_structs = set(self.struct_types)
             emitted_local_functions = set()
             for stage_type, stage in ast.stages.items():
                 if hasattr(stage, "entry_point"):
                     stage_name = self.stage_type_name(stage_type)
                     self.validate_stage_type(stage_name)
                     code += f"# {stage_name.title()} Shader\n"
+                    code += self.generate_stage_local_declarations(
+                        stage,
+                        emitted_stage_local_variables,
+                        emitted_stage_local_structs,
+                    )
                     for func in getattr(stage, "local_functions", []):
                         if id(func) in emitted_local_functions:
                             continue
@@ -1233,6 +1252,88 @@ class MojoCodeGen:
                 f"Unsupported {stage_name} shader stage for Mojo codegen; "
                 f"supported compile-smoke stages are {supported}"
             )
+
+    def generate_stage_local_declarations(
+        self,
+        stage,
+        emitted_stage_local_variables,
+        emitted_stage_local_structs,
+    ):
+        code = ""
+        for node in getattr(stage, "local_structs", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_struct(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_cbuffers", []) or []:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in emitted_stage_local_structs
+            ):
+                code += self.generate_resource_metadata_comment(
+                    node, getattr(node, "name", None), kind="cbuffer"
+                )
+                code += self.generate_struct(node)
+                emitted_stage_local_structs.add(node.name)
+
+        for node in getattr(stage, "local_variables", []) or []:
+            code += self.generate_stage_local_variable_declaration(
+                node, emitted_stage_local_variables
+            )
+        return code
+
+    def generate_stage_local_variable_declaration(
+        self, node, emitted_stage_local_variables
+    ):
+        if isinstance(node, ArrayNode):
+            variable_type = self.array_type_name(
+                node.element_type, get_array_size_from_node(node)
+            )
+            self.register_variable_type(node.name, variable_type)
+            key = (node.name, variable_type)
+            if key in emitted_stage_local_variables:
+                return ""
+            emitted_stage_local_variables.add(key)
+            return self.generate_array_declaration(node)
+
+        variable_type = self.variable_declared_type(node) or "float"
+        self.register_variable_type(getattr(node, "name", None), variable_type)
+        self.register_resource_access_metadata(node, variable_type)
+        key = (getattr(node, "name", None), variable_type)
+        if key in emitted_stage_local_variables:
+            return ""
+        emitted_stage_local_variables.add(key)
+
+        if getattr(node, "initial_value", None) is not None:
+            self.validate_expression_target_shape(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            init_expr = self.generate_expression(
+                node.initial_value, variable_type, f"stage declaration {node.name}"
+            )
+            return (
+                f"{self.generate_resource_metadata_comment(node, variable_type)}"
+                f"var {node.name}: {self.map_type(variable_type)} = {init_expr}\n"
+            )
+
+        resource_comment = self.generate_resource_metadata_comment(node, variable_type)
+        if self.is_array_type_name(variable_type):
+            return (
+                f"{resource_comment}var {node.name} = "
+                f"{self.array_initial_value_for_type(variable_type)}\n"
+            )
+        if self.is_struct_type_name(variable_type):
+            return f"{resource_comment}var {node.name} = {self.zero_value_for_type(variable_type)}\n"
+        if self.is_resource_type_name(variable_type):
+            mapped_type = self.map_type(variable_type)
+            return (
+                f"{resource_comment}var {node.name}: {mapped_type} = "
+                f"{self.zero_value_for_type(variable_type)}\n"
+            )
+        return f"var {node.name}: {self.map_type(variable_type)}\n"
 
     def collect_function_return_types(self, ast):
         functions = list(getattr(ast, "functions", []))
@@ -1768,6 +1869,40 @@ class MojoCodeGen:
         if access:
             self.resource_access_qualifiers[name] = access
 
+    def register_resource_access_alias_metadata(self, name, type_name, initializer):
+        if (
+            not name
+            or initializer is None
+            or self.mojo_resource_kind(type_name) is None
+        ):
+            return
+
+        candidates = self.resource_access_qualifier_candidates(initializer)
+        if candidates:
+            self.resource_access_qualifier_aliases[name] = candidates
+        else:
+            self.resource_access_qualifier_aliases.pop(name, None)
+
+    def register_resource_assignment_alias_metadata(self, target, value, operator):
+        if self.map_operator(operator) != "=":
+            return
+
+        name = self.direct_assignment_target_name(target)
+        if name is None:
+            return
+
+        type_name = self.expression_result_type(target) or self.variable_types.get(name)
+        self.register_resource_access_alias_metadata(name, type_name, value)
+
+    def direct_assignment_target_name(self, target):
+        if isinstance(target, str):
+            return target
+        if isinstance(target, VariableNode) and hasattr(target, "name"):
+            return target.name
+        if hasattr(target, "__class__") and "Identifier" in str(target.__class__):
+            return getattr(target, "name", None)
+        return None
+
     def register_struct_resource_access_metadata(
         self, struct_name, member_name, member, member_type
     ):
@@ -1850,10 +1985,15 @@ class MojoCodeGen:
                 candidates.extend(self.resource_access_qualifier_candidates(arm_expr))
             return self.unique_resource_access_qualifiers(candidates)
 
+        candidates = []
         access, resource_name = self.direct_resource_access_qualifier(expr)
-        if access is None or resource_name is None:
-            return []
-        return [(access, resource_name)]
+        if access is not None and resource_name is not None:
+            candidates.append((access, resource_name))
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name is not None:
+            candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
 
     def unique_resource_access_qualifiers(self, candidates):
         unique = []
@@ -2423,6 +2563,10 @@ class MojoCodeGen:
         "    " * indent
         previous_variable_types = self.variable_types.copy()
         previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
+        previous_resource_access_qualifier_aliases = {
+            name: list(candidates)
+            for name, candidates in self.resource_access_qualifier_aliases.items()
+        }
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
@@ -2504,6 +2648,9 @@ class MojoCodeGen:
         code += "\n"
         self.variable_types = previous_variable_types
         self.resource_access_qualifiers = previous_resource_access_qualifiers
+        self.resource_access_qualifier_aliases = (
+            previous_resource_access_qualifier_aliases
+        )
         self.current_return_type = previous_return_type
         return code
 
@@ -2630,6 +2777,7 @@ class MojoCodeGen:
             node.right, indent, left_type, "assignment target"
         )
         op = self.map_operator(node.operator)
+        self.register_resource_assignment_alias_metadata(node.left, node.right, op)
         return f"{prelude}{indent_str}{left} {op} {right}\n"
 
     def generate_get_dimensions_statement(self, stmt, indent):
@@ -3003,11 +3151,17 @@ class MojoCodeGen:
                         )
 
             if hasattr(stmt, "initial_value") and stmt.initial_value is not None:
+                effective_type = var_type or self.expression_result_type(
+                    stmt.initial_value
+                )
                 self.register_variable_type(
                     stmt.name,
-                    var_type or self.expression_result_type(stmt.initial_value),
+                    effective_type,
                 )
                 self.register_resource_access_metadata(stmt, var_type)
+                self.register_resource_access_alias_metadata(
+                    stmt.name, effective_type, stmt.initial_value
+                )
                 increment_init = self.generate_increment_initializer_declaration(
                     stmt,
                     stmt.initial_value,

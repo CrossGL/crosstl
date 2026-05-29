@@ -1044,6 +1044,39 @@ def test_compute_stage_local_helper_functions_emit_before_entry_point():
     assert "var y: Float32 = helper(1.0)" in generated_code
 
 
+def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
+    code = """
+    shader StageLocalResourceMojo {
+        fragment {
+            uniform sampler2D shadowMap;
+
+            vec4 sampleShadow(vec2 uv) {
+                return texture(shadowMap, uv);
+            }
+
+            vec4 main() @ gl_FragColor {
+                return sampleShadow(vec2(0.5, 0.5));
+            }
+        }
+
+        compute {
+            uniform sampler2D shadowMap;
+
+            void main() {
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL resource metadata: name=shadowMap kind=texture" in generated_code
+    assert generated_code.count("var shadowMap: Texture2D = Texture2D()") == 1
+    assert "fn sampleShadow(uv: SIMD[DType.float32, 2])" in generated_code
+    assert "return sample(shadowMap, uv)" in generated_code
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
+
+
 @pytest.mark.parametrize(
     "stage_name",
     [
@@ -5095,6 +5128,113 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
 def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
     source, pattern
 ):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D writeImage;
+            image2D colorImage;
+
+            vec4 invalidAliasRead(bool useWrite, ivec2 pixel) {
+                image2D alias = useWrite ? writeImage : colorImage;
+                return imageLoad(alias, pixel);
+            }
+            """,
+            r"imageLoad.*writeImage.*writeonly",
+        ),
+        (
+            """
+            readonly uniform uimage2D readCounters;
+            uimage2D counters;
+
+            uint invalidAliasAtomic(bool useRead, ivec2 pixel, uint value) {
+                uimage2D alias = useRead ? readCounters : counters;
+                return alias.InterlockedAdd(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*readCounters.*readonly",
+        ),
+        (
+            """
+            writeonly uniform uimage2D writeCounters;
+            uimage2D counters;
+
+            uint invalidAliasAtomic(int mode, ivec2 pixel, uint value) {
+                uimage2D alias = match mode {
+                    0 => writeCounters,
+                    _ => counters
+                };
+                return imageAtomicAdd(alias, pixel, value);
+            }
+            """,
+            r"image_atomic_add.*writeCounters.*writeonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidAliasStore(bool useRead, uint index, int value) {
+                RWStructuredBuffer<int> alias = useRead ? readValues : values;
+                alias.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> readValues;
+            RWStructuredBuffer<int> values;
+
+            void invalidAssignedAliasStore(bool useRead, uint index, int value) {
+                RWStructuredBuffer<int> alias;
+                alias = useRead ? readValues : values;
+                alias.Store(index, value);
+            }
+            """,
+            r"Store.*readValues.*readonly",
+        ),
+        (
+            """
+            readonly RWByteAddressBuffer readRaw;
+            RWByteAddressBuffer rawBytes;
+
+            void invalidAliasAtomic(
+                int mode,
+                uint offset,
+                uint value,
+                uint original
+            ) {
+                RWByteAddressBuffer alias = match mode {
+                    0 => readRaw,
+                    _ => rawBytes
+                };
+                alias.InterlockedAdd(offset, value, original);
+            }
+            """,
+            r"InterlockedAdd.*readRaw.*readonly",
+        ),
+        (
+            """
+            writeonly uniform uimage2D writeCounters;
+            uimage2D counters;
+
+            uint invalidAssignedAliasAtomic(bool useWrite, ivec2 pixel, uint value) {
+                uimage2D alias;
+                alias = useWrite ? writeCounters : counters;
+                return alias.InterlockedAdd(pixel, value);
+            }
+            """,
+            r"image_atomic_add.*writeCounters.*writeonly",
+        ),
+    ],
+)
+def test_resource_alias_access_qualifiers_propagate_for_mojo_codegen(source, pattern):
     with pytest.raises(ValueError, match=pattern):
         generate_code(parse_code(tokenize_code(source)))
 

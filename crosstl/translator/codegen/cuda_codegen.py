@@ -78,6 +78,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_metadata_aliases = {}
         self.query_return_sources = {}
         self.query_local_resource_names_by_function = {}
+        self.query_metadata_snapshot_locals_by_function = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
@@ -114,6 +115,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
+        self.query_metadata_snapshot_locals_by_function = {}
         self.resource_query_info_required = False
         (
             self.query_resource_names,
@@ -159,6 +161,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def emit_statement(self, node):
         """Render and append one statement node when it produces code."""
         if node is None:
+            return
+
+        if isinstance(node, AssignmentNode):
+            self.emit_assignment_statement(node)
             return
 
         result = self.visit(node)
@@ -402,16 +408,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 inferred_type or "auto",
                 source_node=initial_value,
             )
-            self.register_query_metadata_alias(
+            if self.is_query_metadata_snapshot_local(
                 node.name,
                 inferred_type or "auto",
-                initial_value,
-            )
+            ):
+                self.query_metadata_aliases[node.name] = self.query_metadata_name(
+                    node.name
+                )
+            else:
+                self.register_query_metadata_alias(
+                    node.name,
+                    inferred_type or "auto",
+                    initial_value,
+                )
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
             self.register_variable_type(node.name, var_type, node, initial_value)
-            self.register_query_metadata_alias(node.name, var_type, initial_value)
+            if self.is_query_metadata_snapshot_local(node.name, var_type):
+                self.query_metadata_aliases[node.name] = self.query_metadata_name(
+                    node.name
+                )
+            else:
+                self.register_query_metadata_alias(node.name, var_type, initial_value)
             # Check for special memory qualifiers
             qualifiers = []
             if hasattr(node, "qualifiers"):
@@ -472,7 +491,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
             self.emit(f"{declaration};")
-            metadata_declaration = self.query_metadata_declaration(node.name, var_type)
+            initial_value = getattr(
+                node,
+                "initial_value",
+                getattr(node, "value", None),
+            )
+            effective_var_type = var_type
+            if effective_var_type is None and initial_value is not None:
+                effective_var_type = self.expression_result_type(initial_value)
+            metadata_declaration = self.query_metadata_snapshot_declaration(
+                node.name,
+                effective_var_type,
+                initial_value,
+            )
+            if metadata_declaration is None:
+                metadata_declaration = self.query_metadata_declaration(
+                    node.name,
+                    effective_var_type,
+                )
             if metadata_declaration:
                 self.emit(f"{metadata_declaration};")
             length_declaration = self.structured_buffer_length_declaration(
@@ -490,9 +526,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return node.name
 
     def visit_ExpressionStatementNode(self, node):
+        if isinstance(node.expression, AssignmentNode):
+            self.emit_assignment_statement(node.expression)
+            return None
+
         expr = self.visit(node.expression)
         if expr and expr.strip():
             self.emit(f"{expr};")
+
+    def emit_assignment_statement(self, node):
+        assignment = self.format_assignment_expression(node)
+        if assignment and assignment.strip():
+            self.emit(f"{assignment};")
+
+        metadata_assignment = self.format_query_metadata_assignment(node)
+        if metadata_assignment:
+            self.emit(f"{metadata_assignment};")
 
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
@@ -2962,6 +3011,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return local_names, alias_sources
 
+    def collect_function_resource_assignments(self, func, local_resource_names):
+        """Collect simple assignments into local queryable resource variables."""
+        assignment_sources = {}
+        body = getattr(func, "body", [])
+
+        for node in self.query_walk_nodes(body):
+            if not isinstance(node, AssignmentNode):
+                continue
+            if getattr(node, "operator", "=") != "=":
+                continue
+            target = getattr(node, "target", None)
+            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+                continue
+            target_name = self.get_expression_name(target)
+            if target_name not in local_resource_names:
+                continue
+            value = getattr(node, "value", None)
+            if value is not None:
+                assignment_sources.setdefault(target_name, []).append(value)
+
+        return assignment_sources
+
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
         return_sources = {}
@@ -3098,10 +3169,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         local_resource_names = {}
         local_alias_sources = {}
+        local_assignment_sources = {}
         for func_name, func in functions_by_name.items():
             names, aliases = self.collect_function_resource_aliases(func)
             local_resource_names[func_name] = names
             local_alias_sources[func_name] = aliases
+            local_assignment_sources[func_name] = (
+                self.collect_function_resource_assignments(func, names)
+            )
+        local_metadata_snapshots = {func_name: set() for func_name in functions_by_name}
 
         global_resource_names = {
             getattr(var, "name", None)
@@ -3155,14 +3231,36 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             visited.add(resource_name)
 
             aliases = local_alias_sources.get(func_name, {})
-            if resource_name in aliases:
-                return mark_resolved_resource(
-                    func_name,
-                    aliases[resource_name],
-                    visited,
-                )
-
+            assignments = local_assignment_sources.get(func_name, {})
             if resource_name in local_resource_names.get(func_name, set()):
+                if resource_name in assignments:
+                    snapshot_names = local_metadata_snapshots.setdefault(
+                        func_name,
+                        set(),
+                    )
+                    before = len(snapshot_names)
+                    snapshot_names.add(resource_name)
+                    changed = len(snapshot_names) != before
+                    sources = []
+                    if resource_name in aliases:
+                        sources.append(aliases[resource_name])
+                    sources.extend(assignments.get(resource_name, []))
+                    for source in sources:
+                        changed = (
+                            mark_resolved_resource(
+                                func_name,
+                                source,
+                                visited.copy(),
+                            )
+                            or changed
+                        )
+                    return changed
+                if resource_name in aliases:
+                    return mark_resolved_resource(
+                        func_name,
+                        aliases[resource_name],
+                        visited,
+                    )
                 return False
 
             if resource_name in function_parameter_names.get(func_name, set()):
@@ -3222,6 +3320,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for func_name, names in local_resource_names.items()
             if names
         }
+        self.query_metadata_snapshot_locals_by_function = {
+            func_name: names
+            for func_name, names in local_metadata_snapshots.items()
+            if names
+        }
         return (
             global_names,
             {func_name: names for func_name, names in function_params.items() if names},
@@ -3240,6 +3343,60 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.query_metadata_aliases.pop(name, None)
             return
         self.query_metadata_aliases[name] = metadata_expr
+
+    def is_query_metadata_snapshot_local(self, name, type_name=None):
+        """Return whether a local resource needs its own mutable metadata sidecar."""
+        if not self.current_function_name or not name:
+            return False
+        snapshot_names = self.query_metadata_snapshot_locals_by_function.get(
+            self.current_function_name,
+            set(),
+        )
+        if name not in snapshot_names:
+            return False
+        if type_name is not None and not self.is_queryable_resource_type(type_name):
+            return False
+        return True
+
+    def query_metadata_snapshot_declaration(self, name, type_name, initial_value=None):
+        """Return a local metadata sidecar declaration for reassigned resources."""
+        if not self.is_query_metadata_snapshot_local(name, type_name):
+            return None
+
+        declarator = self.format_typed_declarator(
+            self.query_metadata_type(type_name),
+            self.query_metadata_name(name),
+            dynamic_array_as_pointer=False,
+        )
+        metadata_expr = None
+        if initial_value is not None:
+            metadata_expr = self.query_metadata_expression(initial_value)
+        if metadata_expr is None:
+            metadata_expr = "{}"
+        return f"{declarator} = {metadata_expr}"
+
+    def format_query_metadata_assignment(self, node):
+        """Return a metadata sidecar update for a reassigned local resource."""
+        if getattr(node, "operator", "=") != "=":
+            return None
+
+        target_node = getattr(node, "target", None)
+        if not isinstance(target_node, (IdentifierNode, VariableNode, str)):
+            return None
+        target_name = self.get_expression_name(target_node)
+        target_type = self.variable_types.get(target_name)
+        if not self.is_query_metadata_snapshot_local(target_name, target_type):
+            return None
+
+        metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
+        if metadata_expr is None:
+            resource_type = self.resource_base_type(target_type) or target_type
+            resource_type = resource_type or "resource"
+            metadata_expr = (
+                "/* unsupported CUDA resource query: metadata unavailable for "
+                f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+            )
+        return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
 
     def query_metadata_expression(self, resource_expr):
         """Return CUDA query metadata paired with a resource expression."""

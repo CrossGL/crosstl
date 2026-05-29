@@ -10215,6 +10215,107 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_assigned_resource_aliases_update_cuda_metadata(self):
+        """Test CUDA metadata snapshots track reassigned resource aliases."""
+        source_code = """
+        shader ResourceQueryAssignedAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            image2D imageMap;
+            image2D fallbackImage;
+            sampler2d textureGrid[4];
+            image2D imageGrid[4];
+
+            bool choosePrimary() {
+                return true;
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(bool usePrimary, int slot) {
+                    sampler2d selectedTex = colorMap;
+                    image2D selectedImage = imageMap;
+                    if (usePrimary) {
+                        selectedTex = textureGrid[slot];
+                        selectedImage = imageGrid[slot];
+                    } else {
+                        selectedTex = fallbackMap;
+                        selectedImage = fallbackImage;
+                    }
+                    ivec2 selectedTexSize = textureSize(selectedTex, 0);
+                    ivec2 selectedImageSize = imageSize(selectedImage);
+                    consume(selectedTex, selectedImage);
+
+                    sampler2d unsafeTex = colorMap;
+                    if (usePrimary) {
+                        unsafeTex = choosePrimary() ? colorMap : fallbackMap;
+                    }
+                    ivec2 unsafeTexSize = textureSize(unsafeTex, 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[4] = {};" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[4] = {};" in cuda_code
+        assert (
+            "CglResourceQueryInfo selectedTex_metadata = colorMap_metadata;"
+            in cuda_code
+        )
+        assert (
+            "CglResourceQueryInfo selectedImage_metadata = imageMap_metadata;"
+            in cuda_code
+        )
+        assert "selectedTex_metadata = textureGrid_metadata[slot];" in cuda_code
+        assert "selectedImage_metadata = imageGrid_metadata[slot];" in cuda_code
+        assert "selectedTex_metadata = fallbackMap_metadata;" in cuda_code
+        assert "selectedImage_metadata = fallbackImage_metadata;" in cuda_code
+        assert (
+            "int2 selectedTexSize = cgl_textureSize_sampler2D"
+            "(selectedTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 selectedImageSize = cgl_imageSize_image2D"
+            "(selectedImage_metadata);" in cuda_code
+        )
+        assert (
+            "consume(selectedTex, selectedTex_metadata, selectedImage, "
+            "selectedImage_metadata);" in cuda_code
+        )
+        assert (
+            "CglResourceQueryInfo unsafeTex_metadata = colorMap_metadata;" in cuda_code
+        )
+        assert (
+            "unsafeTex_metadata = /* unsupported CUDA resource query: "
+            "metadata unavailable for sampler2D assignment */ CglResourceQueryInfo{};"
+            in cuda_code
+        )
+        assert (
+            "int2 unsafeTexSize = cgl_textureSize_sampler2D"
+            "(unsafeTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 selectedTexSize = cgl_textureSize_sampler2D(colorMap_metadata"
+            not in cuda_code
+        )
+        assert "selectedTex_metadata = (choosePrimary()" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """
