@@ -3558,6 +3558,24 @@ class MetalCodeGen:
                     stmt.name, acceleration_structure_array_alias
                 )
                 return f"{indent_str}{diagnostic}"
+            ray_function_table_array_alias = (
+                self.unsupported_metal_ray_function_table_array_alias_source(
+                    initial_value
+                )
+            )
+            if ray_function_table_array_alias is not None:
+                self.local_variable_types[stmt.name] = var_type
+                self.unsupported_metal_ray_function_table_array_variables[stmt.name] = (
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        ray_function_table_array_alias
+                    ]
+                )
+                diagnostic = (
+                    self.unsupported_metal_ray_function_table_array_alias_diagnostic(
+                        stmt.name, ray_function_table_array_alias
+                    )
+                )
+                return f"{indent_str}{diagnostic}"
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -5244,6 +5262,11 @@ class MetalCodeGen:
                 return unsupported_value
             unsupported_value = (
                 self.unsupported_metal_acceleration_structure_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
             )
             if unsupported_value is not None:
                 return unsupported_value
@@ -7029,6 +7052,18 @@ class MetalCodeGen:
             f"are not valid Metal buffer parameters ({name}) */\n"
         )
 
+    def unsupported_metal_ray_function_table_array_alias_diagnostic(
+        self, name, source_name
+    ):
+        table_kind = self.unsupported_metal_ray_function_table_array_variables.get(
+            source_name, "ray function table"
+        )
+        return (
+            "/* unsupported Metal ray tracing resource: local "
+            f"{table_kind} alias '{name}' cannot be initialized from "
+            f"unsupported {table_kind} array '{source_name}' */\n"
+        )
+
     def metal_ray_function_table_kind(self, vtype):
         if self.is_visible_function_table_type(vtype):
             return "visible_function_table"
@@ -7043,6 +7078,12 @@ class MetalCodeGen:
         if self.resource_array_parameter(vtype, node) is None:
             return None
         return table_kind
+
+    def unsupported_metal_ray_function_table_array_alias_source(self, expr):
+        source_name = self.expression_name(expr)
+        if source_name in self.unsupported_metal_ray_function_table_array_variables:
+            return source_name
+        return None
 
     def unsupported_metal_ray_function_table_array_reason(self, expr):
         table_name = self.expression_name(expr)
@@ -11720,6 +11761,10 @@ class MetalCodeGen:
             param_name, param_type = (
                 parameter_infos[index] if index < len(parameter_infos) else (None, None)
             )
+            if self.is_unsupported_metal_ray_function_table_array_parameter(
+                func_name, index
+            ):
+                continue
             if self.is_unsupported_metal_acceleration_structure_array_parameter(
                 func_name, index
             ):
@@ -11736,6 +11781,22 @@ class MetalCodeGen:
                 if counter is not None:
                     args.append(counter)
         return args
+
+    def is_unsupported_metal_ray_function_table_array_parameter(self, func_name, index):
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        if index >= len(parameter_nodes):
+            return False
+        parameter = parameter_nodes[index]
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        previous_function_name = self.current_function_name
+        self.current_function_name = func_name
+        try:
+            return (
+                self.metal_ray_function_table_array_parameter_kind(raw_type, parameter)
+                is not None
+            )
+        finally:
+            self.current_function_name = previous_function_name
 
     def is_unsupported_metal_acceleration_structure_array_parameter(
         self, func_name, index

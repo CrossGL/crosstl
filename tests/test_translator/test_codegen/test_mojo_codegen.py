@@ -10795,6 +10795,127 @@ def test_aggregate_target_shape_preserves_nested_explicit_constructors():
     assert "var transforms = InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            vec3[2] badReturn(bool choose) {
+                return {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*return value array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct VecBox {
+                vec3 values[2];
+                int tag;
+            };
+
+            VecBox badBox(int mode) {
+                return VecBox(
+                    {
+                        match mode {
+                            0 => vec2(1.0, 2.0),
+                            _ => vec3(1.0, 2.0, 3.0)
+                        },
+                        vec3(4.0, 5.0, 6.0)
+                    },
+                    1
+                );
+            }
+            """,
+            r"aggregate target.*return value field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct VecBox {
+                vec3 values[2];
+                int tag;
+            };
+
+            VecBox badNamedBox(int mode) {
+                return VecBox {
+                    values: {
+                        match mode {
+                            0 => vec2(1.0, 2.0),
+                            _ => vec3(1.0, 2.0, 3.0)
+                        },
+                        vec3(4.0, 5.0, 6.0)
+                    },
+                    tag: 1
+                };
+            }
+            """,
+            r"aggregate target.*return value field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct MatrixBox {
+                mat2 transforms[2];
+                int tag;
+            };
+
+            MatrixBox badMatrixBox() {
+                return MatrixBox(
+                    {
+                        mat2(1.0, 0.0, 0.0, 1.0),
+                        vec3(1.0, 2.0, 3.0)
+                    },
+                    1
+                );
+            }
+            """,
+            r"aggregate target.*return value field MatrixBox\.transforms"
+            r" array literal element 2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_return_and_struct_fields(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_return_struct_field_constructors():
+    source = """
+    struct AggregateBox {
+        vec3 values[2];
+        mat2 transforms[1];
+        int tag;
+    };
+
+    AggregateBox okBox(bool choose, int mode) {
+        return AggregateBox {
+            values: {
+                choose ? vec3(vec2(1.0, 2.0), 3.0) : vec3(4.0, 5.0, 6.0),
+                match mode {
+                    0 => vec3(vec2(7.0, 8.0), 9.0),
+                    _ => vec3(10.0, 11.0, 12.0)
+                }
+            },
+            transforms: {mat2(vec2(1.0, 0.0), vec2(0.0, 1.0))},
+            tag: 1
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "struct AggregateBox:" in generated_code
+    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+
+
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
     source = """
     generic<T, E> struct Result {

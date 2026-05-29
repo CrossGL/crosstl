@@ -6746,6 +6746,75 @@ def test_metal_arrayed_intersection_function_table_parameter_emits_diagnostic():
     assert "intersectionFunctions[0].size()" not in generated
 
 
+def test_metal_ray_function_table_array_helper_aliases_emit_diagnostics():
+    code = """
+    shader rt {
+        struct CallableData {
+            vec4 color;
+        };
+
+        visible_function_table<CallableData> callables[2] @binding(1);
+        intersection_function_table<instancing> intersectionFunctions[2]
+            @binding(3);
+
+        void invoke(
+            visible_function_table<CallableData> tables[2],
+            uint shaderIndex,
+            CallableData& data
+        ) {
+            let tableAlias = tables;
+            CallShader(tableAlias[shaderIndex], shaderIndex, data);
+        }
+
+        uint tableSize(
+            intersection_function_table<instancing> tables[2],
+            uint idx
+        ) {
+            let tableAlias = tables;
+            return tableAlias[idx].size();
+        }
+
+        ray_generation {
+            void main() {
+                CallableData data;
+                data.color = vec4(1.0);
+                invoke(callables, 0u, data);
+                uint count = tableSize(intersectionFunctions, 1u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "arrays of visible_function_table are not valid Metal buffer parameters"
+        in generated
+    )
+    assert (
+        "arrays of intersection_function_table are not valid Metal buffer parameters"
+        in generated
+    )
+    assert (
+        "local visible_function_table alias 'tableAlias' cannot be initialized "
+        "from unsupported visible_function_table array 'tables'"
+    ) in generated
+    assert (
+        "local intersection_function_table alias 'tableAlias' cannot be "
+        "initialized from unsupported intersection_function_table array 'tables'"
+    ) in generated
+    assert "void invoke(uint shaderIndex, thread CallableData& data)" in generated
+    assert "uint tableSize(uint idx)" in generated
+    assert "invoke(0u, data);" in generated
+    assert "uint count = tableSize(1u);" in generated
+    assert "invoke(callables" not in generated
+    assert "tableSize(intersectionFunctions" not in generated
+    assert "visible_function_table<void(thread void" not in generated
+    assert "tableAlias = tables" not in generated
+    assert "tableAlias[shaderIndex]" not in generated
+    assert "tableAlias[idx].size()" not in generated
+    assert "return 0 /* unsupported Metal ray tracing resource:" in generated
+
+
 def test_ray_intersection_stage_lowers_to_metal_intersection_attribute():
     code = """
     shader rt {

@@ -13250,6 +13250,90 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_struct_pointer_array_call_objects_use_cuda_metadata(
+        self,
+    ):
+        """Test pointer-returned struct array-member queries read CUDA sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d textures[3];
+            sampler2DMS msTextures[2];
+            image2D images[3];
+            image2DMS msImages[2];
+        };
+
+        shader PointerReturnedResourceArrayQueryCallObjects {
+            fn chooseBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                return bundle;
+            }
+
+            fn chooseLocalBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                ResourceBundle* alias = chooseBundle(bundle);
+                return alias;
+            }
+
+            compute {
+                void main(ResourceBundle* bundle, int slot, int sampleSlot) {
+                    ivec2 pointerTex =
+                        textureSize(chooseBundle(bundle)->textures[slot], 0);
+                    int pointerLevels =
+                        textureQueryLevels(chooseBundle(bundle)->textures[slot]);
+                    int pointerSamples =
+                        textureSamples(
+                            chooseLocalBundle(bundle)->msTextures[sampleSlot]
+                        );
+                    ivec2 pointerImage =
+                        imageSize(chooseLocalBundle(bundle)->images[slot]);
+                    int pointerImageSamples =
+                        imageSamples(
+                            chooseLocalBundle(bundle)->msImages[sampleSlot]
+                        );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "CglResourceQueryInfo textures_metadata[3];" in cuda_code
+        assert "CglResourceQueryInfo msTextures_metadata[2];" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[3];" in cuda_code
+        assert "CglResourceQueryInfo msImages_metadata[2];" in cuda_code
+        assert (
+            "int2 pointerTex = cgl_textureSize_sampler2D"
+            "(chooseBundle(bundle)->textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int pointerLevels = cgl_textureQueryLevels_sampler2D"
+            "(chooseBundle(bundle)->textures_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int pointerSamples = cgl_textureSamples_sampler2DMS"
+            "(chooseLocalBundle(bundle)->msTextures_metadata[sampleSlot]);" in cuda_code
+        )
+        assert (
+            "int2 pointerImage = cgl_imageSize_image2D"
+            "(chooseLocalBundle(bundle)->images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int pointerImageSamples = cgl_imageSamples_image2DMS"
+            "(chooseLocalBundle(bundle)->msImages_metadata[sampleSlot]);" in cuda_code
+        )
+        assert "textureSize metadata unavailable on sampler2D" not in cuda_code
+        assert "textureSamples metadata unavailable on sampler2DMS" not in cuda_code
+        assert "imageSize metadata unavailable on image2D" not in cuda_code
+        assert "imageSamples metadata unavailable on image2DMS" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageSamples(" not in cuda_code
+
     def test_resource_query_struct_constructors_forward_cuda_member_metadata(self):
         """Test resource struct constructors carry embedded metadata sidecars."""
         source_code = """

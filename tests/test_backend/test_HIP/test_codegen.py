@@ -10661,6 +10661,117 @@ class TestHipCodeGen:
         assert "symbol.size(kernelName)" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hip_module_kernel_array_member_scalar_outputs_clear_stale_metadata(
+        self,
+    ):
+        """Test module/kernel scalar array/member outputs clear stale metadata."""
+        code = """
+        struct KernelScalarOutputs {
+            unsigned int kernelCount;
+            int attributeValue;
+            size_t paramSize;
+        };
+
+        void queryModuleKernelArrayMemberScalars(
+            hipModule_t module,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            unsigned int* counts,
+            size_t* sizes,
+            const char** names,
+            KernelScalarOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&counts, &staleSize, devicePtr);
+            hipModuleGetFunctionCount(&counts[0], module);
+            values[0] = counts[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryGetKernelCount(&holder->kernelCount, library);
+            values[1] = holder->kernelCount;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetAttribute(
+                &holder->attributeValue,
+                HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                kernel,
+                0
+            );
+            values[2] = holder->attributeValue;
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipKernelGetName(&names[0], kernel);
+            names[1] = names[0];
+
+            hipGetSymbolSize(&sizes[0], names[0]);
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetParamInfo(kernel, 0, &sizes[0], &holder->paramSize);
+            sizes[1] = sizes[0];
+            sizes[2] = holder->paramSize;
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            if (hipKernelGetParamInfo(kernel, 1, &sizes[3], &sizes[4]) == hipSuccess) {
+                sizes[5] = sizes[3];
+                sizes[6] = sizes[4];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            "// HIP module get function count: output: counts[0], module: module",
+            (
+                "// HIP library get kernel count: output: holder->kernelCount, "
+                "library: library"
+            ),
+            (
+                "// HIP kernel get attribute: output: holder->attributeValue, "
+                "attribute: HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, "
+                "kernel: kernel, device: 0"
+            ),
+            "// HIP kernel get name: output: names[0], kernel: kernel",
+            (
+                "// HIP kernel get parameter info: kernel: kernel, "
+                "param index: 0, offset output: sizes[0], "
+                "size output: holder->paramSize"
+            ),
+            (
+                "if (((/* HIP kernel get parameter info: kernel: kernel, "
+                "param index: 1, offset output: sizes[3], "
+                "size output: sizes[4] */ hipSuccess) == hipSuccess))"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+
+        for index, expression in [
+            (0, "counts[0]"),
+            (1, "holder->kernelCount"),
+            (2, "holder->attributeValue"),
+        ]:
+            assert f"values[{index}] = {expression};" in result
+            assert f"values[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (1, "sizes[0]"),
+            (2, "holder->paramSize"),
+            (5, "sizes[3]"),
+            (6, "sizes[4]"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        assert "names[1] = names[0];" in result
+        assert "names[1] = (/* HIP device query:" not in result
+        assert "symbol.size(names[0])" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_hip_module_library_load_array_outputs_clear_stale_metadata(self):
         """Test module/library/link load outputs clear stale array/member metadata."""
         code = """
@@ -13289,6 +13400,175 @@ class TestHipCodeGen:
             assert f"sizes[{index}] = {expression};" in result
             assert f"sizes[{index}] = (/* HIP device query:" not in result
         assert "values[0] = attrValue.cooperative;" in result
+        assert "values[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_graph_array_member_param_outputs_clear_stale_metadata(self):
+        """Test graph get-param array/member outputs clear prior metadata."""
+        code = """
+        struct GraphParamOutputs {
+            hipHostNodeParams host;
+            hipMemAllocNodeParams alloc;
+            hipExternalSemaphoreSignalNodeParams signal;
+            hipKernelNodeAttrValue attr;
+            void* freePtr;
+            size_t graphBytes;
+        };
+
+        void queryGraphParamOutputs(
+            hipDeviceptr_t devicePtr,
+            hipGraphNode_t kernelNode,
+            hipGraphNode_t memcpyNode,
+            hipGraphNode_t memsetNode,
+            hipGraphNode_t hostNode,
+            hipGraphNode_t allocNode,
+            hipGraphNode_t freeNode,
+            hipGraphNode_t signalNode,
+            hipGraphNode_t waitNode,
+            hipGraphNode_t driverMemcpyNode,
+            int device,
+            hipKernelNodeParams* kernelParams,
+            hipMemcpy3DParms* copyParams,
+            hipMemsetParams* memsetParams,
+            hipExternalSemaphoreWaitParams* waitParams,
+            HIP_MEMCPY3D* driverCopies,
+            GraphParamOutputs* holder,
+            void** ptrs,
+            size_t* sizes,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&kernelParams, &staleSize, devicePtr);
+            hipGraphKernelNodeGetParams(kernelNode, &kernelParams[0]);
+            ptrs[0] = kernelParams[0].func;
+
+            hipMemGetAddressRange((void**)&copyParams, &staleSize, devicePtr);
+            if (hipGraphMemcpyNodeGetParams(memcpyNode, &copyParams[1]) == hipSuccess) {
+                ptrs[1] = copyParams[1].srcPtr.ptr;
+            }
+
+            hipMemGetAddressRange((void**)&memsetParams, &staleSize, devicePtr);
+            hipGraphMemsetNodeGetParams(memsetNode, &memsetParams[2]);
+            sizes[0] = memsetParams[2].width;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipGraphHostNodeGetParams(hostNode, &holder->host) != hipSuccess) {
+                ptrs[2] = holder->host.fn;
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphMemAllocNodeGetParams(allocNode, &holder->alloc);
+            sizes[1] = holder->alloc.bytesize;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphMemFreeNodeGetParams(freeNode, &holder->freePtr);
+            ptrs[3] = holder->freePtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphKernelNodeGetAttribute(
+                kernelNode, hipKernelNodeAttributeCooperative, &holder->attr
+            );
+            values[0] = holder->attr.cooperative;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphExternalSemaphoresSignalNodeGetParams(
+                signalNode, &holder->signal
+            );
+            ptrs[4] = holder->signal.extSemArray;
+
+            hipMemGetAddressRange((void**)&waitParams, &staleSize, devicePtr);
+            if (hipGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams[0]) == hipSuccess) {
+                ptrs[5] = waitParams[0].extSemArray;
+            }
+
+            hipMemGetAddressRange((void**)&driverCopies, &staleSize, devicePtr);
+            hipDrvGraphMemcpyNodeGetParams(driverMemcpyNode, &driverCopies[0]);
+            ptrs[6] = driverCopies[0].srcDevice;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetGraphMemAttribute(
+                device, hipGraphMemAttrUsedMemCurrent, &holder->graphBytes
+            );
+            sizes[2] = holder->graphBytes;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP graph kernel node get params: node: kernelNode, "
+                "params: (&kernelParams[0])"
+            ),
+            (
+                "HIP graph memcpy node get params: node: memcpyNode, "
+                "params: (&copyParams[1])"
+            ),
+            (
+                "HIP graph memset node get params: node: memsetNode, "
+                "params: (&memsetParams[2])"
+            ),
+            (
+                "HIP graph host node get params: node: hostNode, "
+                "params: (&holder->host)"
+            ),
+            (
+                "HIP graph memory alloc node get params: node: allocNode, "
+                "params output: holder->alloc"
+            ),
+            (
+                "HIP graph memory free node get params: node: freeNode, "
+                "pointer output: holder->freePtr"
+            ),
+            (
+                "HIP graph kernel node get attribute: node: kernelNode, "
+                "attribute: hipKernelNodeAttributeCooperative, output: holder->attr"
+            ),
+            (
+                "HIP graph external semaphore signal node get params: "
+                "node: signalNode, params: (&holder->signal)"
+            ),
+            (
+                "HIP graph external semaphore wait node get params: "
+                "node: waitNode, params: (&waitParams[0])"
+            ),
+            (
+                "HIP driver graph memcpy node get params: "
+                "node: driverMemcpyNode, params output: driverCopies[0]"
+            ),
+            (
+                "HIP device graph memory get attribute: device: device, "
+                "attribute: hipGraphMemAttrUsedMemCurrent, output: holder->graphBytes"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+
+        for index, expression in [
+            (0, "kernelParams[0].func"),
+            (1, "copyParams[1].srcPtr.ptr"),
+            (2, "holder->host.fn"),
+            (3, "holder->freePtr"),
+            (4, "holder->signal.extSemArray"),
+            (5, "waitParams[0].extSemArray"),
+            (6, "driverCopies[0].srcDevice"),
+        ]:
+            assert f"ptrs[{index}] = {expression};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "memsetParams[2].width"),
+            (1, "holder->alloc.bytesize"),
+            (2, "holder->graphBytes"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        assert "values[0] = holder->attr.cooperative;" in result
         assert "values[0] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result

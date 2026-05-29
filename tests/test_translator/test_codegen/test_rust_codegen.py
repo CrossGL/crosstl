@@ -16028,7 +16028,7 @@ def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_legacy_global_array_nodes_emit_static_declarations():
+def test_legacy_global_array_nodes_emit_static_declarations(tmp_path):
     ast = ShaderNode(
         "Legacy",
         ExecutionModel.GENERAL_PURPOSE,
@@ -16058,6 +16058,7 @@ def test_legacy_global_array_nodes_emit_static_declarations():
     assert "static INITIALIZED: [f32; 4] = [1.0, 2.0, 0.0, 0.0];" in generated_code
     assert "\nlet weights:" not in generated_code
     assert "\nlet initialized:" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_basic_shader():

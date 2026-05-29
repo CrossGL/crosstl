@@ -4989,6 +4989,41 @@ shader MetalRayFunctionTableArrayDiagnosticValidation {
 """
 
 
+METAL_RAY_FUNCTION_TABLE_ARRAY_HELPER_DIAGNOSTIC_SHADER = """
+shader MetalRayFunctionTableArrayHelperDiagnosticValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables[2] @binding(1);
+    intersection_function_table<instancing> intersectionFunctions[2] @binding(3);
+
+    void invoke(
+        visible_function_table<CallableData> tables[2],
+        uint shaderIndex,
+        CallableData& data
+    ) {
+        let tableAlias = tables;
+        CallShader(tableAlias[shaderIndex], shaderIndex, data);
+    }
+
+    uint tableSize(intersection_function_table<instancing> tables[2], uint idx) {
+        let tableAlias = tables;
+        return tableAlias[idx].size();
+    }
+
+    ray_generation {
+        void main() {
+            CallableData data;
+            data.color = vec4(1.0);
+            invoke(callables, 0u, data);
+            uint count = tableSize(intersectionFunctions, 1u);
+        }
+    }
+}
+"""
+
+
 METAL_TEXTURE_3D_PROJECTED_OFFSET_FRAGMENT_SHADER = """
 shader MetalTexture3DProjectedOffsetValidation {
     sampler3D volumeMap;
@@ -8995,6 +9030,48 @@ def test_generated_metal_ray_function_table_array_diagnostics_compile_with_metal
         "arrays of intersection_function_table are not valid Metal buffer parameters"
         in code
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_function_table_array_helper_diagnostics_compile_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_function_table_array_helper_diagnostics.metal"
+    output = tmp_path / "ray_function_table_array_helper_diagnostics.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(
+            METAL_RAY_FUNCTION_TABLE_ARRAY_HELPER_DIAGNOSTIC_SHADER
+        )
+    )
+    assert "arrays of visible_function_table are not valid Metal buffer parameters" in (
+        code
+    )
+    assert (
+        "arrays of intersection_function_table are not valid Metal buffer parameters"
+        in code
+    )
+    assert "local visible_function_table alias" in code
+    assert "local intersection_function_table alias" in code
+    assert "invoke(callables" not in code
+    assert "tableSize(intersectionFunctions" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

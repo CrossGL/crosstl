@@ -46,7 +46,13 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
-def compile_generated_slang(generated_code, tmp_path, stage, profile="sm_6_0"):
+def compile_generated_slang(
+    generated_code,
+    tmp_path,
+    stage,
+    profile="sm_6_0",
+    entry="main",
+):
     slangc = shutil.which("slangc")
     if slangc is None:
         pytest.skip("slangc is not installed")
@@ -61,7 +67,7 @@ def compile_generated_slang(generated_code, tmp_path, stage, profile="sm_6_0"):
             "-target",
             "hlsl",
             "-entry",
-            "main",
+            entry,
             "-stage",
             stage,
             "-profile",
@@ -4795,6 +4801,85 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_Position" not in generated_code
     assert ": gl_FragColor" not in generated_code
     assert ": gl_GlobalInvocationID" not in generated_code
+
+
+def test_slangc_smoke_compiles_generated_stage_interfaces_if_available(tmp_path):
+    code = """
+    shader SlangStageInterfaceCompileSmoke {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(
+                VSInput input,
+                uint vertexId @ gl_VertexID,
+                uint instanceId @ gl_InstanceID
+            ) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv + vec2(
+                    float(vertexId & 1u),
+                    float(instanceId & 1u)
+                );
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                VSOutput input,
+                bool frontFacing @ gl_FrontFacing,
+                vec4 fragCoord @ gl_FragCoord
+            ) @ gl_FragColor {
+                float facing = frontFacing ? 1.0 : 0.5;
+                return vec4(input.uv, facing, fragCoord.w);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float3 position : POSITION;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 position : SV_Position;" in generated_code
+    assert (
+        "VSOutput VSMain(VSInput input, uint vertexId : SV_VertexID, "
+        "uint instanceId : SV_InstanceID)" in generated_code
+    )
+    assert (
+        "float4 PSMain(VSOutput input, bool frontFacing : SV_IsFrontFace, "
+        "float4 fragCoord : SV_Position) : SV_Target" in generated_code
+    )
+    assert "float4(input.uv, facing, fragCoord.w)" in generated_code
+    assert ": gl_Position" not in generated_code
+    assert ": gl_VertexID" not in generated_code
+    assert ": gl_InstanceID" not in generated_code
+    assert ": gl_FrontFacing" not in generated_code
+    assert ": gl_FragCoord" not in generated_code
+    assert ": gl_FragColor" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "vertex",
+        profile="vs_6_0",
+        entry="VSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
 
 
 @pytest.mark.parametrize(
