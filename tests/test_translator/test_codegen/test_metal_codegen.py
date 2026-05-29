@@ -2327,6 +2327,95 @@ def test_metal_unsigned_integer_literal_suffix_codegen():
     assert "7, u" not in generated_code
 
 
+def test_metal_global_function_constants_emit_msl_attributes_and_default_diagnostics():
+    code = """
+    shader FunctionConstantCodegen {
+        bool useFast @function_constant(0) = true;
+        int mode @constant_id(1) = 2;
+        float scale @function_constant(2) = 0.5;
+        uint flags @function_constant(3);
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                float value = useFast ? scale : 0.0;
+                return vec4(value + float(mode) + float(flags), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert (
+        "/* unsupported Metal function constant default: 'useFast' initializers "
+        "are not allowed by MSL */"
+    ) in generated_code
+    assert "constant bool useFast [[function_constant(0)]];" in generated_code
+    assert "constant int mode [[function_constant(1)]];" in generated_code
+    assert "constant float scale [[function_constant(2)]];" in generated_code
+    assert "constant uint flags [[function_constant(3)]];" in generated_code
+    assert (
+        "constant bool useFast [[function_constant(0)]] = true;" not in generated_code
+    )
+    assert "constant int mode [[function_constant(1)]] = 2;" not in generated_code
+    assert "constant float scale [[function_constant(2)]] = 0.5;" not in generated_code
+    assert "function constant default: 'flags'" not in generated_code
+    assert "bool useFast;" not in generated_code
+    assert "int mode;" not in generated_code
+    assert "float scale;" not in generated_code
+    assert "float value = useFast ? scale : 0.0;" in generated_code
+
+
+def test_metal_global_function_constants_reject_duplicate_ids():
+    code = """
+    shader DuplicateFunctionConstants {
+        bool useFast @function_constant(0) = true;
+        int mode @constant_id(0) = 2;
+
+        fragment {
+            vec4 main() @gl_FragColor {
+                return useFast ? vec4(float(mode)) : vec4(0.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate Metal function constant id 0",
+    ):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+@pytest.mark.parametrize(
+    ("declaration", "expected_error"),
+    [
+        ("bool useFast @function_constant = true;", "requires an integer id"),
+        ("bool useFast @function_constant(mode) = true;", "requires an integer id"),
+        ("sampler2D tex @function_constant(0);", "cannot use type 'sampler2D'"),
+    ],
+)
+def test_metal_global_function_constants_validate_declarations(
+    declaration, expected_error
+):
+    code = f"""
+    shader InvalidFunctionConstant {{
+        {declaration}
+
+        fragment {{
+            vec4 main() @gl_FragColor {{
+                return vec4(1.0);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=expected_error):
+        MetalCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
 def test_metal_resource_binding_attributes_are_not_parameter_semantics():
     code = """
     shader BindingAttributes {

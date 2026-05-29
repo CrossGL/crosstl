@@ -39,6 +39,23 @@ shader FragmentRangeValidation {
 """
 
 
+METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER = """
+shader MetalFunctionConstantValidation {
+    bool useFast @function_constant(0) = true;
+    int mode @constant_id(1) = 2;
+    float scale @function_constant(2) = 0.5;
+    uint flags @function_constant(3);
+
+    fragment {
+        vec4 main() @ gl_FragColor {
+            float value = useFast ? scale : 0.0;
+            return vec4(value + float(mode) + float(flags), 0.0, 0.0, 1.0);
+        }
+    }
+}
+"""
+
+
 FRAGMENT_STRUCT_INPUT_SHADER = """
 shader FragmentStructInputValidation {
     struct VSOutput {
@@ -5772,6 +5789,34 @@ def test_generated_metal_fragment_smoke_compiles_with_metal(tmp_path):
     source = tmp_path / "fragment_range.metal"
     output = tmp_path / "fragment_range.air"
     code = MetalCodeGen().generate(crosstl.translator.parse(FRAGMENT_RANGE_SHADER))
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_function_constants_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "function_constants.metal"
+    output = tmp_path / "function_constants.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_FUNCTION_CONSTANT_FRAGMENT_SHADER),
+        "fragment",
+    )
+    assert (
+        "/* unsupported Metal function constant default: 'useFast' initializers "
+        "are not allowed by MSL */"
+    ) in code
+    assert "constant bool useFast [[function_constant(0)]];" in code
+    assert "constant int mode [[function_constant(1)]];" in code
+    assert "constant float scale [[function_constant(2)]];" in code
+    assert "constant uint flags [[function_constant(3)]];" in code
+    assert "function constant default: 'flags'" not in code
+    assert "bool useFast;" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

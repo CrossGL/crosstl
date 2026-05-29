@@ -1195,6 +1195,9 @@ class MetalCodeGen:
                 array_suffix = ""
 
             var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if self.is_metal_function_constant_variable(node):
+                continue
+
             lowered_block = self.lowered_glsl_buffer_blocks.get(var_name)
             if lowered_block is not None:
                 binding = self.explicit_resource_binding_index(
@@ -1607,7 +1610,116 @@ class MetalCodeGen:
             value_code = self.generate_constant_expression(value)
             code += f"constant {self.map_type(const_type)} {name} = {value_code};\n"
 
+        used_function_constant_ids = {}
+        for node in getattr(ast, "global_variables", []) or []:
+            function_constant_id = self.metal_function_constant_id(node)
+            if function_constant_id is None:
+                continue
+
+            name = getattr(node, "name", getattr(node, "variable_name", None))
+            previous_name = used_function_constant_ids.get(function_constant_id)
+            if previous_name is not None:
+                raise ValueError(
+                    "Duplicate Metal function constant id "
+                    f"{function_constant_id} for '{name}' and '{previous_name}'"
+                )
+            used_function_constant_ids[function_constant_id] = name
+
+            var_type = getattr(node, "var_type", getattr(node, "vtype", "float"))
+            self.validate_metal_function_constant_type(node, var_type)
+            mapped_type = self.map_type(var_type)
+            initial_value = getattr(node, "initial_value", None)
+            if initial_value is not None:
+                code += (
+                    "/* unsupported Metal function constant default: "
+                    f"'{name}' initializers are not allowed by MSL */\n"
+                )
+            code += (
+                f"constant {mapped_type} {name} "
+                f"[[function_constant({function_constant_id})]];\n"
+            )
+
         return f"{code}\n" if code else ""
+
+    def metal_function_constant_attributes(self, node):
+        attributes = []
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            normalized = str(attr_name).lower()
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in {"function_constant", "constant_id"}:
+                attributes.append(attr)
+        return attributes
+
+    def is_metal_function_constant_variable(self, node):
+        return bool(self.metal_function_constant_attributes(node))
+
+    def metal_function_constant_id(self, node):
+        attributes = self.metal_function_constant_attributes(node)
+        if not attributes:
+            return None
+
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        if len(attributes) > 1:
+            raise ValueError(
+                f"Metal function constant '{name}' has multiple function constant "
+                "attributes"
+            )
+
+        arguments = getattr(attributes[0], "arguments", []) or []
+        function_constant_id = (
+            self.binding_index_value(arguments[0]) if len(arguments) == 1 else None
+        )
+        if function_constant_id is None:
+            raise ValueError(f"Metal function constant '{name}' requires an integer id")
+        return function_constant_id
+
+    def validate_metal_function_constant_type(self, node, var_type):
+        name = getattr(node, "name", getattr(node, "variable_name", None))
+        type_name = self.type_name_string(var_type)
+        mapped_type = self.map_type(var_type)
+        invalid = (
+            self.is_resource_parameter_type(type_name)
+            or self.is_array_type_node(var_type)
+            or "[" in mapped_type
+            or "]" in mapped_type
+            or "*" in mapped_type
+            or "&" in mapped_type
+        )
+        if invalid:
+            raise ValueError(
+                f"Metal function constant '{name}' cannot use type '{type_name}'"
+            )
+
+        if not self.is_metal_function_constant_value_type(mapped_type):
+            raise ValueError(
+                f"Metal function constant '{name}' cannot use type '{type_name}'"
+            )
+
+    def is_metal_function_constant_value_type(self, mapped_type):
+        scalar_types = {
+            "bool",
+            "int",
+            "uint",
+            "int64_t",
+            "uint64_t",
+            "float",
+            "half",
+        }
+        if mapped_type in scalar_types:
+            return True
+
+        for base_type in scalar_types:
+            if mapped_type in {
+                f"{base_type}2",
+                f"{base_type}3",
+                f"{base_type}4",
+            }:
+                return True
+        return False
 
     def format_struct_resource_array_member(self, member):
         name = getattr(member, "name", None)

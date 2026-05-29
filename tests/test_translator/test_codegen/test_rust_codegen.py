@@ -17214,7 +17214,7 @@ def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
     assert "DoWhileNode" not in generated_code
 
 
-def test_bool_string_and_char_literals_emit_rust_syntax():
+def test_bool_string_and_char_literals_emit_rust_syntax(tmp_path):
     code = """
     shader main {
         compute {
@@ -17248,6 +17248,7 @@ def test_bool_string_and_char_literals_emit_rust_syntax():
     assert "marker = 'y';" in generated_code
     assert "True" not in generated_code
     assert "False" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_local_bindings_are_mutable_only_when_reassigned_or_mutated():
