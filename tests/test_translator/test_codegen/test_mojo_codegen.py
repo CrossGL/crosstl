@@ -4784,6 +4784,14 @@ def _generic_payload_enum_direct_resource_payload_source():
         return Result::Ok(image);
     }
 
+    Result<sampler2DMS, int> makeMSTexture(sampler2DMS texture) {
+        return Result::Ok(texture);
+    }
+
+    Result<image2DMS, int> makeMSImage(image2DMS image) {
+        return Result::Ok(image);
+    }
+
     Result<RWStructuredBuffer<int>, int> makeBuffer(
         RWStructuredBuffer<int> values
     ) {
@@ -4803,6 +4811,14 @@ def _generic_payload_enum_direct_resource_payload_source():
     }
 
     Result<image2D[2], int> makeImageArray(image2D images[2]) {
+        return Result::Ok(images);
+    }
+
+    Result<sampler2DMS[2], int> makeMSTextureArray(sampler2DMS textures[2]) {
+        return Result::Ok(textures);
+    }
+
+    Result<image2DMS[2], int> makeMSImageArray(image2DMS images[2]) {
         return Result::Ok(images);
     }
 
@@ -4847,9 +4863,45 @@ def _generic_payload_enum_direct_resource_payload_source():
         };
     }
 
+    int queryDirectMSTextureSamples(Result<sampler2DMS, int> value) {
+        return match value {
+            Result::Ok(texture) => textureSamples(texture),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 fetchDirectMSTexturePayload(
+        Result<sampler2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(texture) => texture.Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
     vec4 loadDirectPayload(Result<image2D, int> value, ivec2 pixel) {
         return match value {
             Result::Ok(image) => imageLoad(image, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int queryDirectMSImageSamples(Result<image2DMS, int> value) {
+        return match value {
+            Result::Ok(image) => imageSamples(image),
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 loadDirectMSImagePayload(
+        Result<image2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(image) => image.Load(pixel, sampleIndex),
             Result::Err(_) => vec4(0.0)
         };
     }
@@ -4862,6 +4914,21 @@ def _generic_payload_enum_direct_resource_payload_source():
         match value {
             Result::Ok(image) => {
                 imageStore(image, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeDirectMSImagePayload(
+        Result<image2DMS, int> value,
+        ivec2 pixel,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(image) => {
+                image.Store(pixel, sampleIndex, color);
             }
             Result::Err(_) => {
             }
@@ -4925,6 +4992,18 @@ def _generic_payload_enum_direct_resource_payload_source():
         };
     }
 
+    vec4 fetchMSTextureArrayPayload(
+        Result<sampler2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(textures) => textures[slot].Load(pixel, sampleIndex),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
     vec4 loadImageArrayPayload(
         Result<image2D[2], int> value,
         int slot,
@@ -4932,6 +5011,18 @@ def _generic_payload_enum_direct_resource_payload_source():
     ) {
         return match value {
             Result::Ok(images) => imageLoad(images[slot], pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadMSImageArrayPayload(
+        Result<image2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        return match value {
+            Result::Ok(images) => images[slot].Load(pixel, sampleIndex),
             Result::Err(_) => vec4(0.0)
         };
     }
@@ -4945,6 +5036,22 @@ def _generic_payload_enum_direct_resource_payload_source():
         match value {
             Result::Ok(images) => {
                 imageStore(images[slot], pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void storeMSImageArrayPayload(
+        Result<image2DMS[2], int> value,
+        int slot,
+        ivec2 pixel,
+        int sampleIndex,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(images) => {
+                images[slot].Store(pixel, sampleIndex, color);
             }
             Result::Err(_) => {
             }
@@ -5039,6 +5146,14 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "var Ok_0: Image2D" in generated_code
     assert "struct Result_image2D_2_int:" in generated_code
     assert "var Ok_0: InlineArray[Image2D, 2]" in generated_code
+    assert "struct Result_sampler2DMS_int:" in generated_code
+    assert "var Ok_0: Texture2DMS" in generated_code
+    assert "struct Result_sampler2DMS_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Texture2DMS, 2]" in generated_code
+    assert "struct Result_image2DMS_int:" in generated_code
+    assert "var Ok_0: Image2DMS" in generated_code
+    assert "struct Result_image2DMS_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Image2DMS, 2]" in generated_code
     assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
     assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
     assert "struct Result_ByteAddressBuffer_int:" in generated_code
@@ -5054,6 +5169,11 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "sample(value.Ok_0, uv)" in generated_code
     assert "image_load(value.Ok_0, pixel)" in generated_code
     assert "image_store(value.Ok_0, pixel, color)" in generated_code
+    assert "texture_samples(value.Ok_0)" in generated_code
+    assert "texel_fetch(value.Ok_0, pixel, sampleIndex)" in generated_code
+    assert "image_samples(value.Ok_0)" in generated_code
+    assert "image_load(value.Ok_0, pixel, sampleIndex)" in generated_code
+    assert "image_store(value.Ok_0, pixel, sampleIndex, color)" in generated_code
     assert "buffer_load(value.Ok_0, index)" in generated_code
     assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
     assert "buffer_load4(value.Ok_0, offset)" in generated_code
@@ -5061,6 +5181,12 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
     assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
     assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
+    assert "texel_fetch(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
+    assert "image_load(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
+    assert (
+        "image_store(value.Ok_0[int(slot)], pixel, sampleIndex, color)"
+        in generated_code
+    )
     assert "buffer_load(value.Ok_0[int(slot)], index)" in generated_code
     assert "buffer_store(value.Ok_0[int(slot)], index, scalar)" in generated_code
     assert "buffer_load4(value.Ok_0[int(slot)], offset)" in generated_code
@@ -5072,6 +5198,20 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "fn texture_size(tex: Texture2D, lod: Int32)" in generated_code
     assert "fn image_size(image: Image2D)" in generated_code
     assert "fn image_store(image: Image2D, " in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32)" in generated_code
+    )
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32)" in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
+        "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
+    )
     assert "fn buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
     assert "fn buffer_load4(buffer: ByteAddressBuffer, " in generated_code
     assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
@@ -5326,6 +5466,76 @@ def test_generic_payload_enum_helper_returned_direct_resource_payload_access_dia
     ],
 )
 def test_generic_payload_enum_helper_returned_global_byte_address_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2DMS readSamples;
+            image2DMS samples;
+            Result<image2DMS, int> pickSamples(bool choose) {
+                return Result::Ok(choose ? readSamples : samples);
+            }
+            void invalidHelperGlobalMSStore(
+                bool choose,
+                ivec2 pixel,
+                int sampleIndex,
+                vec4 color
+            ) {
+                Result<image2DMS, int> value = pickSamples(choose);
+                match value {
+                    Result::Ok(image) => {
+                        image.Store(pixel, sampleIndex, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*readSamples.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2DMS writeSamples[2];
+            image2DMS samples[2];
+            Result<image2DMS[2], int> pickSamples(int mode) {
+                return match mode {
+                    0 => Result::Ok(writeSamples),
+                    _ => Result::Ok(samples)
+                };
+            }
+            vec4 invalidHelperGlobalMSRead(
+                int mode,
+                int slot,
+                ivec2 pixel,
+                int sampleIndex
+            ) {
+                Result<image2DMS[2], int> value = pickSamples(mode);
+                return match value {
+                    Result::Ok(images) => images[slot].Load(pixel, sampleIndex),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"Load.*writeSamples.*writeonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_global_multisample_payload_access_diagnostics(
     source, pattern
 ):
     with pytest.raises(ValueError, match=pattern):

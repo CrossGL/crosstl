@@ -10356,6 +10356,77 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 
 
+def test_directx_wave_active_all_equal_preserves_input_shape():
+    code = """
+    shader WaveAllEqualShapes {
+        compute {
+            uint main(float value, vec2 pair, ivec3 lanes, bvec4 flags, mat2 matrix) {
+                let scalarEqual = WaveActiveAllEqual(value);
+                bvec2 pairEqual = WaveActiveAllEqual(pair);
+                let lanesEqual = WaveActiveAllEqual(lanes);
+                let flagsEqual = WaveActiveAllEqual(flags);
+                let matrixEqual = WaveActiveAllEqual(matrix);
+                return (scalarEqual ? 1u : 0u)
+                    + (pairEqual.x ? 1u : 0u)
+                    + (lanesEqual.y ? 1u : 0u)
+                    + (flagsEqual.z ? 1u : 0u);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "bool scalarEqual = WaveActiveAllEqual(value);",
+        "bool2 pairEqual = WaveActiveAllEqual(pair);",
+        "bool3 lanesEqual = WaveActiveAllEqual(lanes);",
+        "bool4 flagsEqual = WaveActiveAllEqual(flags);",
+        "bool2x2 matrixEqual = WaveActiveAllEqual(matrix);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "bool wrong = WaveActiveAllEqual(pair);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool2 result context, got bool",
+        ),
+        (
+            "bvec2 wrong = WaveActiveAllEqual(value);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool result context, got bool2",
+        ),
+        (
+            "vec2 wrong = WaveActiveAllEqual(pair);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
+            "bool2 result context, got float2",
+        ),
+        (
+            "bool wrong = WaveActiveAllEqual(values);",
+            "DirectX wave intrinsic 'WaveActiveAllEqual' value argument must be "
+            "basic scalar, vector, or matrix, got float[2]",
+        ),
+    ],
+)
+def test_directx_wave_active_all_equal_validates_shape_and_argument(body, match):
+    code = f"""
+    shader BadWaveAllEqualShape {{
+        compute {{
+            uint main(float value, vec2 pair) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("body", "match"),
     [

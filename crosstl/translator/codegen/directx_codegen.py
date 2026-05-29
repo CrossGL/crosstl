@@ -471,6 +471,7 @@ class HLSLCodeGen:
         "min16uint",
         "uint64_t",
     }
+    HLSL_WAVE_BASIC_COMPONENT_TYPES = HLSL_WAVE_NUMERIC_COMPONENT_TYPES | {"bool"}
     HLSL_WAVE_SIZE_LANE_COUNTS = {4, 8, 16, 32, 64, 128}
 
     def __init__(self):
@@ -2702,6 +2703,35 @@ class HLSLCodeGen:
             return "bool"
         return None
 
+    def hlsl_matrix_shape(self, vtype):
+        mapped_type = self.map_type(vtype)
+        for component_type in (
+            "min16float",
+            "min10float",
+            "min16uint",
+            "min16int",
+            "min12int",
+            "uint64_t",
+            "int64_t",
+            "double",
+            "float",
+            "half",
+            "uint",
+            "int",
+            "bool",
+        ):
+            if not mapped_type.startswith(component_type):
+                continue
+            suffix = mapped_type[len(component_type) :]
+            if (
+                len(suffix) == 3
+                and suffix[0] in {"2", "3", "4"}
+                and suffix[1] == "x"
+                and suffix[2] in {"2", "3", "4"}
+            ):
+                return component_type, suffix[0], suffix[2]
+        return None
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -3741,6 +3771,8 @@ class HLSLCodeGen:
     def hlsl_wave_intrinsic_return_type(self, operation, args):
         if operation in self.HLSL_WAVE_UINT_RESULT_INTRINSICS:
             return "uint"
+        if operation == "WaveActiveAllEqual" and args:
+            return self.hlsl_wave_all_equal_return_type(args[0])
         if operation in self.HLSL_WAVE_BOOL_RESULT_INTRINSICS:
             return "bool"
         if operation in self.HLSL_WAVE_UINT4_RESULT_INTRINSICS:
@@ -3772,12 +3804,48 @@ class HLSLCodeGen:
             return self.vector_component_type(base_type), mapped_type
         return None, mapped_type
 
+    def hlsl_wave_basic_value_component_type(self, argument):
+        component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
+        if component_type is not None or mapped_type is None:
+            return component_type, mapped_type
+
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if array_suffix:
+            return None, mapped_type
+        matrix_shape = self.hlsl_matrix_shape(base_type)
+        if matrix_shape:
+            return matrix_shape[0], mapped_type
+        return None, mapped_type
+
+    def hlsl_wave_all_equal_return_type(self, argument):
+        base_type, array_suffix, mapped_type = self.hlsl_wave_argument_base_type(
+            argument
+        )
+        if mapped_type is None or array_suffix:
+            return "bool"
+        if self.is_scalar_value_type(base_type):
+            return "bool"
+        if self.is_vector_value_type(base_type):
+            size = self.map_type(base_type)[-1:]
+            if size in {"2", "3", "4"}:
+                return f"bool{size}"
+        matrix_shape = self.hlsl_matrix_shape(base_type)
+        if matrix_shape:
+            _, rows, columns = matrix_shape
+            return f"bool{rows}x{columns}"
+        return "bool"
+
     def hlsl_result_component_type(self, vtype):
         mapped_type = self.map_type(vtype)
         if self.is_scalar_value_type(mapped_type):
             return mapped_type
         if self.is_vector_value_type(mapped_type):
             return self.vector_component_type(mapped_type)
+        matrix_shape = self.hlsl_matrix_shape(mapped_type)
+        if matrix_shape:
+            return matrix_shape[0]
         return None
 
     def hlsl_wave_result_context_matches(self, actual_type, expected_type):
@@ -3854,9 +3922,20 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_wave_value_argument(
-        self, operation, argument, role, allowed_components, description
+        self,
+        operation,
+        argument,
+        role,
+        allowed_components,
+        description,
+        include_matrices=False,
     ):
-        component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
+        if include_matrices:
+            component_type, mapped_type = self.hlsl_wave_basic_value_component_type(
+                argument
+            )
+        else:
+            component_type, mapped_type = self.hlsl_wave_value_component_type(argument)
         if mapped_type is None:
             return
         if component_type not in allowed_components:
@@ -3885,6 +3964,15 @@ class HLSLCodeGen:
                 "value",
                 self.HLSL_WAVE_INTEGER_COMPONENT_TYPES,
                 "integer scalar or vector",
+            )
+        elif operation == "WaveActiveAllEqual":
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_BASIC_COMPONENT_TYPES,
+                "basic scalar, vector, or matrix",
+                include_matrices=True,
             )
 
         if operation == "WaveReadLaneAt":
@@ -3944,6 +4032,10 @@ class HLSLCodeGen:
             "4",
         }:
             return f"vector{mapped_type[-1]}"
+        matrix_shape = self.hlsl_matrix_shape(mapped_type)
+        if matrix_shape:
+            _, rows, columns = matrix_shape
+            return f"matrix{rows}x{columns}"
         return mapped_type
 
     def hlsl_value_shape_matches(self, expected_type, actual_type):
