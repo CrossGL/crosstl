@@ -9963,6 +9963,9 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                 vec2 ddy,
                 ivec2 offset
             ) {
+                int integerLod = 2;
+                uint unsignedLod = 3u;
+                double preciseLod = 4.0;
                 float direct = textureCompare(tex, uv, depth);
                 float explicitCompare = textureCompare(
                     tex,
@@ -9978,6 +9981,27 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                 );
                 float cubeCompare = textureCompare(cube, direction, depth);
                 float lod = textureCompareLod(tex, compareState, uv, depth, 2.0);
+                float intLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    integerLod
+                );
+                float uintLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    unsignedLod
+                );
+                float doubleLod = textureCompareLod(
+                    tex,
+                    compareState,
+                    uv,
+                    depth,
+                    preciseLod
+                );
                 float grad = textureCompareGrad(
                     tex,
                     compareState,
@@ -9999,6 +10023,9 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
                     + arrayCompare
                     + cubeCompare
                     + lod
+                    + intLod
+                    + uintLod
+                    + doubleLod
                     + grad
                     + offsetCompare
                     + gathered.x
@@ -10023,6 +10050,13 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert "float arrayCompare = layers.SampleCmp(uvLayer, depth);" in generated_code
     assert "float cubeCompare = cube.SampleCmp(direction, depth);" in generated_code
     assert "float lod = tex.SampleCmpLevel(uv, depth, 2.0);" in generated_code
+    assert "float intLod = tex.SampleCmpLevel(uv, depth, integerLod);" in generated_code
+    assert (
+        "float uintLod = tex.SampleCmpLevel(uv, depth, unsignedLod);" in generated_code
+    )
+    assert (
+        "float doubleLod = tex.SampleCmpLevel(uv, depth, preciseLod);" in generated_code
+    )
     assert "float grad = tex.SampleCmpGrad(uv, depth, ddx, ddy);" in generated_code
     assert "float offsetCompare = tex.SampleCmp(uv, depth, offset);" in generated_code
     assert "float4 gathered = tex.GatherCmp(uv, depth);" in generated_code
@@ -10050,6 +10084,8 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 vec2 badDepth = vec2(0.5, 0.25);
+                bool boolLod = true;
+                vec2 badLod = vec2(0.0, 1.0);
                 int intDepth = 1;
                 bool boolDepth = true;
                 ivec2 intDepthPair = ivec2(1, 2);
@@ -10070,6 +10106,18 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 );
                 float badCoordRank = textureCompare(shadowMap, scalarCoord, 0.5);
                 float badCompareRank = textureCompare(shadowMap, uv, badDepth);
+                float boolLodCompare = textureCompareLod(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    boolLod
+                );
+                float vectorLodCompare = textureCompareLod(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    badLod
+                );
                 float intCompare = textureCompare(shadowMap, uv, intDepth);
                 float boolOffsetCompare = textureCompareOffset(
                     shadowMap,
@@ -10179,6 +10227,16 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         "float intCompare = /* unsupported Slang shadow compare: "
         "textureCompare compare reference must be scalar float or double, got int */ "
         "0.0;" in generated_code
+    )
+    assert (
+        "float boolLodCompare = /* unsupported Slang shadow compare: "
+        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
+        "got bool */ 0.0;" in generated_code
+    )
+    assert (
+        "float vectorLodCompare = /* unsupported Slang shadow compare: "
+        "textureCompareLod lod argument must be scalar int, uint, float, or double, "
+        "got float2 */ 0.0;" in generated_code
     )
     assert (
         "float boolOffsetCompare = /* unsupported Slang shadow compare: "

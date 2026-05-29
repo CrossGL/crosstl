@@ -2,6 +2,7 @@
 
 from ..ast import (
     AssignmentNode,
+    BinaryOpNode,
     BreakNode,
     ContinueNode,
     ForInNode,
@@ -36,6 +37,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     """Emit CUDA source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "CUDA"
+    query_return_index_binary_ops = {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
         "Texture1DArray": "sampler1DArray",
@@ -3056,6 +3058,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Return whether a returned-array index can be rendered in the caller."""
         if isinstance(index_expr, LiteralNode) or isinstance(index_expr, int):
             return True
+        if isinstance(index_expr, BinaryOpNode):
+            operator = getattr(index_expr, "operator", getattr(index_expr, "op", None))
+            return (
+                operator in self.query_return_index_binary_ops
+                and self.is_safe_query_return_index(index_expr.left, param_indices)
+                and self.is_safe_query_return_index(index_expr.right, param_indices)
+            )
         index_name = self.get_expression_name(index_expr)
         if index_name:
             return index_name in param_indices
@@ -3303,6 +3312,23 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def format_query_return_index(self, index_expr, param_indices, raw_args):
         """Render a returned-array index in the caller's argument context."""
+        if isinstance(index_expr, BinaryOpNode):
+            operator = getattr(index_expr, "operator", getattr(index_expr, "op", None))
+            if operator not in self.query_return_index_binary_ops:
+                return None
+            left = self.format_query_return_index(
+                index_expr.left,
+                param_indices,
+                raw_args,
+            )
+            right = self.format_query_return_index(
+                index_expr.right,
+                param_indices,
+                raw_args,
+            )
+            if left is None or right is None:
+                return None
+            return f"({left} {operator} {right})"
         index_name = self.get_expression_name(index_expr)
         if index_name in param_indices:
             param_index = param_indices[index_name]

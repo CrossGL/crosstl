@@ -551,7 +551,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 362
+        "test_count": 363
       },
       "translator_codegen": {
         "exists": true,
@@ -779,7 +779,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 419
+        "test_count": 420
       },
       "translator_codegen": {
         "exists": true,
@@ -917,7 +917,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 225,
+        "unsupported_marker_count": 228,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",

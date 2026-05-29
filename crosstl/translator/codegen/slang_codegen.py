@@ -8929,6 +8929,11 @@ class SlangCodeGen:
                 return self.unsupported_texture_compare_call(
                     func_name, "requires one lod argument"
                 )
+            lod_reason = self.scalar_numeric_texture_argument_unsupported_reason(
+                extra_args[0], "lod argument"
+            )
+            if lod_reason:
+                return self.unsupported_texture_compare_call(func_name, lod_reason)
             lod = self.generate_expression(extra_args[0])
             return f"{texture_name}.SampleCmpLevel({coord}, {compare}, {lod})"
 
@@ -9124,6 +9129,17 @@ class SlangCodeGen:
             return None
 
         return f"{role} must be scalar int or uint, got {mapped_type}"
+
+    def scalar_numeric_texture_argument_unsupported_reason(self, node, role):
+        type_name = self.type_name_string(self.expression_result_type(node))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"int", "uint", "float", "double"}:
+            return None
+
+        return f"{role} must be scalar int, uint, float, or double, got {mapped_type}"
 
     def texture_rank_unsupported_reason(
         self, node, expected_rank, resource_type, role, array_element=False

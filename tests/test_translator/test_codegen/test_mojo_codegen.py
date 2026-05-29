@@ -5412,6 +5412,85 @@ def test_resource_struct_arrays_default_initialize_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_struct_array_function_boundaries_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        image2D inputImage;
+        sampler2D textures[2];
+        image2D images[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet[2] cloneSets(ResourceSet sets[2]) {
+        return sets;
+    }
+
+    ResourceSet[2] replaceSets(
+        ResourceSet sets[2],
+        ResourceSet replacement,
+        int index
+    ) {
+        sets[index] = replacement;
+        return sets;
+    }
+
+    ResourceSet forwardSet(ResourceSet sets[2], int index) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[index];
+    }
+
+    ResourceSet buildReplacement() {
+        ResourceSet set;
+        return set;
+    }
+
+    ResourceSet callBoundaries(int index) {
+        ResourceSet sets[2];
+        ResourceSet replacement = buildReplacement();
+        ResourceSet changedSets[2] = replaceSets(sets, replacement, index);
+        ResourceSet forwarded = forwardSet(changedSets, index);
+        return forwarded;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
+        "InlineArray[ResourceSet, 2]:" in generated_code
+    )
+    assert (
+        "fn replaceSets(owned sets: InlineArray[ResourceSet, 2], "
+        "replacement: ResourceSet, index: Int32) -> InlineArray[ResourceSet, 2]:"
+        in generated_code
+    )
+    assert (
+        "var changedSets: InlineArray[ResourceSet, 2] = "
+        "replaceSets(sets, replacement, index)" in generated_code
+    )
+    assert "var sets = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert "unsafe_uninitialized=True" not in generated_code
+
+    generated_code += (
+        "\nfn main():\n    var resourceSet = callBoundaries(1)\n    _ = resourceSet\n"
+    )
+
+    source_path = tmp_path / "resource_struct_array_function_boundaries.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholders():
     code = """
     struct SampleSet {
