@@ -16237,6 +16237,82 @@ def test_metal_formatted_image_arrays_infer_named_constant_size():
     assert "imageStore(" not in generated_code
 
 
+def test_metal_readonly_formatted_image_array_parameters_use_resource_arrays():
+    shader = """
+    shader ReadonlyFormattedImageArrayParameterContext {
+        const int BASE_COUNT = 2;
+        const int IMAGE_COUNT = BASE_COUNT * 2;
+        const int LAST_IMAGE = IMAGE_COUNT - 1;
+        uimage2D counters @r32ui[IMAGE_COUNT];
+        image2D sources[IMAGE_COUNT] @rg16f @readonly;
+        image2D targets[IMAGE_COUNT] @rg16f @writeonly;
+
+        uint addCounter(uimage2D images[IMAGE_COUNT] @r32ui, int layer, ivec2 pixel, uint value) {
+            uint oldValue = imageLoad(images[LAST_IMAGE], pixel);
+            imageStore(images[layer], pixel, oldValue + value);
+            return imageAtomicAdd(images[layer], pixel, value);
+        }
+
+        vec2 readSource(image2D images[IMAGE_COUNT] @rg16f @readonly, int layer, ivec2 pixel) {
+            return imageLoad(images[layer], pixel);
+        }
+
+        void writeTarget(image2D images[IMAGE_COUNT] @rg16f @writeonly, int layer, ivec2 pixel, vec2 value) {
+            imageStore(images[layer], pixel, value);
+        }
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 1);
+                uint total = addCounter(counters, 1, pixel, 3u);
+                vec2 pair = readSource(sources, LAST_IMAGE, pixel) + vec2(float(total));
+                writeTarget(targets, 2, pixel, pair);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "constant int IMAGE_COUNT = BASE_COUNT * 2;" in generated_code
+    assert (
+        "array<texture2d<uint, access::read_write>, IMAGE_COUNT> counters [[texture(0)]]"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::read>, IMAGE_COUNT> sources [[texture(4)]]"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::write>, IMAGE_COUNT> targets [[texture(8)]]"
+        in generated_code
+    )
+    assert (
+        "uint addCounter(array<texture2d<uint, access::read_write>, IMAGE_COUNT> images"
+        in generated_code
+    )
+    assert (
+        "float2 readSource(array<texture2d<float, access::read>, IMAGE_COUNT> images"
+        in generated_code
+    )
+    assert (
+        "void writeTarget(array<texture2d<float, access::write>, IMAGE_COUNT> images"
+        in generated_code
+    )
+    assert (
+        "thread texture2d<float, access::read> images[IMAGE_COUNT]"
+        not in generated_code
+    )
+    assert "images[layer].read(uint2(pixel)).xy" in generated_code
+    assert (
+        "images[layer].write(float4(value, 0.0, 0.0), uint2(pixel))" in generated_code
+    )
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
 def test_metal_formatted_image_arrays_ignore_shadowed_local_constant():
     shader = """
     shader ShadowedImageConstIndex {

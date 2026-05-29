@@ -2282,6 +2282,23 @@ class VulkanSPIRVCodeGen:
         lod_id = self.register_constant(0.0, self.register_primitive_type("float"))
         return f"Lod %{lod_id.id}"
 
+    def image_atomic_operand_names(
+        self, function_name: str, multisampled: bool
+    ) -> List[str]:
+        operands = ["image", "coordinate"]
+        if multisampled:
+            operands.append("sample")
+        if function_name == "imageAtomicCompSwap":
+            operands.append("compare")
+        operands.append("value")
+        return operands
+
+    def image_atomic_operand_description(
+        self, function_name: str, multisampled: bool
+    ) -> str:
+        operands = self.image_atomic_operand_names(function_name, multisampled)
+        return ", ".join(operands[:-1]) + f", and {operands[-1]} operands"
+
     def call_image_atomic_function(
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
@@ -2303,6 +2320,17 @@ class VulkanSPIRVCodeGen:
 
         component_type_name = metadata.get("component_type", "uint")
         result_type = self.register_primitive_type(component_type_name)
+        is_multisampled = bool(metadata.get("multisampled"))
+        expected_operands = self.image_atomic_operand_names(
+            function_name, is_multisampled
+        )
+        if len(args) > len(expected_operands):
+            self.emit(
+                f"; WARNING: {function_name} accepts only "
+                f"{self.image_atomic_operand_description(function_name, is_multisampled)}"
+            )
+            return self.default_value_for_type(result_type)
+
         if metadata.get("readonly") or metadata.get("writeonly"):
             self.emit(f"; WARNING: {function_name} requires a read-write storage image")
             return self.default_value_for_type(result_type)
@@ -2323,7 +2351,7 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(0, self.register_primitive_type("uint"))
 
         value_arg_index = 2
-        if metadata.get("multisampled"):
+        if is_multisampled:
             if len(args) < 4:
                 self.emit(f"; WARNING: {function_name} requires a sample operand")
                 return self.register_constant(

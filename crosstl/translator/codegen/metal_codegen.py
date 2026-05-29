@@ -8511,6 +8511,8 @@ class MetalCodeGen:
             return f"{address_space} {referenced_type}& {name}"
 
         if self.is_array_type_node(raw_param_type):
+            if self.resource_array_parameter(raw_param_type, node) is not None:
+                return None
             binding = self.explicit_buffer_binding_index(node)
             qualifiers = self.parameter_qualifier_names(node)
             address_space = self.effective_parameter_address_space(
@@ -8628,6 +8630,11 @@ class MetalCodeGen:
     def parameter_variable_address_space(
         self, raw_param_type, node=None, shader_type=None
     ):
+        if (
+            self.is_array_type_node(raw_param_type)
+            and self.resource_array_parameter(raw_param_type, node) is not None
+        ):
+            return None
         if not (
             isinstance(raw_param_type, (PointerType, ReferenceType))
             or self.is_array_type_node(raw_param_type)

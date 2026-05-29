@@ -5203,6 +5203,55 @@ shader MetalStorageImageAccessQualifiersValidation {
 """
 
 
+METAL_SYMBOLIC_STORAGE_IMAGE_ARRAYS_COMPUTE_SHADER = """
+shader MetalSymbolicStorageImageArraysValidation {
+    const int BASE_COUNT = 2;
+    const int IMAGE_COUNT = BASE_COUNT * 2;
+    const int LAST_IMAGE = IMAGE_COUNT - 1;
+    uimage2D counters @r32ui[IMAGE_COUNT];
+    image2D sources[IMAGE_COUNT] @rg16f @readonly;
+    image2D targets[IMAGE_COUNT] @rg16f @writeonly;
+
+    uint addCounter(
+        uimage2D images[IMAGE_COUNT] @r32ui,
+        int layer,
+        ivec2 pixel,
+        uint value
+    ) {
+        uint oldValue = imageLoad(images[LAST_IMAGE], pixel);
+        imageStore(images[layer], pixel, oldValue + value);
+        return imageAtomicAdd(images[layer], pixel, value);
+    }
+
+    vec2 readSource(
+        image2D images[IMAGE_COUNT] @rg16f @readonly,
+        int layer,
+        ivec2 pixel
+    ) {
+        return imageLoad(images[layer], pixel);
+    }
+
+    void writeTarget(
+        image2D images[IMAGE_COUNT] @rg16f @writeonly,
+        int layer,
+        ivec2 pixel,
+        vec2 value
+    ) {
+        imageStore(images[layer], pixel, value);
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            uint total = addCounter(counters, 1, pixel, 3u);
+            vec2 pair = readSource(sources, LAST_IMAGE, pixel) + vec2(float(total));
+            writeTarget(targets, 2, pixel, pair);
+        }
+    }
+}
+"""
+
+
 METAL_STRUCT_HELD_STORAGE_IMAGE_ARRAYS_COMPUTE_SHADER = """
 shader MetalStructHeldStorageImageArraysValidation {
     struct ImagePack {
@@ -9562,6 +9611,42 @@ def test_generated_metal_compute_storage_image_access_qualifiers_compile_with_me
     assert "texture2d<float, access::read> source [[texture(0)]]" in code
     assert "texture2d<float, access::write> target [[texture(1)]]" in code
     assert "texture2d<uint, access::read_write> counters [[texture(2)]]" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_symbolic_storage_image_arrays_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "symbolic_storage_image_arrays.metal"
+    output = tmp_path / "symbolic_storage_image_arrays.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SYMBOLIC_STORAGE_IMAGE_ARRAYS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "constant int IMAGE_COUNT = BASE_COUNT * 2;" in code
+    assert (
+        "array<texture2d<uint, access::read_write>, IMAGE_COUNT> counters [[texture(0)]]"
+        in code
+    )
+    assert (
+        "array<texture2d<float, access::read>, IMAGE_COUNT> sources [[texture(4)]]"
+        in code
+    )
+    assert (
+        "array<texture2d<float, access::write>, IMAGE_COUNT> targets [[texture(8)]]"
+        in code
+    )
+    assert (
+        "float2 readSource(array<texture2d<float, access::read>, IMAGE_COUNT> images"
+        in code
+    )
+    assert "thread texture2d<float, access::read> images[IMAGE_COUNT]" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

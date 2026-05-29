@@ -12726,6 +12726,63 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_image_atomics_reject_excess_operands(self, tmp_path):
+        source_code = """
+        shader ImageAtomicExcessOperands {
+            uimage2D counters @r32ui;
+            uimage2DMS msCounters @r32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    uint badAdd = imageAtomicAdd(counters, pixel, 1u, 2u);
+                    uint badSwap = imageAtomicCompSwap(
+                        counters,
+                        pixel,
+                        1u,
+                        2u,
+                        3u
+                    );
+                    uint badMsAdd =
+                        imageAtomicAdd(msCounters, pixel, 0u, 1u, 2u);
+                    uint badMsSwap = imageAtomicCompSwap(
+                        msCounters,
+                        pixel,
+                        0u,
+                        1u,
+                        2u,
+                        3u
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: imageAtomicAdd accepts only image, coordinate, and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: imageAtomicCompSwap accepts only image, coordinate, compare, "
+            "and value operands"
+        ) in spv_code
+        assert (
+            "WARNING: imageAtomicAdd accepts only image, coordinate, sample, and "
+            "value operands"
+        ) in spv_code
+        assert (
+            "WARNING: imageAtomicCompSwap accepts only image, coordinate, sample, "
+            "compare, and value operands"
+        ) in spv_code
+        assert "OpImageTexelPointer" not in spv_code
+        assert "OpAtomic" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_image_globals_emit_spirv_storage_image_types(self):
         source_code = """
         shader Resources {
