@@ -8198,12 +8198,31 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
     ):
+        counts_seen, _ = self.validate_hlsl_mesh_output_write_switch_result(
+            switch_node,
+            set_mesh_output_counts_seen,
+            role_by_name,
+            declared_counts,
+            set_count_literals,
+            active_helper_calls,
+        )
+        return counts_seen
+
+    def validate_hlsl_mesh_output_write_switch_result(
+        self,
+        switch_node,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls=None,
+    ):
         if active_helper_calls is None:
             active_helper_calls = set()
 
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
-            return set_mesh_output_counts_seen
+            return set_mesh_output_counts_seen, True
 
         start_indices, covers_all_paths = self.hlsl_switch_possible_start_indices(
             switch_node, case_entries
@@ -8211,7 +8230,7 @@ class HLSLCodeGen:
         path_results = []
         for start_index in start_indices:
             path_results.append(
-                self.validate_hlsl_mesh_output_write_sequence(
+                self.validate_hlsl_mesh_output_write_sequence_result(
                     self.hlsl_switch_fallthrough_path_body(case_entries, start_index),
                     set_mesh_output_counts_seen,
                     role_by_name,
@@ -8221,9 +8240,18 @@ class HLSLCodeGen:
                 )
             )
 
-        if covers_all_paths and path_results and all(path_results):
-            return True
-        return set_mesh_output_counts_seen
+        if not covers_all_paths:
+            path_results.append((set_mesh_output_counts_seen, True))
+        if not path_results:
+            return set_mesh_output_counts_seen, True
+
+        continuing_counts = [
+            counts_seen for counts_seen, can_continue in path_results if can_continue
+        ]
+        if not continuing_counts:
+            return set_mesh_output_counts_seen, False
+
+        return all(continuing_counts), True
 
     def hlsl_assignment_from_statement(self, stmt):
         if isinstance(stmt, AssignmentNode):
@@ -8403,87 +8431,77 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
     ):
+        counts_seen, _ = self.validate_hlsl_mesh_output_write_sequence_result(
+            statements,
+            set_mesh_output_counts_seen,
+            role_by_name,
+            declared_counts,
+            set_count_literals,
+            active_helper_calls,
+        )
+        return counts_seen
+
+    def validate_hlsl_mesh_output_write_sequence_result(
+        self,
+        statements,
+        set_mesh_output_counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls=None,
+    ):
         if active_helper_calls is None:
             active_helper_calls = set()
 
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
-                counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                    self.hlsl_statement_body_items(stmt),
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
-                    active_helper_calls,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_sequence_result(
+                        self.hlsl_statement_body_items(stmt),
+                        counts_seen,
+                        role_by_name,
+                        declared_counts,
+                        set_count_literals,
+                        active_helper_calls,
+                    )
                 )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, IfNode):
-                then_statements = self.hlsl_statement_body_items(
-                    getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
-                )
-                else_branch = getattr(
-                    stmt, "else_branch", getattr(stmt, "else_body", None)
-                )
-                condition_value = self.hlsl_bool_constant_value(
-                    getattr(stmt, "condition", getattr(stmt, "if_condition", None))
-                )
-                if condition_value is True:
-                    counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                        then_statements,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_if_result(
+                        stmt,
                         counts_seen,
                         role_by_name,
                         declared_counts,
                         set_count_literals,
                         active_helper_calls,
                     )
-                    continue
-
-                if condition_value is False:
-                    if else_branch is not None:
-                        counts_seen = self.validate_hlsl_mesh_output_write_sequence(
-                            self.hlsl_statement_body_items(else_branch),
-                            counts_seen,
-                            role_by_name,
-                            declared_counts,
-                            set_count_literals,
-                            active_helper_calls,
-                        )
-                    continue
-
-                self.validate_hlsl_mesh_output_write_sequence(
-                    then_statements,
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
-                    active_helper_calls,
                 )
-                if else_branch is not None:
-                    self.validate_hlsl_mesh_output_write_sequence(
-                        self.hlsl_statement_body_items(else_branch),
-                        counts_seen,
-                        role_by_name,
-                        declared_counts,
-                        set_count_literals,
-                        active_helper_calls,
-                    )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, SwitchNode):
-                counts_seen = self.validate_hlsl_mesh_output_write_switch(
-                    stmt,
-                    counts_seen,
-                    role_by_name,
-                    declared_counts,
-                    set_count_literals,
-                    active_helper_calls,
+                counts_seen, can_continue = (
+                    self.validate_hlsl_mesh_output_write_switch_result(
+                        stmt,
+                        counts_seen,
+                        role_by_name,
+                        declared_counts,
+                        set_count_literals,
+                        active_helper_calls,
+                    )
                 )
+                if not can_continue:
+                    return counts_seen, False
                 continue
 
             if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
-                self.validate_hlsl_mesh_output_write_sequence(
+                self.validate_hlsl_mesh_output_write_sequence_result(
                     self.hlsl_statement_body_items(getattr(stmt, "body", None)),
                     counts_seen,
                     role_by_name,
@@ -8518,7 +8536,84 @@ class HLSLCodeGen:
             if self.hlsl_statement_contains_set_mesh_output_counts(stmt):
                 counts_seen = True
 
-        return counts_seen
+            if isinstance(stmt, ReturnNode):
+                return counts_seen, False
+
+        return counts_seen, True
+
+    def validate_hlsl_mesh_output_write_if_result(
+        self,
+        if_node,
+        counts_seen,
+        role_by_name,
+        declared_counts,
+        set_count_literals,
+        active_helper_calls,
+    ):
+        then_statements = self.hlsl_statement_body_items(
+            getattr(if_node, "then_branch", getattr(if_node, "if_body", None))
+        )
+        else_branch = getattr(
+            if_node, "else_branch", getattr(if_node, "else_body", None)
+        )
+        condition_value = self.hlsl_bool_constant_value(
+            getattr(if_node, "condition", getattr(if_node, "if_condition", None))
+        )
+        if condition_value is True:
+            return self.validate_hlsl_mesh_output_write_sequence_result(
+                then_statements,
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+            )
+
+        if condition_value is False:
+            if else_branch is None:
+                return counts_seen, True
+            return self.validate_hlsl_mesh_output_write_sequence_result(
+                self.hlsl_statement_body_items(else_branch),
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+            )
+
+        branch_results = [
+            self.validate_hlsl_mesh_output_write_sequence_result(
+                then_statements,
+                counts_seen,
+                role_by_name,
+                declared_counts,
+                set_count_literals,
+                active_helper_calls,
+            )
+        ]
+        if else_branch is not None:
+            branch_results.append(
+                self.validate_hlsl_mesh_output_write_sequence_result(
+                    self.hlsl_statement_body_items(else_branch),
+                    counts_seen,
+                    role_by_name,
+                    declared_counts,
+                    set_count_literals,
+                    active_helper_calls,
+                )
+            )
+        else:
+            branch_results.append((counts_seen, True))
+
+        continuing_counts = [
+            branch_counts
+            for branch_counts, can_continue in branch_results
+            if can_continue
+        ]
+        if not continuing_counts:
+            return counts_seen, False
+
+        return all(continuing_counts), True
 
     def validate_hlsl_mesh_output_writes(self, func, role_parameters):
         role_by_name = self.hlsl_mesh_output_role_by_parameter_name(role_parameters)

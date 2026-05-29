@@ -6617,6 +6617,64 @@ def test_directx_mesh_output_writes_track_literal_branch_dominance():
     assert "SetMeshOutputCounts(3, 1);" in generated
 
 
+def test_directx_mesh_output_writes_track_early_return_dominance():
+    early_return_code = """
+    shader MeshOutputCountDominatesAfterEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (selector == 0u) {
+                    return;
+                } else {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(early_return_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+
+    continuing_path_without_count_code = """
+    shader MeshOutputCountMissingAfterEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (selector == 0u) {
+                    SetMeshOutputCounts(3, 1);
+                    return;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(continuing_path_without_count_code), "mesh"
+        )
+
+
 def test_directx_mesh_output_writes_reject_switch_count_without_full_dominance():
     missing_default_code = """
     shader MeshOutputCountSwitchMissingDefault {
@@ -6711,6 +6769,69 @@ def test_directx_mesh_output_writes_track_switch_count_dominance():
     assert "default:" in generated
     assert generated.count("SetMeshOutputCounts(3, 1);") == 1
     assert "verts[0].position" in generated
+
+
+def test_directx_mesh_output_writes_track_switch_early_return_dominance():
+    early_return_code = """
+    shader MeshOutputCountDominatesThroughSwitchEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        return;
+                    default:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(early_return_code), "mesh"
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+
+    continuing_path_without_count_code = """
+    shader MeshOutputCountMissingThroughSwitchEarlyReturn {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        return;
+                    default:
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(continuing_path_without_count_code), "mesh"
+        )
 
 
 def test_directx_mesh_output_writes_validate_literal_bounds():
