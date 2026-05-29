@@ -5968,6 +5968,12 @@ class SlangCodeGen:
             return self.unsupported_slang_wave_op_expression(
                 node.operation, rejection_reason
             )
+        result_type = self.slang_wave_result_type(node)
+        target_reason = self.slang_wave_target_type_rejection_reason(result_type)
+        if target_reason is not None:
+            return self.unsupported_slang_wave_op_expression(
+                node.operation, target_reason
+            )
 
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{node.operation}({args})"
@@ -6051,6 +6057,35 @@ class SlangCodeGen:
             return None
         return self.convert_type(arg_type)
 
+    def slang_wave_target_type_rejection_reason(self, result_type):
+        expected_type = self.slang_wave_expected_target_type()
+        result_type = self.type_name_string(result_type)
+        if result_type:
+            result_type = self.convert_type(result_type)
+        if not expected_type or not result_type:
+            return None
+        if not self.is_slang_wave_value_type(result_type):
+            return None
+        if expected_type == result_type:
+            return None
+        return f"returns {result_type} but target expects {expected_type}"
+
+    def slang_wave_expected_target_type(self):
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if not expected_type:
+            return None
+        expected_type = self.convert_type(expected_type)
+        if expected_type == "auto":
+            return None
+        if self.is_slang_wave_value_type(expected_type):
+            return expected_type
+        return None
+
+    def is_slang_wave_value_type(self, type_name):
+        return self.is_scalar_value_type(type_name) or self.is_vector_value_type(
+            type_name
+        )
+
     def is_slang_wave_integer_value_type(self, type_name):
         return type_name in {
             "int",
@@ -6071,14 +6106,21 @@ class SlangCodeGen:
 
     def slang_wave_fallback_value(self, operation):
         default_value = self.slang_wave_default_value(operation)
-        expected_type = self.type_name_string(self.current_expression_expected_type)
-        if expected_type:
-            expected_type = self.convert_type(expected_type)
-            if self.is_vector_value_type(
-                expected_type
-            ) and not default_value.startswith(f"{expected_type}("):
-                return self.zero_value_for_type(expected_type)
+        expected_type = self.slang_wave_expected_target_type()
+        if expected_type and not self.slang_wave_default_matches_expected_type(
+            default_value, expected_type
+        ):
+            return self.zero_value_for_type(expected_type)
         return default_value
+
+    def slang_wave_default_matches_expected_type(self, default_value, expected_type):
+        if self.is_vector_value_type(expected_type):
+            return default_value.startswith(f"{expected_type}(")
+        if expected_type == "bool":
+            return default_value == "false"
+        if expected_type in {"int", "uint", "float", "double"}:
+            return default_value in {"0", "0u"}
+        return False
 
     def slang_wave_default_value(self, operation):
         if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:

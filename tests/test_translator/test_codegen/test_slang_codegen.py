@@ -2932,6 +2932,74 @@ def test_wave_intrinsic_diagnostics_use_vector_target_fallbacks():
     assert "WaveOpNode" not in generated_code
 
 
+def test_wave_intrinsics_validate_target_result_types():
+    code = """
+    shader InvalidSlangWaveTargetTypes {
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec2 value) {
+            }
+
+            void main() {
+                vec2 values = vec2(1.0, 2.0);
+                uvec3 lanes = uvec3(1u, 2u, 3u);
+                bool predicate = true;
+                vec2 validVector = WaveActiveSum(values);
+                uint validLane = WaveGetLaneIndex();
+                vec2 scalarToVector = WaveActiveSum(1.0);
+                float scalarFromBallot = WaveActiveBallot(predicate);
+                bool boolFromLane = WaveGetLaneIndex();
+                uvec2 widthMismatch = WaveActiveSum(lanes);
+                acceptVector(WaveReadLaneAt(1.0, 0u));
+                acceptFloat(WaveActiveBallot(predicate));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float2 validVector = WaveActiveSum(values);" in generated_code
+    assert "uint validLane = WaveGetLaneIndex();" in generated_code
+    assert (
+        "float2 scalarToVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum returns float but target expects float2 */ float2(0.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarFromBallot = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot returns uint4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "bool boolFromLane = /* unsupported Slang wave intrinsic: "
+        "WaveGetLaneIndex returns uint but target expects bool */ false;"
+        in generated_code
+    )
+    assert (
+        "uint2 widthMismatch = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum returns uint3 but target expects uint2 */ uint2(0u);"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang wave intrinsic: WaveReadLaneAt "
+        "returns float but target expects float2 */ float2(0.0));" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang wave intrinsic: WaveActiveBallot "
+        "returns uint4 but target expects float */ 0);" in generated_code
+    )
+    assert "float2 scalarToVector = WaveActiveSum(1.0);" not in generated_code
+    assert "float scalarFromBallot = WaveActiveBallot(predicate);" not in generated_code
+    assert "bool boolFromLane = WaveGetLaneIndex();" not in generated_code
+    assert "uint2 widthMismatch = WaveActiveSum(lanes);" not in generated_code
+    assert "acceptVector(WaveReadLaneAt(1.0, 0u));" not in generated_code
+    assert "acceptFloat(WaveActiveBallot(predicate));" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
 def test_floating_binary_modulo_lowers_to_slang_fmod():
     code = """
     shader BinaryModuloGap {

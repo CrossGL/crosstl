@@ -921,7 +921,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 268,
+        "unsupported_marker_count": 269,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -934,6 +934,10 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "if node.name not in unsupported_tess_factor_builtins:"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "return self.unsupported_slang_wave_op_expression("
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -998,10 +1002,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_image_access_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_image_access_call("
           }
         ]
       },
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 375
+        "test_count": 376
       },
       "translator_codegen": {
         "exists": true,
