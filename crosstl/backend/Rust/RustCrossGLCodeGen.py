@@ -474,6 +474,8 @@ class RustToCrossGLConverter:
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
+        self.local_function_item_counter = 0
+        self.local_function_item_names = set()
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
@@ -542,6 +544,8 @@ class RustToCrossGLConverter:
         self.value_type_scopes = []
         self.closure_helper_counter = 0
         self.closure_helper_names = set()
+        self.local_function_item_counter = 0
+        self.local_function_item_names = set()
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
@@ -1834,6 +1838,8 @@ class RustToCrossGLConverter:
                     code += self.generate_const_statement(stmt, indent)
                 elif isinstance(stmt, StaticNode):
                     code += self.generate_static_statement(stmt, indent)
+                elif isinstance(stmt, FunctionNode):
+                    code += self.generate_local_function_item(stmt)
                 elif isinstance(stmt, LetNode):
                     code += self.generate_let_statement(stmt, indent, loop_contexts)
                 elif isinstance(stmt, AssignmentNode):
@@ -1942,6 +1948,30 @@ class RustToCrossGLConverter:
                 self.pop_name_alias_scope()
 
         return code
+
+    def generate_local_function_item(self, func):
+        helper_name = self.next_local_function_item_name(func.name)
+        self.add_local_callable(func.name, helper_name)
+        helper_func = FunctionNode(
+            func.return_type,
+            helper_name,
+            func.params,
+            func.body,
+            attributes=func.attributes,
+            visibility=func.visibility,
+            generics=func.generics,
+            where_clauses=func.where_clauses,
+            is_async=func.is_async,
+            is_unsafe=func.is_unsafe,
+            abi=func.abi,
+            is_const=func.is_const,
+        )
+        helper_code = self.generate_function(helper_func, 0)
+
+        if self.current_closure_helpers is not None:
+            self.current_closure_helpers.append(helper_code)
+            return ""
+        return helper_code
 
     def generate_const_statement(self, node, indent):
         indent_str = "    " * indent
@@ -7867,6 +7897,22 @@ class RustToCrossGLConverter:
                 name not in self.user_function_names
                 and name not in self.closure_helper_names
             ):
+                return name
+
+    def next_local_function_item_name(self, context_name=None):
+        context = self.sanitize_closure_helper_context(context_name)
+        while True:
+            if context:
+                name = f"_rust_local_{context}_{self.local_function_item_counter}"
+            else:
+                name = f"_rust_local_{self.local_function_item_counter}"
+            self.local_function_item_counter += 1
+            if (
+                name not in self.user_function_names
+                and name not in self.closure_helper_names
+                and name not in self.local_function_item_names
+            ):
+                self.local_function_item_names.add(name)
                 return name
 
     def sanitize_closure_helper_context(self, context_name):

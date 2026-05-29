@@ -6430,6 +6430,48 @@ def test_block_local_closure_names_do_not_shadow_resource_builtins_after_block()
     assert "let builtin_lod = sample_lod(tex, lod);" not in result
 
 
+def test_block_local_function_items_shadow_resource_builtins_only_in_scope():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn block_local_function_item_shadowing(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        flag: bool,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let block_value = {
+            fn sample(resource: ColorTexture) -> Vec4<f32> {
+                return Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);
+            }
+            sample(tex)
+        };
+        if flag {
+            fn sample_lod(resource: ColorTexture, level: f32) -> Vec4<f32> {
+                return Vec4::<f32>::new(level, 0.0, 0.0, 0.0);
+            }
+            let branch_value = sample_lod(tex, lod);
+        }
+        let builtin_value = sample(tex, uv);
+        let builtin_lod = sample_lod(tex, lod);
+        return block_value + builtin_value + builtin_lod;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "vec4 _rust_local_sample_" in result
+    assert "vec4 _rust_local_sample_lod_" in result
+    assert "return vec4(1.0, 0.0, 0.0, 1.0);" in result
+    assert "return vec4(level, 0.0, 0.0, 0.0);" in result
+    assert "block_value = _rust_local_sample_" in result
+    assert "let branch_value = _rust_local_sample_lod_" in result
+    assert "let builtin_value = texture(tex, uv);" in result
+    assert "let builtin_lod = textureLod(tex, lod);" in result
+    assert "let builtin_value = _rust_local_sample_" not in result
+    assert "let builtin_lod = _rust_local_sample_lod_" not in result
+
+
 def test_typed_pattern_closures_emit_helpers():
     code = """
     struct Point {
