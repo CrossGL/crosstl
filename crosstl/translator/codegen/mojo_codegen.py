@@ -882,6 +882,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_return_resource_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1082,6 +1083,7 @@ class MojoCodeGen:
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
+        self.function_return_resource_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1378,6 +1380,15 @@ class MojoCodeGen:
         for func in functions:
             self.register_function_return_type(func)
 
+        for _ in range(max(1, len(functions))):
+            changed = False
+            for func in functions:
+                changed = (
+                    self.register_function_return_resource_aliases(func) or changed
+                )
+            if not changed:
+                break
+
     def register_function_return_type(self, func):
         if not hasattr(func, "name"):
             return
@@ -1391,6 +1402,105 @@ class MojoCodeGen:
             self.function_parameter_type_name(param)
             for param in getattr(func, "parameters", getattr(func, "params", []))
         ]
+
+    def register_function_return_resource_aliases(self, func):
+        if not hasattr(func, "name"):
+            return False
+
+        return_type = self.function_return_types.get(func.name)
+        if self.mojo_resource_kind(return_type) is None:
+            return False
+
+        params = getattr(func, "parameters", getattr(func, "params", []))
+        param_indices = {
+            getattr(param, "name", None): index
+            for index, param in enumerate(params)
+            if getattr(param, "name", None)
+        }
+        aliases = []
+        for return_node in self.return_nodes(getattr(func, "body", [])):
+            value = getattr(return_node, "value", None)
+            for index in self.return_resource_alias_param_indices(value, param_indices):
+                if index not in aliases:
+                    aliases.append(index)
+        if aliases == self.function_return_resource_aliases.get(func.name):
+            return False
+        if aliases:
+            self.function_return_resource_aliases[func.name] = aliases
+        else:
+            self.function_return_resource_aliases.pop(func.name, None)
+        return True
+
+    def return_nodes(self, body):
+        nodes = []
+        for stmt in self.body_statements(body):
+            self.collect_return_nodes(stmt, nodes)
+        return nodes
+
+    def collect_return_nodes(self, node, nodes):
+        if node is None:
+            return
+        if isinstance(node, ReturnNode):
+            nodes.append(node)
+            return
+        for child in self.node_children(node):
+            self.collect_return_nodes(child, nodes)
+
+    def return_resource_alias_param_indices(self, expr, param_indices):
+        if isinstance(expr, list):
+            return []
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [param_indices[root_name]]
+
+        if isinstance(expr, TernaryOpNode):
+            indices = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for index in self.return_resource_alias_param_indices(
+                    branch, param_indices
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, MatchNode):
+            indices = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for index in self.return_resource_alias_param_indices(
+                    arm_expr, param_indices
+                ):
+                    if index not in indices:
+                        indices.append(index)
+            return indices
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_param_indices_from_call(
+                expr, param_indices
+            )
+
+        return []
+
+    def return_resource_alias_param_indices_from_call(self, expr, param_indices):
+        func_name = self.function_call_name(expr)
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return []
+
+        indices = []
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            for index in self.return_resource_alias_param_indices(
+                expr.args[alias_index], param_indices
+            ):
+                if index not in indices:
+                    indices.append(index)
+        return indices
 
     def is_user_defined_function(self, func_name):
         return isinstance(func_name, str) and func_name in self.function_return_types
@@ -2228,6 +2338,11 @@ class MojoCodeGen:
                 candidates.extend(self.resource_access_qualifier_candidates(arm_expr))
             return self.unique_resource_access_qualifiers(candidates)
 
+        if isinstance(expr, FunctionCallNode):
+            candidates = self.function_return_resource_alias_candidates(expr)
+            if candidates:
+                return candidates
+
         candidates = []
         access, resource_name = self.direct_resource_access_qualifier(expr)
         if access is not None and resource_name is not None:
@@ -2236,6 +2351,21 @@ class MojoCodeGen:
         root_name = self.resource_access_root_name(expr)
         if root_name is not None:
             candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def function_return_resource_alias_candidates(self, expr):
+        func_name = self.function_call_name(expr)
+        alias_indices = self.function_return_resource_aliases.get(func_name)
+        if not alias_indices:
+            return []
+
+        candidates = []
+        for alias_index in alias_indices:
+            if alias_index >= len(expr.args):
+                continue
+            candidates.extend(
+                self.resource_access_qualifier_candidates(expr.args[alias_index])
+            )
         return self.unique_resource_access_qualifiers(candidates)
 
     def unique_resource_access_qualifiers(self, candidates):

@@ -17175,7 +17175,7 @@ def test_increment_and_decrement_initializers_preserve_rust_value_order():
     assert "let post_dec: i32 = i -= 1;" not in generated_code
 
 
-def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
+def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body(tmp_path):
     code = """
     shader main {
         compute {
@@ -17212,6 +17212,7 @@ def test_do_while_statement_lowers_to_rust_loop_with_condition_after_body():
     ) in generated_code
     assert "if !((value < 8))" in generated_code
     assert "DoWhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_bool_string_and_char_literals_emit_rust_syntax(tmp_path):

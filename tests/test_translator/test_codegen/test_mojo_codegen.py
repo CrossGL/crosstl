@@ -4974,6 +4974,138 @@ def test_generic_payload_enum_resource_query_diagnostics_for_mojo_codegen(
         generate_code(parse_code(tokenize_code(source)))
 
 
+def _helper_returned_resource_alias_source():
+    return """
+    readonly image2D inputs[2];
+    writeonly image2D outputs[2];
+    sampler2D textures[2];
+
+    image2D chooseInput(readonly image2D inputImage) {
+        return inputImage;
+    }
+
+    image2D chooseViaNestedHelper(writeonly image2D outputImage) {
+        return chooseOutput(outputImage);
+    }
+
+    image2D chooseOutput(writeonly image2D outputImage) {
+        return outputImage;
+    }
+
+    sampler2D chooseTexture(sampler2D tex) {
+        return tex;
+    }
+
+    vec4 readReturnedAlias(int slot, ivec2 pixel) {
+        image2D selected = chooseInput(inputs[slot]);
+        return imageLoad(selected, pixel);
+    }
+
+    void writeReturnedAlias(int slot, ivec2 pixel, vec4 color) {
+        image2D selected = chooseViaNestedHelper(outputs[slot]);
+        imageStore(selected, pixel, color);
+    }
+
+    ivec2 queryReturnedTexture(int slot) {
+        return textureSize(chooseTexture(textures[slot]), 0);
+    }
+    """
+
+
+def test_helper_returned_resource_aliases_preserve_mojo_qualifiers_and_compile(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_helper_returned_resource_alias_source()))
+    )
+
+    assert "fn chooseInput(inputImage: Image2D) -> Image2D:" in generated_code
+    assert "fn chooseViaNestedHelper(outputImage: Image2D) -> Image2D:" in (
+        generated_code
+    )
+    assert "var selected: Image2D = chooseInput(inputs[int(slot)])" in generated_code
+    assert "return image_load(selected, pixel)" in generated_code
+    assert (
+        "var selected: Image2D = chooseViaNestedHelper(outputs[int(slot)])"
+        in generated_code
+    )
+    assert "image_store(selected, pixel, color)" in generated_code
+    assert "return texture_size(chooseTexture(textures[int(slot)]), 0)" in (
+        generated_code
+    )
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "textureSize(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "helper_returned_resource_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly image2D outputs[2];
+
+            image2D chooseOutput(writeonly image2D outputImage) {
+                return outputImage;
+            }
+
+            vec4 invalidRead(int slot, ivec2 pixel) {
+                image2D selected = chooseOutput(outputs[slot]);
+                return imageLoad(selected, pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            writeonly image2D outputs[2];
+
+            image2D chooseOutput(writeonly image2D outputImage) {
+                return outputImage;
+            }
+
+            vec4 invalidDirectRead(int slot, ivec2 pixel) {
+                return imageLoad(chooseOutput(outputs[slot]), pixel);
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            readonly image2D inputs[2];
+
+            image2D chooseInput(readonly image2D inputImage) {
+                return inputImage;
+            }
+
+            void invalidWrite(int slot, ivec2 pixel, vec4 color) {
+                image2D selected = chooseInput(inputs[slot]);
+                imageStore(selected, pixel, color);
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+    ],
+)
+def test_helper_returned_resource_alias_diagnostics_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_generic_payload_enum_parameterized_specializations_are_rejected_for_mojo_codegen():
     code = """
     generic<T, E> struct Result {

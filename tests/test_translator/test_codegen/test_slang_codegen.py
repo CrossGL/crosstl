@@ -10357,6 +10357,78 @@ def test_shadow_compare_builtins_emit_slang_compare_methods():
     assert ".GatherCmp(compareState" not in generated_code
 
 
+def test_shadow_compare_builtins_validate_target_result_types():
+    code = """
+    shader InvalidShadowCompareTargets {
+        sampler2dshadow shadowMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            void acceptVector(vec4 value) {
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.5);
+                ivec2 offset = ivec2(1, 0);
+                float depth = 0.5;
+                int intCompareTarget = textureCompare(shadowMap, uv, depth);
+                vec2 vectorCompareTarget =
+                    textureCompareOffset(shadowMap, uv, depth, offset);
+                float scalarGatherTarget =
+                    textureGatherCompare(shadowMap, uv, depth);
+                ivec2 intVectorGatherTarget =
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset);
+                acceptFloat(textureGatherCompare(shadowMap, uv, depth));
+                acceptVector(textureCompare(shadowMap, uv, depth));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "int intCompareTarget = /* unsupported Slang shadow compare: "
+        "textureCompare returns float but target expects int */ 0;" in generated_code
+    )
+    assert (
+        "float2 vectorCompareTarget = /* unsupported Slang shadow compare: "
+        "textureCompareOffset returns float but target expects float2 */ "
+        "float2(0.0);" in generated_code
+    )
+    assert (
+        "float scalarGatherTarget = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompare returns float4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "int2 intVectorGatherTarget = /* unsupported Slang shadow gather compare: "
+        "textureGatherCompareOffset returns float4 but target expects int2 */ "
+        "int2(0);" in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang shadow gather compare: "
+        "textureGatherCompare returns float4 but target expects float */ 0);"
+        in generated_code
+    )
+    assert (
+        "acceptVector(/* unsupported Slang shadow compare: textureCompare returns "
+        "float but target expects float4 */ float4(0.0));" in generated_code
+    )
+    assert generated_code.count("unsupported Slang shadow compare") == 3
+    assert generated_code.count("unsupported Slang shadow gather compare") == 3
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+    assert ".SampleCmp(" not in generated_code
+    assert ".GatherCmp(" not in generated_code
+
+
 def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {

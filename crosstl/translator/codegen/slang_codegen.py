@@ -8934,6 +8934,15 @@ class SlangCodeGen:
         )
         if compare_reason:
             return self.unsupported_texture_compare_call(func_name, compare_reason)
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "float"
+        )
+        if expected_reason:
+            return self.unsupported_texture_compare_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
+            )
 
         if func_name == "textureCompare":
             if extra_args:
@@ -9007,6 +9016,15 @@ class SlangCodeGen:
         if compare_reason:
             return self.unsupported_texture_gather_compare_call(
                 func_name, compare_reason
+            )
+        expected_reason = self.resource_query_expected_type_unsupported_reason(
+            func_name, "float4"
+        )
+        if expected_reason:
+            return self.unsupported_texture_gather_compare_call(
+                func_name,
+                expected_reason,
+                self.zero_value_for_type(self.current_expression_expected_type),
             )
 
         if func_name == "textureGatherCompare":
@@ -9358,13 +9376,18 @@ class SlangCodeGen:
             "samplerCubeArrayShadow",
         }
 
-    def unsupported_texture_compare_call(self, func_name, reason):
-        return f"/* unsupported Slang shadow compare: {func_name} {reason} */ 0.0"
+    def unsupported_texture_compare_call(self, func_name, reason, fallback="0.0"):
+        return (
+            f"/* unsupported Slang shadow compare: {func_name} {reason} */ "
+            f"{fallback}"
+        )
 
-    def unsupported_texture_gather_compare_call(self, func_name, reason):
+    def unsupported_texture_gather_compare_call(
+        self, func_name, reason, fallback="float4(0.0)"
+    ):
         return (
             f"/* unsupported Slang shadow gather compare: "
-            f"{func_name} {reason} */ float4(0.0)"
+            f"{func_name} {reason} */ {fallback}"
         )
 
     def literal_int_value(self, node):
