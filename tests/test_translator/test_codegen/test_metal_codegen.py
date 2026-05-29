@@ -22786,6 +22786,61 @@ def test_metal_sampled_texture_inferred_local_aliases_preserve_sampler_metadata(
     assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("statement", "match"),
+    [
+        (
+            """
+            samplerCube alias = colorMap;
+            vec4 value = texture(alias, colorMapSampler, vec3(0.0, 0.0, 1.0));
+            """,
+            "Metal local resource alias 'alias' declares samplerCube but initializer has texture2d<float>",
+        ),
+        (
+            """
+            uimage2D alias = source;
+            uint value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares uimage2D but initializer has texture2d<float, access::read>",
+        ),
+        (
+            """
+            image2D alias @rgba32f @readonly = target;
+            vec4 value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares access::read but initializer has access::write",
+        ),
+        (
+            """
+            image2D alias @rg16f @readonly = source;
+            vec2 value = imageLoad(alias, ivec2(0, 0));
+            """,
+            "Metal local resource alias 'alias' declares format rg16f but initializer has rgba32f",
+        ),
+    ],
+)
+def test_metal_explicit_resource_local_aliases_reject_incompatible_metadata(
+    statement, match
+):
+    shader = f"""
+    shader ExplicitResourceLocalAliasCompatibility {{
+        sampler2D colorMap;
+        sampler colorMapSampler;
+        image2D source @rgba32f @readonly;
+        image2D target @rgba32f @writeonly;
+
+        compute {{
+            void main() {{
+                {statement}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_metal_resource_array_local_aliases_preserve_element_metadata():
     texture_shader = """
     shader TextureArrayLocalAliases {

@@ -1721,6 +1721,9 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceGetCacheConfig":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "cacheConfig")
                 return [f"// HIP get device cache config: output: {output}"]
         elif name == "hipDeviceSetCacheConfig":
             if args:
@@ -1728,6 +1731,9 @@ class HipToCrossGLConverter:
         elif name == "hipDeviceGetSharedMemConfig":
             if args:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(output_name, "sharedMemConfig")
                 return [f"// HIP get device shared memory config: output: {output}"]
         elif name == "hipDeviceSetSharedMemConfig":
             if args:
@@ -2646,6 +2652,14 @@ class HipToCrossGLConverter:
             if args:
                 output = self.format_runtime_pointer_target(raw_args[0])
                 config_kind = "cache" if "Cache" in name else "shared memory"
+                output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                if output_name is not None:
+                    query_name = (
+                        "context.cacheConfig"
+                        if "Cache" in name
+                        else "context.sharedMemConfig"
+                    )
+                    self.register_device_query_source(output_name, query_name)
                 return [f"// HIP context get {config_kind} config: output: {output}"]
         if name in {"hipCtxSetCacheConfig", "hipCtxSetSharedMemConfig"}:
             if args:

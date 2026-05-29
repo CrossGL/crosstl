@@ -4138,17 +4138,22 @@ class MojoCodeGen:
                 base_context,
             )
         positional_args = []
+        rendered_fields = {}
         for index, argument in enumerate(expr.arguments):
             field_type = None
+            field_name = None
             if index < len(field_items):
                 field_name, field_type = field_items[index]
                 field_context = f"{base_context} field {struct_type}.{field_name}"
             else:
                 field_context = f"{base_context} field {index + 1}"
             self.validate_expression_target_shape(argument, field_type, field_context)
-            positional_args.append(
-                self.generate_expression(argument, field_type, field_context)
+            rendered_argument = self.generate_expression(
+                argument, field_type, field_context
             )
+            positional_args.append(rendered_argument)
+            if field_name is not None:
+                rendered_fields[field_name] = rendered_argument
         named_args = []
         for name, value in named_arguments.items():
             field_type = fields.get(name)
@@ -4158,9 +4163,26 @@ class MojoCodeGen:
                 else f"{base_context} field {name}"
             )
             self.validate_expression_target_shape(value, field_type, field_context)
-            named_args.append(
-                f"{name}={self.generate_expression(value, field_type, field_context)}"
-            )
+            rendered_value = self.generate_expression(value, field_type, field_context)
+            named_args.append(f"{name}={rendered_value}")
+            if field_type is not None:
+                rendered_fields[name] = rendered_value
+
+        if struct_type in self.struct_types:
+            missing_fields = [
+                (field_name, field_type)
+                for field_name, field_type in field_items
+                if field_name not in rendered_fields
+            ]
+            if missing_fields:
+                for field_name, field_type in missing_fields:
+                    rendered_fields[field_name] = self.zero_value_for_type(field_type)
+                field_args = [
+                    f"{field_name}={rendered_fields[field_name]}"
+                    for field_name, _ in field_items
+                ]
+                return f"{mapped_type}({', '.join(field_args)})"
+
         return f"{mapped_type}({', '.join([*positional_args, *named_args])})"
 
     def validate_struct_constructor_field_bindings(

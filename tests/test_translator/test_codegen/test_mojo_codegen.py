@@ -14,6 +14,7 @@ from crosstl.translator.ast import (
     BufferOpNode,
     BuiltinVariableNode,
     CastNode,
+    ConstructorNode,
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
@@ -252,6 +253,51 @@ def test_braced_struct_constructors_emit_mojo_initializers():
     assert "ConstructorNode(" not in generated_code
 
 
+def test_braced_struct_constructors_zero_fill_missing_fields():
+    code = """
+    struct Pair {
+        float x;
+        float y;
+    };
+
+    struct Mixed {
+        float value;
+        float2 vectorValue;
+    };
+
+    Pair makePartialNamed() {
+        return Pair { y: 2.0 };
+    }
+
+    Mixed makePartialMixed() {
+        return Mixed { value: 3.0 };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "return Pair(x=0.0, y=2.0)" in generated_code
+    assert (
+        "return Mixed(value=3.0, vectorValue=SIMD[DType.float32, 2](0.0, 0.0))"
+        in generated_code
+    )
+    assert "Pair(y=2.0)" not in generated_code
+
+
+def test_braced_struct_positional_missing_fields_zero_fill_direct_ast():
+    codegen = MojoCodeGen()
+    codegen.struct_types["Pair"] = {"x": "float", "y": "float"}
+    constructor = ConstructorNode(
+        PrimitiveType("Pair"),
+        [LiteralNode(1.0, PrimitiveType("float"))],
+    )
+
+    assert (
+        codegen.generate_constructor_node(constructor, "Pair", "return value")
+        == "Pair(x=1.0, y=0.0)"
+    )
+
+
 def test_braced_struct_constructors_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -273,6 +319,12 @@ def test_braced_struct_constructors_compile_with_mojo(tmp_path):
         Pair pair = Pair { x: 1.0, y: 2.0 };
         return pair.x + pair.y;
     }
+
+    float sumPartialPairs() {
+        Pair positional = Pair { x: 8.0 };
+        Pair named = Pair { y: 9.0 };
+        return positional.x + positional.y + named.x + named.y;
+    }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     generated_code += """
@@ -280,6 +332,7 @@ fn main():
     print(makePair(4.0, 5.0).y)
     print(makePositionalPair(6.0, 7.0).x)
     print(sumPair())
+    print(sumPartialPairs())
 """
 
     source_path = tmp_path / "braced_struct_constructors.mojo"
@@ -295,6 +348,7 @@ fn main():
     assert "5.0" in result.stdout
     assert "6.0" in result.stdout
     assert "3.0" in result.stdout
+    assert "17.0" in result.stdout
 
 
 def test_unit_enums_lower_to_mojo_aliases():

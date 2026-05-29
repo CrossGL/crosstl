@@ -5618,6 +5618,103 @@ class TestHipCodeGen:
         assert "var manualLimit: u32 = (/* HIP device query:" not in result
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
 
+    def test_hip_cache_and_shared_memory_config_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test HIP cache/shared-memory config outputs lower to metadata."""
+        code = """
+        void host(int* out) {
+            hipFuncCache_t deviceCache = hipFuncCachePreferNone;
+            hipSharedMemConfig deviceShared = hipSharedMemBankSizeDefault;
+            hipFuncCache_t contextCache = hipFuncCachePreferNone;
+            hipSharedMemConfig contextShared = hipSharedMemBankSizeDefault;
+            hipFuncCache_t statusCache = hipFuncCachePreferNone;
+            hipSharedMemConfig statusShared = hipSharedMemBankSizeDefault;
+            hipDeviceGetCacheConfig(&deviceCache);
+            out[0] = deviceCache;
+            hipDeviceSetCacheConfig(deviceCache);
+            deviceCache = hipFuncCachePreferEqual;
+            hipFuncCache_t manualDeviceCache = deviceCache;
+            hipDeviceGetSharedMemConfig(&deviceShared);
+            out[1] = deviceShared;
+            hipDeviceSetSharedMemConfig(deviceShared);
+            deviceShared = hipSharedMemBankSizeEightByte;
+            hipSharedMemConfig manualDeviceShared = deviceShared;
+            hipError_t errCache = hipCtxGetCacheConfig(&contextCache);
+            out[2] = contextCache;
+            hipCtxSetCacheConfig(contextCache);
+            contextCache = hipFuncCachePreferL1;
+            hipFuncCache_t manualContextCache = contextCache;
+            hipError_t errShared = hipCtxGetSharedMemConfig(&contextShared);
+            out[3] = contextShared;
+            hipCtxSetSharedMemConfig(contextShared);
+            contextShared = hipSharedMemBankSizeFourByte;
+            hipSharedMemConfig manualContextShared = contextShared;
+            hipError_t statusDeviceCache = hipDeviceGetCacheConfig(&statusCache);
+            out[4] = statusCache;
+            hipError_t statusDeviceShared =
+                hipDeviceGetSharedMemConfig(&statusShared);
+            out[5] = statusShared;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device cache config: output: deviceCache" in result
+        assert "out[0] = (/* HIP device query: cacheConfig */ 0);" in result
+        assert "// HIP set device cache config: deviceCache" in result
+        assert "deviceCache = hipFuncCachePreferEqual;" in result
+        assert "var manualDeviceCache: hipFuncCache_t = deviceCache;" in result
+        assert "// HIP get device shared memory config: output: deviceShared" in result
+        assert "out[1] = (/* HIP device query: sharedMemConfig */ 0);" in result
+        assert "// HIP set device shared memory config: deviceShared" in result
+        assert "deviceShared = hipSharedMemBankSizeEightByte;" in result
+        assert "var manualDeviceShared: hipSharedMemConfig = deviceShared;" in result
+        assert "// HIP context get cache config: output: contextCache" in result
+        assert "var errCache: hipError_t = hipSuccess;" in result
+        assert "out[2] = (/* HIP device query: context.cacheConfig */ 0);" in result
+        assert "// HIP context set cache config: contextCache" in result
+        assert "contextCache = hipFuncCachePreferL1;" in result
+        assert "var manualContextCache: hipFuncCache_t = contextCache;" in result
+        assert (
+            "// HIP context get shared memory config: output: contextShared" in result
+        )
+        assert "var errShared: hipError_t = hipSuccess;" in result
+        assert "out[3] = (/* HIP device query: context.sharedMemConfig */ 0);" in result
+        assert "// HIP context set shared memory config: contextShared" in result
+        assert "contextShared = hipSharedMemBankSizeFourByte;" in result
+        assert "var manualContextShared: hipSharedMemConfig = contextShared;" in result
+        assert "var statusDeviceCache: hipError_t = hipSuccess;" in result
+        assert "out[4] = (/* HIP device query: cacheConfig */ 0);" in result
+        assert "var statusDeviceShared: hipError_t = hipSuccess;" in result
+        assert "out[5] = (/* HIP device query: sharedMemConfig */ 0);" in result
+        assert "out[0] = deviceCache;" not in result
+        assert "out[1] = deviceShared;" not in result
+        assert "out[2] = contextCache;" not in result
+        assert "out[3] = contextShared;" not in result
+        assert "out[4] = statusCache;" not in result
+        assert "out[5] = statusShared;" not in result
+        assert (
+            "var manualDeviceCache: hipFuncCache_t = (/* HIP device query:"
+            not in result
+        )
+        assert (
+            "var manualDeviceShared: hipSharedMemConfig = (/* HIP device query:"
+            not in result
+        )
+        assert (
+            "var manualContextCache: hipFuncCache_t = (/* HIP device query:"
+            not in result
+        )
+        assert (
+            "var manualContextShared: hipSharedMemConfig = (/* HIP device query:"
+            not in result
+        )
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """

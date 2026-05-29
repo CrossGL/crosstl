@@ -3166,12 +3166,61 @@ class MetalCodeGen:
                 return initial_type
             return None
 
+        declared_resource_type = self.map_resource_type_with_format(
+            declared_type_name, node
+        )
+        self.validate_local_resource_alias_compatibility(
+            node, declared_type_name, declared_resource_type, initial_type
+        )
         if (
             explicit_image_access(node, self.attribute_value_to_string) is None
             and explicit_image_format(node, self.attribute_value_to_string) is None
         ):
             return initial_type
-        return self.map_resource_type_with_format(declared_type_name, node)
+        if explicit_image_access(node, self.attribute_value_to_string) is None:
+            return initial_type
+        return declared_resource_type
+
+    def validate_local_resource_alias_compatibility(
+        self, node, declared_type_name, declared_resource_type, initial_type
+    ):
+        alias_name = getattr(node, "name", "<anonymous>")
+        declared_compat_type = self.local_resource_alias_compatibility_type(
+            declared_resource_type
+        )
+        initial_compat_type = self.local_resource_alias_compatibility_type(initial_type)
+        if declared_compat_type != initial_compat_type:
+            raise ValueError(
+                f"Metal local resource alias '{alias_name}' declares "
+                f"{declared_type_name} but initializer has {initial_type}"
+            )
+
+        declared_access = explicit_image_access(node, self.attribute_value_to_string)
+        if declared_access is not None:
+            initial_access = self.storage_image_access_mode(initial_type)
+            if initial_access is not None and declared_access != initial_access:
+                raise ValueError(
+                    f"Metal local resource alias '{alias_name}' declares "
+                    f"access::{declared_access} but initializer has "
+                    f"access::{initial_access}"
+                )
+
+        declared_format = explicit_image_format(node, self.attribute_value_to_string)
+        if declared_format is not None:
+            initial_format = self.image_resource_format(
+                getattr(node, "initial_value", None)
+            )
+            if initial_format is not None and declared_format != initial_format:
+                raise ValueError(
+                    f"Metal local resource alias '{alias_name}' declares "
+                    f"format {declared_format} but initializer has {initial_format}"
+                )
+
+    def local_resource_alias_compatibility_type(self, resource_type):
+        resource_type = self.resource_base_type(resource_type)
+        if self.is_storage_image_resource(resource_type):
+            return self.storage_image_access_agnostic_type(resource_type)
+        return resource_type
 
     def local_variable_texture_alias_declaration_type(self, node, resource_type):
         array_size = self.texture_argument_resource_array_size(
