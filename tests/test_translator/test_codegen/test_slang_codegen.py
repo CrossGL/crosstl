@@ -9330,6 +9330,95 @@ def test_byte_address_buffer_access_qualifiers_emit_slang_kinds_and_diagnostics(
     assert "buffer_store(" not in generated_code
 
 
+def test_byte_address_store_calls_reject_value_contexts():
+    code = """
+    shader SlangByteAddressStoreValueContexts {
+        RWByteAddressBuffer rawOutput @binding(24);
+
+        uint passUint(uint value) {
+            return value;
+        }
+
+        uint returnBlocked(uint offset, uint value) {
+            return buffer_store(rawOutput, offset, value);
+        }
+
+        compute {
+            void main(uint offset, uint value) {
+                uint oldValue = 0u;
+                buffer_store(rawOutput, offset, value);
+                rawOutput.Store2(offset + 4u, uint2(value, value));
+                uint initBlocked =
+                    buffer_store(rawOutput, offset + 8u, value);
+                oldValue = rawOutput.Store(offset + 12u, value);
+                passUint(
+                    rawOutput.Store3(offset + 16u, uint3(value, value, value))
+                );
+                uint binaryBlocked =
+                    rawOutput.Store4(
+                        offset + 20u,
+                        uint4(value, value, value, value)
+                    ) + 1u;
+                if (buffer_store(rawOutput, offset + 24u, value) != 0u) {
+                    oldValue = returnBlocked(offset, value);
+                }
+                for (
+                    buffer_store(rawOutput, offset + 28u, value);
+                    oldValue < 8u;
+                    rawOutput.Store(offset + 32u, oldValue)
+                ) {
+                    break;
+                }
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rawOutput.Store(offset, value);" in generated_code
+    assert "rawOutput.Store2(offset + 4u, uint2(value, value));" in generated_code
+    assert (
+        "uint initBlocked = /* unsupported Slang byte-address buffer: "
+        "buffer_store cannot be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "oldValue = /* unsupported Slang byte-address buffer: Store cannot be "
+        "used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "passUint(/* unsupported Slang byte-address buffer: Store3 cannot be "
+        "used as a value expression */ 0u);" in generated_code
+    )
+    assert (
+        "uint binaryBlocked = /* unsupported Slang byte-address buffer: Store4 "
+        "cannot be used as a value expression */ 0u + 1u;" in generated_code
+    )
+    assert (
+        "if (/* unsupported Slang byte-address buffer: buffer_store cannot be "
+        "used as a value expression */ 0u != 0u)" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang byte-address buffer: buffer_store cannot "
+        "be used as a value expression */ 0u;" in generated_code
+    )
+    assert (
+        "for (rawOutput.Store(offset + 28u, value); oldValue < 8u; "
+        "rawOutput.Store(offset + 32u, oldValue))" in generated_code
+    )
+    assert "uint initBlocked = rawOutput.Store" not in generated_code
+    assert "oldValue = rawOutput.Store" not in generated_code
+    assert "passUint(rawOutput.Store3" not in generated_code
+    assert (
+        "rawOutput.Store4(offset + 20u, uint4(value, value, value, value)) + 1u"
+        not in generated_code
+    )
+    assert "if (rawOutput.Store" not in generated_code
+    assert "return rawOutput.Store" not in generated_code
+    assert "return buffer_store(" not in generated_code
+    assert "None(" not in generated_code
+
+
 def test_byte_address_interlocked_member_calls_respect_access_qualifiers():
     code = """
     shader SlangByteAddressInterlockedMembers {

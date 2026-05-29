@@ -256,7 +256,6 @@ from .image_access_contracts import (
     unsupported_texture_gather_call_expression,
     unsupported_texture_compare_scalar_expression,
     unsupported_texture_compare_operation_error,
-    unsupported_texture_offset_call_expression,
     unsupported_texture_query_levels_expression,
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
@@ -766,6 +765,9 @@ class GLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
+        self.literal_int_vector_constants = {}
+        self.current_compile_time_int_constants = {}
+        self.current_compile_time_int_vector_constants = {}
         self.current_stage_output = None
         self.current_stage_inputs = {}
         self.current_stage_outputs = {}
@@ -1488,6 +1490,16 @@ class GLSLCodeGen:
         )
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
+        )
+        self.literal_int_vector_constants = (
+            self.collect_literal_int_vector_constants_from_variables(
+                getattr(ast, "global_variables", []),
+                self.literal_int_constants,
+            )
+        )
+        self.current_compile_time_int_constants = dict(self.literal_int_constants)
+        self.current_compile_time_int_vector_constants = dict(
+            self.literal_int_vector_constants
         )
         self.current_stage_output = None
         self.current_stage_inputs = {}
@@ -4393,6 +4405,10 @@ class GLSLCodeGen:
         previous_flattened_stage_variables = self.flattened_stage_variables
         previous_stage_return_type = self.current_stage_return_type
         previous_stage_entry_type = self.current_stage_entry_type
+        previous_compile_time_int_constants = self.current_compile_time_int_constants
+        previous_compile_time_int_vector_constants = (
+            self.current_compile_time_int_vector_constants
+        )
         self.current_sampler_parameters = sampler_parameters
         self.current_texture_parameters = {
             **texture_parameters,
@@ -4439,6 +4455,14 @@ class GLSLCodeGen:
             getattr(func, "return_type", None)
         )
         self.current_stage_entry_type = shader_type or stage_context
+        self.current_compile_time_int_constants = dict(self.literal_int_constants)
+        self.current_compile_time_int_vector_constants = dict(
+            self.literal_int_vector_constants
+        )
+        for param in param_list:
+            name = getattr(param, "name", None)
+            self.current_compile_time_int_constants.pop(name, None)
+            self.current_compile_time_int_vector_constants.pop(name, None)
         body = getattr(func, "body", [])
         if unsupported_buffer_array_info:
             code += self.unsupported_structured_buffer_array_function_body(
@@ -4466,6 +4490,10 @@ class GLSLCodeGen:
         self.flattened_stage_variables = previous_flattened_stage_variables
         self.current_stage_return_type = previous_stage_return_type
         self.current_stage_entry_type = previous_stage_entry_type
+        self.current_compile_time_int_constants = previous_compile_time_int_constants
+        self.current_compile_time_int_vector_constants = (
+            previous_compile_time_int_vector_constants
+        )
         self.current_function_return_type = previous_function_return_type
         self.local_variable_types = previous_local_variable_types
         self.current_generic_function_substitutions = (
@@ -5762,6 +5790,7 @@ class GLSLCodeGen:
                 return f"{indent_str}{stmt.name} = {init_expr};\n"
             local_name = self.glsl_local_identifier_name(stmt.name)
             self.local_variable_types[stmt.name] = var_type
+            self.update_compile_time_offset_constants(stmt, var_type)
 
             declaration = format_c_style_array_declaration(
                 self.map_type(var_type), local_name
@@ -9635,7 +9664,11 @@ class GLSLCodeGen:
         return self.texture_sampling_capabilities(texture_type)["sample_offset"]
 
     def unsupported_texture_sample_offset_call(self, func_name, reason):
-        return unsupported_texture_offset_call_expression("GLSL", func_name, reason)
+        zero_value = self.texture_sample_vector_zero_value()
+        return (
+            f"/* unsupported GLSL texture offset: {func_name} {reason} */ "
+            f"{zero_value}"
+        )
 
     def is_multisample_texture_resource_type(self, texture_type):
         return self.resource_base_type(texture_type) in {
@@ -9853,6 +9886,13 @@ class GLSLCodeGen:
                 func_name, texture_gather_operation_error()
             )
 
+        if offset_args and not self.glsl_texel_offsets_are_compile_time_constants(
+            offset_args
+        ):
+            return self.unsupported_dynamic_texel_offset_gather_call(
+                func_name, texture_type
+            )
+
         component = self.texture_gather_component_value(component_arg)
         if component is not None:
             if component not in {0, 1, 2, 3}:
@@ -9985,10 +10025,8 @@ class GLSLCodeGen:
     def unsupported_texture_compare_call(self, func_name, reason):
         return unsupported_texture_compare_scalar_expression("GLSL", func_name, reason)
 
-    def glsl_texel_offset_is_compile_time_constant(self, offset_arg):
-        offset_type = self.type_name_string(self.expression_result_type(offset_arg))
-        scalar_integer_types = {"int", "uint"}
-        vector_integer_types = {
+    def glsl_integer_vector_type_names(self):
+        return {
             "ivec2",
             "ivec3",
             "ivec4",
@@ -9997,43 +10035,187 @@ class GLSLCodeGen:
             "uvec4",
         }
 
-        literal_value = self.literal_int_value(offset_arg, self.literal_int_constants)
-        if isinstance(literal_value, int) and not isinstance(literal_value, bool):
-            return offset_type is None or offset_type in scalar_integer_types
+    def glsl_compile_time_int_constants(self):
+        if self.current_compile_time_int_constants is not None:
+            return self.current_compile_time_int_constants
+        return self.literal_int_constants
 
-        class_name = offset_arg.__class__.__name__ if offset_arg is not None else ""
+    def glsl_compile_time_int_vector_constants(self):
+        if self.current_compile_time_int_vector_constants is not None:
+            return self.current_compile_time_int_vector_constants
+        return self.literal_int_vector_constants
+
+    def glsl_integer_vector_literal_value(
+        self, expr, int_constants=None, vector_constants=None
+    ):
+        vector_constants = (
+            self.glsl_compile_time_int_vector_constants()
+            if vector_constants is None
+            else vector_constants
+        )
+        expr_name = self.expression_name(expr)
+        if expr_name in vector_constants:
+            return vector_constants[expr_name]
+
+        class_name = expr.__class__.__name__ if expr is not None else ""
         if "FunctionCall" in class_name:
-            constructor = getattr(
-                offset_arg, "function", getattr(offset_arg, "name", None)
-            )
-            arguments = getattr(
-                offset_arg, "arguments", getattr(offset_arg, "args", [])
-            )
+            constructor = getattr(expr, "function", getattr(expr, "name", None))
+            arguments = getattr(expr, "arguments", getattr(expr, "args", []))
         elif "Constructor" in class_name:
-            constructor = getattr(offset_arg, "constructor_type", None)
-            arguments = getattr(offset_arg, "arguments", [])
+            constructor = getattr(expr, "constructor_type", None)
+            arguments = getattr(expr, "arguments", [])
         else:
-            return False
+            return None
 
         constructor_name = self.type_name_string(constructor)
-        if constructor_name not in vector_integer_types:
-            return False
+        if constructor_name not in self.glsl_integer_vector_type_names():
+            return None
+
         arguments = list(arguments or [])
         if not arguments:
-            return False
+            return None
+
+        int_constants = (
+            self.glsl_compile_time_int_constants()
+            if int_constants is None
+            else int_constants
+        )
+        values = []
         for argument in arguments:
-            literal_argument = self.literal_int_value(
-                argument, self.literal_int_constants
-            )
+            literal_argument = self.literal_int_value(argument, int_constants)
             if not isinstance(literal_argument, int) or isinstance(
                 literal_argument, bool
             ):
-                return False
-        return True
+                return None
+            values.append(literal_argument)
+
+        vector_width = int(constructor_name[-1])
+        if len(values) == 1:
+            return tuple(values * vector_width)
+        if len(values) == vector_width:
+            return tuple(values)
+        return None
+
+    def collect_literal_int_vector_constants_from_variables(
+        self, variables, int_constants
+    ):
+        vector_constants = {}
+        for variable in variables or []:
+            name = getattr(variable, "name", None)
+            if not name or "const" not in getattr(variable, "qualifiers", []):
+                continue
+            var_type = self.type_name_string(
+                getattr(variable, "var_type", getattr(variable, "vtype", None))
+            )
+            if var_type not in self.glsl_integer_vector_type_names():
+                continue
+            value = self.glsl_integer_vector_literal_value(
+                getattr(variable, "initial_value", None),
+                int_constants,
+                vector_constants,
+            )
+            if value is not None:
+                vector_constants[name] = value
+        return vector_constants
+
+    def update_compile_time_offset_constants(self, variable, var_type):
+        name = getattr(variable, "name", None)
+        if not name:
+            return
+        self.current_compile_time_int_constants.pop(name, None)
+        self.current_compile_time_int_vector_constants.pop(name, None)
+        if "const" not in getattr(variable, "qualifiers", []):
+            return
+
+        initial_value = getattr(variable, "initial_value", None)
+        var_type = self.type_name_string(var_type)
+        scalar_integer_types = {"int", "uint"}
+        if var_type in scalar_integer_types:
+            value = self.literal_int_value(
+                initial_value, self.current_compile_time_int_constants
+            )
+            if isinstance(value, int) and not isinstance(value, bool):
+                self.current_compile_time_int_constants[name] = value
+            return
+
+        if var_type not in self.glsl_integer_vector_type_names():
+            return
+        value = self.glsl_integer_vector_literal_value(
+            initial_value,
+            self.current_compile_time_int_constants,
+            self.current_compile_time_int_vector_constants,
+        )
+        if value is not None:
+            self.current_compile_time_int_vector_constants[name] = value
+
+    def glsl_texel_offset_is_compile_time_constant(self, offset_arg):
+        offset_type = self.type_name_string(self.expression_result_type(offset_arg))
+        scalar_integer_types = {"int", "uint"}
+        vector_integer_types = self.glsl_integer_vector_type_names()
+        int_constants = self.glsl_compile_time_int_constants()
+
+        literal_value = self.literal_int_value(offset_arg, int_constants)
+        if isinstance(literal_value, int) and not isinstance(literal_value, bool):
+            return offset_type is None or offset_type in scalar_integer_types
+
+        if offset_type is not None and offset_type not in vector_integer_types:
+            return False
+        return (
+            self.glsl_integer_vector_literal_value(offset_arg, int_constants)
+            is not None
+        )
+
+    def glsl_texel_offsets_are_compile_time_constants(self, offset_args):
+        return all(
+            self.glsl_texel_offset_is_compile_time_constant(offset_arg)
+            for offset_arg in offset_args
+        )
+
+    def glsl_texture_call_offsets_are_compile_time_constants(self, func_name, args):
+        offset_indices = texture_offset_argument_indices(
+            func_name,
+            self.texture_call_uses_explicit_sampler(args),
+            len(args),
+        )
+        return self.glsl_texel_offsets_are_compile_time_constants(
+            args[offset_index] for offset_index in offset_indices
+        )
+
+    def dynamic_texel_offset_reason(self):
+        return "texel offsets must be compile-time integer constants"
 
     def unsupported_dynamic_texel_offset_compare_call(self, func_name):
         return self.unsupported_texture_compare_call(
-            func_name, "texel offsets must be compile-time integer constants"
+            func_name, self.dynamic_texel_offset_reason()
+        )
+
+    def unsupported_dynamic_texel_offset_sample_call(self, func_name):
+        return self.unsupported_texture_sample_offset_call(
+            func_name, self.dynamic_texel_offset_reason()
+        )
+
+    def unsupported_dynamic_texel_offset_projected_call(self, func_name, texture_type):
+        return self.unsupported_texture_projected_call(
+            func_name, self.dynamic_texel_offset_reason(), texture_type
+        )
+
+    def unsupported_dynamic_texel_offset_gather_call(self, func_name, texture_type):
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL texture gather: {func_name} "
+            f"{self.dynamic_texel_offset_reason()} */ {zero_value}"
+        )
+
+    def unsupported_dynamic_texel_offset_gather_compare_call(self, func_name):
+        return self.unsupported_texture_gather_compare_call(
+            func_name, self.dynamic_texel_offset_reason()
+        )
+
+    def unsupported_dynamic_texel_fetch_offset_call(self, func_name, texture_type):
+        zero_value = self.texture_sample_vector_zero_value(texture_type)
+        return (
+            f"/* unsupported GLSL texel fetch offset: {func_name} "
+            f"{self.dynamic_texel_offset_reason()} */ {zero_value}"
         )
 
     def generate_texture_compare_call(self, func_name, args):
@@ -10122,7 +10304,10 @@ class GLSLCodeGen:
                         func_name, "explicit LOD offsets require 2D shadow samplers"
                     )
                 lod = self.generate_expression(extra_args[1])
-                offset = self.generate_expression(extra_args[2])
+                offset_arg = extra_args[2]
+                if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                    return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+                offset = self.generate_expression(offset_arg)
                 return (
                     f"textureLodOffset({texture_name}, {compare_coord}, "
                     f"{lod}, {offset})"
@@ -10156,7 +10341,10 @@ class GLSLCodeGen:
                     )
                 ddx = self.generate_expression(extra_args[1])
                 ddy = self.generate_expression(extra_args[2])
-                offset = self.generate_expression(extra_args[3])
+                offset_arg = extra_args[3]
+                if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                    return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+                offset = self.generate_expression(offset_arg)
                 return (
                     f"textureGradOffset({texture_name}, {compare_coord}, "
                     f"{ddx}, {ddy}, {offset})"
@@ -10239,7 +10427,10 @@ class GLSLCodeGen:
                     func_name, texture_compare_coordinate_error()
                 )
             lod = self.generate_expression(extra_args[1])
-            offset = self.generate_expression(extra_args[2])
+            offset_arg = extra_args[2]
+            if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+            offset = self.generate_expression(offset_arg)
             return f"textureLodOffset({texture_name}, {compare_coord}, {lod}, {offset})"
 
         if is_texture_compare_grad_operation(func_name):
@@ -10284,7 +10475,10 @@ class GLSLCodeGen:
                 )
             ddx = self.generate_expression(extra_args[1])
             ddy = self.generate_expression(extra_args[2])
-            offset = self.generate_expression(extra_args[3])
+            offset_arg = extra_args[3]
+            if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+                return self.unsupported_dynamic_texel_offset_compare_call(func_name)
+            offset = self.generate_expression(offset_arg)
             return (
                 f"textureGradOffset({texture_name}, {compare_coord}, "
                 f"{ddx}, {ddy}, {offset})"
@@ -10381,6 +10575,8 @@ class GLSLCodeGen:
             self.validate_texture_gather_compare_offsets_argument(
                 func_name, texture_type, offset_arg
             )
+        if not self.glsl_texel_offsets_are_compile_time_constants(offset_args):
+            return self.unsupported_dynamic_texel_offset_gather_compare_call(func_name)
 
         compare = self.generate_expression(compare_arg)
         return self.texture_gather_compare_offsets_expression(
@@ -10426,7 +10622,10 @@ class GLSLCodeGen:
             return self.unsupported_texture_gather_compare_call(
                 func_name, texture_compare_offset_capability_error("GLSL")
             )
-        offset = self.generate_expression(extra_args[1])
+        offset_arg = extra_args[1]
+        if not self.glsl_texel_offset_is_compile_time_constant(offset_arg):
+            return self.unsupported_dynamic_texel_offset_gather_compare_call(func_name)
+        offset = self.generate_expression(offset_arg)
         return f"textureGatherOffset({texture_name}, {coord}, {compare}, {offset})"
 
     def image_resource_format(self, texture_arg):
@@ -10907,6 +11106,12 @@ class GLSLCodeGen:
                 return self.unsupported_multisample_texel_fetch_offset_call(
                     texture_type
                 )
+            if not self.glsl_texture_call_offsets_are_compile_time_constants(
+                func_name, args
+            ):
+                return self.unsupported_dynamic_texel_fetch_offset_call(
+                    func_name, texture_type
+                )
             return None
 
         if is_texel_fetch_basic_operation(func_name) and len(args) >= 3:
@@ -10936,12 +11141,32 @@ class GLSLCodeGen:
                 return self.unsupported_multisample_texture_call(
                     func_name, texture_type
                 )
-            if is_texture_sample_offset_operation(
-                func_name
-            ) and not self.texture_sample_offset_supported(texture_type):
-                return self.unsupported_texture_sample_offset_call(
-                    func_name, texture_sample_offset_capability_error("GLSL")
-                )
+            if is_texture_sample_offset_operation(func_name):
+                if not self.texture_sample_offset_supported(texture_type):
+                    return self.unsupported_texture_sample_offset_call(
+                        func_name, texture_sample_offset_capability_error("GLSL")
+                    )
+                if not self.glsl_texture_call_offsets_are_compile_time_constants(
+                    func_name, args
+                ):
+                    return self.unsupported_dynamic_texel_offset_sample_call(func_name)
+            if (
+                is_projected_texture_basic_offset_operation(func_name)
+                or is_projected_texture_lod_offset_operation(func_name)
+                or is_projected_texture_grad_offset_operation(func_name)
+            ):
+                if not self.texture_sample_offset_supported(texture_type):
+                    return self.unsupported_texture_projected_call(
+                        func_name,
+                        texture_sample_offset_capability_error("GLSL"),
+                        texture_type,
+                    )
+                if not self.glsl_texture_call_offsets_are_compile_time_constants(
+                    func_name, args
+                ):
+                    return self.unsupported_dynamic_texel_offset_projected_call(
+                        func_name, texture_type
+                    )
 
         if not is_texture_sampling_operation(
             func_name

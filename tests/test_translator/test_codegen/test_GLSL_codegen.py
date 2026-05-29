@@ -63,6 +63,14 @@ def glsl_image_atomic_parameter_diagnostic(operation, resource_type, zero_value)
     )
 
 
+def glsl_dynamic_texel_offset_diagnostic(category, operation, zero_value):
+    return (
+        f"/* unsupported GLSL {category}: {operation} "
+        "texel offsets must be compile-time integer constants */ "
+        f"{zero_value}"
+    )
+
+
 def test_glsl_workgroup_barrier_builtin_lowers_to_native_barrier():
     shader = """
     shader SynchronizationBuiltins {
@@ -13144,21 +13152,23 @@ def test_opengl_texture_gather_offset_variants_filter_sampler_arguments():
         "component == 2 ? textureGather(tex, uv, 2) : textureGather(tex, uv, 3)"
         in generated_code
     )
-    assert "textureGatherOffset(tex, uv, offset, 3)" in generated_code
     assert (
-        "component == 0 ? textureGatherOffset(tex, uv, offset, 0) : "
-        "component == 1 ? textureGatherOffset(tex, uv, offset, 1) : "
-        "component == 2 ? textureGatherOffset(tex, uv, offset, 2) : "
-        "textureGatherOffset(tex, uv, offset, 3)" in generated_code
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather", "textureGatherOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "component == 0 ? vec4(textureGatherOffset(layers, uvLayer, offset0, 0).x, "
-        "textureGatherOffset(layers, uvLayer, offset1, 0).y, "
-        "textureGatherOffset(layers, uvLayer, offset2, 0).z, "
-        "textureGatherOffset(layers, uvLayer, offset3, 0).w)" in generated_code
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture gather", "textureGatherOffsets", "vec4(0.0)"
+        )
+        in generated_code
     )
     assert "textureGather(tex, uv, component)" not in generated_code
     assert "textureGatherOffset(tex, uv, offset, component)" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert (
         "gatherOps(colorMap, layerMap, uv, uvLayer, offset, offset0, offset1, offset2, offset3, component)"
@@ -13244,14 +13254,19 @@ def test_opengl_texture_gather_compare_offsets_filter_sampler_arguments():
 
     assert "sampler compareSampler" not in generated_code
     assert "sampler s" not in generated_code
-    assert "textureGatherCompareOffsets" not in generated_code
+    assert "textureGatherCompareOffsets(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offsets[0]).x" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offsets[1]).y" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offsets[2]).z" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offsets[3]).w" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offset0).x" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offset3).w" in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffsets",
+                "vec4(0.0)",
+            )
+        )
+        == 2
+    )
 
 
 def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
@@ -13314,26 +13329,13 @@ def test_opengl_texture_gather_offsets_mix_literal_and_dynamic_offsets():
     assert "textureGatherOffsets(" not in generated_code
     assert "linearSampler" not in generated_code
     assert ", s, uvLayer" not in generated_code
-    assert generated_code.count("component == 0 ? vec4(") == 1
-    assert generated_code.count("component == 1 ? vec4(") == 1
-    assert generated_code.count("component == 2 ? vec4(") == 1
-    for component in range(4):
-        assert (
-            f"textureGatherOffset(layers, uvLayer, ivec2((-1), 0), {component}).x"
-            in generated_code
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture gather", "textureGatherOffsets", "vec4(0.0)"
         )
-        assert (
-            f"textureGatherOffset(layers, uvLayer, dynamic0, {component}).y"
-            in generated_code
-        )
-        assert (
-            f"textureGatherOffset(layers, uvLayer, ivec2(1, (-1)), {component}).z"
-            in generated_code
-        )
-        assert (
-            f"textureGatherOffset(layers, uvLayer, dynamic1, {component}).w"
-            in generated_code
-        )
+        in generated_code
+    )
+    assert "textureGatherOffset(" not in generated_code
     assert (
         "gatherOps(layerMap, uvLayer, dynamic0, dynamic1, component)" in generated_code
     )
@@ -13390,30 +13392,20 @@ def test_opengl_direct_stage_gather_offsets_use_input_members():
         "textureGather(colorMap, uv, 3));" in generated_code
     )
     assert (
-        "component == 0 ? textureGatherOffset(colorMap, uv, offset, 0) : "
-        "component == 1 ? textureGatherOffset(colorMap, uv, offset, 1) : "
-        "component == 2 ? textureGatherOffset(colorMap, uv, offset, 2) : "
-        "textureGatherOffset(colorMap, uv, offset, 3)" in generated_code
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture gather", "textureGatherOffset", "vec4(0.0)"
+        )
+        in generated_code
     )
-    for component in range(4):
-        assert (
-            f"textureGatherOffset(layerMap, uvLayer, offset0, {component}).x"
-            in generated_code
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture gather", "textureGatherOffsets", "vec4(0.0)"
         )
-        assert (
-            f"textureGatherOffset(layerMap, uvLayer, offset1, {component}).y"
-            in generated_code
-        )
-        assert (
-            f"textureGatherOffset(layerMap, uvLayer, offset2, {component}).z"
-            in generated_code
-        )
-        assert (
-            f"textureGatherOffset(layerMap, uvLayer, offset3, {component}).w"
-            in generated_code
-        )
+        in generated_code
+    )
     assert "textureGather(colorMap, uv, component)" not in generated_code
     assert "textureGatherOffset(colorMap, uv, offset, component)" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
     assert "textureGatherOffsets(" not in generated_code
     assert "input.uv" not in generated_code
     assert "input.offset" not in generated_code
@@ -13718,11 +13710,28 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
         "vec4 offsetOps(sampler2D tex, sampler2DArray layers, vec2 uv, vec3 uvLayer, float lod, vec2 ddx, vec2 ddy, ivec2 offset)"
         in generated_code
     )
-    assert "textureOffset(tex, uv, offset)" in generated_code
-    assert "textureLodOffset(tex, uv, lod, offset)" in generated_code
-    assert "textureGradOffset(tex, uv, ddx, ddy, offset)" in generated_code
-    assert "textureLodOffset(layers, uvLayer, lod, offset)" in generated_code
-    assert "textureGradOffset(layers, uvLayer, ddx, ddy, offset)" in generated_code
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureLodOffset", "vec4(0.0)"
+            )
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureGradOffset", "vec4(0.0)"
+            )
+        )
+        == 2
+    )
     assert (
         "offsetOps(colorMap, layerMap, uv, uvLayer, lod, ddx, ddy, offset)"
         in generated_code
@@ -13730,6 +13739,9 @@ def test_opengl_texture_lod_grad_offsets_filter_sampler_arguments():
     assert "linearSampler" not in generated_code
     assert ", s, uv" not in generated_code
     assert ", s, uvLayer" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_cube_texture_sample_offsets_emit_diagnostics():
@@ -13922,37 +13934,45 @@ def test_opengl_direct_stage_sample_offsets_and_texel_fetch_offset_use_input_mem
 
     assert "layout(binding = 0) uniform sampler2D colorMap;" in generated_code
     assert "layout(binding = 1) uniform sampler2DArray layerMap;" in generated_code
-    assert "vec4 plain = textureOffset(colorMap, uv, offset);" in generated_code
     assert (
-        "vec4 lodSample = textureLodOffset(colorMap, uv, lod, offset);"
-        in generated_code
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 gradSample = textureGradOffset(colorMap, uv, ddx, ddy, offset);"
-        in generated_code
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureLodOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 arrayPlain = textureOffset(layerMap, uvLayer, offset);" in generated_code
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture offset", "textureGradOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert (
-        "vec4 arrayLod = textureLodOffset(layerMap, uvLayer, lod, offset);"
-        in generated_code
-    )
-    assert (
-        "vec4 arrayGrad = textureGradOffset(layerMap, uvLayer, ddx, ddy, offset);"
-        in generated_code
-    )
-    assert (
-        "vec4 fetched = texelFetchOffset(colorMap, pixel, int(lod), offset);"
-        in generated_code
-    )
-    assert (
-        "vec4 fetchedLayer = texelFetchOffset(layerMap, pixelLayer, int(lod), offset);"
-        in generated_code
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
+            )
+        )
+        == 2
     )
     assert "linearSampler" not in generated_code
     assert "input.uv" not in generated_code
     assert "input.pixel" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
+    assert "texelFetchOffset(" not in generated_code
 
 
 def test_opengl_projected_texture_variants_filter_sampler_arguments():
@@ -14031,12 +14051,28 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     assert "textureProj(tex, uvq)" in generated_code
     assert "textureProj(tex, uvqw, 0.25)" in generated_code
     assert "textureProj(volume, xyzq)" in generated_code
-    assert "textureProjOffset(tex, uvq, offset)" in generated_code
-    assert "textureProjOffset(tex, uvq, offset, 0.5)" in generated_code
     assert "textureProjLod(tex, uvq, 2.0)" in generated_code
-    assert "textureProjLodOffset(tex, uvq, 3.0, offset)" in generated_code
     assert "textureProjGrad(tex, uvq, ddx, ddy)" in generated_code
-    assert "textureProjGradOffset(tex, uvq, ddx, ddy, offset)" in generated_code
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "projected texture", "textureProjOffset", "vec4(0.0)"
+            )
+        )
+        == 2
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
     assert (
         "projectedOps(colorMap, volumeMap, uvq, uvqw, xyzq, ddx, ddy, offset)"
         in generated_code
@@ -14045,6 +14081,9 @@ def test_opengl_projected_texture_variants_filter_sampler_arguments():
     assert ", s, uvq" not in generated_code
     assert ", s, uvqw" not in generated_code
     assert ", s, xyzq" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_direct_projected_texture_stage_input_members():
@@ -14096,25 +14135,36 @@ def test_opengl_direct_projected_texture_stage_input_members():
     assert "vec4 projected = textureProj(colorMap, uvq);" in generated_code
     assert "vec4 projectedBias = textureProj(colorMap, uvqw, 0.25);" in generated_code
     assert "vec4 volumeProjected = textureProj(volumeMap, xyzq);" in generated_code
-    assert (
-        "vec4 projectedOffset = textureProjOffset(colorMap, uvq, offset);"
-        in generated_code
-    )
     assert "vec4 projectedLod = textureProjLod(colorMap, uvq, lod);" in generated_code
-    assert (
-        "vec4 projectedLodOffset = textureProjLodOffset(colorMap, uvq, lod, offset);"
-        in generated_code
-    )
     assert (
         "vec4 projectedGrad = textureProjGrad(colorMap, uvq, ddx, ddy);"
         in generated_code
     )
     assert (
-        "vec4 projectedGradOffset = textureProjGradOffset(colorMap, uvq, ddx, ddy, offset);"
+        "vec4 projectedOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
         in generated_code
     )
     assert "linearSampler" not in generated_code
     assert ", input." not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_direct_projected_array_texture_stage_input_members():
@@ -14152,26 +14202,37 @@ def test_opengl_direct_projected_array_texture_stage_input_members():
     assert "layout(binding = 0) uniform sampler2DArray layerMap;" in generated_code
     assert "vec4 projected = textureProj(layerMap, uvLayerQ);" in generated_code
     assert (
-        "vec4 projectedOffset = textureProjOffset(layerMap, uvLayerQ, offset);"
-        in generated_code
-    )
-    assert (
         "vec4 projectedLod = textureProjLod(layerMap, uvLayerQ, lod);" in generated_code
-    )
-    assert (
-        "vec4 projectedLodOffset = textureProjLodOffset(layerMap, uvLayerQ, lod, offset);"
-        in generated_code
     )
     assert (
         "vec4 projectedGrad = textureProjGrad(layerMap, uvLayerQ, ddx, ddy);"
         in generated_code
     )
     assert (
-        "vec4 projectedGradOffset = textureProjGradOffset(layerMap, uvLayerQ, ddx, ddy, offset);"
+        "vec4 projectedOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
         in generated_code
     )
     assert "linearSampler" not in generated_code
     assert ", input." not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_implicit_projected_array_texture_stage_input_members_strip_samplers():
@@ -14208,25 +14269,36 @@ def test_opengl_implicit_projected_array_texture_stage_input_members_strip_sampl
     assert "layout(binding = 0) uniform sampler2DArray layerMap;" in generated_code
     assert "vec4 projected = textureProj(layerMap, uvLayerQ);" in generated_code
     assert (
-        "vec4 projectedOffset = textureProjOffset(layerMap, uvLayerQ, offset);"
-        in generated_code
-    )
-    assert (
         "vec4 projectedLod = textureProjLod(layerMap, uvLayerQ, lod);" in generated_code
-    )
-    assert (
-        "vec4 projectedLodOffset = textureProjLodOffset(layerMap, uvLayerQ, lod, offset);"
-        in generated_code
     )
     assert (
         "vec4 projectedGrad = textureProjGrad(layerMap, uvLayerQ, ddx, ddy);"
         in generated_code
     )
     assert (
-        "vec4 projectedGradOffset = textureProjGradOffset(layerMap, uvLayerQ, ddx, ddy, offset);"
+        "vec4 projectedOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
         in generated_code
     )
     assert "input." not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_projected_array_texture_resource_arrays_strip_samplers():
@@ -14290,21 +14362,29 @@ def test_opengl_projected_array_texture_resource_arrays_strip_samplers():
         in generated_code
     )
     assert "vec4 fixedProj = textureProj(maps[2], uvLayerQ);" in generated_code
-    assert (
-        "vec4 dynamicOffset = textureProjOffset(maps[layer], uvLayerQ, offset);"
-        in generated_code
-    )
     assert "vec4 fixedLod = textureProjLod(maps[1], uvLayerQ, lod);" in generated_code
-    assert (
-        "vec4 dynamicLodOffset = textureProjLodOffset(maps[layer], uvLayerQ, lod, offset);"
-        in generated_code
-    )
     assert (
         "vec4 fixedGrad = textureProjGrad(maps[3], uvLayerQ, ddx, ddy);"
         in generated_code
     )
     assert (
-        "vec4 dynamicGradOffset = textureProjGradOffset(maps[layer], uvLayerQ, ddx, ddy, offset);"
+        "vec4 dynamicOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
         in generated_code
     )
     assert (
@@ -14314,6 +14394,9 @@ def test_opengl_projected_array_texture_resource_arrays_strip_samplers():
     assert "linearSamplers" not in generated_code
     assert "samplers" not in generated_code
     assert "input." not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_implicit_projected_array_texture_resource_arrays_strip_samplers():
@@ -14374,21 +14457,29 @@ def test_opengl_implicit_projected_array_texture_resource_arrays_strip_samplers(
         in generated_code
     )
     assert "vec4 fixedProj = textureProj(maps[2], uvLayerQ);" in generated_code
-    assert (
-        "vec4 dynamicOffset = textureProjOffset(maps[layer], uvLayerQ, offset);"
-        in generated_code
-    )
     assert "vec4 fixedLod = textureProjLod(maps[1], uvLayerQ, lod);" in generated_code
-    assert (
-        "vec4 dynamicLodOffset = textureProjLodOffset(maps[layer], uvLayerQ, lod, offset);"
-        in generated_code
-    )
     assert (
         "vec4 fixedGrad = textureProjGrad(maps[3], uvLayerQ, ddx, ddy);"
         in generated_code
     )
     assert (
-        "vec4 dynamicGradOffset = textureProjGradOffset(maps[layer], uvLayerQ, ddx, ddy, offset);"
+        "vec4 dynamicOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjLodOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "projected texture", "textureProjGradOffset", "vec4(0.0)"
+        )
         in generated_code
     )
     assert (
@@ -14396,6 +14487,9 @@ def test_opengl_implicit_projected_array_texture_resource_arrays_strip_samplers(
         in generated_code
     )
     assert "input." not in generated_code
+    assert "textureProjOffset(" not in generated_code
+    assert "textureProjLodOffset(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
 
 
 def test_opengl_implicit_projected_stage_input_members_strip_samplers():
@@ -14571,7 +14665,11 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float lodOffsetProjected = textureLodOffset(tex, vec3(uvq.xy / uvq.z, depth), lod, offset);"
+        "float lodOffsetProjected = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjLodOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -14579,7 +14677,11 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = textureGradOffset(tex, vec3(uvq.xy / uvq.z, depth), ddx, ddy, offset);"
+        "float gradOffsetProjected = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -14601,11 +14703,23 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
         == 2
     )
     assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture compare", "textureCompareProjGradOffset", "0.0"
+            )
+        )
+        == 2
+    )
+    assert (
         "float gradProjected = textureGrad(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy);"
         in generated_code
     )
     assert (
-        "float gradOffsetProjected = textureGradOffset(tex, vec4(uvLayerQ.xy / uvLayerQ.w, uvLayerQ.z, depth), ddx, ddy, offset);"
+        "float gradOffsetProjected = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -14614,6 +14728,8 @@ def test_opengl_projected_shadow_compare_variants_filter_sampler_arguments():
     )
     assert "compareSampler" not in generated_code
     assert "textureCompareProj(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_direct_projected_shadow_compare_stage_input_members():
@@ -14775,7 +14891,11 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
         in generated_code
     )
     assert (
-        "float planarGradOffset = textureGradOffset(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth), ddx, ddy, offset);"
+        "float planarGradOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -14807,6 +14927,7 @@ def test_opengl_projected_shadow_compare_resource_arrays_strip_sampler_arguments
     assert "sampler shadowSamplers" not in generated_code
     assert "shadowSamplers[" not in generated_code
     assert "textureCompareProj(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers():
@@ -14909,7 +15030,11 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
         in generated_code
     )
     assert (
-        "float planarGradOffset = textureGradOffset(shadowMaps[layer], vec3(uvq.xy / uvq.z, depth), ddx, ddy, offset);"
+        "float planarGradOffset = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareProjGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -14941,6 +15066,7 @@ def test_opengl_implicit_projected_shadow_compare_resource_arrays_strip_samplers
     assert "sampler shadowMapsSampler" not in generated_code
     assert "sampler shadowArraysSampler" not in generated_code
     assert "textureCompareProj(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_unsized_projected_shadow_compare_arrays_infer_transitive_constant_size():
@@ -15808,20 +15934,33 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
         in generated_code
     )
     assert (
-        "ivec4 offsetSigned = textureOffset(signedMap, uv, offset);" in generated_code
+        "ivec4 offsetSigned = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureOffset", "ivec4(0)"
+        )
+        + ";"
+        in generated_code
     )
     assert (
-        "uvec4 offsetUnsigned = textureLodOffset(unsignedLayers, uvLayer, 1.0, offset);"
+        "uvec4 offsetUnsigned = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture offset", "textureLodOffset", "uvec4(0u)"
+        )
+        + ";"
         in generated_code
     )
     assert "textureGather(signedMap, uv, 0)" in generated_code
     assert "textureGather(signedMap, uv, 1)" in generated_code
     assert "textureGather(signedMap, uv, 2)" in generated_code
     assert "textureGather(signedMap, uv, 3)" in generated_code
-    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 0)" in generated_code
-    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 1)" in generated_code
-    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 2)" in generated_code
-    assert "textureGatherOffset(unsignedLayers, uvLayer, offset, 3)" in generated_code
+    assert (
+        "uvec4 gatheredUnsigned = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture gather", "textureGatherOffset", "uvec4(0u)"
+        )
+        + ";"
+        in generated_code
+    )
     assert (
         "ivec4 gatheredCube = textureGather(signedCube, direction);" in generated_code
     )
@@ -15831,8 +15970,9 @@ def test_opengl_integer_sampler_offsets_and_gathers_strip_sampler_arguments():
     )
     assert "linearSampler" not in generated_code
     assert ", linearSampler" not in generated_code
-    assert "unsupported GLSL texture gather" not in generated_code
-    assert "unsupported GLSL texture offset" not in generated_code
+    assert "textureOffset(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
 
 
 def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
@@ -15897,7 +16037,14 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
         in generated_code
     )
     assert "textureGather(tex, uv, depth)" in generated_code
-    assert "textureGatherOffset(tex, uv, depth, offset)" in generated_code
+    assert (
+        "vec4 offsetGathered = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture gather compare", "textureGatherCompareOffset", "vec4(0.0)"
+        )
+        + ";"
+        in generated_code
+    )
     assert (
         "float offsetCompared = /* unsupported GLSL texture compare: "
         "textureCompareOffset texel offsets must be compile-time integer constants "
@@ -15908,7 +16055,16 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
         in generated_code
     )
     assert "textureGather(tex, uvLayer, depth)" in generated_code
-    assert "textureGatherOffset(tex, uvLayer, depth, offset)" in generated_code
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+        )
+        == 2
+    )
     assert (
         generated_code.count(
             "/* unsupported GLSL texture compare: textureCompareOffset texel offsets must be compile-time integer constants */ 0.0"
@@ -15924,9 +16080,10 @@ def test_opengl_shadow_gather_compare_offsets_filter_sampler_arguments():
     assert "gatherShadowArray(shadowArray, uvLayer, depth, offset)" in generated_code
     assert "gatherCubeShadowArray(cubeShadowArray, cubeLayer, depth)" in generated_code
     assert "compareSampler" not in generated_code
-    assert "textureGatherCompare" not in generated_code
-    assert "textureGatherCompareOffset" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
     assert "textureCompareOffset(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
 
 
 def test_opengl_shadow_compare_offset_literal_offsets_lower_to_texture_offset():
@@ -16037,7 +16194,7 @@ def test_opengl_cube_shadow_gather_compare_supports_cube_and_cube_array():
     assert "textureGather(cubeShadowArray, cubeLayer, depth)" in generated_code
     assert "compareSampler" not in generated_code
     assert "unsupported GLSL texture gather compare" not in generated_code
-    assert "textureGatherCompare" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
     assert "input." not in generated_code
 
 
@@ -16117,7 +16274,13 @@ def test_opengl_direct_shadow_gather_compare_stage_input_members():
         )
         assert "vec4 planar = textureGather(shadowMap, uv, depth);" in generated_code
         assert (
-            "vec4 planarOffset = textureGatherOffset(shadowMap, uv, depth, offset);"
+            "vec4 planarOffset = "
+            + glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+            + ";"
             in generated_code
         )
         assert (
@@ -16125,15 +16288,22 @@ def test_opengl_direct_shadow_gather_compare_stage_input_members():
             in generated_code
         )
         assert (
-            "vec4 arrayOffset = textureGatherOffset(shadowArray, uvLayer, depth, offset);"
+            "vec4 arrayOffset = "
+            + glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+            + ";"
             in generated_code
         )
         assert (
             "vec4 cubeArrayGather = textureGather(cubeShadowArray, cubeLayer, depth);"
             in generated_code
         )
-        assert "unsupported GLSL texture gather compare" not in generated_code
-        assert "textureGatherCompare" not in generated_code
+        assert "textureGatherCompare(" not in generated_code
+        assert "textureGatherCompareOffset(" not in generated_code
+        assert "textureGatherOffset(" not in generated_code
         assert "compareSampler" not in generated_code
         assert "input." not in generated_code
 
@@ -16273,7 +16443,13 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
         )
         assert "vec4 fixedPlanar = textureGather(maps[2], uv, depth);" in generated_code
         assert (
-            "vec4 dynamicPlanarOffset = textureGatherOffset(maps[layer], uv, depth, offset);"
+            "vec4 dynamicPlanarOffset = "
+            + glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+            + ";"
             in generated_code
         )
         assert (
@@ -16281,7 +16457,13 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
             in generated_code
         )
         assert (
-            "vec4 dynamicArrayOffset = textureGatherOffset(arrays[layer], uvLayer, depth, offset);"
+            "vec4 dynamicArrayOffset = "
+            + glsl_dynamic_texel_offset_diagnostic(
+                "texture gather compare",
+                "textureGatherCompareOffset",
+                "vec4(0.0)",
+            )
+            + ";"
             in generated_code
         )
         assert (
@@ -16298,7 +16480,9 @@ def test_opengl_shadow_gather_compare_resource_arrays_strip_samplers():
         )
         assert "compareSamplers" not in generated_code
         assert "samplers" not in generated_code
-        assert "textureGatherCompare" not in generated_code
+        assert "textureGatherCompare(" not in generated_code
+        assert "textureGatherCompareOffset(" not in generated_code
+        assert "textureGatherOffset(" not in generated_code
         assert "input." not in generated_code
 
 
@@ -16463,7 +16647,11 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
     )
     assert "float lodValue = textureLod(tex, vec3(uv, depth), lod);" in generated_code
     assert (
-        "float lodOffsetValue = textureLodOffset(tex, vec3(uv, depth), lod, offset);"
+        "float lodOffsetValue = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareLodOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16471,7 +16659,11 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float gradOffsetValue = textureGradOffset(tex, vec3(uv, depth), ddx, ddy, offset);"
+        "float gradOffsetValue = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16483,7 +16675,11 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         in generated_code
     )
     assert (
-        "float gradOffsetValue = textureGradOffset(tex, vec4(uvLayer, depth), ddx, ddy, offset);"
+        "float gradOffsetValue = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16494,8 +16690,10 @@ def test_opengl_shadow_compare_lod_grad_filter_sampler_arguments():
         in generated_code
     )
     assert "compareSampler" not in generated_code
-    assert "textureCompareLod" not in generated_code
-    assert "textureCompareGrad" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+    assert "textureCompareGrad(" not in generated_code
+    assert "textureLodOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
@@ -16563,7 +16761,11 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "vec2 lod = textureQueryLod(tex, uv);" in generated_code
     assert "float cmp = textureLod(tex, vec3(uv, depth), lod.x);" in generated_code
     assert (
-        "float grad = textureGradOffset(tex, vec3(uv, depth), ddx, ddy, offset);"
+        "float grad = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16574,6 +16776,7 @@ def test_opengl_nested_implicit_shadow_compare_lod_grad_strips_samplers():
     assert "wrappedShadow(shadowMap, uv, depth, ddx, ddy, offset)" in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_array_shadow_compare_lod_reports_unsupported():
@@ -16926,7 +17129,11 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float planarGrad = textureGradOffset(shadowMaps[1], vec3(uv, depth), ddx, ddy, offset);"
+        "float planarGrad = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16934,7 +17141,11 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
         in generated_code
     )
     assert (
-        "float arrayGrad = textureGradOffset(shadowArrays[layer], vec4(uvLayer, depth), ddx, ddy, offset);"
+        "float arrayGrad = "
+        + glsl_dynamic_texel_offset_diagnostic(
+            "texture compare", "textureCompareGradOffset", "0.0"
+        )
+        + ";"
         in generated_code
     )
     assert (
@@ -16945,6 +17156,7 @@ def test_opengl_array_shadow_compare_lod_grad_resource_arrays():
     assert "shadowSamplers[" not in generated_code
     assert "textureCompareLod(" not in generated_code
     assert "textureCompareGradOffset(" not in generated_code
+    assert "textureGradOffset(" not in generated_code
 
 
 def test_opengl_cube_shadow_compare_lod_grad_resource_arrays():
@@ -20720,9 +20932,22 @@ def test_opengl_integer_sampler_1d_3d_array_size_and_offsets_lower():
         "uvec4 fetchUnsignedLayer(usampler2DArray tex, ivec3 pixelLayer, int lod, ivec2 offset)"
         in generated_code
     )
-    assert "texelFetchOffset(tex, x, lod, offset)" in generated_code
-    assert "texelFetchOffset(tex, pixelLayer, lod, offset)" in generated_code
-    assert "texelFetchOffset(tex, voxel, lod, offset)" in generated_code
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texel fetch offset", "texelFetchOffset", "ivec4(0)"
+            )
+        )
+        == 2
+    )
+    assert (
+        generated_code.count(
+            glsl_dynamic_texel_offset_diagnostic(
+                "texel fetch offset", "texelFetchOffset", "uvec4(0u)"
+            )
+        )
+        == 2
+    )
     assert "int signedLineSize = textureSize(signedLine, lod);" in generated_code
     assert (
         "ivec2 unsignedLineSize = textureSize(unsignedLineArray, lod);"
@@ -20734,6 +20959,7 @@ def test_opengl_integer_sampler_1d_3d_array_size_and_offsets_lower():
         in generated_code
     )
     assert "input." not in generated_code
+    assert "texelFetchOffset(" not in generated_code
 
 
 @pytest.mark.parametrize(
@@ -23443,7 +23669,13 @@ def test_glsl_sampler_1d_array_sampling_and_queries():
     assert "texture(tex, uvLayer)" in generated_code
     assert "textureLod(tex, uvLayer, lod)" in generated_code
     assert "texelFetch(tex, pixelLayer, lod)" in generated_code
-    assert "texelFetchOffset(tex, pixelLayer, lod, offset)" in generated_code
+    assert (
+        glsl_dynamic_texel_offset_diagnostic(
+            "texel fetch offset", "texelFetchOffset", "vec4(0.0)"
+        )
+        in generated_code
+    )
+    assert "texelFetchOffset(" not in generated_code
     assert "textureQueryLod(tex, uvLayer);" not in generated_code
     assert (
         "sampleLineArray(lineArray, vec2(0.5, 0.0), ivec2(4, 0), 0, 1)"

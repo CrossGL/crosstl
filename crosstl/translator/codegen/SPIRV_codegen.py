@@ -152,6 +152,7 @@ class VulkanSPIRVCodeGen:
         self.precise_expression_depth = 0
 
         self.functions = {}
+        self.function_nodes = {}
         self.function_signatures = {}
         self.function_parameter_names = {}
         self.function_image_access_requirements = {}
@@ -10225,6 +10226,7 @@ class VulkanSPIRVCodeGen:
     def process_function_node(self, function_node, stage=None):
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
+        self.function_nodes[function_node.name] = function_node
         previous_return_type = self.current_return_type
         previous_return_type_source = self.current_return_type_source
         previous_stage = self.current_stage
@@ -10350,6 +10352,7 @@ class VulkanSPIRVCodeGen:
             self.mark_function_interface_variable(patch_variable)
 
         self.process_statements(function_node.body)
+        self.process_tessellation_patch_constant_function(function_node)
 
         if not self.current_block_has_terminator():
             if self.convert_type_node_to_string(function_node.return_type) == "void":
@@ -10929,6 +10932,259 @@ class VulkanSPIRVCodeGen:
             "name": param_name,
             "storage_class": storage_class,
         }
+
+    def function_attribute_arguments(self, function_node, attribute_name: str):
+        for attr in getattr(function_node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != attribute_name:
+                continue
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            return list(arguments or [])
+        return []
+
+    def tessellation_patch_constant_function_name(self, function_node) -> Optional[str]:
+        arguments = self.function_attribute_arguments(
+            function_node, "patchconstantfunc"
+        )
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                "requires exactly one function name"
+            )
+            return None
+
+        function_name = self.attribute_value_to_string(arguments[0])
+        if not function_name:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                "requires a function name"
+            )
+            return None
+        return function_name
+
+    def matching_patch_interface_variable(self, patch_info: dict) -> Optional[SpirvId]:
+        for variable in self.local_variables.values():
+            metadata = self.patch_parameter_metadata.get(variable.id)
+            if metadata is None:
+                continue
+            if metadata.get("patch_type") != patch_info.get("patch_type"):
+                continue
+            if metadata.get("control_points") != patch_info.get("control_points"):
+                continue
+            if metadata.get("element_type_name") != patch_info.get("element_type_name"):
+                continue
+            return variable
+        return None
+
+    def tessellation_patch_constant_builtin_argument(
+        self, param, param_type: SpirvId
+    ) -> Optional[SpirvId]:
+        semantic = self.semantic_from_node(param)
+        normalized = self.normalized_metadata_name(semantic or "")
+        builtin_names = {
+            "gl_primitiveid": "gl_PrimitiveID",
+            "primitiveid": "gl_PrimitiveID",
+            "primitive_id": "gl_PrimitiveID",
+            "sv_primitiveid": "gl_PrimitiveID",
+        }
+        builtin_name = builtin_names.get(normalized)
+        if builtin_name is None:
+            return None
+
+        builtin = self.ensure_stage_builtin(builtin_name)
+        if builtin is None:
+            return None
+        value_type = self.variable_value_types.get(builtin.id) or param_type
+        return self.load_from_variable(builtin, value_type)
+
+    def tessellation_patch_constant_call_arguments(self, function_node):
+        arguments = []
+        for param in getattr(
+            function_node, "parameters", getattr(function_node, "params", [])
+        ):
+            param_type_source = getattr(
+                param, "param_type", getattr(param, "vtype", None)
+            )
+            param_type_name = self.type_name_from_value(param_type_source)
+            param_type = self.map_crossgl_type(param_type_source)
+            patch_info = self.patch_type_info_from_name(param_type_name)
+            param_name = getattr(param, "name", "<anonymous>")
+
+            if patch_info is not None:
+                if patch_info["patch_type"] != "InputPatch":
+                    self.emit(
+                        "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                        f"parameter {param_name} must use InputPatch<T, N>"
+                    )
+                    arguments.append(self.default_value_for_type(param_type))
+                    continue
+
+                source_variable = self.matching_patch_interface_variable(patch_info)
+                if source_variable is None:
+                    self.emit(
+                        "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                        f"parameter {param_name} has no matching InputPatch "
+                        "entry-point parameter"
+                    )
+                    arguments.append(self.default_value_for_type(param_type))
+                    continue
+
+                source_type = self.variable_value_types.get(source_variable.id)
+                if source_type is None:
+                    arguments.append(self.default_value_for_type(param_type))
+                else:
+                    arguments.append(
+                        self.load_from_variable(source_variable, source_type)
+                    )
+                continue
+
+            builtin_argument = self.tessellation_patch_constant_builtin_argument(
+                param, param_type
+            )
+            if builtin_argument is not None:
+                arguments.append(builtin_argument)
+                continue
+
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"parameter {param_name} has no supported SPIR-V source"
+            )
+            arguments.append(self.default_value_for_type(param_type))
+        return arguments
+
+    def tessellation_patch_constant_builtin_name(
+        self, semantic: Optional[str]
+    ) -> Optional[str]:
+        normalized = self.normalized_metadata_name(semantic or "")
+        return {
+            "gl_tesslevelouter": "gl_TessLevelOuter",
+            "tesslevelouter": "gl_TessLevelOuter",
+            "sv_tessfactor": "gl_TessLevelOuter",
+            "gl_tesslevelinner": "gl_TessLevelInner",
+            "tesslevelinner": "gl_TessLevelInner",
+            "sv_insidetessfactor": "gl_TessLevelInner",
+        }.get(normalized)
+
+    def tessellation_patch_constant_member_components(
+        self, value: SpirvId, value_type: SpirvId
+    ):
+        array_info = self.array_type_info_from_type(value_type)
+        if array_info is not None:
+            element_type, size = array_info
+            for index in range(size or 0):
+                yield index, self.composite_extract(value, element_type, index)
+            return
+
+        vector_info = self.vector_type_info_from_type(value_type)
+        if vector_info is not None:
+            component_type, count = vector_info
+            for index in range(count):
+                yield index, self.composite_extract(value, component_type, index)
+            return
+
+        yield 0, value
+
+    def store_tessellation_patch_constant_builtin_component(
+        self, builtin_name: str, component_index: int, value: SpirvId
+    ):
+        builtin_size = self.tessellation_patch_builtin_size(builtin_name)
+        if builtin_size is None or component_index >= builtin_size:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"{builtin_name} component {component_index} is out of range"
+            )
+            return
+
+        builtin = self.ensure_stage_builtin(builtin_name)
+        if builtin is None:
+            return
+
+        int_type = self.primitive_types["int"]
+        float_type = self.primitive_types["float"]
+        index_id = self.register_constant(component_index, int_type)
+        ptr_type = self.register_pointer_type(float_type, "Output")
+        access = self.access_chain(builtin, [index_id], ptr_type)
+        self.variable_value_types[access.id] = float_type
+        self.store_to_variable(access, self.convert_value_to_type(value, float_type))
+
+    def store_tessellation_patch_constant_semantics(
+        self, result: SpirvId, result_type: SpirvId, function_name: str
+    ):
+        struct_name = result_type.type.base_type
+        members = self.current_struct_members.get(struct_name, [])
+        metadata_by_member = self.struct_member_metadata.get(struct_name, {})
+        stored_any = False
+
+        for member_index, (member_type, member_name) in enumerate(members):
+            metadata = metadata_by_member.get(member_name, {})
+            builtin_name = self.tessellation_patch_constant_builtin_name(
+                metadata.get("semantic")
+            )
+            if builtin_name is None:
+                continue
+
+            member_value = self.composite_extract(result, member_type, member_index)
+            for (
+                component_index,
+                component,
+            ) in self.tessellation_patch_constant_member_components(
+                member_value, member_type
+            ):
+                self.store_tessellation_patch_constant_builtin_component(
+                    builtin_name, component_index, component
+                )
+                stored_any = True
+
+        if not stored_any:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"'{function_name}' returned no tessellation factor semantics"
+            )
+
+    def process_tessellation_patch_constant_function(self, function_node):
+        if self.current_execution_model != "TessellationControl":
+            return
+        if not self.function_is_entry_point(function_node, self.current_stage):
+            return
+        if self.current_block_has_terminator():
+            return
+
+        function_name = self.tessellation_patch_constant_function_name(function_node)
+        if function_name is None:
+            return
+        if function_name not in self.functions:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"'{function_name}' does not reference a generated function"
+            )
+            return
+
+        return_type, _param_types = self.function_signatures[function_name]
+        if return_type.type.base_type == "void":
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"'{function_name}' requires a non-void return type"
+            )
+            return
+
+        patch_function = self.function_nodes.get(function_name)
+        if patch_function is None:
+            self.emit(
+                "; WARNING: SPIR-V tessellation_control patchconstantfunc "
+                f"'{function_name}' has no available function definition"
+            )
+            return
+
+        arguments = self.tessellation_patch_constant_call_arguments(patch_function)
+        result = self.call_function(function_name, arguments)
+        if result is None:
+            return
+        self.store_tessellation_patch_constant_semantics(
+            result, return_type, function_name
+        )
 
     def register_patch_parameter_interface_variable(self, param, patch_info: dict):
         self.require_capability("Tessellation")

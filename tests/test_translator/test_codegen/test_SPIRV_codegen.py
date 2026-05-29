@@ -4953,6 +4953,119 @@ class TestVulkanSPIRVCodeGen:
         assert "Could not determine array element type" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_patchconstantfunc_stores_tess_factor_builtins(self, tmp_path):
+        source_code = """
+        shader TessellationPatchConstantFunction {
+            struct VSOut {
+                vec4 position;
+            };
+
+            struct PatchConstants {
+                float outer[3] @ gl_TessLevelOuter;
+                float inner[1] @ gl_TessLevelInner;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                    PatchConstants patch;
+                    VSOut first = inputPatch[0];
+                    patch.outer[0] = first.position.x;
+                    patch.outer[1] = 2.0;
+                    patch.outer[2] = 3.0;
+                    patch.inner[0] = 1.0;
+                    return patch;
+                }
+
+                void main(InputPatch<VSOut, 3> inputPatch)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        input_patch = spirv_named_variable(
+            spv_code, "inputPatch", storage_class="Input"
+        )
+        outer_output = spirv_named_variable(
+            spv_code, "gl_TessLevelOuter", storage_class="Output"
+        )
+        inner_output = spirv_named_variable(
+            spv_code, "gl_TessLevelInner", storage_class="Output"
+        )
+
+        assert input_patch in control_entry.group(1)
+        assert outer_output in control_entry.group(1)
+        assert inner_output in control_entry.group(1)
+        assert f"OpDecorate {outer_output} BuiltIn TessLevelOuter" in spv_code
+        assert f"OpDecorate {inner_output} BuiltIn TessLevelInner" in spv_code
+        assert re.search(r"%\d+ = OpFunctionCall %\d+ %\d+ %\d+\b", spv_code)
+        assert not re.search(r'OpEntryPoint \w+ %\d+ "HSConst"', spv_code)
+
+        outer_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(outer_output)}\b", spv_code
+        )
+        inner_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(inner_output)}\b", spv_code
+        )
+        outer_stores = [
+            access_id
+            for access_id in outer_accesses
+            if f"OpStore {access_id} " in spv_code
+        ]
+        inner_stores = [
+            access_id
+            for access_id in inner_accesses
+            if f"OpStore {access_id} " in spv_code
+        ]
+        assert len(outer_stores) == 3
+        assert len(inner_stores) == 1
+        assert "patchconstantfunc" not in spv_code
+        assert "Unknown variable" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    @pytest.mark.parametrize(
+        ("attribute", "warning"),
+        [
+            (
+                "@patchconstantfunc(Missing)",
+                "patchconstantfunc 'Missing' does not reference a generated function",
+            ),
+            (
+                "@patchconstantfunc(HSConst, Other)",
+                "patchconstantfunc requires exactly one function name",
+            ),
+        ],
+    )
+    def test_tessellation_patchconstantfunc_rejects_invalid_metadata(
+        self, tmp_path, attribute, warning
+    ):
+        source_code = f"""
+        shader InvalidTessellationPatchConstantFunction {{
+            tessellation_control {{
+                void main() @outputcontrolpoints(3) {attribute} {{
+                }}
+            }}
+        }}
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert warning in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_geometry_stream_builtins_reject_invalid_stage_and_arity(self, tmp_path):
         source_code = """
         shader InvalidGeometryStreamBuiltins {

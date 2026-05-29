@@ -141,7 +141,7 @@
         "path": "crosstl/backend/GLSL"
       },
       "signals": {
-        "unsupported_marker_count": 156,
+        "unsupported_marker_count": 176,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
@@ -189,10 +189,6 @@
           },
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
-            "text": "unsupported_texture_offset_call_expression,"
-          },
-          {
-            "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_texture_query_levels_expression,"
           },
           {
@@ -222,6 +218,10 @@
           {
             "path": "crosstl/translator/codegen/GLSL_codegen.py",
             "text": "unsupported_buffer_array_info = ("
+          },
+          {
+            "path": "crosstl/translator/codegen/GLSL_codegen.py",
+            "text": "self.unsupported_structured_buffer_array_functions.get(func.name, {})"
           }
         ]
       },
@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 534
+        "test_count": 536
       },
       "translator_codegen": {
         "exists": true,
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 392
+        "test_count": 393
       },
       "translator_codegen": {
         "exists": true,
@@ -921,7 +921,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 314,
+        "unsupported_marker_count": 316,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 392
+        "test_count": 393
       },
       "translator_codegen": {
         "exists": true,

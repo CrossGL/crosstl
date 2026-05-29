@@ -3367,6 +3367,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return assignment_sources
 
+    def is_query_return_alias_type(self, type_name):
+        """Return whether a local type can participate in resource-return tracing."""
+        if self.is_queryable_resource_type(type_name):
+            return True
+
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return False
+
+        if self.struct_member_lookup_type(type_name) in self.struct_member_types:
+            return True
+
+        indirect_info = self.cuda_indirect_type_info(type_name)
+        if indirect_info is None:
+            return False
+        pointee_type = self.struct_member_lookup_type(indirect_info["pointee_type"])
+        return pointee_type in self.struct_member_types
+
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
         return_sources = {}
@@ -3407,7 +3425,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     supported_return_body = False
                     break
                 var_type = self.get_variable_node_type(statement)
-                if not self.is_queryable_resource_type(var_type):
+                if not self.is_query_return_alias_type(var_type):
                     supported_return_body = False
                     break
                 name = getattr(statement, "name", None)
@@ -3588,6 +3606,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 all_param_indices,
                 param_types,
                 global_variable_types,
+                local_alias_sources,
+                local_visited,
             )
 
         return_name = self.get_expression_name(return_base_expr)
@@ -3642,8 +3662,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         all_param_indices,
         param_types,
         global_variable_types,
+        local_alias_sources=None,
+        local_visited=None,
     ):
         """Describe a storage-image struct member returned by a helper."""
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
+
         if isinstance(member_expr, PointerAccessNode):
             object_node = getattr(member_expr, "pointer_expr", None)
         else:
@@ -3667,7 +3694,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "indices": return_indices,
             "param_indices": all_param_indices,
         }
-        if object_name in param_types:
+        if object_name in local_alias_sources:
+            if object_name in local_visited:
+                return None
+            object_kind = "expression"
+            object_type = self.query_return_expression_type(
+                local_alias_sources[object_name],
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited | {object_name},
+            )
+        elif object_name in param_types:
             object_kind = "parameter"
             object_type = param_types[object_name]
             descriptor["object_index"] = all_param_indices.get(object_name)
@@ -3681,6 +3719,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 object_node,
                 param_types,
                 global_variable_types,
+                local_alias_sources,
+                local_visited,
             )
         if isinstance(member_expr, PointerAccessNode):
             pointer_info = self.cuda_indirect_type_info(object_type)
@@ -3707,9 +3747,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         expr,
         param_types,
         global_variable_types,
+        local_alias_sources=None,
+        local_visited=None,
     ):
         """Infer expression types for returned-resource tracing without scope."""
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
+
         expr_name = self.get_expression_name(expr)
+        if expr_name in local_alias_sources:
+            if expr_name in local_visited:
+                return None
+            return self.query_return_expression_type(
+                local_alias_sources[expr_name],
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited | {expr_name},
+            )
         if expr_name in param_types:
             return param_types[expr_name]
         if expr_name in global_variable_types:
@@ -3721,6 +3778,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 pointer_expr,
                 param_types,
                 global_variable_types,
+                local_alias_sources,
+                local_visited,
             )
             pointer_info = self.cuda_indirect_type_info(pointer_type)
             if pointer_info is None:
@@ -3741,6 +3800,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     object_node,
                     param_types,
                     global_variable_types,
+                    local_alias_sources,
+                    local_visited,
                 )
             )
             return self.struct_member_types.get(object_type, {}).get(
@@ -3753,6 +3814,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 array_expr,
                 param_types,
                 global_variable_types,
+                local_alias_sources,
+                local_visited,
             )
             return self.array_access_element_type(array_type)
 

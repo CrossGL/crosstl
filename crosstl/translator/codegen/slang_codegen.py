@@ -8015,7 +8015,7 @@ class SlangCodeGen:
         index = self.generate_expression(args[1])
         return f"{buffer}.Load({index})"
 
-    def buffer_store_expression(self, args):
+    def buffer_store_expression(self, args, statement_context=False):
         if len(args) < 3:
             return self.unsupported_structured_buffer_call(
                 "buffer_store", "requires buffer, index, and value arguments"
@@ -8030,6 +8030,12 @@ class SlangCodeGen:
             if not self.is_writable_byte_address_buffer_resource_type(buffer_type):
                 return self.unsupported_byte_address_buffer_call(
                     "buffer_store", "requires RWByteAddressBuffer resource"
+                )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    "buffer_store",
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             buffer = self.generate_expression(args[0])
             index = self.generate_expression(args[1])
@@ -8228,6 +8234,12 @@ class SlangCodeGen:
             if not self.is_writable_byte_address_buffer_resource_type(receiver_type):
                 return self.unsupported_byte_address_buffer_call(
                     member, "requires RWByteAddressBuffer receiver"
+                )
+            if not statement_context:
+                return self.unsupported_byte_address_buffer_call(
+                    member,
+                    "cannot be used as a value expression",
+                    self.atomic_result_diagnostic_fallback_type("uint"),
                 )
             receiver_expr = self.generate_expression(receiver)
             args_expr = ", ".join(self.generate_expression(arg) for arg in args)
@@ -8596,7 +8608,7 @@ class SlangCodeGen:
             return self.buffer_load_expression(args)
 
         if func_name == "buffer_store":
-            return self.buffer_store_expression(args)
+            return self.buffer_store_expression(args, statement_context)
 
         if func_name == "buffer_append":
             return self.buffer_append_expression(args)
