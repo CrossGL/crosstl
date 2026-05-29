@@ -3802,6 +3802,135 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_batch_symbol_array_outputs_clear_stale_metadata(self):
+        """Test HIP batched copy and symbol outputs clear stale metadata."""
+        code = """
+        struct BatchOutputs {
+            size_t failIndex;
+            void* symbolPtr;
+            size_t symbolSize;
+        };
+
+        void queryBatchSymbolOutputTargets(
+            void** copyDsts,
+            void** copySrcs,
+            size_t* copySizes,
+            hipMemcpyAttributes* attrs,
+            size_t* attrIndices,
+            hipMemcpy3DBatchOp* batch3DOps,
+            hipStream_t stream,
+            void* symbol,
+            void* devicePtr,
+            size_t* failIndices,
+            void** symbolPtrs,
+            size_t* symbolSizes,
+            BatchOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&failIndices, &staleSize, devicePtr);
+            hipMemcpyBatchAsync(
+                copyDsts,
+                copySrcs,
+                copySizes,
+                1,
+                attrs,
+                attrIndices,
+                1,
+                &failIndices[0],
+                stream
+            );
+            values[0] = failIndices[0];
+
+            hipMemGetAddressRange((void**)&failIndices, &staleSize, devicePtr);
+            hipMemcpy3DBatchAsync(
+                1,
+                batch3DOps,
+                &failIndices[1],
+                0ull,
+                stream
+            );
+            values[1] = failIndices[1];
+
+            hipMemGetAddressRange((void**)&symbolPtrs, &staleSize, devicePtr);
+            hipGetSymbolAddress(&symbolPtrs[0], symbol);
+            symbolPtrs[1] = symbolPtrs[0];
+
+            hipMemGetAddressRange((void**)&symbolSizes, &staleSize, devicePtr);
+            hipGetSymbolSize(&symbolSizes[0], symbol);
+            values[2] = symbolSizes[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemcpyBatchAsync(
+                copyDsts,
+                copySrcs,
+                copySizes,
+                1,
+                attrs,
+                attrIndices,
+                1,
+                &holder->failIndex,
+                stream
+            );
+            values[3] = holder->failIndex;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetSymbolAddress(&holder->symbolPtr, symbol);
+            symbolPtrs[2] = holder->symbolPtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetSymbolSize(&holder->symbolSize, symbol);
+            values[4] = holder->symbolSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP batched memory copy: destinations: copyDsts, "
+            "sources: copySrcs, sizes: copySizes, count: 1, attributes: attrs, "
+            "attribute indices: attrIndices, attribute count: 1, "
+            "fail index output: failIndices[0], stream: stream"
+        ) in result
+        assert (
+            "// HIP batched 3D memory copy: count: 1, operations: batch3DOps, "
+            "fail index output: failIndices[1], flags: 0ull, stream: stream"
+        ) in result
+        assert (
+            "// HIP get symbol address: output: symbolPtrs[0], symbol: symbol" in result
+        )
+        assert (
+            "// HIP get symbol size: output: symbolSizes[0], symbol: symbol" in result
+        )
+        assert (
+            "// HIP batched memory copy: destinations: copyDsts, "
+            "sources: copySrcs, sizes: copySizes, count: 1, attributes: attrs, "
+            "attribute indices: attrIndices, attribute count: 1, "
+            "fail index output: holder->failIndex, stream: stream"
+        ) in result
+        assert (
+            "// HIP get symbol address: output: holder->symbolPtr, symbol: symbol"
+            in result
+        )
+        assert (
+            "// HIP get symbol size: output: holder->symbolSize, symbol: symbol"
+            in result
+        )
+        assert "values[0] = failIndices[0];" in result
+        assert "values[1] = failIndices[1];" in result
+        assert "symbolPtrs[1] = symbolPtrs[0];" in result
+        assert "values[2] = symbolSizes[0];" in result
+        assert "values[3] = holder->failIndex;" in result
+        assert "symbolPtrs[2] = holder->symbolPtr;" in result
+        assert "values[4] = holder->symbolSize;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_surface_object_descriptor_query_is_explicitly_unsupported(self):
         """Test CUDA-parity surface descriptor queries stay explicit for HIP."""
         code = """

@@ -1306,7 +1306,7 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMemcpyBatchAsync":
             if len(args) >= 9:
-                fail_output = self.format_runtime_pointer_target(node.args[7])
+                fail_output = self.format_runtime_raw_output_target(node.args[7])
                 return [
                     f"// HIP batched memory copy: destinations: {args[0]}, "
                     f"sources: {args[1]}, sizes: {args[2]}, count: {args[3]}, "
@@ -1316,7 +1316,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemcpy3DBatchAsync":
             if len(args) >= 5:
-                fail_output = self.format_runtime_pointer_target(node.args[2])
+                fail_output = self.format_runtime_raw_output_target(node.args[2])
                 return [
                     f"// HIP batched 3D memory copy: count: {args[0]}, "
                     f"operations: {args[1]}, fail index output: {fail_output}, "
@@ -1324,14 +1324,14 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetSymbolAddress":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP get symbol address: output: {output}, "
                     f"symbol: {args[1]}"
                 ]
         elif name == "hipGetSymbolSize":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(

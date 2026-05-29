@@ -21059,9 +21059,27 @@ def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():
     assert "RenderOutput::Clear::new(color, depth)" not in generated_code
 
 
-def test_non_wildcard_match_fallback_uses_never_expression():
+def test_non_wildcard_match_fallback_uses_never_expression(tmp_path):
     code = """
     shader PatternCases {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            InvalidInput
+        }
+
+        enum VectorOp {
+            Cross,
+            Add,
+            Dot
+        }
+
         fn convert(op: VectorOp) -> Result<int, MathError> {
             match op {
                 VectorOp::Cross => Result::Ok(1),
@@ -21075,6 +21093,7 @@ def test_non_wildcard_match_fallback_uses_never_expression():
 
     assert "_ => unreachable!()," in generated_code
     assert "_ => {}," not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_exhaustive_bool_result_and_enum_matches_omit_unreachable_fallback(tmp_path):
