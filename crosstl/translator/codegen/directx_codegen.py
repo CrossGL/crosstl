@@ -9189,11 +9189,70 @@ class HLSLCodeGen:
                 calls.append(getattr(node, "arguments", []))
         return calls
 
+    def hlsl_call_literal_int_parameter_constants(
+        self, call, callee, visible_int_constants
+    ):
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        parameter_constants = {}
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+            parameter_name = getattr(parameter, "name", None)
+            if not parameter_name:
+                continue
+            value = self.hlsl_integer_constant_value(args[index], visible_int_constants)
+            if value is not None:
+                parameter_constants[parameter_name] = value
+        return parameter_constants
+
+    def validate_hlsl_dispatch_mesh_helper_group_count_arguments(
+        self, stmt, shader_type, visible_int_constants, active_helper_calls
+    ):
+        available_functions = self.current_hlsl_available_functions or {}
+        for node in self.walk_ast(stmt):
+            if not isinstance(node, FunctionCallNode):
+                continue
+
+            helper_name = self.function_call_name(node)
+            helper = available_functions.get(helper_name)
+            if helper is None or not self.hlsl_function_contains_dispatch_mesh(helper):
+                continue
+
+            helper_parameter_constants = self.hlsl_call_literal_int_parameter_constants(
+                node, helper, visible_int_constants
+            )
+            if not helper_parameter_constants:
+                continue
+
+            helper_id = id(helper)
+            if helper_id in active_helper_calls:
+                continue
+
+            helper_visible_int_constants = self.hlsl_initial_int_constants(helper)
+            helper_visible_int_constants.update(helper_parameter_constants)
+            active_helper_calls.add(helper_id)
+            try:
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                    shader_type,
+                    helper_visible_int_constants,
+                    active_helper_calls,
+                )
+            finally:
+                active_helper_calls.remove(helper_id)
+
     def validate_hlsl_dispatch_mesh_group_count_sequence(
-        self, statements, shader_type, visible_int_constants=None
+        self,
+        statements,
+        shader_type,
+        visible_int_constants=None,
+        active_helper_calls=None,
     ):
         if visible_int_constants is None:
             visible_int_constants = dict(self.literal_int_constants)
+        if active_helper_calls is None:
+            active_helper_calls = set()
 
         for stmt in self.hlsl_statement_body_items(statements):
             if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
@@ -9201,6 +9260,7 @@ class HLSLCodeGen:
                     self.hlsl_statement_body_items(stmt),
                     shader_type,
                     dict(visible_int_constants),
+                    active_helper_calls,
                 )
                 continue
 
@@ -9211,6 +9271,7 @@ class HLSLCodeGen:
                     ),
                     shader_type,
                     dict(visible_int_constants),
+                    active_helper_calls,
                 )
                 else_branch = getattr(
                     stmt, "else_branch", getattr(stmt, "else_body", None)
@@ -9220,6 +9281,7 @@ class HLSLCodeGen:
                         self.hlsl_statement_body_items(else_branch),
                         shader_type,
                         dict(visible_int_constants),
+                        active_helper_calls,
                     )
                 continue
 
@@ -9232,6 +9294,7 @@ class HLSLCodeGen:
                         ),
                         shader_type,
                         dict(visible_int_constants),
+                        active_helper_calls,
                     )
                 continue
 
@@ -9240,6 +9303,7 @@ class HLSLCodeGen:
                     self.hlsl_statement_body_items(getattr(stmt, "body", None)),
                     shader_type,
                     dict(visible_int_constants),
+                    active_helper_calls,
                 )
                 continue
 
@@ -9247,6 +9311,9 @@ class HLSLCodeGen:
                 self.validate_hlsl_dispatch_mesh_group_count_arguments(
                     args, shader_type, visible_int_constants
                 )
+            self.validate_hlsl_dispatch_mesh_helper_group_count_arguments(
+                stmt, shader_type, visible_int_constants, active_helper_calls
+            )
 
             self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
 

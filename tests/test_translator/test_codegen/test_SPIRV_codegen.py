@@ -13157,6 +13157,110 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_stage_local_storage_image_pointer_and_array_hints_are_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalImagePointerTypeIsolation {
+            uimage2D counters @r32ui[2];
+            image2D colors @rgba32f @readonly[3];
+
+            compute {
+                uint touchImage(uimage2D image @r32ui, ivec2 pixel) {
+                    return imageAtomicAdd(image, pixel, 1u);
+                }
+
+                uint sampleStage(uimage2D images[] @r32ui, ivec2 pixel) {
+                    return imageLoad(images[1], pixel);
+                }
+
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    uint oldValue = touchImage(counters[0], pixel);
+                    uint count = sampleStage(counters, pixel);
+                }
+            }
+
+            fragment {
+                vec4 touchImage(image2D image @rgba32f, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                vec4 sampleStage(image2D images[] @rgba32f, ivec2 pixel) {
+                    return imageLoad(images[2], pixel);
+                }
+
+                void main() {
+                    ivec2 pixel = ivec2(0, 1);
+                    vec4 direct = touchImage(colors[0], pixel);
+                    vec4 color = sampleStage(colors, pixel);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING" not in spv_code
+        assert "OpAtomicIAdd" in spv_code
+        assert spv_code.count("OpImageRead") == 3
+        assert "imageLoad(" not in spv_code
+
+        function_bodies = {
+            match.group(1): match.group(0)
+            for match in re.finditer(
+                r"(%\d+) = OpFunction\b.*?OpFunctionEnd", spv_code, re.DOTALL
+            )
+        }
+        parameter_types = {
+            function_id: re.findall(
+                r"%\d+ = OpFunctionParameter (%\d+)\b", function_body
+            )
+            for function_id, function_body in function_bodies.items()
+        }
+
+        atomic_function = next(
+            function_id
+            for function_id, function_body in function_bodies.items()
+            if "OpAtomicIAdd" in function_body
+        )
+        atomic_image_param_type = parameter_types[atomic_function][0]
+        uniform_pointer_pointees = {
+            pointer_type: pointee_type
+            for pointer_type, pointee_type in re.findall(
+                r"(%\d+) = OpTypePointer UniformConstant (%\d+)\b", spv_code
+            )
+        }
+        image_types = set(re.findall(r"(%\d+) = OpTypeImage\b", spv_code))
+        assert atomic_image_param_type in uniform_pointer_pointees
+        assert uniform_pointer_pointees[atomic_image_param_type] in image_types
+
+        result_types = {}
+        for result_id, result_type in re.findall(
+            r"(%\d+) = OpVariable (%\d+) \w+\b", spv_code
+        ):
+            result_types[result_id] = result_type
+        for result_id, result_type in re.findall(
+            r"(%\d+) = "
+            r"Op(?:FunctionParameter|AccessChain|Load|CompositeConstruct|"
+            r"FunctionCall|ImageRead|AtomicIAdd) (%\d+)\b",
+            spv_code,
+        ):
+            result_types[result_id] = result_type
+
+        for _, _, callee_id, operands in re.findall(
+            r"(%\d+) = OpFunctionCall (%\d+) (%\d+)([^\n]*)", spv_code
+        ):
+            for operand_id, param_type in zip(
+                operands.split(), parameter_types.get(callee_id, [])
+            ):
+                assert result_types.get(operand_id) == param_type
+
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_image_operations_reject_malformed_operand_shapes(self, tmp_path):
         source_code = """
         shader StorageImageMalformedOperands {

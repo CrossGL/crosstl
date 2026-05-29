@@ -167,7 +167,9 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_params = {}
         self.stage_local_function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
+        self.stage_local_function_resource_array_type_hints = {}
         self.function_storage_image_pointer_params = {}
+        self.stage_local_function_storage_image_pointer_params = {}
         self.function_execution_models = {}
         self.current_execution_model = None
         self.current_function_name = None
@@ -1264,6 +1266,14 @@ class VulkanSPIRVCodeGen:
             return params
         return self.function_resource_array_params.get(function_name, set())
 
+    def resolve_function_resource_array_type_hints(self, function_name: str):
+        hints = self.stage_local_metadata(
+            self.stage_local_function_resource_array_type_hints, function_name
+        )
+        if hints is not None:
+            return hints
+        return self.function_resource_array_type_hints.get(function_name, {})
+
     def resolve_function_mesh_output_parameter_indices(self, function_name: str):
         indices = self.stage_local_metadata(
             self.stage_local_function_mesh_output_parameter_indices, function_name
@@ -1296,6 +1306,15 @@ class VulkanSPIRVCodeGen:
         if requirements is not None:
             return requirements
         return self.function_storage_buffer_access_requirements.get(function_name)
+
+    def resolve_function_storage_image_pointer_params(self, function_name: str):
+        params = self.stage_local_metadata(
+            self.stage_local_function_storage_image_pointer_params,
+            function_name,
+        )
+        if params is not None:
+            return params
+        return self.function_storage_image_pointer_params.get(function_name, set())
 
     def resolve_inline_storage_buffer_function(self, function_name: str):
         function_node = self.stage_local_metadata(
@@ -10390,11 +10409,11 @@ class VulkanSPIRVCodeGen:
         param_value_types = []
         resource_array_param_indices = set()
         patch_interface_parameters = []
-        param_type_hints = self.function_resource_array_type_hints.get(
-            function_node.name, {}
+        param_type_hints = self.resolve_function_resource_array_type_hints(
+            function_node.name
         )
-        storage_image_pointer_params = self.function_storage_image_pointer_params.get(
-            function_node.name, set()
+        storage_image_pointer_params = (
+            self.resolve_function_storage_image_pointer_params(function_node.name)
         )
         parameters = getattr(
             function_node, "parameters", getattr(function_node, "params", [])
@@ -12856,11 +12875,8 @@ class VulkanSPIRVCodeGen:
             if models
         }
 
-    def collect_storage_image_pointer_parameters(self, ast):
-        functions = {
-            getattr(func, "name", None): func
-            for func in self.collect_ast_functions(ast)
-        }
+    def collect_storage_image_pointer_parameters_for_functions(self, function_nodes):
+        functions = {getattr(func, "name", None): func for func in function_nodes}
         functions = {name: func for name, func in functions.items() if name}
         parameter_names = {
             func_name: [
@@ -12924,16 +12940,52 @@ class VulkanSPIRVCodeGen:
             func_name: params for func_name, params in pointer_params.items() if params
         }
 
-    def collect_resource_array_parameter_type_hints(self, ast):
-        functions = {
-            getattr(func, "name", None): func
-            for func in self.collect_ast_functions(ast)
-        }
-        functions = {name: func for name, func in functions.items() if name}
+    def collect_storage_image_pointer_parameters(self, ast):
+        return self.collect_storage_image_pointer_parameters_for_functions(
+            self.collect_ast_functions(ast)
+        )
 
-        global_nodes = list(getattr(ast, "global_variables", []) or [])
+    def collect_stage_local_storage_image_pointer_metadata(self, ast):
+        self.stage_local_function_storage_image_pointer_params = {}
+        global_functions = list(getattr(ast, "functions", []) or [])
+
         for stage in (getattr(ast, "stages", None) or {}).values():
-            global_nodes.extend(getattr(stage, "local_variables", []) or [])
+            local_functions = list(getattr(stage, "local_functions", []) or [])
+            if not local_functions:
+                continue
+
+            local_names = {
+                getattr(func, "name", None)
+                for func in local_functions
+                if getattr(func, "name", None)
+            }
+            visible_functions = [
+                func
+                for func in global_functions
+                if getattr(func, "name", None) not in local_names
+            ] + local_functions
+            pointer_params = (
+                self.collect_storage_image_pointer_parameters_for_functions(
+                    visible_functions
+                )
+            )
+
+            for function_node in local_functions:
+                function_name = getattr(function_node, "name", None)
+                if not function_name:
+                    continue
+                key = self.stage_local_function_key(stage, function_name)
+                if key is None:
+                    continue
+                self.stage_local_function_storage_image_pointer_params[key] = (
+                    pointer_params.get(function_name, set())
+                )
+
+    def collect_resource_array_parameter_type_hints_for_functions(
+        self, function_nodes, global_nodes
+    ):
+        functions = {getattr(func, "name", None): func for func in function_nodes}
+        functions = {name: func for name, func in functions.items() if name}
 
         global_types = {}
         for node in self.walk_ast_nodes(global_nodes):
@@ -13029,6 +13081,57 @@ class VulkanSPIRVCodeGen:
             for func_name, param_hints in hints.items()
             if param_hints
         }
+
+    def collect_resource_array_parameter_type_hints(self, ast):
+        global_nodes = list(getattr(ast, "global_variables", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            global_nodes.extend(getattr(stage, "local_variables", []) or [])
+
+        return self.collect_resource_array_parameter_type_hints_for_functions(
+            self.collect_ast_functions(ast),
+            global_nodes,
+        )
+
+    def collect_stage_local_resource_array_parameter_type_hints(self, ast):
+        self.stage_local_function_resource_array_type_hints = {}
+        global_functions = list(getattr(ast, "functions", []) or [])
+
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            local_functions = list(getattr(stage, "local_functions", []) or [])
+            if not local_functions:
+                continue
+
+            local_names = {
+                getattr(func, "name", None)
+                for func in local_functions
+                if getattr(func, "name", None)
+            }
+            visible_functions = [
+                func
+                for func in global_functions
+                if getattr(func, "name", None) not in local_names
+            ] + local_functions
+            entry_function = getattr(stage, "entry_point", None)
+            if entry_function is not None:
+                visible_functions.append(entry_function)
+
+            global_nodes = list(getattr(ast, "global_variables", []) or [])
+            global_nodes.extend(getattr(stage, "local_variables", []) or [])
+            hints = self.collect_resource_array_parameter_type_hints_for_functions(
+                visible_functions,
+                global_nodes,
+            )
+
+            for function_node in local_functions:
+                function_name = getattr(function_node, "name", None)
+                if not function_name:
+                    continue
+                key = self.stage_local_function_key(stage, function_name)
+                if key is None:
+                    continue
+                self.stage_local_function_resource_array_type_hints[key] = hints.get(
+                    function_name, {}
+                )
 
     def split_outer_array_type(self, type_name: str):
         if not type_name or "[" not in type_name or not type_name.endswith("]"):
@@ -17531,6 +17634,7 @@ class VulkanSPIRVCodeGen:
         self.function_resource_array_type_hints = (
             self.collect_resource_array_parameter_type_hints(ast)
         )
+        self.collect_stage_local_resource_array_parameter_type_hints(ast)
         self.function_image_access_requirements = (
             self.collect_function_image_access_requirements_for_ast(ast)
         )
@@ -17546,6 +17650,7 @@ class VulkanSPIRVCodeGen:
         self.function_storage_image_pointer_params = (
             self.collect_storage_image_pointer_parameters(ast)
         )
+        self.collect_stage_local_storage_image_pointer_metadata(ast)
         self.reserve_explicit_resource_bindings(ast)
         for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
             if self.stage_key(stage_type) == "tessellation_control":
