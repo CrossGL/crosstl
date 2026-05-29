@@ -2617,8 +2617,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             param_name = getattr(param, "name", None)
             if param_name in query_params:
                 metadata_arg = self.query_metadata_expression(raw_args[index])
-                if metadata_arg:
-                    expanded_args.append(metadata_arg)
+                if metadata_arg is None:
+                    metadata_arg = self.unavailable_query_metadata_argument(
+                        param_name,
+                        self.get_parameter_type(param),
+                    )
+                expanded_args.append(metadata_arg)
 
             param_type = self.get_parameter_type(param)
             if self.structured_buffer_parameter_requires_length(
@@ -2635,6 +2639,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 if counter_arg:
                     expanded_args.append(counter_arg)
         return expanded_args
+
+    def unavailable_query_metadata_argument(self, param_name, param_type):
+        """Return a deterministic zero metadata sidecar for untraceable resources."""
+        self.resource_query_info_required = True
+        type_name = self.query_type_name(param_type)
+        resource_type = self.resource_base_type(type_name) or "unknown resource"
+        fallback = "nullptr" if "[" in type_name else "CglResourceQueryInfo{}"
+        param_label = f" argument {param_name}" if param_name else " argument"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"metadata unavailable for {resource_type}{param_label} */ {fallback}"
+        )
 
     def diagnostic_zero_value_for_type(self, type_name):
         """Return a CUDA fallback expression for unsupported value-producing calls."""

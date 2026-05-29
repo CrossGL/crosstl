@@ -16921,6 +16921,74 @@ def test_directx_unsupported_dimension_texture_gather_emits_diagnostics_without_
     assert "textureGather(" not in generated_code
 
 
+def test_directx_unsupported_dimension_texture_gather_compare_emits_diagnostics_without_samplers():
+    shader = """
+    shader UnsupportedDimensionGatherCompare {
+        sampler1D lineMap;
+        sampler3D volumeMap;
+        sampler2D colorMap;
+        sampler sharedSampler;
+
+        struct FSInput {
+            float u @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            vec3 volumeUv @ TEXCOORD2;
+            float depth;
+        };
+
+        vec4 gatherLine(sampler1D tex, sampler s, float u, float depth) {
+            return textureGatherCompare(tex, s, u, depth);
+        }
+
+        vec4 gatherVolume(sampler3D tex, sampler s, vec3 volumeUv, float depth) {
+            return textureGatherCompare(tex, s, volumeUv, depth);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 sampled = texture(colorMap, sharedSampler, input.uv);
+                return sampled
+                    + gatherLine(lineMap, sharedSampler, input.u, input.depth)
+                    + gatherVolume(volumeMap, sharedSampler, input.volumeUv, input.depth)
+                    + textureGatherCompare(lineMap, input.u, input.depth)
+                    + textureGatherCompare(volumeMap, input.volumeUv, input.depth);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    diagnostic = (
+        "/* unsupported DirectX texture gather compare: textureGatherCompare "
+        "requires 2D, 2D-array, cube, or cube-array textures */ "
+        "float4(0.0, 0.0, 0.0, 0.0)"
+    )
+    assert "Texture1D lineMap : register(t0);" in generated_code
+    assert "Texture3D volumeMap : register(t1);" in generated_code
+    assert "Texture2D colorMap : register(t2);" in generated_code
+    assert "SamplerState sharedSampler : register(s0);" in generated_code
+    assert "SamplerComparisonState sharedSampler" not in generated_code
+    assert "lineMapSampler" not in generated_code
+    assert "volumeMapSampler" not in generated_code
+    assert (
+        "float4 gatherLine(Texture1D tex, SamplerState s, float u, float depth)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherVolume(Texture3D tex, SamplerState s, float3 volumeUv, float depth)"
+        in generated_code
+    )
+    assert generated_code.count(diagnostic) == 4
+    assert (
+        "float4 sampled = colorMap.Sample(sharedSampler, input.uv);" in generated_code
+    )
+    assert ".GatherCmp(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
 def test_directx_texture_sample_offset_variants_use_sample_offsets():
     shader = """
     shader TextureSampleOffsets {

@@ -16163,6 +16163,74 @@ def test_opengl_explicit_storage_image_format_layouts():
     assert "layout(r32ui, binding = 4) uniform uimage2D counters;" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader InvalidGlobalImageFormat {
+                image2D colorOut @format(rgba64f);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return imageLoad(colorOut, ivec2(uv));
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL image format metadata for 'colorOut': "
+            "format rgba64f is not a supported storage image format",
+        ),
+        (
+            """
+            shader InvalidParameterImageFormat {
+                vec4 loadColor(image2D image @format(slot), ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return vec4(0.0);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL image format metadata for 'image': "
+            "format slot is not a supported storage image format",
+        ),
+        (
+            """
+            shader SampledTextureFormatMetadata {
+                sampler2D colorTex @format(rgba8);
+
+                fragment {
+                    vec4 main(vec2 uv @TEXCOORD0) @gl_FragColor {
+                        return texture(colorTex, uv);
+                    }
+                }
+            }
+            """,
+            "Image format metadata on global variable 'colorTex' requires "
+            "storage image type: @rgba8 on sampler2D",
+        ),
+        (
+            """
+            shader SampledTextureParameterFormatMetadata {
+                vec4 sampleColor(sampler2D colorTex @format(rgba8), vec2 uv) {
+                    return texture(colorTex, uv);
+                }
+            }
+            """,
+            "Image format metadata on parameter 'colorTex' of function "
+            "'sampleColor' requires storage image type: @rgba8 on sampler2D",
+        ),
+    ],
+)
+def test_opengl_image_format_metadata_rejects_invalid_targets(shader, message):
+    with pytest.raises(ValueError, match=message):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 def test_opengl_explicit_scalar_image_formats():
     shader = """
     shader ExplicitScalarImageFormats {

@@ -8794,6 +8794,12 @@ class SlangCodeGen:
                     "requires a typed offsets array or four offset arguments",
                 )
 
+        component_reason = self.texture_gather_component_unsupported_reason(
+            component_arg
+        )
+        if component_reason:
+            return self.unsupported_texture_gather_call(func_name, component_reason)
+
         method_args = [coord] + [
             self.generate_expression(offset_arg) for offset_arg in offset_args
         ]
@@ -8834,6 +8840,20 @@ class SlangCodeGen:
             3: "GatherAlpha",
         }
         return methods.get(self.literal_int_value(component_arg))
+
+    def texture_gather_component_unsupported_reason(self, component_arg):
+        if component_arg is None:
+            return None
+
+        component_type = self.expression_result_type(component_arg)
+        if component_type is None:
+            return None
+
+        mapped_type = self.convert_type(component_type)
+        if mapped_type in {"int", "uint"}:
+            return None
+
+        return f"component argument must be scalar int or uint, got {mapped_type}"
 
     def texture_gather_component_expression(self, texture_name, method_args, component):
         arg_list = ", ".join(method_args)

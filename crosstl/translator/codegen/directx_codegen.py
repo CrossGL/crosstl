@@ -4690,6 +4690,18 @@ class HLSLCodeGen:
         )
         return not self.texture_gather_compare_offset_supported(texture_type)
 
+    def texture_gather_compare_call_is_diagnostic_only(self, func_name, texture_type):
+        if not is_texture_gather_compare_operation(func_name) or texture_type is None:
+            return False
+        if self.texture_gather_compare_offset_call_is_diagnostic_only(
+            func_name, texture_type
+        ):
+            return True
+        texture_type = self.resource_base_type(
+            self.map_resource_type_with_format(texture_type)
+        )
+        return not self.texture_gather_supported(texture_type)
+
     def texture_gather_call_is_diagnostic_only(self, func_name, texture_type):
         if func_name != "textureGather" or texture_type is None:
             return False
@@ -4779,9 +4791,7 @@ class HLSLCodeGen:
             func_name, texture_type
         ):
             return True
-        if self.texture_gather_compare_offset_call_is_diagnostic_only(
-            func_name, texture_type
-        ):
+        if self.texture_gather_compare_call_is_diagnostic_only(func_name, texture_type):
             return True
         if self.texture_gather_call_is_diagnostic_only(func_name, texture_type):
             return True
@@ -4837,7 +4847,7 @@ class HLSLCodeGen:
                     func_name, global_texture_types.get(texture_name)
                 ):
                     continue
-                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                if self.texture_gather_compare_call_is_diagnostic_only(
                     func_name, global_texture_types.get(texture_name)
                 ):
                     continue
@@ -5307,7 +5317,7 @@ class HLSLCodeGen:
                     texture_func, texture_param_types[texture_name]
                 ):
                     continue
-                if self.texture_gather_compare_offset_call_is_diagnostic_only(
+                if self.texture_gather_compare_call_is_diagnostic_only(
                     texture_func, texture_param_types[texture_name]
                 ):
                     continue
@@ -11344,6 +11354,12 @@ class HLSLCodeGen:
         if self.is_multisample_texture_resource_type(texture_type):
             return self.unsupported_multisample_texture_gather_compare_call(
                 func_name, texture_type
+            )
+        if not is_texture_gather_compare_offset_operation(
+            func_name
+        ) and not self.texture_gather_supported(texture_type):
+            return self.unsupported_texture_gather_compare_call(
+                func_name, texture_gather_capability_error()
             )
 
         compare = self.generate_expression(extra_args[0])

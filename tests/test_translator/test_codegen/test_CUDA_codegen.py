@@ -9957,6 +9957,115 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
+        """Test CUDA query sidecars remain well-formed for returned resources."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+            image2D img;
+        };
+
+        shader ReturnedResourceQueries {
+            sampler2d colorMap;
+            image2D imageMap;
+
+            sampler2d chooseTex() {
+                return colorMap;
+            }
+
+            image2D chooseImage() {
+                return imageMap;
+            }
+
+            ResourceBundle chooseBundle() {
+                ResourceBundle bundle;
+                bundle.tex = colorMap;
+                bundle.img = imageMap;
+                return bundle;
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main() {
+                    ivec2 directTexSize = textureSize(chooseTex(), 0);
+                    int directLevels = textureQueryLevels(chooseTex());
+                    ivec2 directImageSize = imageSize(chooseImage());
+                    ResourceBundle bundle = chooseBundle();
+                    ivec2 bundleTexSize = textureSize(bundle.tex, 0);
+                    ivec2 bundleImageSize = imageSize(bundle.img);
+                    consume(chooseTex(), chooseImage());
+                    consume(bundle.tex, bundle.img);
+                    consume(chooseBundle().tex, chooseBundle().img);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "__device__ void consume(texture<float4, 2> tex, "
+            "CglResourceQueryInfo tex_metadata, cudaSurfaceObject_t img, "
+            "CglResourceQueryInfo img_metadata)" in cuda_code
+        )
+        assert (
+            "int2 directTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int directLevels = /* unsupported CUDA resource query: "
+            "textureQueryLevels metadata unavailable on sampler2D */ 0;" in cuda_code
+        )
+        assert (
+            "int2 directImageSize = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "int2 bundleTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int2 bundleImageSize = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "consume(chooseTex(), /* unsupported CUDA resource query: "
+            "metadata unavailable for sampler2D argument tex */ "
+            "CglResourceQueryInfo{}, chooseImage(), /* unsupported CUDA "
+            "resource query: metadata unavailable for image2D argument img */ "
+            "CglResourceQueryInfo{});" in cuda_code
+        )
+        assert (
+            "consume(bundle.tex, /* unsupported CUDA resource query: "
+            "metadata unavailable for sampler2D argument tex */ "
+            "CglResourceQueryInfo{}, bundle.img, /* unsupported CUDA resource "
+            "query: metadata unavailable for image2D argument img */ "
+            "CglResourceQueryInfo{});" in cuda_code
+        )
+        assert (
+            "consume(chooseBundle().tex, /* unsupported CUDA resource query: "
+            "metadata unavailable for sampler2D argument tex */ "
+            "CglResourceQueryInfo{}, chooseBundle().img, /* unsupported CUDA "
+            "resource query: metadata unavailable for image2D argument img */ "
+            "CglResourceQueryInfo{});" in cuda_code
+        )
+        assert "consume(chooseTex(), chooseImage());" not in cuda_code
+        assert "consume(bundle.tex, bundle.img);" not in cuda_code
+        assert "consume(chooseBundle().tex, chooseBundle().img);" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

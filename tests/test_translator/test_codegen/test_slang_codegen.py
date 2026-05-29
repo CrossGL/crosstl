@@ -9812,7 +9812,26 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 ivec3 badOffsetArray[4]
             ) {
                 float scalarCoord = 0.25;
+                float floatComponent = 1.0;
+                bool boolComponent = true;
+                ivec2 vectorComponent = ivec2(1, 2);
                 vec4 badComponent = textureGather(tex, uv, 4);
+                vec4 floatComponentGather = textureGather(tex, uv, floatComponent);
+                vec4 boolComponentGather = textureGatherOffset(
+                    tex,
+                    uv,
+                    offset,
+                    boolComponent
+                );
+                vec4 vectorComponentGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offset,
+                    offset,
+                    offset,
+                    offset,
+                    vectorComponent
+                );
                 vec4 missingOffset = textureGatherOffset(tex, uv);
                 vec4 badOffsets = textureGatherOffsets(tex, uv, offset);
                 vec4 samplerGather = textureGather(querySampler, uv);
@@ -9838,6 +9857,21 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 badComponent = /* unsupported Slang texture gather: "
         "textureGather component literal must be 0, 1, 2, or 3 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatComponentGather = /* unsupported Slang texture gather: "
+        "textureGather component argument must be scalar int or uint, got float */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolComponentGather = /* unsupported Slang texture gather: "
+        "textureGatherOffset component argument must be scalar int or uint, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 vectorComponentGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets component argument must be scalar int or uint, "
+        "got int2 */ float4(0.0);" in generated_code
     )
     assert (
         "float4 missingOffset = /* unsupported Slang texture gather: "

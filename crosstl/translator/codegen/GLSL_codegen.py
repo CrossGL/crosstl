@@ -10989,13 +10989,53 @@ class GLSLCodeGen:
 
         return self.map_image_base_type_with_format(vtype_str, node)
 
+    def invalid_glsl_image_format_message(self, node, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Invalid OpenGL image format metadata for "
+            f"'{node_name}': format {source} is not a supported storage image format"
+        )
+
+    def explicit_glsl_image_format(self, node):
+        if node is None or not hasattr(node, "attributes"):
+            return None
+        supported_formats = supported_image_formats()
+        for attr in node.attributes:
+            attr_name = getattr(attr, "name", None)
+            if not attr_name:
+                continue
+            attr_name = str(attr_name).lower()
+            if attr_name in supported_formats:
+                return attr_name
+            if attr_name != "format":
+                continue
+
+            arguments = getattr(attr, "arguments", []) or []
+            source = self.attribute_value_to_string(arguments[0]) if arguments else None
+            if source is None:
+                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+            format_name = str(source).lower()
+            if format_name not in supported_formats:
+                raise ValueError(self.invalid_glsl_image_format_message(node, source))
+            return format_name
+        return None
+
+    def validate_glsl_image_format_target(self, node, vtype, explicit_format):
+        if explicit_format is None or self.is_storage_image_type(vtype):
+            return
+        node_name = self.resource_node_name(node, "<unnamed>")
+        type_name = self.type_name_string(self.resource_base_type(vtype))
+        raise ValueError(
+            "OpenGL image format metadata for "
+            f"'{node_name}' applies only to storage image resources, "
+            f"got {type_name}"
+        )
+
     def map_image_base_type_with_format(self, vtype, node=None):
         base_type = self.resource_base_type(vtype)
-        explicit_format = (
-            explicit_image_format(node, self.attribute_value_to_string)
-            if node is not None
-            else None
-        )
+        explicit_format = self.explicit_glsl_image_format(node)
+        self.validate_glsl_image_format_target(node, base_type, explicit_format)
         if explicit_format in {
             "r8",
             "r8_snorm",
@@ -11500,7 +11540,8 @@ class GLSLCodeGen:
         return None
 
     def image_format_qualifier(self, vtype, node=None):
-        explicit_format = explicit_image_format(node, self.attribute_value_to_string)
+        explicit_format = self.explicit_glsl_image_format(node)
+        self.validate_glsl_image_format_target(node, vtype, explicit_format)
         if explicit_format:
             return explicit_format
         if vtype in {
