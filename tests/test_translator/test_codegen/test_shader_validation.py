@@ -4083,6 +4083,66 @@ shader MetalRayTracingPrimitiveAccelerationValidation {
 """
 
 
+METAL_RAY_TRACING_ACCELERATION_ALIAS_HELPER_SHADER = """
+shader MetalRayTracingAccelerationAliasHelperValidation {
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+    primitive_acceleration_structure primitiveAS @binding(2);
+    intersection_function_table<triangle_data> primitiveIntersectionFunctions
+        @binding(3);
+
+    void shootInstance(
+        accelerationStructureEXT scene,
+        vec3 origin,
+        vec3 direction
+    ) {
+        accelerationStructureEXT sceneAlias = scene;
+        TraceRay(
+            sceneAlias,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    void shootPrimitive(
+        primitive_acceleration_structure primitiveScene,
+        vec3 origin,
+        vec3 direction
+    ) {
+        primitive_acceleration_structure primitiveAlias = primitiveScene;
+        TraceRay(
+            primitiveAlias,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            0
+        );
+    }
+
+    ray_generation {
+        void main() {
+            shootInstance(topLevelAS, vec3(0.0), vec3(0.0, 0.0, 1.0));
+            shootPrimitive(primitiveAS, vec3(0.0), vec3(0.0, 1.0, 0.0));
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_PAYLOAD_TRACE_SHADER = """
 shader MetalRayTracingPayloadTraceValidation {
     struct Payload {
@@ -8088,6 +8148,43 @@ def test_generated_metal_primitive_acceleration_trace_compiles_with_metal3(
         crosstl.translator.parse(METAL_RAY_TRACING_PRIMITIVE_ACCELERATION_SHADER)
     )
     assert "intersect(__crossgl_ray_0, primitiveAS, intersectionFunctions)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_acceleration_alias_helper_trace_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_acceleration_alias_helper.metal"
+    output = tmp_path / "ray_tracing_acceleration_alias_helper.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_ACCELERATION_ALIAS_HELPER_SHADER)
+    )
+    assert "instance_acceleration_structure sceneAlias = scene;" in code
+    assert "primitive_acceleration_structure primitiveAlias = primitiveScene;" in (code)
+    assert (
+        "intersection_function_table<triangle_data> primitiveIntersectionFunctions"
+        in code
+    )
+    assert "primitiveAlias, primitiveIntersectionFunctions)" in code
+    assert "primitiveAlias, intersectionFunctions)" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

@@ -4806,12 +4806,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         struct_type = self.struct_member_lookup_type(struct_type)
         return member_name in self.struct_query_metadata_members.get(struct_type, set())
 
-    def can_reuse_struct_metadata_object_expression(self, object_node):
+    def can_reuse_struct_metadata_object_expression(
+        self, object_node, allow_function_call_object=False
+    ):
         """Return whether a direct member sidecar read avoids duplicating calls."""
         if object_node is None:
             return False
         if isinstance(object_node, FunctionCallNode):
-            return False
+            return allow_function_call_object
         if isinstance(object_node, ArrayAccessNode):
             array_node = getattr(
                 object_node,
@@ -4824,7 +4826,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 getattr(object_node, "index", None),
             )
             return self.can_reuse_struct_metadata_object_expression(
-                array_node
+                array_node, allow_function_call_object
             ) and self.is_safe_query_return_actual_index(index_node)
         if isinstance(object_node, MemberAccessNode):
             return self.can_reuse_struct_metadata_object_expression(
@@ -4832,15 +4834,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     object_node,
                     "object_expr",
                     getattr(object_node, "object", None),
-                )
+                ),
+                allow_function_call_object,
             )
         if isinstance(object_node, PointerAccessNode):
             return self.can_reuse_struct_metadata_object_expression(
-                getattr(object_node, "pointer_expr", None)
+                getattr(object_node, "pointer_expr", None),
+                allow_function_call_object,
             )
         return True
 
-    def query_struct_member_metadata_expression(self, resource_expr):
+    def query_struct_member_metadata_expression(
+        self, resource_expr, allow_function_call_object=False
+    ):
         """Return metadata paired with a struct resource-member expression."""
         if isinstance(resource_expr, PointerAccessNode):
             object_node = getattr(resource_expr, "pointer_expr", None)
@@ -4867,7 +4873,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if object_node is None or not isinstance(member_name, str):
             return None
-        if not self.can_reuse_struct_metadata_object_expression(object_node):
+        if not self.can_reuse_struct_metadata_object_expression(
+            object_node, allow_function_call_object
+        ):
             return None
         if not self.struct_member_has_query_metadata(struct_type, member_name):
             return None
@@ -4927,7 +4935,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
         return f"{target_metadata} = {metadata_expr}"
 
-    def query_metadata_expression(self, resource_expr):
+    def query_metadata_expression(
+        self, resource_expr, allow_function_call_object=False
+    ):
         """Return CUDA query metadata paired with a resource expression."""
         if isinstance(resource_expr, TernaryOpNode):
             if not self.is_safe_query_return_actual_index(resource_expr.condition):
@@ -4940,8 +4950,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if true_type is None or false_type is None or true_type != false_type:
                 return None
-            true_metadata = self.query_metadata_expression(resource_expr.true_expr)
-            false_metadata = self.query_metadata_expression(resource_expr.false_expr)
+            true_metadata = self.query_metadata_expression(
+                resource_expr.true_expr, allow_function_call_object
+            )
+            false_metadata = self.query_metadata_expression(
+                resource_expr.false_expr, allow_function_call_object
+            )
             if true_metadata is None or false_metadata is None:
                 return None
             condition = self.visit(resource_expr.condition)
@@ -4960,6 +4974,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.query_return_source_metadata_expression(
                 return_source,
                 raw_args,
+                allow_function_call_object,
             )
 
         if isinstance(resource_expr, ArrayAccessNode):
@@ -4977,12 +4992,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 index_node
             ):
                 return None
-            base_expr = self.query_metadata_expression(array_node)
+            base_expr = self.query_metadata_expression(
+                array_node, allow_function_call_object
+            )
             if base_expr is None:
                 return None
             return f"{base_expr}[{self.visit(index_node)}]"
 
-        member_metadata = self.query_struct_member_metadata_expression(resource_expr)
+        member_metadata = self.query_struct_member_metadata_expression(
+            resource_expr, allow_function_call_object
+        )
         if member_metadata is not None:
             return member_metadata
 
@@ -5014,7 +5033,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.query_metadata_name(resource_name)
         return None
 
-    def query_return_source_metadata_expression(self, return_source, raw_args):
+    def query_return_source_metadata_expression(
+        self, return_source, raw_args, allow_function_call_object=False
+    ):
         """Render query metadata for a resource returned by a user function."""
         if return_source["kind"] == "ternary":
             condition = self.format_query_return_safe_expression(
@@ -5027,10 +5048,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             true_metadata = self.query_return_source_metadata_expression(
                 return_source["true_source"],
                 raw_args,
+                allow_function_call_object,
             )
             false_metadata = self.query_return_source_metadata_expression(
                 return_source["false_source"],
                 raw_args,
+                allow_function_call_object,
             )
             if true_metadata is None or false_metadata is None:
                 return None
@@ -5042,7 +5065,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             index = return_source["index"]
             if index >= len(raw_args):
                 return None
-            metadata_expr = self.query_metadata_expression(raw_args[index])
+            metadata_expr = self.query_metadata_expression(
+                raw_args[index], allow_function_call_object
+            )
         elif return_source["kind"] == "member":
             member = return_source.get("member")
             object_type = return_source.get("object_type")
@@ -5684,7 +5709,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if spec is None:
             return None
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_dimension_metadata_query_call(
                 func_name, resource_type
@@ -5714,7 +5741,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if spec is None or not spec["samples"]:
             return None
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_scalar_metadata_query_call(func_name, resource_type)
 
@@ -5738,7 +5767,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if spec is None:
             return None
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_scalar_metadata_query_call(
                 "textureQueryLevels", resource_type

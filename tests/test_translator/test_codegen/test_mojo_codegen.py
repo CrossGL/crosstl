@@ -10574,6 +10574,81 @@ def test_generic_user_struct_constructor_aggregate_payload_diagnostics(
         generate_code(ast)
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badAssignment() {
+                vec3 value;
+                value = vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptVec3(vec3 value) {
+            }
+
+            void badArgument() {
+                acceptVec3(vec2(1.0, 2.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptVec3.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptVec3(vec3 value) {
+            }
+
+            void badMatrixArgument() {
+                acceptVec3(mat2(1.0, 0.0, 0.0, 1.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptVec3.*expects vec3.*got mat2",
+        ),
+        (
+            """
+            void acceptMat2(mat2 value) {
+            }
+
+            void badVectorArgument() {
+                acceptMat2(vec3(1.0, 2.0, 3.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptMat2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_assignment_and_arguments(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_explicit_vector_constructors():
+    source = """
+    void acceptVec3(vec3 value) {
+    }
+
+    vec3 okConstructor() {
+        return vec3(vec2(1.0, 2.0), 3.0);
+    }
+
+    void okArgument() {
+        acceptVec3(vec3(vec2(1.0, 2.0), 3.0));
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "return _crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "acceptVec3(_crossgl_construct_f32_4_vf322_01_s" in generated_code
+
+
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
     source = """
     generic<T, E> struct Result {

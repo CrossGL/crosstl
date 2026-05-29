@@ -15738,7 +15738,7 @@ def test_lazy_lock_static_use_sites_are_dereferenced(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_colliding_static_symbol_names_are_suffixed_and_referenced():
+def test_colliding_static_symbol_names_are_suffixed_and_referenced(tmp_path):
     code = """
     float fooBar = 1.0;
     float foo_bar = 2.0;
@@ -15766,6 +15766,7 @@ def test_colliding_static_symbol_names_are_suffixed_and_referenced():
     )
     assert "static FOO_BAR: f32 = 2.0;" not in generated_code
     assert "fooBar + foo_bar" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():

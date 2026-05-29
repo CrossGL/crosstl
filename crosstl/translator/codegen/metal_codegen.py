@@ -11187,6 +11187,11 @@ class MetalCodeGen:
         )
         sampler_names = self.global_sampler_names()
         texture_alias_sources = self.local_texture_alias_sources(func, texture_names)
+        acceleration_structure_alias_types = (
+            self.local_acceleration_structure_dependency_types(
+                func, acceleration_structure_names
+            )
+        )
         dependencies = set()
 
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
@@ -11224,10 +11229,97 @@ class MetalCodeGen:
                     local_names,
                     visible_function_table_names,
                     intersection_function_table_names,
+                    acceleration_structure_alias_types,
                     dependencies,
                 )
 
         return dependencies
+
+    def local_acceleration_structure_dependency_types(
+        self, func, acceleration_structure_names
+    ):
+        aliases = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            param_name = getattr(param, "name", None)
+            param_type = self.type_name_string(
+                getattr(
+                    param,
+                    "param_type",
+                    getattr(param, "var_type", getattr(param, "vtype", None)),
+                )
+            )
+            if (
+                param_name
+                and param_type
+                and self.is_acceleration_structure_type(param_type)
+                and not self.metal_type_is_pointer_like(param_type)
+            ):
+                aliases[param_name] = self.map_resource_type_with_format(param_type)
+
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            initial_type = self.acceleration_structure_dependency_argument_type(
+                getattr(node, "initial_value", None),
+                aliases,
+                acceleration_structure_names,
+            )
+            if initial_type is None:
+                continue
+
+            declared_type = self.local_variable_type_node(node)
+            declared_type_name = self.type_name_string(declared_type)
+            if not declared_type_name:
+                aliases[name] = initial_type
+                continue
+            if not self.is_acceleration_structure_type(declared_type_name):
+                continue
+
+            declared_resource_type = self.map_resource_type_with_format(
+                declared_type_name, node
+            )
+            if declared_resource_type == initial_type:
+                aliases[name] = declared_resource_type
+        return aliases
+
+    def acceleration_structure_dependency_argument_type(
+        self, argument, alias_types=None, acceleration_structure_names=None
+    ):
+        if argument is None:
+            return None
+
+        argument_type = self.expression_result_type(argument)
+        if argument_type and self.is_acceleration_structure_type(argument_type):
+            if self.metal_type_is_pointer_like(argument_type):
+                return None
+            return self.map_resource_type_with_format(argument_type)
+
+        argument_name = self.expression_name(argument)
+        if not argument_name:
+            return None
+        if alias_types and argument_name in alias_types:
+            return alias_types[argument_name]
+
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            array_size,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) != argument_name:
+                continue
+            if (
+                acceleration_structure_names is not None
+                and argument_name not in acceleration_structure_names
+            ):
+                return None
+            if array_size is not None and not isinstance(argument, ArrayAccessNode):
+                return None
+            return mapped_type
+        return None
 
     def local_texture_alias_sources(self, func, texture_names):
         aliases = {}
@@ -11265,6 +11357,7 @@ class MetalCodeGen:
         local_names,
         visible_function_table_names,
         intersection_function_table_names,
+        acceleration_structure_alias_types,
         dependencies,
     ):
         operation = getattr(call, "operation", None)
@@ -11272,8 +11365,14 @@ class MetalCodeGen:
             args = getattr(call, "arguments", [])
             if not args:
                 return
+            acceleration_structure_type = (
+                self.acceleration_structure_dependency_argument_type(
+                    args[0], acceleration_structure_alias_types
+                )
+                or self.metal_acceleration_structure_argument_type(args[0])
+            )
             table = self.default_intersection_function_table(
-                self.metal_acceleration_structure_argument_type(args[0])
+                acceleration_structure_type
             )
             if (
                 table is not None

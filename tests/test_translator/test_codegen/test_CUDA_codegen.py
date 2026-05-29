@@ -13096,24 +13096,40 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
-    def test_resource_query_struct_member_call_objects_keep_cuda_metadata_type(
+    def test_resource_query_struct_member_call_objects_use_cuda_metadata_for_queries(
         self,
     ):
-        """Test unsupported call-object member queries still declare sidecar type."""
+        """Test call-object member resource queries can read returned sidecars."""
         source_code = """
         struct ResourceBundle {
             sampler2d tex;
+            sampler2DMS msTex;
+            image2D img;
         };
 
         shader ReturnedResourceQueryCallObjects {
+            sampler2d colorMap;
+            sampler2DMS samplesMap;
+            image2D imageMap;
+
             ResourceBundle chooseBundle() {
+                return ResourceBundle(colorMap, samplesMap, imageMap);
+            }
+
+            ResourceBundle chooseLocalBundle() {
                 ResourceBundle bundle;
+                bundle.tex = colorMap;
+                bundle.msTex = samplesMap;
+                bundle.img = imageMap;
                 return bundle;
             }
 
             compute {
                 void main() {
                     ivec2 directCallMember = textureSize(chooseBundle().tex, 0);
+                    int directCallLevels = textureQueryLevels(chooseBundle().tex);
+                    int directCallSamples = textureSamples(chooseBundle().msTex);
+                    ivec2 directCallImage = imageSize(chooseLocalBundle().img);
                 }
             }
         }
@@ -13127,13 +13143,35 @@ class TestCudaCodeGen:
 
         assert "struct CglResourceQueryInfo" in cuda_code
         assert "CglResourceQueryInfo tex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo msTex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo img_metadata;" in cuda_code
         assert (
-            "int2 directCallMember = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
-            in cuda_code
+            "return ResourceBundle(colorMap, colorMap_metadata, samplesMap, "
+            "samplesMap_metadata, imageMap, imageMap_metadata);" in cuda_code
         )
-        assert "chooseBundle().tex_metadata" not in cuda_code
+        assert (
+            "int2 directCallMember = cgl_textureSize_sampler2D"
+            "(chooseBundle().tex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int directCallLevels = cgl_textureQueryLevels_sampler2D"
+            "(chooseBundle().tex_metadata);" in cuda_code
+        )
+        assert (
+            "int directCallSamples = cgl_textureSamples_sampler2DMS"
+            "(chooseBundle().msTex_metadata);" in cuda_code
+        )
+        assert (
+            "int2 directCallImage = cgl_imageSize_image2D"
+            "(chooseLocalBundle().img_metadata);" in cuda_code
+        )
+        assert "textureSize metadata unavailable on sampler2D" not in cuda_code
+        assert "textureSamples metadata unavailable on sampler2DMS" not in cuda_code
+        assert "imageSize metadata unavailable on image2D" not in cuda_code
         assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
 
     def test_resource_query_struct_constructors_forward_cuda_member_metadata(self):
         """Test resource struct constructors carry embedded metadata sidecars."""
