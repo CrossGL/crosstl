@@ -23788,6 +23788,39 @@ def test_glsl_storage_image_access_function_attributes_emit_qualifiers():
     )
 
 
+def test_glsl_storage_image_access_accepts_equivalent_aliases():
+    shader = """
+    shader StorageImageAccessEquivalentAliases {
+        image2D source @readonly @access(readonly);
+
+        fragment {
+            vec4 main(
+                image2D target[2] @writeonly @access(writeonly) @binding(4)
+            ) @gl_FragColor {
+                float loaded = imageLoad(source, ivec2(0, 0));
+                imageStore(target[1], ivec2(0, 0), vec4(loaded));
+                return vec4(loaded);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "layout(rgba32f, binding = 0) readonly uniform image2D source;"
+        in generated_code
+    )
+    assert (
+        "layout(rgba32f, binding = 4) writeonly uniform image2D target[2];"
+        in generated_code
+    )
+    assert "float loaded = imageLoad(source, ivec2(0, 0)).x;" in generated_code
+    assert "imageStore(target[1], ivec2(0, 0), vec4(loaded));" in generated_code
+
+
 def test_glsl_storage_image_access_readwrite_operations_stay_qualifier_free():
     shader = """
     shader StorageImageReadwriteOperations {
@@ -23877,6 +23910,68 @@ def test_glsl_storage_image_access_rejects_conflicting_metadata(shader, match):
     with pytest.raises(ValueError, match=match):
         ast = crosstl.translator.parse(shader)
         GLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("shader", "message"),
+    [
+        (
+            """
+            shader DuplicateGlobalDirectImageAccess {
+                image2D image @readonly @readonly;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'image': @readonly",
+        ),
+        (
+            """
+            shader DuplicateGlobalFunctionImageAccess {
+                image2D image @access(readonly) @access(readonly);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'image': "
+            "@access(readonly)",
+        ),
+        (
+            """
+            shader DuplicateStageParameterDirectImageAccess {
+                fragment {
+                    vec4 main(image2D target[2] @writeonly @writeonly) @gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'target': @writeonly",
+        ),
+        (
+            """
+            shader DuplicateStageParameterFunctionImageAccess {
+                fragment {
+                    vec4 main(image2D target[2] @access(writeonly) @access(writeonly)) @gl_FragColor {
+                        return vec4(1.0);
+                    }
+                }
+            }
+            """,
+            "Duplicate OpenGL resource access metadata for 'target': "
+            "@access(writeonly)",
+        ),
+    ],
+)
+def test_glsl_storage_image_access_rejects_duplicate_metadata(shader, message):
+    with pytest.raises(ValueError, match=re.escape(message)):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "fragment")
 
 
 @pytest.mark.parametrize(

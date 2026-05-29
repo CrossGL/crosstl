@@ -12282,12 +12282,22 @@ class GLSLCodeGen:
             return
         first_source, first_access = choices[0]
         node_name = self.resource_node_name(node, "<unnamed>")
+        seen_sources = {first_source}
         for source, access in choices[1:]:
+            if source in seen_sources:
+                raise ValueError(
+                    "Duplicate OpenGL resource access metadata for "
+                    f"'{node_name}': {self.resource_access_metadata_label(source)}"
+                )
+            seen_sources.add(source)
             if access != first_access:
                 raise ValueError(
                     "Conflicting OpenGL resource access metadata for "
                     f"'{node_name}': {first_source} differs from {source}"
                 )
+
+    def resource_access_metadata_label(self, source):
+        return f"@{source}"
 
     def map_operator(self, op):
         op_map = {
