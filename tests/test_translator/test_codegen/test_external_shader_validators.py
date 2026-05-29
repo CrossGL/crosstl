@@ -396,8 +396,9 @@ shader GLSLBufferBlockAccessValidator {
             uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);
             uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);
             uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);
+            uint swapped = atomicCompSwap(readwriteData.values[1], uint(0), arrayOld);
             readwriteData.value += oldValue;
-            readwriteData.values[1] = arrayOld;
+            readwriteData.values[2] = swapped;
         }
     }
 }
@@ -2445,8 +2446,12 @@ def test_generated_glsl_buffer_block_access_qualifiers_validate_with_glslangvali
     assert "uint nestedOld = atomicAdd(readwriteData.nested.value, oldValue);" in code
     assert "uint itemOld = atomicAdd(readwriteData.items[1].value, nestedOld);" in code
     assert "uint arrayOld = atomicAdd(readwriteData.values[0], itemOld);" in code
+    assert (
+        "uint swapped = atomicCompSwap(readwriteData.values[1], uint(0), arrayOld);"
+        in code
+    )
     assert "readwriteData.value += oldValue;" in code
-    assert "readwriteData.values[1] = arrayOld;" in code
+    assert "readwriteData.values[2] = swapped;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

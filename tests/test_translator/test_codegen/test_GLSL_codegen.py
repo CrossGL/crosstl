@@ -720,6 +720,62 @@ def test_glsl_buffer_block_atomics_reject_non_scalar_integer_members(
         GLSLCodeGen().generate(ast)
 
 
+@pytest.mark.parametrize(
+    ("call", "match"),
+    [
+        (
+            "atomicAdd(data.value, signedDelta);",
+            r"requires uint value argument.*signedDelta has type int",
+        ),
+        (
+            "atomicAdd(data.signedValue, unsignedDelta);",
+            r"requires int value argument.*unsignedDelta has type uint",
+        ),
+        (
+            "atomicCompSwap(data.value, signedDelta, unsignedDelta);",
+            r"requires uint compare argument.*signedDelta has type int",
+        ),
+        (
+            "atomicCompSwap(data.signedValue, signedDelta, unsignedDelta);",
+            r"requires int value argument.*unsignedDelta has type uint",
+        ),
+        (
+            "atomicExchange(data.value, boolDelta);",
+            r"requires uint value argument.*boolDelta has type bool",
+        ),
+        (
+            "atomicAdd(data.value, vectorDelta);",
+            r"requires uint value argument.*vectorDelta has type vec2",
+        ),
+    ],
+)
+def test_glsl_buffer_block_atomics_reject_incompatible_value_arguments(call, match):
+    shader = f"""
+    shader BufferBlockInvalidAtomicArguments {{
+        struct Data {{
+            uint value;
+            int signedValue;
+        }};
+
+        Data data @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {{
+            void main() {{
+                int signedDelta = 1;
+                uint unsignedDelta = 1u;
+                bool boolDelta = true;
+                vec2 vectorDelta = vec2(1.0, 2.0);
+                {call}
+            }}
+        }}
+    }}
+    """
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
 def test_glsl_structured_buffer_access_rejects_incompatible_helper_calls():
     shader = """
     shader StructuredBufferAccessInvalidHelper {

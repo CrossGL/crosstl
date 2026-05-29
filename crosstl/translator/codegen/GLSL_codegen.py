@@ -7983,6 +7983,46 @@ class GLSLCodeGen:
                 f"int or uint buffer block member for {target_name}: got "
                 f"{mapped_type}"
             )
+        self.validate_glsl_buffer_block_atomic_value_arguments(
+            func_name,
+            args,
+            target,
+            mapped_type,
+        )
+
+    def validate_glsl_buffer_block_atomic_value_arguments(
+        self, func_name, args, target, target_type
+    ):
+        target_name = expression_debug_name(target)
+        for value_arg, label in self.glsl_buffer_block_atomic_value_arguments(
+            func_name, args
+        ):
+            value_type = self.glsl_buffer_block_atomic_argument_type(value_arg)
+            if value_type is None or value_type == target_type:
+                continue
+            raise ValueError(
+                f"OpenGL buffer block atomic '{func_name}' requires {target_type} "
+                f"{label} argument for {target_name}: "
+                f"{expression_debug_name(value_arg)} has type {value_type}"
+            )
+
+    def glsl_buffer_block_atomic_value_arguments(self, func_name, args):
+        if func_name == "atomicCompSwap":
+            for index, label in ((1, "compare"), (2, "value")):
+                if len(args) > index:
+                    yield args[index], label
+            return
+        if len(args) > 1:
+            yield args[1], "value"
+
+    def glsl_buffer_block_atomic_argument_type(self, expr):
+        scalar_kind = self.scalar_expression_kind(expr)
+        if scalar_kind is not None:
+            return scalar_kind
+        result_type = self.expression_result_type(expr)
+        if result_type is None:
+            return None
+        return self.map_type(result_type)
 
     def generate_glsl_buffer_block_mutation_target(self, expr):
         self.glsl_buffer_block_read_validation_suppression += 1

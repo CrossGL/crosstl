@@ -17502,6 +17502,34 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
         GLSLCodeGen().generate(shader_ast)
 
 
+def test_codegen_mixed_ssbo_invalid_glsl_atomic_argument_types_raise():
+    code = """
+    #version 450 core
+    layout(std430, binding = 25) buffer AtomicArgumentBlock {
+        uint counter;
+        int signedCounter;
+    } atomicArgumentBlock;
+
+    void main() {
+        int signedDelta = 1;
+        uint oldCounter = atomicAdd(atomicArgumentBlock.counter, signedDelta);
+    }
+    """
+
+    crossgl = generate_crossgl(code, "compute")
+    shader_ast = parse_crossgl(crossgl)
+    assert shader_ast is not None
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL buffer block atomic 'atomicAdd' requires uint value "
+            "argument for atomicArgumentBlock.counter: signedDelta has type int"
+        ),
+    ):
+        GLSLCodeGen().generate(shader_ast)
+
+
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():
     code = """
     #version 300 es
