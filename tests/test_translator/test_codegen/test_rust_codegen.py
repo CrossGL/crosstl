@@ -18861,7 +18861,7 @@ def test_vector_constructor(tmp_path):
         pytest.fail("Vector constructor codegen not implemented")
 
 
-def test_double_vector_and_matrix_types_emit_rust_names():
+def test_double_vector_and_matrix_types_emit_rust_names(tmp_path):
     code = """
     shader main {
         compute {
@@ -18898,6 +18898,7 @@ def test_double_vector_and_matrix_types_emit_rust_names():
     assert "bool2" not in generated_code
     assert "dmat2(" not in generated_code
     assert "MatrixType(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_matrix_constructors_flatten_vector_args_once():
