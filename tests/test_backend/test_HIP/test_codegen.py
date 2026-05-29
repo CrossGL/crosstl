@@ -5814,6 +5814,342 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_interop_handle_array_outputs_clear_stale_metadata(self):
+        """Test HIP interop and handle array outputs clear stale metadata."""
+        code = """
+        void host(
+            void* devicePtr,
+            void* hostPtr,
+            hipMemPoolProps* poolProps,
+            hipMemPool_t* pools,
+            hipMemPoolPtrExportData* poolExports,
+            hipMemGenericAllocationHandle_t* allocationHandles,
+            hipMemAllocationProp* allocationProps,
+            hipMemAllocationHandleType handleType,
+            void** shareableHandles,
+            void** ptrs,
+            hipDeviceptr_t* devicePtrs,
+            hipIpcMemHandle_t* ipcMemHandles,
+            hipIpcEventHandle_t* ipcEventHandles,
+            hipEvent_t* events,
+            hipExternalMemory_t* externalMemories,
+            hipExternalMemoryHandleDesc* memoryDescs,
+            hipExternalMemoryBufferDesc* bufferDescs,
+            hipExternalMemoryMipmappedArrayDesc* mipmapDescs,
+            hipMipmappedArray_t* mipmaps,
+            hipExternalSemaphore_t* externalSemaphores,
+            hipExternalSemaphoreHandleDesc* semaphoreDescs,
+            hipGraphicsResource_t* graphicsResources,
+            hipArray_t* arrays,
+            size_t* sizes,
+            unsigned int glBuffer,
+            unsigned int glImage,
+            unsigned int glTarget
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipMemPoolCreate(&pools[0], &poolProps[0]);
+            pools[8] = pools[0];
+
+            hipMemGetAddressRange((void**)&shareableHandles, &staleSize, devicePtr);
+            hipMemPoolExportToShareableHandle(
+                &shareableHandles[0],
+                pools[0],
+                handleType,
+                0
+            );
+            shareableHandles[8] = shareableHandles[0];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipMemPoolImportFromShareableHandle(
+                &pools[1],
+                shareableHandles[0],
+                handleType,
+                0
+            );
+            pools[9] = pools[1];
+
+            hipMemGetAddressRange((void**)&poolExports, &staleSize, devicePtr);
+            hipMemPoolExportPointer(&poolExports[0], ptrs[0]);
+            poolExports[8] = poolExports[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemPoolImportPointer(&ptrs[1], pools[1], &poolExports[0]);
+            ptrs[8] = ptrs[1];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipDeviceGetDefaultMemPool(&pools[2], 0);
+            pools[10] = pools[2];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipDeviceGetMemPool(&pools[3], 0);
+            pools[11] = pools[3];
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemCreate(&allocationHandles[0], 4096, &allocationProps[0], 0);
+            allocationHandles[8] = allocationHandles[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemAddressReserve(&ptrs[2], 4096, 0, hostPtr, 0);
+            ptrs[9] = ptrs[2];
+
+            hipMemGetAddressRange((void**)&allocationProps, &staleSize, devicePtr);
+            hipMemGetAllocationPropertiesFromHandle(
+                &allocationProps[1],
+                allocationHandles[0]
+            );
+            allocationProps[8].type = allocationProps[1].type;
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemRetainAllocationHandle(&allocationHandles[1], ptrs[2]);
+            allocationHandles[9] = allocationHandles[1];
+
+            hipMemGetAddressRange((void**)&shareableHandles, &staleSize, devicePtr);
+            hipMemExportToShareableHandle(
+                &shareableHandles[1],
+                allocationHandles[0],
+                handleType,
+                0
+            );
+            shareableHandles[9] = shareableHandles[1];
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemImportFromShareableHandle(
+                &allocationHandles[2],
+                shareableHandles[1],
+                handleType
+            );
+            allocationHandles[10] = allocationHandles[2];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostGetDevicePointer(&ptrs[3], hostPtr, 0);
+            ptrs[10] = ptrs[3];
+
+            hipMemGetAddressRange((void**)&devicePtrs, &staleSize, devicePtr);
+            hipMemHostGetDevicePointer(&devicePtrs[0], hostPtr, 0);
+            devicePtrs[8] = devicePtrs[0];
+
+            hipMemGetAddressRange((void**)&ipcMemHandles, &staleSize, devicePtr);
+            hipIpcGetMemHandle(&ipcMemHandles[0], ptrs[3]);
+            ipcMemHandles[8] = ipcMemHandles[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipIpcOpenMemHandle(
+                &ptrs[4],
+                ipcMemHandles[0],
+                hipIpcMemLazyEnablePeerAccess
+            );
+            ptrs[11] = ptrs[4];
+
+            hipMemGetAddressRange((void**)&ipcEventHandles, &staleSize, devicePtr);
+            hipIpcGetEventHandle(&ipcEventHandles[0], events[0]);
+            ipcEventHandles[8] = ipcEventHandles[0];
+
+            hipMemGetAddressRange((void**)&events, &staleSize, devicePtr);
+            hipIpcOpenEventHandle(&events[1], ipcEventHandles[0]);
+            events[8] = events[1];
+
+            hipMemGetAddressRange((void**)&externalMemories, &staleSize, devicePtr);
+            hipImportExternalMemory(&externalMemories[0], &memoryDescs[0]);
+            externalMemories[8] = externalMemories[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipExternalMemoryGetMappedBuffer(
+                &ptrs[5],
+                externalMemories[0],
+                &bufferDescs[0]
+            );
+            ptrs[12] = ptrs[5];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipExternalMemoryGetMappedMipmappedArray(
+                &mipmaps[0],
+                externalMemories[0],
+                &mipmapDescs[0]
+            );
+            mipmaps[8] = mipmaps[0];
+
+            hipMemGetAddressRange((void**)&externalSemaphores, &staleSize, devicePtr);
+            hipImportExternalSemaphore(&externalSemaphores[0], &semaphoreDescs[0]);
+            externalSemaphores[8] = externalSemaphores[0];
+
+            hipMemGetAddressRange((void**)&graphicsResources, &staleSize, devicePtr);
+            hipGraphicsGLRegisterBuffer(
+                &graphicsResources[0],
+                glBuffer,
+                hipGraphicsRegisterFlagsWriteDiscard
+            );
+            graphicsResources[8] = graphicsResources[0];
+
+            hipMemGetAddressRange((void**)&graphicsResources, &staleSize, devicePtr);
+            hipGraphicsGLRegisterImage(
+                &graphicsResources[1],
+                glImage,
+                glTarget,
+                hipGraphicsRegisterFlagsSurfaceLoadStore
+            );
+            graphicsResources[9] = graphicsResources[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipGraphicsResourceGetMappedPointer(
+                &ptrs[6],
+                &sizes[0],
+                graphicsResources[0]
+            );
+            ptrs[13] = ptrs[6];
+            sizes[8] = sizes[0];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipGraphicsSubResourceGetMappedArray(&arrays[0], graphicsResources[1], 0, 0);
+            arrays[8] = arrays[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory pool create: output: pools[0], properties: (&poolProps[0])"
+            in result
+        )
+        assert "pools[8] = pools[0];" in result
+        assert (
+            "// HIP memory pool export to shareable handle: "
+            "output: shareableHandles[0], pool: pools[0], "
+            "handle type: handleType, flags: 0"
+        ) in result
+        assert "shareableHandles[8] = shareableHandles[0];" in result
+        assert (
+            "// HIP memory pool import from shareable handle: output: pools[1], "
+            "handle: shareableHandles[0], handle type: handleType, flags: 0"
+        ) in result
+        assert "pools[9] = pools[1];" in result
+        assert (
+            "// HIP memory pool export pointer: output: poolExports[0], "
+            "pointer: ptrs[0]"
+        ) in result
+        assert "poolExports[8] = poolExports[0];" in result
+        assert (
+            "// HIP memory pool import pointer: output: ptrs[1], "
+            "pool: pools[1], export data: (&poolExports[0])"
+        ) in result
+        assert "ptrs[8] = ptrs[1];" in result
+        assert "// HIP get default memory pool: output: pools[2], device: 0" in result
+        assert "pools[10] = pools[2];" in result
+        assert "// HIP get device memory pool: output: pools[3], device: 0" in result
+        assert "pools[11] = pools[3];" in result
+        assert (
+            "// HIP virtual memory create allocation: output: allocationHandles[0], "
+            "bytes: 4096, properties: (&allocationProps[0]), flags: 0"
+        ) in result
+        assert "allocationHandles[8] = allocationHandles[0];" in result
+        assert (
+            "// HIP virtual memory reserve address: output: ptrs[2], bytes: 4096, "
+            "alignment: 0, address: hostPtr, flags: 0"
+        ) in result
+        assert "ptrs[9] = ptrs[2];" in result
+        assert (
+            "// HIP virtual memory allocation properties: output: allocationProps[1], "
+            "handle: allocationHandles[0]"
+        ) in result
+        assert "allocationProps[8].type = allocationProps[1].type;" in result
+        assert (
+            "// HIP virtual memory retain allocation handle: "
+            "output: allocationHandles[1], address: ptrs[2]"
+        ) in result
+        assert "allocationHandles[9] = allocationHandles[1];" in result
+        assert (
+            "// HIP virtual memory export shareable handle: "
+            "output: shareableHandles[1], handle: allocationHandles[0], "
+            "handle type: handleType, flags: 0"
+        ) in result
+        assert "shareableHandles[9] = shareableHandles[1];" in result
+        assert (
+            "// HIP virtual memory import shareable handle: "
+            "output: allocationHandles[2], shareable handle: shareableHandles[1], "
+            "handle type: handleType"
+        ) in result
+        assert "allocationHandles[10] = allocationHandles[2];" in result
+        assert (
+            "// HIP host device pointer: output: ptrs[3], host: hostPtr, flags: 0"
+            in result
+        )
+        assert "ptrs[10] = ptrs[3];" in result
+        assert (
+            "// HIP driver host device pointer: output: devicePtrs[0], "
+            "host: hostPtr, flags: 0"
+        ) in result
+        assert "devicePtrs[8] = devicePtrs[0];" in result
+        assert (
+            "// HIP IPC get memory handle: output: ipcMemHandles[0], "
+            "pointer: ptrs[3]"
+        ) in result
+        assert "ipcMemHandles[8] = ipcMemHandles[0];" in result
+        assert (
+            "// HIP IPC open memory handle: output: ptrs[4], "
+            "handle: ipcMemHandles[0], flags: hipIpcMemLazyEnablePeerAccess"
+        ) in result
+        assert "ptrs[11] = ptrs[4];" in result
+        assert (
+            "// HIP IPC get event handle: output: ipcEventHandles[0], "
+            "event: events[0]"
+        ) in result
+        assert "ipcEventHandles[8] = ipcEventHandles[0];" in result
+        assert (
+            "// HIP IPC open event handle: output: events[1], "
+            "handle: ipcEventHandles[0]"
+        ) in result
+        assert "events[8] = events[1];" in result
+        assert (
+            "// HIP import external memory: output: externalMemories[0], "
+            "descriptor: (&memoryDescs[0])"
+        ) in result
+        assert "externalMemories[8] = externalMemories[0];" in result
+        assert (
+            "// HIP external memory mapped buffer: output: ptrs[5], "
+            "memory: externalMemories[0], descriptor: (&bufferDescs[0])"
+        ) in result
+        assert "ptrs[12] = ptrs[5];" in result
+        assert (
+            "// HIP external memory mapped mipmapped array: output: mipmaps[0], "
+            "memory: externalMemories[0], descriptor: (&mipmapDescs[0])"
+        ) in result
+        assert "mipmaps[8] = mipmaps[0];" in result
+        assert (
+            "// HIP import external semaphore: output: externalSemaphores[0], "
+            "descriptor: (&semaphoreDescs[0])"
+        ) in result
+        assert "externalSemaphores[8] = externalSemaphores[0];" in result
+        assert (
+            "// HIP OpenGL register buffer: output: graphicsResources[0], "
+            "buffer: glBuffer, flags: hipGraphicsRegisterFlagsWriteDiscard"
+        ) in result
+        assert "graphicsResources[8] = graphicsResources[0];" in result
+        assert (
+            "// HIP OpenGL register image: output: graphicsResources[1], "
+            "image: glImage, target: glTarget, "
+            "flags: hipGraphicsRegisterFlagsSurfaceLoadStore"
+        ) in result
+        assert "graphicsResources[9] = graphicsResources[1];" in result
+        assert (
+            "// HIP graphics mapped pointer: pointer output: ptrs[6], "
+            "size output: sizes[0], resource: graphicsResources[0]"
+        ) in result
+        assert "ptrs[13] = ptrs[6];" in result
+        assert "sizes[8] = sizes[0];" in result
+        assert (
+            "// HIP graphics mapped subresource array: output: arrays[0], "
+            "resource: graphicsResources[1], array index: 0, mip level: 0"
+        ) in result
+        assert "arrays[8] = arrays[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_memset_async_conversion(self):
         """Test hipMemsetAsync emits metadata comments and status success"""
         code = """

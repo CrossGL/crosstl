@@ -9618,6 +9618,67 @@ def test_glsl_stage_io_multidimensional_array_locations_are_reserved():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_glsl_stage_io_multidimensional_arrays_keep_interpolation_qualifiers():
+    shader = """
+    shader StageIOInterpolationArrays {
+        vertex {
+            struct VertexInput {
+                vec3 position @location(0);
+            }
+
+            struct VertexOutput {
+                ivec2 ids[2][2] @location(1);
+                vec4 samples[2] @location(5) @sample;
+                vec3 centers[2] @location(7) @centroid;
+                vec2 noPersp[2] @location(9) @noperspective;
+                vec4 position @gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.ids[0][0] = ivec2(1, 2);
+                output.samples[0] = vec4(input.position, 1.0);
+                output.centers[0] = input.position;
+                output.noPersp[0] = input.position.xy;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                ivec2 ids[2][2] @location(1),
+                vec4 samples[2] @location(5) @sample,
+                vec3 centers[2] @location(7) @centroid,
+                vec2 noPersp[2] @location(9) @noperspective
+            ) @gl_FragColor {
+                return samples[0]
+                    + vec4(centers[0], 1.0)
+                    + vec4(noPersp[0], 0.0, 1.0)
+                    + vec4(ids[0][0], 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    assert "layout(location = 1) flat out ivec2 ids[2][2];" in vertex_code
+    assert "layout(location = 5) sample out vec4 samples[2];" in vertex_code
+    assert "layout(location = 7) centroid out vec3 centers[2];" in vertex_code
+    assert "layout(location = 9) noperspective out vec2 noPersp[2];" in vertex_code
+    assert "layout(location = 1) flat in ivec2 ids[2][2];" in fragment_code
+    assert "layout(location = 5) sample in vec4 samples[2];" in fragment_code
+    assert "layout(location = 7) centroid in vec3 centers[2];" in fragment_code
+    assert "layout(location = 9) noperspective in vec2 noPersp[2];" in fragment_code
+    assert "ivec2[2][2] ids" not in vertex_code
+    assert "vec4[2] samples" not in vertex_code
+    assert "ivec2[2][2] ids" not in fragment_code
+    assert "vec4[2] samples" not in fragment_code
+
+
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
     shader = """
     shader TraitSelfOption {
