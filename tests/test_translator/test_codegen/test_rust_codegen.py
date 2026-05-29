@@ -19397,7 +19397,7 @@ def test_vector_comparison_binary_operands_emit_boolean_lanes(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_logical_binary_operands_emit_boolean_lanes():
+def test_bool_vector_logical_binary_operands_emit_boolean_lanes(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -19453,9 +19453,10 @@ def test_bool_vector_logical_binary_operands_emit_boolean_lanes():
     assert "let either: Vec3<bool> = (a || b);" not in generated_code
     assert "let scalarRight: Vec3<bool> = (a && ready);" not in generated_code
     assert "let scalarLeft: Vec3<bool> = (makeFlag() || b);" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_unary_not_emits_boolean_lanes():
+def test_bool_vector_unary_not_emits_boolean_lanes(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -19491,6 +19492,7 @@ def test_bool_vector_unary_not_emits_boolean_lanes():
     assert "let inv2: Vec2<bool> = (!mask2);" not in generated_code
     assert "let inv3: Vec3<bool> = (!mask3);" not in generated_code
     assert "!{ let __cgl_swizzle_" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_scalar_constructor_bindings_use_cast_types():
