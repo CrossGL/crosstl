@@ -6077,6 +6077,86 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_image_access_returned_chains_and_ternaries_emit_cuda_diagnostics(self):
+        """Test CUDA preserves access through returned helper chains."""
+        source_code = """
+        shader ImageAccessReturnedChains {
+            readonly image2D readOnlyA @rgba16f;
+            readonly image2D readOnlyB @rgba16f;
+            writeonly image2D writeOnlyA @rgba16f;
+            writeonly image2D writeOnlyB @rgba16f;
+
+            image2D chooseWrite(bool useA) {
+                return useA ? writeOnlyA : writeOnlyB;
+            }
+
+            image2D chainWrite(bool useA) {
+                return chooseWrite(useA);
+            }
+
+            image2D chooseRead(bool useA) {
+                return useA ? readOnlyA : readOnlyB;
+            }
+
+            image2D chainRead(bool useA) {
+                return chooseRead(useA);
+            }
+
+            image2D chooseMixed(bool useA) {
+                return useA ? readOnlyA : writeOnlyA;
+            }
+
+            int nextFlag() {
+                return 1;
+            }
+
+            compute {
+                void main(bool useA, ivec2 pixel) {
+                    vec4 blockedChainRead =
+                        imageLoad(chainWrite(useA), pixel);
+                    imageStore(chainRead(useA), pixel, blockedChainRead);
+                    vec4 mixedRead = imageLoad(chooseMixed(useA), pixel);
+                    vec4 unsafeBlockedRead =
+                        imageLoad(chainWrite(nextFlag() == 1), pixel);
+                    imageStore(
+                        chainRead(nextFlag() == 1),
+                        pixel,
+                        unsafeBlockedRead
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "float4 blockedChainRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 unsafeBlockedRead = /* unsupported CUDA image access: "
+            "imageLoad requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA image access: imageStore requires writable "
+            "image resource on image2D */ ((void)0);" in cuda_code
+        )
+        assert (
+            "float4 mixedRead = surf2Dread<float4>"
+            "(chooseMixed(useA), pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chainWrite" not in cuda_code
+        assert "surf2Dwrite(blockedChainRead, chainRead" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+
     def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
         self,
     ):
