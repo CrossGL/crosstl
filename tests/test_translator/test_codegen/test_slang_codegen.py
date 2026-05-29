@@ -9894,6 +9894,8 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                 vec3 uvLayer,
                 ivec2 offset,
                 ivec2 offsets[4],
+                ivec2 offsetSets[2][4],
+                int offsetSetIndex,
                 int component
             ) {
                 vec4 gathered = textureGather(tex, uv);
@@ -9934,6 +9936,16 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                     offsets,
                     component
                 );
+                vec4 nestedOffsetsGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetSets[0]
+                );
+                vec4 dynamicNestedOffsetsGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetSets[offsetSetIndex]
+                );
                 return gathered
                     + explicitGathered
                     + greenGather
@@ -9943,7 +9955,9 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
                     + offsetsGather
                     + dynamicGather
                     + dynamicOffsetGather
-                    + dynamicOffsetsGather;
+                    + dynamicOffsetsGather
+                    + nestedOffsetsGather
+                    + dynamicNestedOffsetsGather;
             }
 
             void main() {}
@@ -9991,6 +10005,17 @@ def test_texture_gather_builtins_emit_slang_gather_methods():
         "layers.GatherAlpha("
         "uvLayer, offsets[0], offsets[1], offsets[2], offsets[3]));" in generated_code
     )
+    assert (
+        "float4 nestedOffsetsGather = tex.Gather("
+        "uv, offsetSets[0][0], offsetSets[0][1], "
+        "offsetSets[0][2], offsetSets[0][3]);" in generated_code
+    )
+    assert (
+        "float4 dynamicNestedOffsetsGather = tex.Gather("
+        "uv, offsetSets[offsetSetIndex][0], offsetSets[offsetSetIndex][1], "
+        "offsetSets[offsetSetIndex][2], offsetSets[offsetSetIndex][3]);"
+        in generated_code
+    )
     assert "textureGather" not in generated_code
     assert ".Gather(sampleState" not in generated_code
     assert ".GatherBlue(sampleState" not in generated_code
@@ -10014,6 +10039,11 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 floatOffset,
                 bvec2 boolOffset,
                 ivec3 badOffset,
+                vec2 floatOffsetArray[4],
+                bvec2 boolOffsetArray[4],
+                uvec2 uintOffsetArray[4],
+                ivec2 offsetArray[4],
+                int offsetIndex,
                 ivec3 badOffsetArray[4]
             ) {
                 float scalarCoord = 0.25;
@@ -10053,6 +10083,31 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
                     boolOffset,
                     boolOffset,
                     boolOffset
+                );
+                vec4 floatOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    floatOffsetArray
+                );
+                vec4 boolOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    boolOffsetArray
+                );
+                vec4 uintOffsetArrayGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    uintOffsetArray
+                );
+                vec4 indexedOffsetElementGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetArray[0]
+                );
+                vec4 dynamicIndexedOffsetElementGather = textureGatherOffsets(
+                    tex,
+                    uv,
+                    offsetArray[offsetIndex]
                 );
                 vec4 badOffsetsRank = textureGatherOffsets(tex, uv, badOffsetArray);
                 return badComponent + missingOffset + badOffsets;
@@ -10136,6 +10191,31 @@ def test_texture_gather_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 boolOffsetsGather = /* unsupported Slang texture gather: "
         "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 floatOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got float2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 uintOffsetArrayGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets offset must be scalar or vector int, got uint2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 indexedOffsetElementGather = /* unsupported Slang texture gather: "
+        "textureGatherOffsets requires a typed offsets array or four offset "
+        "arguments */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 dynamicIndexedOffsetElementGather = /* unsupported Slang texture "
+        "gather: textureGatherOffsets requires a typed offsets array or four "
+        "offset arguments */ float4(0.0);" in generated_code
     )
     assert (
         "float4 badOffsetsRank = /* unsupported Slang texture gather: "

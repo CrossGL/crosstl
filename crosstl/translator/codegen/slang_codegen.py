@@ -9368,7 +9368,7 @@ class SlangCodeGen:
         return None
 
     def is_array_expression(self, node):
-        type_name = self.get_expression_type(node)
+        type_name = self.type_name_string(self.expression_result_type(node))
         return isinstance(type_name, str) and "[" in type_name and "]" in type_name
 
     def generate_texture_query_levels(self, args):

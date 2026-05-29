@@ -10316,6 +10316,147 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_control_flow_assigned_aliases_update_cuda_metadata(self):
+        """Test CUDA metadata snapshots update inside loops, switch, and match."""
+        source_code = """
+        shader ResourceQueryControlFlowAssignedAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            image2D imageMap;
+            image2D fallbackImage;
+            sampler2d textureGrid[4];
+            image2D imageGrid[4];
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(int mode, int slot) {
+                    sampler2d loopTex = colorMap;
+                    image2D loopImage = imageMap;
+                    for (int i = 0; i < 4; i++) {
+                        if (i == slot) {
+                            loopTex = textureGrid[i];
+                            loopImage = imageGrid[i];
+                            continue;
+                        }
+                        if (i == 3) {
+                            loopTex = fallbackMap;
+                            loopImage = fallbackImage;
+                            break;
+                        }
+                    }
+                    ivec2 loopTexSize = textureSize(loopTex, 0);
+                    ivec2 loopImageSize = imageSize(loopImage);
+                    consume(loopTex, loopImage);
+
+                    sampler2d switchTex = colorMap;
+                    image2D switchImage = imageMap;
+                    switch (mode) {
+                        case 0:
+                            switchTex = textureGrid[slot];
+                            switchImage = imageGrid[slot];
+                            break;
+                        case 1:
+                            switchTex = fallbackMap;
+                            switchImage = fallbackImage;
+                            break;
+                        default:
+                            switchTex = colorMap;
+                            switchImage = imageMap;
+                    }
+                    ivec2 switchTexSize = textureSize(switchTex, 0);
+                    ivec2 switchImageSize = imageSize(switchImage);
+                    consume(switchTex, switchImage);
+
+                    sampler2d matchTex = colorMap;
+                    match mode {
+                        0 => {
+                            matchTex = textureGrid[slot];
+                        }
+                        _ => {
+                            matchTex = fallbackMap;
+                        }
+                    }
+                    ivec2 matchTexSize = textureSize(matchTex, 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo imageMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackImage_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[4] = {};" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[4] = {};" in cuda_code
+        assert "CglResourceQueryInfo loopTex_metadata = colorMap_metadata;" in cuda_code
+        assert (
+            "CglResourceQueryInfo loopImage_metadata = imageMap_metadata;" in cuda_code
+        )
+        assert "loopTex_metadata = textureGrid_metadata[i];" in cuda_code
+        assert "loopImage_metadata = imageGrid_metadata[i];" in cuda_code
+        assert "loopTex_metadata = fallbackMap_metadata;" in cuda_code
+        assert "loopImage_metadata = fallbackImage_metadata;" in cuda_code
+        assert (
+            "int2 loopTexSize = cgl_textureSize_sampler2D"
+            "(loopTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 loopImageSize = cgl_imageSize_image2D"
+            "(loopImage_metadata);" in cuda_code
+        )
+        assert (
+            "consume(loopTex, loopTex_metadata, loopImage, loopImage_metadata);"
+            in cuda_code
+        )
+        assert (
+            "CglResourceQueryInfo switchTex_metadata = colorMap_metadata;" in cuda_code
+        )
+        assert (
+            "CglResourceQueryInfo switchImage_metadata = imageMap_metadata;"
+            in cuda_code
+        )
+        assert "switchTex_metadata = textureGrid_metadata[slot];" in cuda_code
+        assert "switchImage_metadata = imageGrid_metadata[slot];" in cuda_code
+        assert "switchTex_metadata = fallbackMap_metadata;" in cuda_code
+        assert "switchImage_metadata = fallbackImage_metadata;" in cuda_code
+        assert "switchTex_metadata = colorMap_metadata;" in cuda_code
+        assert "switchImage_metadata = imageMap_metadata;" in cuda_code
+        assert (
+            "int2 switchTexSize = cgl_textureSize_sampler2D"
+            "(switchTex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 switchImageSize = cgl_imageSize_image2D"
+            "(switchImage_metadata);" in cuda_code
+        )
+        assert (
+            "consume(switchTex, switchTex_metadata, switchImage, "
+            "switchImage_metadata);" in cuda_code
+        )
+        assert (
+            "CglResourceQueryInfo matchTex_metadata = colorMap_metadata;" in cuda_code
+        )
+        assert "matchTex_metadata = textureGrid_metadata[slot];" in cuda_code
+        assert "matchTex_metadata = fallbackMap_metadata;" in cuda_code
+        assert (
+            "int2 matchTexSize = cgl_textureSize_sampler2D"
+            "(matchTex_metadata, 0);" in cuda_code
+        )
+        assert "continue;" in cuda_code
+        assert "break;" in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """
