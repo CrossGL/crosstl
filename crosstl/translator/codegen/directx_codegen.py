@@ -6003,6 +6003,12 @@ class HLSLCodeGen:
         except ValueError:
             return None
 
+    def hlsl_constant_int_value(self, value):
+        parsed = self.literal_int_value(value, self.literal_int_constants)
+        if parsed is not None:
+            return parsed
+        return self.hlsl_int_literal_value(value)
+
     def hlsl_float_literal_value(self, value):
         if value is None:
             return None
@@ -6041,18 +6047,10 @@ class HLSLCodeGen:
         return type_name.split("<", 1)[0].strip()
 
     def hlsl_parameter_array_count(self, parameter):
-        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-        if str(type(param_type)).find("ArrayType") != -1:
-            return self.hlsl_int_literal_value(getattr(param_type, "size", None))
-
-        type_name = self.type_name_string(param_type)
-        if not type_name:
+        size_expr = self.hlsl_parameter_array_size_expression(parameter)
+        if size_expr is None:
             return None
-        _base_type, array_suffix = split_array_type_suffix(str(type_name))
-        if not array_suffix:
-            return None
-        first_dimension = array_suffix[1:].split("]", 1)[0]
-        return self.hlsl_int_literal_value(first_dimension)
+        return self.hlsl_constant_int_value(size_expr)
 
     def hlsl_parameter_mapped_base_and_array_suffix(self, parameter):
         param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
@@ -7842,7 +7840,7 @@ class HLSLCodeGen:
             if operator == "+":
                 return value
             return None
-        return self.hlsl_int_literal_value(expr)
+        return self.hlsl_constant_int_value(expr)
 
     def hlsl_bool_constant_value(self, expr):
         if expr is None:

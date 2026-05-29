@@ -6193,6 +6193,37 @@ def test_directx_mesh_output_signature_validates_required_roles_and_counts():
             crosstl.translator.parse(mismatched_primitives_code), "mesh"
         )
 
+    constant_mismatched_primitives_code = """
+    shader ConstantMismatchedMeshPrimitiveCount {
+        const int PRIMITIVE_COUNT = 2;
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[PRIMITIVE_COUNT],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, PRIMITIVE_COUNT);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].culled = false;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="primitives.*match.*indices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(constant_mismatched_primitives_code), "mesh"
+        )
+
 
 def test_directx_mesh_set_output_counts_validates_arguments_and_bounds():
     missing_argument_code = """
@@ -6959,6 +6990,31 @@ def test_directx_mesh_output_writes_validate_literal_bounds():
             crosstl.translator.parse(declared_bound_code), "mesh"
         )
 
+    constant_declared_bound_code = """
+    shader MeshOutputWriteConstantDeclaredBound {
+        const int BAD_VERTEX = 3;
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[BAD_VERTEX].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(constant_declared_bound_code), "mesh"
+        )
+
     set_count_bound_code = """
     shader MeshOutputWriteSetCountBound {
         struct MeshVertex {
@@ -6979,6 +7035,31 @@ def test_directx_mesh_output_writes_validate_literal_bounds():
     with pytest.raises(ValueError, match="verts.*numVertices"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(set_count_bound_code), "mesh"
+        )
+
+    constant_set_count_bound_code = """
+    shader MeshOutputWriteConstantSetCountBound {
+        const int FIRST_SKIPPED_VERTEX = 2;
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(2, 1);
+                verts[FIRST_SKIPPED_VERTEX].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*numVertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(constant_set_count_bound_code), "mesh"
         )
 
 

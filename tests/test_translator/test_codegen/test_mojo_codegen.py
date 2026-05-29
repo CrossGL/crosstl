@@ -21,6 +21,7 @@ from crosstl.translator.ast import (
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
+    IdentifierPatternNode,
     LiteralPatternNode,
     LiteralNode,
     MatchArmNode,
@@ -33,6 +34,7 @@ from crosstl.translator.ast import (
     RayTracingOpNode,
     ReturnNode,
     SwizzleNode,
+    StructPatternNode,
     SyncNode,
     TernaryOpNode,
     TextureNode,
@@ -10153,6 +10155,159 @@ def test_generic_user_struct_arrays_and_ternaries_compile_with_mojo(tmp_path):
     generated_code += "\nfn main():\n    pass\n"
 
     source_path = tmp_path / "generic_user_struct_arrays_and_ternaries.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_match_context_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+
+    Pair<int> choosePair(int mode) {}
+    int readChosenPair(int mode) {}
+    int destructureConstructedPair() {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+    pair_int = NamedType("Pair", [PrimitiveType("int")])
+
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    def box_constructor(value, tag):
+        return ConstructorNode(box_int, [int_literal(value), int_literal(tag)])
+
+    def pair_constructor(left_value, left_tag, right_value, right_tag):
+        return ConstructorNode(
+            pair_int,
+            [
+                box_constructor(left_value, left_tag),
+                box_constructor(right_value, right_tag),
+            ],
+        )
+
+    def pair_match():
+        return MatchNode(
+            IdentifierNode("mode"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(int_literal(0)),
+                    None,
+                    pair_constructor(1, 2, 3, 4),
+                ),
+                MatchArmNode(
+                    WildcardPatternNode(),
+                    None,
+                    pair_constructor(5, 6, 7, 8),
+                ),
+            ],
+        )
+
+    def nested_member(name, *members):
+        expression = IdentifierNode(name)
+        for member in members:
+            expression = MemberAccessNode(expression, member)
+        return expression
+
+    functions["choosePair"].body = BlockNode([ReturnNode(pair_match())])
+    functions["readChosenPair"].body = BlockNode(
+        [
+            VariableNode("selected", pair_int, pair_match()),
+            ReturnNode(
+                BinaryOpNode(
+                    nested_member("selected", "left", "value"),
+                    "+",
+                    nested_member("selected", "right", "tag"),
+                )
+            ),
+        ]
+    )
+
+    constructed_subject = pair_constructor(10, 20, 30, 40)
+    functions["destructureConstructedPair"].body = BlockNode(
+        [
+            ReturnNode(
+                MatchNode(
+                    constructed_subject,
+                    [
+                        MatchArmNode(
+                            StructPatternNode(
+                                "Pair",
+                                {
+                                    "left": IdentifierPatternNode("left"),
+                                    "right": IdentifierPatternNode("right"),
+                                },
+                            ),
+                            None,
+                            BinaryOpNode(
+                                nested_member("left", "value"),
+                                "+",
+                                nested_member("right", "tag"),
+                            ),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_match_contexts_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_match_context_ast())
+
+    assert "fn choosePair(mode: Int32) -> Pair[Int32]:" in generated_code
+    assert (
+        "    var __cgl_match_value_0: Pair[Int32] = "
+        "Pair[Int32](Box[Int32](0, 0), Box[Int32](0, 0))" in generated_code
+    )
+    assert (
+        "        __cgl_match_value_0 = Pair[Int32](Box[Int32](1, 2), "
+        "Box[Int32](3, 4))" in generated_code
+    )
+    assert (
+        "        __cgl_match_value_0 = Pair[Int32](Box[Int32](5, 6), "
+        "Box[Int32](7, 8))" in generated_code
+    )
+    assert "    return __cgl_match_value_0" in generated_code
+    assert "fn readChosenPair(mode: Int32) -> Int32:" in generated_code
+    assert "    var selected: Pair[Int32] = __cgl_match_value_1" in generated_code
+    assert "    return (selected.left.value + selected.right.tag)" in generated_code
+    assert "fn destructureConstructedPair() -> Int32:" in generated_code
+    assert (
+        "    var __cgl_match_subject_0: Pair[Int32] = "
+        "Pair[Int32](Box[Int32](10, 20), Box[Int32](30, 40))" in generated_code
+    )
+    assert (
+        "    __cgl_match_value_2 = (__cgl_match_subject_0.left.value + "
+        "__cgl_match_subject_0.right.tag)" in generated_code
+    )
+    assert "Box<int>" not in generated_code
+    assert "Pair<int>" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_generic_user_struct_match_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_match_context_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_match_contexts.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],

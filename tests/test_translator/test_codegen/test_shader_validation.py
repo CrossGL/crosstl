@@ -4565,6 +4565,36 @@ shader MetalRayCallableDispatchValidation {
 """
 
 
+METAL_RAY_CALLABLE_TABLE_HELPER_ALIAS_SHADER = """
+shader MetalRayCallableTableHelperAliasValidation {
+    struct CallableData {
+        vec4 color;
+    };
+
+    visible_function_table<CallableData> callables @binding(1);
+    visible_function_table<CallableData> secondaryCallables @binding(2);
+
+    void invoke(
+        visible_function_table<CallableData> table,
+        uint shaderIndex,
+        CallableData& data
+    ) {
+        CallShader(table, shaderIndex, data);
+    }
+
+    ray_generation {
+        void main() {
+            CallableData data;
+            data.color = vec4(1.0);
+            visible_function_table<CallableData> tableAlias = callables;
+            invoke(tableAlias, 2u, data);
+            CallShader(secondaryCallables, 1u, data);
+        }
+    }
+}
+"""
+
+
 METAL_RAY_CALLABLE_INVALID_EXPLICIT_TABLE_SHADER = """
 shader MetalRayCallableInvalidExplicitTableValidation {
     struct CallableData {
@@ -8342,6 +8372,43 @@ def test_generated_metal_ray_callable_dispatch_compiles_with_metal3(
     code = MetalCodeGen().generate(
         crosstl.translator.parse(METAL_RAY_CALLABLE_DISPATCH_SHADER)
     )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_ray_callable_table_helper_alias_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_callable_table_helper_alias.metal"
+    output = tmp_path / "ray_callable_table_helper_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_CALLABLE_TABLE_HELPER_ALIAS_SHADER)
+    )
+    assert (
+        "visible_function_table<void(thread CallableData&)> tableAlias = callables;"
+        in code
+    )
+    assert "invoke(tableAlias, 2u, data);" in code
+    assert "table[shaderIndex](data);" in code
+    assert "secondaryCallables[1u](data);" in code
+    assert "CallShader(" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
