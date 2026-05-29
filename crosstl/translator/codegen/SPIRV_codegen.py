@@ -156,6 +156,8 @@ class VulkanSPIRVCodeGen:
         self.function_signatures = {}
         self.stage_local_functions = {}
         self.stage_local_function_signatures = {}
+        self.stage_local_function_parameter_names = {}
+        self.stage_local_function_image_access_requirements = {}
         self.function_parameter_names = {}
         self.function_image_access_requirements = {}
         self.function_storage_buffer_access_requirements = {}
@@ -1267,6 +1269,22 @@ class VulkanSPIRVCodeGen:
         if indices is not None:
             return indices
         return self.function_mesh_output_parameter_indices.get(function_name, set())
+
+    def resolve_function_parameter_names(self, function_name: str):
+        names = self.stage_local_metadata(
+            self.stage_local_function_parameter_names, function_name
+        )
+        if names is not None:
+            return names
+        return self.function_parameter_names.get(function_name, [])
+
+    def resolve_function_image_access_requirements(self, function_name: str):
+        requirements = self.stage_local_metadata(
+            self.stage_local_function_image_access_requirements, function_name
+        )
+        if requirements is not None:
+            return requirements
+        return self.function_image_access_requirements.get(function_name)
 
     def create_function_parameter(
         self, param_type: SpirvId, name: Optional[str] = None
@@ -11877,6 +11895,49 @@ class VulkanSPIRVCodeGen:
             self.expression_name,
         )
 
+    def collect_stage_local_function_image_access_metadata(self, ast):
+        self.stage_local_function_parameter_names = {}
+        self.stage_local_function_image_access_requirements = {}
+        global_functions = list(getattr(ast, "functions", []) or [])
+
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            local_functions = list(getattr(stage, "local_functions", []) or [])
+            if not local_functions:
+                continue
+
+            local_names = {
+                getattr(func, "name", None)
+                for func in local_functions
+                if getattr(func, "name", None)
+            }
+            visible_functions = [
+                func
+                for func in global_functions
+                if getattr(func, "name", None) not in local_names
+            ] + local_functions
+            parameter_names = collect_function_parameter_names(visible_functions)
+            requirements = collect_function_image_access_requirements(
+                visible_functions,
+                parameter_names,
+                self.walk_ast_nodes,
+                self.function_call_name,
+                self.expression_name,
+            )
+
+            for function_node in local_functions:
+                function_name = getattr(function_node, "name", None)
+                if not function_name:
+                    continue
+                key = self.stage_local_function_key(stage, function_name)
+                if key is None:
+                    continue
+                self.stage_local_function_parameter_names[key] = parameter_names.get(
+                    function_name, []
+                )
+                self.stage_local_function_image_access_requirements[key] = (
+                    requirements.get(function_name, {})
+                )
+
     def buffer_operation_access_requirement(self, func_name):
         if (
             func_name == "buffer_load"
@@ -12499,11 +12560,11 @@ class VulkanSPIRVCodeGen:
         return name if name is not None else str(expr)
 
     def validate_function_image_access_arguments(self, func_name, args) -> bool:
-        callee_requirements = self.function_image_access_requirements.get(func_name)
+        callee_requirements = self.resolve_function_image_access_requirements(func_name)
         if not callee_requirements:
             return True
 
-        param_names = self.function_parameter_names.get(func_name, [])
+        param_names = self.resolve_function_parameter_names(func_name)
         for index, param_name in enumerate(param_names):
             required_access = callee_requirements.get(param_name)
             if required_access is None or index >= len(args):
@@ -17406,6 +17467,7 @@ class VulkanSPIRVCodeGen:
         self.function_image_access_requirements = (
             self.collect_function_image_access_requirements_for_ast(ast)
         )
+        self.collect_stage_local_function_image_access_metadata(ast)
         self.function_storage_buffer_access_requirements = (
             self.collect_function_storage_buffer_access_requirements_for_ast(ast)
         )

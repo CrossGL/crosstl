@@ -896,6 +896,18 @@ class SlangCodeGen:
                 names.add(attr_name)
         return names
 
+    def slang_stage_attribute_duplicate_names(self, func):
+        seen = set()
+        duplicates = []
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.slang_stage_attribute_name(attr)
+            if not attr_name:
+                continue
+            if attr_name in seen and attr_name not in duplicates:
+                duplicates.append(attr_name)
+            seen.add(attr_name)
+        return duplicates
+
     def slang_stage_attribute_value_to_string(self, value):
         if value is None:
             return None
@@ -983,6 +995,13 @@ class SlangCodeGen:
                     f"Slang {stage_name} stage does not support "
                     f"{attr_name} attribute"
                 )
+
+    def validate_slang_stage_attribute_uniqueness(self, func, stage_name):
+        for attr_name in self.slang_stage_attribute_duplicate_names(func):
+            raise ValueError(
+                f"Slang {stage_name} stage {attr_name} attribute "
+                "must appear at most once"
+            )
 
     def validate_slang_tessellation_domain(self, func, stage_name):
         shader_stage = self.slang_shader_stage_name(stage_name)
@@ -1139,6 +1158,7 @@ class SlangCodeGen:
             return
 
         self.validate_slang_stage_attribute_applicability(func, stage_name)
+        self.validate_slang_stage_attribute_uniqueness(func, stage_name)
         self.validate_positive_slang_stage_attribute(func, stage_name, "maxvertexcount")
         self.validate_positive_slang_stage_attribute(
             func, stage_name, "outputcontrolpoints"

@@ -3816,7 +3816,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipUserObjectCreate":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP user object create: output: {output}, "
                     f"resource: {args[1]}, destructor: {args[2]}, "

@@ -5446,6 +5446,63 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_user_object_array_outputs_clear_stale_metadata(self):
+        """Test user-object array and member outputs clear stale metadata."""
+        code = """
+        struct UserObjectOutputs {
+            hipUserObject_t object;
+        };
+
+        void queryUserObjectOutputs(
+            hipDeviceptr_t devicePtr,
+            hipHostFn_t destructor,
+            void* resource,
+            hipUserObject_t* objects,
+            UserObjectOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&objects, &staleSize, devicePtr);
+            hipUserObjectCreate(&objects[0], resource, destructor, 1, 0);
+            ptrs[0] = objects[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipUserObjectCreate(&holder->object, resource, destructor, 2, 0);
+            ptrs[1] = holder->object;
+
+            hipMemGetAddressRange((void**)&objects, &staleSize, devicePtr);
+            if (hipUserObjectCreate(&objects[1], resource, destructor, 3, 0) == hipSuccess) {
+                ptrs[2] = objects[1];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP user object create: output: objects[0], resource: resource, "
+            "destructor: destructor, initial refcount: 1, flags: 0"
+        ) in result
+        assert (
+            "// HIP user object create: output: holder->object, resource: resource, "
+            "destructor: destructor, initial refcount: 2, flags: 0"
+        ) in result
+        assert (
+            "if (((/* HIP user object create: output: objects[1], "
+            "resource: resource, destructor: destructor, initial refcount: 3, "
+            "flags: 0 */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert "ptrs[0] = objects[0];" in result
+        assert "ptrs[1] = holder->object;" in result
+        assert "ptrs[2] = objects[1];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_graph_memory_memcpy_expression_contexts_emit_status(self):
         """Test HIP graph memory/memcpy calls in expressions emit status."""
         code = """
@@ -10356,6 +10413,142 @@ class TestHipCodeGen:
             assert f"ptrs[{index}] = rawHandle;" in result
         assert "ptrs[0] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
+
+    def test_hip_module_library_kernel_array_outputs_clear_stale_metadata(self):
+        """Test module/library/kernel array and member outputs clear stale metadata."""
+        code = """
+        struct ModuleHandleOutputs {
+            hipFunction_t function;
+            textureReference* texRef;
+            hipKernel_t kernel;
+            hipLibrary_t library;
+            const char* name;
+        };
+
+        void queryModuleHandleOutputs(
+            hipModule_t module,
+            const void* symbol,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            hipFunction_t* functions,
+            textureReference** refs,
+            hipKernel_t* kernels,
+            hipLibrary_t* libraries,
+            const char** names,
+            ModuleHandleOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipModuleGetFunction(&functions[0], module, "array_kernel");
+            ptrs[0] = functions[0];
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipGetFuncBySymbol(&functions[1], symbol);
+            ptrs[1] = functions[1];
+
+            hipMemGetAddressRange((void**)&refs, &staleSize, devicePtr);
+            hipModuleGetTexRef(&refs[0], module, "array_tex");
+            ptrs[2] = refs[0];
+
+            hipMemGetAddressRange((void**)&kernels, &staleSize, devicePtr);
+            hipLibraryGetKernel(&kernels[0], library, "library_kernel");
+            ptrs[3] = kernels[0];
+
+            hipMemGetAddressRange((void**)&kernels, &staleSize, devicePtr);
+            hipLibraryEnumerateKernels(kernels, 4, library);
+            ptrs[4] = kernels[1];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipKernelGetLibrary(&libraries[0], kernel);
+            ptrs[5] = libraries[0];
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipKernelGetName(&names[0], kernel);
+            ptrs[6] = names[0];
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipKernelGetFunction(&functions[2], kernel);
+            ptrs[7] = functions[2];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleGetFunction(&holder->function, module, "member_kernel");
+            ptrs[8] = holder->function;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleGetTexRef(&holder->texRef, module, "member_tex");
+            ptrs[9] = holder->texRef;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryGetKernel(&holder->kernel, library, "member_library_kernel");
+            ptrs[10] = holder->kernel;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetLibrary(&holder->library, kernel);
+            ptrs[11] = holder->library;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetName(&holder->name, kernel);
+            ptrs[12] = holder->name;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetFunction(&holder->function, kernel);
+            ptrs[13] = holder->function;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIP module get function: output: functions[0], "
+                'module: module, name: "array_kernel"'
+            ),
+            "// HIP get function by symbol: output: functions[1], symbol: symbol",
+            (
+                "// HIP module get texture reference: output: refs[0], "
+                'module: module, name: "array_tex"'
+            ),
+            (
+                "// HIP library get kernel: output: kernels[0], library: library, "
+                'name: "library_kernel"'
+            ),
+            (
+                "// HIP library enumerate kernels: output: kernels, "
+                "max kernels: 4, library: library"
+            ),
+            "// HIP kernel get library: output: libraries[0], kernel: kernel",
+            "// HIP kernel get name: output: names[0], kernel: kernel",
+            "// HIP kernel get function: output: functions[2], kernel: kernel",
+            (
+                "// HIP module get function: output: holder->function, "
+                'module: module, name: "member_kernel"'
+            ),
+            (
+                "// HIP module get texture reference: output: holder->texRef, "
+                'module: module, name: "member_tex"'
+            ),
+            (
+                "// HIP library get kernel: output: holder->kernel, "
+                'library: library, name: "member_library_kernel"'
+            ),
+            "// HIP kernel get library: output: holder->library, kernel: kernel",
+            "// HIP kernel get name: output: holder->name, kernel: kernel",
+            "// HIP kernel get function: output: holder->function, kernel: kernel",
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(14):
+            assert f"ptrs[{index}] = " in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_module_library_kernel_scalar_outputs_replace_stale_metadata(self):
         """Test scalar module/library/kernel outputs replace prior query metadata."""

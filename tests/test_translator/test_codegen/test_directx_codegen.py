@@ -6288,6 +6288,28 @@ def test_directx_mesh_set_output_counts_validates_arguments_and_bounds():
             crosstl.translator.parse(vertex_bound_code), "mesh"
         )
 
+    local_constant_vertex_bound_code = """
+    shader MeshOutputCountLocalConstantVertexBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                const int VERT_COUNT = 4;
+                SetMeshOutputCounts(VERT_COUNT, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numVertices.*cannot exceed vertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_constant_vertex_bound_code), "mesh"
+        )
+
     primitive_bound_code = """
     shader MeshOutputCountPrimitiveBound {
         struct MeshVertex {
@@ -6907,6 +6929,40 @@ def test_directx_mesh_output_writes_track_switch_count_dominance():
     assert generated.count("SetMeshOutputCounts(3, 1);") == 1
     assert "verts[0].position" in generated
 
+    local_constant_selector_shader = """
+    shader MeshOutputCountDominatesThroughLocalConstantSwitch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                const int SELECTED_PATH = 1;
+                switch (SELECTED_PATH) {
+                    case 0:
+                        break;
+                    case 1:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(local_constant_selector_shader), "mesh"
+    )
+
+    assert "switch (SELECTED_PATH)" in generated
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+
 
 def test_directx_mesh_output_writes_track_switch_early_return_dominance():
     early_return_code = """
@@ -7121,6 +7177,30 @@ def test_directx_mesh_output_writes_validate_literal_bounds():
             crosstl.translator.parse(constant_declared_bound_code), "mesh"
         )
 
+    local_constant_declared_bound_code = """
+    shader MeshOutputWriteLocalConstantDeclaredBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                const int BAD_VERTEX = 3;
+                SetMeshOutputCounts(3, 1);
+                verts[BAD_VERTEX].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*declared array size"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_constant_declared_bound_code), "mesh"
+        )
+
     set_count_bound_code = """
     shader MeshOutputWriteSetCountBound {
         struct MeshVertex {
@@ -7166,6 +7246,30 @@ def test_directx_mesh_output_writes_validate_literal_bounds():
     with pytest.raises(ValueError, match="verts.*numVertices"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(constant_set_count_bound_code), "mesh"
+        )
+
+    local_constant_set_count_bound_code = """
+    shader MeshOutputWriteLocalConstantSetCountBound {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                const int VERT_COUNT = 2;
+                SetMeshOutputCounts(VERT_COUNT, 1);
+                verts[2].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*numVertices"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_constant_set_count_bound_code), "mesh"
         )
 
 

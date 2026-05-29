@@ -8391,6 +8391,34 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
             "compute { void main() @numthreads(0, 1, 1) { } }",
             "numthreads values must be positive",
         ),
+        (
+            (
+                "compute { void main() "
+                "@numthreads(8, 1, 1) @slang_numthreads(4, 1, 1) { } }"
+            ),
+            "numthreads attribute must appear at most once",
+        ),
+        (
+            (
+                "geometry { void main() "
+                "@maxvertexcount(3) @hlsl_maxvertexcount(4) { } }"
+            ),
+            "maxvertexcount attribute must appear at most once",
+        ),
+        (
+            (
+                "tessellation_control { void main() "
+                "@domain(tri) @slang_domain(quad) { } }"
+            ),
+            "domain attribute must appear at most once",
+        ),
+        (
+            (
+                "mesh { void main() "
+                "@outputtopology(triangle) @hlsl_outputtopology(line) { } }"
+            ),
+            "outputtopology attribute must appear at most once",
+        ),
     ],
 )
 def test_invalid_slang_stage_attributes_raise(stage_source, message):

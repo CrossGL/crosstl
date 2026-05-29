@@ -12995,6 +12995,55 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_stage_local_storage_image_access_contracts_keep_helpers_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalImageAccessIsolation {
+            image2D source @rgba32f @readonly;
+            image2D target @rgba32f @writeonly;
+
+            compute {
+                vec4 useImage(image2D image @rgba32f, ivec2 pixel) {
+                    return imageLoad(image, pixel);
+                }
+
+                void main() {
+                    vec4 value = useImage(source, ivec2(0, 1));
+                }
+            }
+
+            fragment {
+                void useImage(
+                    image2D image @rgba32f,
+                    ivec2 pixel,
+                    vec4 value
+                ) {
+                    imageStore(image, pixel, value);
+                }
+
+                void main() {
+                    useImage(target, ivec2(0, 1), vec4(1.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "requires read-write storage image access" not in spv_code
+        assert "requires read-capable storage image access" not in spv_code
+        assert "requires write-capable storage image access" not in spv_code
+        assert spv_code.count("OpFunctionCall") == 2
+        assert "OpImageRead" in spv_code
+        assert "OpImageWrite" in spv_code
+        assert "imageLoad(" not in spv_code
+        assert "imageStore(" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_stage_local_resource_array_helpers_keep_parameter_metadata_isolated(
         self, tmp_path
     ):
