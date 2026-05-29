@@ -16912,7 +16912,7 @@ def test_for_statement():
         pytest.fail("For statement codegen not implemented.")
 
 
-def test_for_continue_emits_update_before_continue_in_rust():
+def test_for_continue_emits_update_before_continue_in_rust(tmp_path):
     code = """
     shader main {
         compute {
@@ -16952,6 +16952,7 @@ def test_for_continue_emits_update_before_continue_in_rust():
         not in generated_code
     )
     assert "DoWhileNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_for_in_statement_lowers_to_rust_ranges_and_scopes_loop_contexts(tmp_path):

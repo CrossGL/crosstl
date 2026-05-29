@@ -3974,6 +3974,15 @@ class HLSLCodeGen:
                 "basic scalar, vector, or matrix",
                 include_matrices=True,
             )
+        elif operation == "WaveMatch":
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_BASIC_COMPONENT_TYPES,
+                "primitive scalar, vector, or matrix",
+                include_matrices=True,
+            )
 
         if operation == "WaveReadLaneAt":
             self.validate_hlsl_wave_scalar_int_uint_argument(

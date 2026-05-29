@@ -10427,6 +10427,63 @@ def test_directx_wave_active_all_equal_validates_shape_and_argument(body, match)
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_directx_wave_match_accepts_primitive_value_shapes():
+    code = """
+    shader WaveMatchPrimitiveShapes {
+        compute {
+            uint main(float value, uvec2 pair, bvec3 flags, mat2 matrix) {
+                uvec4 scalarMask = WaveMatch(value);
+                let pairMask = WaveMatch(pair);
+                let flagMask = WaveMatch(flags);
+                let matrixMask = WaveMatch(matrix);
+                return scalarMask.x + pairMask.y + flagMask.z + matrixMask.w;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "uint4 scalarMask = WaveMatch(value);",
+        "uint4 pairMask = WaveMatch(pair);",
+        "uint4 flagMask = WaveMatch(flags);",
+        "uint4 matrixMask = WaveMatch(matrix);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "uvec4 wrong = WaveMatch(values);",
+            "DirectX wave intrinsic 'WaveMatch' value argument must be "
+            "primitive scalar, vector, or matrix, got float[2]",
+        ),
+        (
+            "uvec4 wrong = WaveMatch(raw);",
+            "DirectX wave intrinsic 'WaveMatch' value argument must be "
+            "primitive scalar, vector, or matrix, got RWByteAddressBuffer",
+        ),
+    ],
+)
+def test_directx_wave_match_rejects_non_primitive_arguments(body, match):
+    code = f"""
+    shader BadWaveMatchArgument {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(float value) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("body", "match"),
     [
