@@ -5138,6 +5138,92 @@ class TestVulkanSPIRVCodeGen:
         assert "returned no tessellation factor semantics" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_patchconstantfunc_array_patch_io_reserves_locations(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationPatchConstantArrayUserOutputs {
+            struct VSOut {
+                vec4 position;
+            };
+
+            struct PatchConstants {
+                float outer[3] @ gl_TessLevelOuter;
+                float inner[1] @ gl_TessLevelInner;
+                float patchWeights[2] @ location(1) @ component(0);
+                float patchScale @ patch;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                    PatchConstants patch;
+                    patch.outer[0] = 1.0;
+                    patch.outer[1] = 1.0;
+                    patch.outer[2] = 1.0;
+                    patch.inner[0] = 1.0;
+                    patch.patchWeights[0] = inputPatch[0].position.x;
+                    patch.patchWeights[1] = inputPatch[1].position.y;
+                    patch.patchScale = 2.0;
+                    return patch;
+                }
+
+                void main(
+                    InputPatch<VSOut, 3> inputPatch,
+                    OutputPatch<VSOut, 3> outputPatch
+                )
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                    outputPatch[gl_InvocationID].position =
+                        inputPatch[gl_InvocationID].position;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<VSOut, 3> patch) @domain(tri) {
+                    float firstWeight = patchWeights[0];
+                    float secondWeight = patchWeights[1];
+                    float scale = patchScale;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        weights_output = spirv_named_variable(
+            spv_code, "patchWeights", storage_class="Output"
+        )
+        weights_input = spirv_named_variable(
+            spv_code, "patchWeights", storage_class="Input"
+        )
+        scale_output = spirv_named_variable(
+            spv_code, "patchScale", storage_class="Output"
+        )
+        scale_input = spirv_named_variable(
+            spv_code, "patchScale", storage_class="Input"
+        )
+
+        for variable_id in (
+            weights_output,
+            weights_input,
+            scale_output,
+            scale_input,
+        ):
+            assert f"OpDecorate {variable_id} Patch" in spv_code
+
+        assert f"OpDecorate {weights_output} Location 1" in spv_code
+        assert f"OpDecorate {weights_input} Location 1" in spv_code
+        assert f"OpDecorate {weights_output} Component 0" in spv_code
+        assert f"OpDecorate {weights_input} Component 0" in spv_code
+        assert f"OpDecorate {scale_output} Location 3" in spv_code
+        assert f"OpDecorate {scale_input} Location 3" in spv_code
+        assert "Duplicate SPIR-V" not in spv_code
+        assert "Unknown variable patchWeights" not in spv_code
+        assert "Unknown variable patchScale" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_tessellation_patchconstantfunc_rejects_user_patch_input_stores(
         self, tmp_path
     ):
@@ -9243,6 +9329,56 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpDecorate {output_id} Location 0" in spv_code
         assert f"OpDecorate {next_output_id} Location 1" in spv_code
         assert "WARNING" not in spv_code
+
+    def test_global_interface_arrays_reserve_all_element_locations(self):
+        source_code = """
+        shader Variables {
+            float inputValues[2] @input @location(0);
+            float nextInput @input;
+            float outputValues[2] @output @location(0);
+            float nextOutput @output;
+
+            compute {
+                void main() {
+                    nextOutput = inputValues[0] + inputValues[1] + nextInput;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        input_values_id = spirv_named_variable(
+            spv_code, "inputValues", storage_class="Input"
+        )
+        next_input_id = spirv_named_variable(
+            spv_code, "nextInput", storage_class="Input"
+        )
+        output_values_id = spirv_named_variable(
+            spv_code, "outputValues", storage_class="Output"
+        )
+        next_output_id = spirv_named_variable(
+            spv_code, "nextOutput", storage_class="Output"
+        )
+
+        assert f"OpDecorate {input_values_id} Location 0" in spv_code
+        assert f"OpDecorate {next_input_id} Location 2" in spv_code
+        assert f"OpDecorate {output_values_id} Location 0" in spv_code
+        assert f"OpDecorate {next_output_id} Location 2" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_global_interface_arrays_reject_overlapping_element_locations(self):
+        source_code = """
+        shader Variables {
+            float inputValues[2] @input @location(0);
+            float overlappingInput @input @location(1);
+        }
+        """
+
+        with pytest.raises(ValueError, match="Duplicate SPIR-V input location 1"):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
     @pytest.mark.parametrize("attribute", ["input", "output"])
     def test_global_interface_variables_reject_duplicate_explicit_locations(

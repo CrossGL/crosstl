@@ -202,66 +202,243 @@ mod math {
         }
     }
 
-    macro_rules! matrix_type {
-        ($name:ident) => {
-            #[derive(Debug, Clone, Copy)]
-            pub struct $name<T>(PhantomData<T>);
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+    }
 
-            impl<T> Default for $name<T> {
-                fn default() -> Self {
-                    Self(PhantomData)
-                }
+    impl<T> Mat2<T> {
+        pub fn new(m00: T, m01: T, m10: T, m11: T) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
             }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+        pub c2: Vec3<T>,
+    }
+
+    impl<T> Mat3<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m20: T,
+            m21: T,
+            m22: T,
+        ) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+                c2: Vec3::new(m20, m21, m22),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+        pub c2: Vec4<T>,
+        pub c3: Vec4<T>,
+    }
+
+    impl<T> Mat4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m23: T,
+            m30: T,
+            m31: T,
+            m32: T,
+            m33: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+                c2: Vec4::new(m20, m21, m22, m23),
+                c3: Vec4::new(m30, m31, m32, m33),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2x3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+    }
+
+    impl<T> Mat2x3<T> {
+        pub fn new(m00: T, m01: T, m02: T, m10: T, m11: T, m12: T) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2x4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+    }
+
+    impl<T> Mat2x4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3x2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+        pub c2: Vec2<T>,
+    }
+
+    impl<T> Mat3x2<T> {
+        pub fn new(m00: T, m01: T, m10: T, m11: T, m20: T, m21: T) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
+                c2: Vec2::new(m20, m21),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3x4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+        pub c2: Vec4<T>,
+    }
+
+    impl<T> Mat3x4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m23: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+                c2: Vec4::new(m20, m21, m22, m23),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4x2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+        pub c2: Vec2<T>,
+        pub c3: Vec2<T>,
+    }
+
+    impl<T> Mat4x2<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m10: T,
+            m11: T,
+            m20: T,
+            m21: T,
+            m30: T,
+            m31: T,
+        ) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
+                c2: Vec2::new(m20, m21),
+                c3: Vec2::new(m30, m31),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4x3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+        pub c2: Vec3<T>,
+        pub c3: Vec3<T>,
+    }
+
+    impl<T> Mat4x3<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m30: T,
+            m31: T,
+            m32: T,
+        ) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+                c2: Vec3::new(m20, m21, m22),
+                c3: Vec3::new(m30, m31, m32),
+            }
+        }
+    }
+
+    macro_rules! matrix_default {
+        ($($name:ident),+) => {
+            $(
+                impl<T> Default for $name<T> {
+                    fn default() -> Self {
+                        unsafe { std::mem::zeroed() }
+                    }
+                }
+            )+
         };
     }
 
-    matrix_type!(Mat2);
-    matrix_type!(Mat3);
-    matrix_type!(Mat4);
-    matrix_type!(Mat2x3);
-    matrix_type!(Mat2x4);
-    matrix_type!(Mat3x2);
-    matrix_type!(Mat3x4);
-    matrix_type!(Mat4x2);
-    matrix_type!(Mat4x3);
-
-    macro_rules! matrix_constructor {
-        ($name:ident, $($arg:ident),+) => {
-            impl<T> $name<T> {
-                pub fn new($($arg: T),+) -> Self {
-                    Self(PhantomData)
-                }
-            }
-        };
-    }
-
-    matrix_constructor!(Mat2, _m00, _m01, _m10, _m11);
-    matrix_constructor!(Mat3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22);
-    matrix_constructor!(
-        Mat4,
-        _m00,
-        _m01,
-        _m02,
-        _m03,
-        _m10,
-        _m11,
-        _m12,
-        _m13,
-        _m20,
-        _m21,
-        _m22,
-        _m23,
-        _m30,
-        _m31,
-        _m32,
-        _m33
-    );
-    matrix_constructor!(Mat2x3, _m00, _m01, _m02, _m10, _m11, _m12);
-    matrix_constructor!(Mat2x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13);
-    matrix_constructor!(Mat3x2, _m00, _m01, _m10, _m11, _m20, _m21);
-    matrix_constructor!(Mat3x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13, _m20, _m21, _m22, _m23);
-    matrix_constructor!(Mat4x2, _m00, _m01, _m10, _m11, _m20, _m21, _m30, _m31);
-    matrix_constructor!(Mat4x3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22, _m30, _m31, _m32);
+    matrix_default!(Mat2, Mat3, Mat4, Mat2x3, Mat2x4, Mat3x2, Mat3x4, Mat4x2, Mat4x3);
 
     macro_rules! matrix_arithmetic {
         ($name:ident) => {
@@ -19645,7 +19822,7 @@ def test_mixed_scalar_simple_assignments_cast_rhs_to_lhs_type():
     assert "count = index;" not in generated_code
 
 
-def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
+def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types(tmp_path):
     code = """
     void probe(ivec2 pixel, vec2 amount, mat2 transform, dmat2 preciseInput) {
         vec2 declaredCoords = pixel;
@@ -19710,6 +19887,7 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
     assert "coords = pixel;" not in generated_code
     assert "precise = transform;" not in generated_code
     assert "declaredRegular = preciseInput;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_returns_cast_value_to_declared_return_type():

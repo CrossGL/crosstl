@@ -1403,25 +1403,31 @@ class SlangCodeGen:
                 "array size must be positive"
             )
 
-    def slang_set_mesh_output_count_calls(self, func):
+    def slang_set_mesh_output_count_calls(self, func, active_helpers=None):
+        if active_helpers is None:
+            active_helpers = set()
+
+        func_name = getattr(func, "name", None)
+        if func_name in active_helpers:
+            return []
+        if func_name:
+            active_helpers = active_helpers | {func_name}
+
         calls = []
         for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, MeshOpNode):
-                if getattr(node, "operation", None) == "SetMeshOutputCounts":
-                    calls.append(getattr(node, "arguments", []))
+            call_name = self.slang_call_name(node)
+            if call_name == "SetMeshOutputCounts":
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
                 continue
             if not isinstance(node, FunctionCallNode):
                 continue
 
-            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
-            if hasattr(func_expr, "name"):
-                call_name = func_expr.name
-            elif isinstance(func_expr, str):
-                call_name = func_expr
-            else:
-                call_name = None
-            if call_name == "SetMeshOutputCounts":
-                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+            helper_func = self.user_functions_by_name.get(call_name)
+            if helper_func is None:
+                continue
+            calls.extend(
+                self.slang_set_mesh_output_count_calls(helper_func, active_helpers)
+            )
         return calls
 
     def validate_slang_mesh_output_parameters(self, func, shader_type, parameters):
@@ -1564,7 +1570,16 @@ class SlangCodeGen:
 
     def slang_statement_is_set_mesh_output_counts(self, statement):
         expr = self.slang_statement_expression(statement)
-        return self.slang_call_name(expr) == "SetMeshOutputCounts"
+        call_name = self.slang_call_name(expr)
+        if call_name == "SetMeshOutputCounts":
+            return True
+        if not isinstance(expr, FunctionCallNode):
+            return False
+
+        helper_func = self.user_functions_by_name.get(call_name)
+        if helper_func is None:
+            return False
+        return bool(self.slang_set_mesh_output_count_calls(helper_func))
 
     def slang_mesh_output_role_by_parameter(self, role_parameters):
         role_by_name = {}

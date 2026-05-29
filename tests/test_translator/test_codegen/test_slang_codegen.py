@@ -3449,6 +3449,105 @@ def test_mesh_output_signature_and_helper_roles_lower_to_native_slang():
     assert ": primitives" not in generated_code
 
 
+def test_mesh_output_signature_accepts_nested_helper_set_counts():
+    code = """
+    shader SlangMeshOutputHelperCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        void writeVertex(@vertices inout MeshVertex verts[3]) {
+            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void emitCounts()" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "void configureCounts()" in generated_code
+    assert "emitCounts();" in generated_code
+    assert "configureCounts();" in generated_code
+    assert "writeVertex(verts);" in generated_code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+
+def test_mesh_output_signature_validates_helper_set_counts_order_and_duplicates():
+    write_before_counts_code = """
+    shader InvalidSlangMeshOutputHelperCountOrder {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void configureCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                configureCounts();
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="writes must occur after"):
+        generate_code(parse_code(tokenize_code(write_before_counts_code)))
+
+    duplicate_helper_counts_code = """
+    shader InvalidSlangMeshOutputDuplicateHelperCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void configureCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                configureCounts();
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="SetMeshOutputCounts exactly once"):
+        generate_code(parse_code(tokenize_code(duplicate_helper_counts_code)))
+
+
 @pytest.mark.parametrize(
     "parameter_source",
     [

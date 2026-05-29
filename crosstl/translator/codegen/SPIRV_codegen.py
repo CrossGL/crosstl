@@ -11431,28 +11431,63 @@ class VulkanSPIRVCodeGen:
     ) -> set:
         component = self.explicit_component_attribute(node)
         component_start = component if component is not None else 0
-        component_width = self.interface_component_width(node)
-        if component_start + component_width > 4:
-            raise ValueError(
-                f"SPIR-V component range overflows location {location}: "
-                f"{component_start}..{component_start + component_width - 1}"
-            )
-
         index = self.explicit_interface_integer_attribute(node, "index") or 0
         scope = self.interface_location_scope()
-        return {
-            (scope, location, index, component)
-            for component in range(component_start, component_start + component_width)
-        }
+        slots = set()
+
+        for offset, component_width in enumerate(
+            self.interface_location_component_widths(node)
+        ):
+            if component_start + component_width > 4:
+                raise ValueError(
+                    f"SPIR-V component range overflows location {location + offset}: "
+                    f"{component_start}..{component_start + component_width - 1}"
+                )
+
+            slots.update(
+                (scope, location + offset, index, component)
+                for component in range(
+                    component_start, component_start + component_width
+                )
+            )
+
+        return slots
 
     def interface_component_width(self, node: VariableNode) -> int:
+        widths = self.interface_location_component_widths(node)
+        if widths:
+            return widths[0]
+        return 4
+
+    def interface_location_component_widths(self, node: VariableNode) -> List[int]:
         type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
         type_source = getattr(node, "member_type", type_source)
         type_name = self.type_name_from_value(type_source)
+        return self.interface_type_location_component_widths(type_name)
+
+    def interface_type_location_component_widths(self, type_name: str) -> List[int]:
+        if type_name is None:
+            return [4]
+
+        type_name = self.normalize_generic_vector_type(type_name)
+        array_type = self.split_outer_array_type(type_name)
+        if array_type is not None:
+            element_type_name, size = array_type
+            element_widths = self.interface_type_location_component_widths(
+                element_type_name
+            )
+            element_count = max(size or 1, 1)
+            return element_widths * element_count
+
+        matrix_match = re.fullmatch(r"(d)?mat([234])(?:x([234]))?", type_name)
+        if matrix_match:
+            _is_double, cols, rows = matrix_match.groups()
+            return [int(rows or cols)] * int(cols)
+
         vector_info = self.vector_component_type_and_count(type_name)
         if vector_info is not None:
             _, component_count = vector_info
-            return component_count
+            return [component_count]
 
         if self.normalize_primitive_name(type_name) in {
             "float",
@@ -11461,9 +11496,9 @@ class VulkanSPIRVCodeGen:
             "uint",
             "bool",
         }:
-            return 1
+            return [1]
 
-        return 4
+        return [4]
 
     def infer_global_storage_class(
         self, node: VariableNode, default_storage_class: str, type_name: str = None
