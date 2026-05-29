@@ -282,6 +282,7 @@ jobs:
         run: |
           mkdir -p output/${{ matrix.combination.category }}
         shell: bash
+        working-directory: examples
 
       - name: Test ${{ matrix.combination.category }}/${{ matrix.combination.example }} -> ${{ matrix.combination.backend }}
         run: |

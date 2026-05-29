@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from hypothesis import given, settings, strategies as st

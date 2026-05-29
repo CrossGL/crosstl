@@ -602,6 +602,14 @@ def test_examples_workflow_enforces_backend_outputs_and_platform_matrix():
     assert "--summary-json" in examples
     assert 'summary["within_regression_budget"]' in examples
     assert "Example regression detected" in examples
+    assert re.search(
+        r"- name: Create output directory\n"
+        r"\s+run:\s+\|\n"
+        r"\s+mkdir -p output/\$\{\{ matrix\.combination\.category \}\}\n"
+        r"\s+shell: bash\n"
+        r"\s+working-directory: examples",
+        examples,
+    )
 
 
 def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
