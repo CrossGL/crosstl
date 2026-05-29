@@ -11070,6 +11070,42 @@ def test_directx_wave_intrinsics_validate_argument_types():
     assert "WaveMultiPrefixCountBits(predicate, mask)" in generated
 
 
+def test_directx_wave_vote_intrinsics_accept_inline_predicate_expressions():
+    code = """
+    shader WaveInlinePredicateExpressions {
+        compute {
+            uint main(uint value, uint lane, uvec4 mask) {
+                bool anyLane = WaveActiveAnyTrue(value >= lane);
+                bool allLane = WaveActiveAllTrue((value + 1u) > 0u);
+                uint activeCount = WaveActiveCountBits(value == lane);
+                uint prefixCount = WavePrefixCountBits(value <= lane);
+                uvec4 ballot = WaveActiveBallot(value != lane);
+                uint multiCount = WaveMultiPrefixCountBits(value < lane, mask);
+                bool quadAny = QuadAny(value >= lane);
+                bool quadAll = QuadAll(value <= lane);
+                return activeCount + prefixCount + ballot.x + multiCount
+                    + (anyLane ? 1u : 0u) + (allLane ? 1u : 0u)
+                    + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+            }
+        }
+    }
+    """
+
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for snippet in [
+        "WaveActiveAnyTrue((value >= lane))",
+        "WaveActiveAllTrue(((value + 1u) > 0u))",
+        "WaveActiveCountBits((value == lane))",
+        "WavePrefixCountBits((value <= lane))",
+        "WaveActiveBallot((value != lane))",
+        "WaveMultiPrefixCountBits((value < lane), mask)",
+        "QuadAny((value >= lane))",
+        "QuadAll((value <= lane))",
+    ]:
+        assert snippet in generated
+
+
 def test_directx_wave_active_all_equal_preserves_input_shape():
     code = """
     shader WaveAllEqualShapes {

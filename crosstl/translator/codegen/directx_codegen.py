@@ -2733,6 +2733,19 @@ class HLSLCodeGen:
                 return component_type, suffix[0], suffix[2]
         return None
 
+    def hlsl_boolean_expression_result_type(self, *operand_types):
+        for operand_type in operand_types:
+            mapped_type = self.map_type(operand_type)
+            if self.is_vector_value_type(mapped_type):
+                size = mapped_type[-1:]
+                if size in {"2", "3", "4"}:
+                    return f"bool{size}"
+            matrix_shape = self.hlsl_matrix_shape(mapped_type)
+            if matrix_shape:
+                _, rows, columns = matrix_shape
+                return f"bool{rows}x{columns}"
+        return "bool"
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -2745,6 +2758,9 @@ class HLSLCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
+            operator = str(getattr(expr, "operator", getattr(expr, "op", "")))
+            if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                return self.hlsl_boolean_expression_result_type(left_type, right_type)
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):

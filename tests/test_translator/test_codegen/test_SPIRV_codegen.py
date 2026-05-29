@@ -5033,6 +5033,166 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_patchconstantfunc_emits_user_patch_interfaces(self, tmp_path):
+        source_code = """
+        shader TessellationPatchConstantUserOutputs {
+            struct VSOut {
+                vec4 position;
+            };
+
+            struct PatchConstants {
+                float outer[3] @ gl_TessLevelOuter;
+                float inner[1] @ gl_TessLevelInner;
+                vec4 patchColor @ patch;
+                float patchWeight @ patch;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                    PatchConstants patch;
+                    patch.outer[0] = 1.0;
+                    patch.outer[1] = 1.0;
+                    patch.outer[2] = 1.0;
+                    patch.inner[0] = 1.0;
+                    patch.patchColor = inputPatch[0].position;
+                    patch.patchWeight = 0.5;
+                    return patch;
+                }
+
+                void main(
+                    InputPatch<VSOut, 3> inputPatch,
+                    OutputPatch<VSOut, 3> outputPatch
+                )
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                    outputPatch[gl_InvocationID].position =
+                        inputPatch[gl_InvocationID].position;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<VSOut, 3> patch) @domain(tri) {
+                    vec4 color = patchColor;
+                    float weight = patchWeight;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        control_entry = re.search(
+            r'OpEntryPoint TessellationControl %\d+ "main"([^\n]*)', spv_code
+        )
+        evaluation_entry = re.search(
+            r'OpEntryPoint TessellationEvaluation %\d+ "main"([^\n]*)', spv_code
+        )
+        assert control_entry is not None
+        assert evaluation_entry is not None
+
+        color_output = spirv_named_variable(
+            spv_code, "patchColor", storage_class="Output"
+        )
+        color_input = spirv_named_variable(
+            spv_code, "patchColor", storage_class="Input"
+        )
+        weight_output = spirv_named_variable(
+            spv_code, "patchWeight", storage_class="Output"
+        )
+        weight_input = spirv_named_variable(
+            spv_code, "patchWeight", storage_class="Input"
+        )
+
+        assert color_output in control_entry.group(1)
+        assert weight_output in control_entry.group(1)
+        assert color_input in evaluation_entry.group(1)
+        assert weight_input in evaluation_entry.group(1)
+        for variable_id in (color_output, color_input, weight_output, weight_input):
+            assert f"OpDecorate {variable_id} Patch" in spv_code
+
+        color_output_location = re.search(
+            rf"OpDecorate {re.escape(color_output)} Location (\d+)", spv_code
+        )
+        color_input_location = re.search(
+            rf"OpDecorate {re.escape(color_input)} Location (\d+)", spv_code
+        )
+        weight_output_location = re.search(
+            rf"OpDecorate {re.escape(weight_output)} Location (\d+)", spv_code
+        )
+        weight_input_location = re.search(
+            rf"OpDecorate {re.escape(weight_input)} Location (\d+)", spv_code
+        )
+        assert color_output_location is not None
+        assert color_input_location is not None
+        assert weight_output_location is not None
+        assert weight_input_location is not None
+        assert color_output_location.group(1) == color_input_location.group(1)
+        assert weight_output_location.group(1) == weight_input_location.group(1)
+
+        assert f"OpStore {color_output} " in spv_code
+        assert f"OpStore {weight_output} " in spv_code
+        assert "Unknown variable patchColor" not in spv_code
+        assert "Unknown variable patchWeight" not in spv_code
+        assert "returned no tessellation factor semantics" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_tessellation_patchconstantfunc_rejects_user_patch_input_stores(
+        self, tmp_path
+    ):
+        source_code = """
+        shader InvalidTessellationPatchConstantUserOutput {
+            struct VSOut {
+                vec4 position;
+            };
+
+            struct PatchConstants {
+                float outer[3] @ gl_TessLevelOuter;
+                float inner[1] @ gl_TessLevelInner;
+                vec4 patchColor @ patch;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch) {
+                    PatchConstants patch;
+                    patch.outer[0] = 1.0;
+                    patch.outer[1] = 1.0;
+                    patch.outer[2] = 1.0;
+                    patch.inner[0] = 1.0;
+                    patch.patchColor = inputPatch[0].position;
+                    return patch;
+                }
+
+                void main(InputPatch<VSOut, 3> inputPatch)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<VSOut, 3> patch) @domain(tri) {
+                    patchColor = vec4(1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        color_input = spirv_named_variable(
+            spv_code, "patchColor", storage_class="Input"
+        )
+        assert f"OpDecorate {color_input} Patch" in spv_code
+        assert "; WARNING: cannot assign to read-only SPIR-V pointer patchColor" in (
+            spv_code
+        )
+        assert f"OpStore {color_input} " not in spv_code
+        assert "Unknown variable patchColor" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     @pytest.mark.parametrize(
         ("attribute", "warning"),
         [

@@ -182,6 +182,9 @@ class VulkanSPIRVCodeGen:
         self.readonly_pointer_names = {}
         self.patch_parameter_metadata = {}
         self.tessellation_output_patch_locations = {}
+        self.tessellation_patch_constant_interfaces = {}
+        self.tessellation_patch_constant_output_variables = {}
+        self.tessellation_patch_constant_input_variables = {}
         self.mesh_output_member_variables = {}
         self.mesh_output_member_shadow_variables = {}
         self.mesh_output_member_locations = {}
@@ -9359,7 +9362,9 @@ class VulkanSPIRVCodeGen:
             if member_type:
                 members.append((member_type, member_name))
                 member_metadata[member_name] = {
-                    "semantic": self.semantic_from_node(member)
+                    "node": member,
+                    "semantic": self.semantic_from_node(member),
+                    "type": member_type,
                 }
 
         self.struct_member_metadata[struct_node.name] = member_metadata
@@ -11131,6 +11136,113 @@ class VulkanSPIRVCodeGen:
         self.variable_value_types[access.id] = float_type
         self.store_to_variable(access, self.convert_value_to_type(value, float_type))
 
+    def tessellation_patch_constant_user_member_key(
+        self, member_name: str, metadata: dict
+    ) -> Optional[str]:
+        semantic = metadata.get("semantic")
+        if self.tessellation_patch_constant_builtin_name(semantic) is not None:
+            return None
+
+        node = metadata.get("node")
+        normalized = self.normalized_metadata_name(semantic or "")
+        patch_markers = {
+            "patch",
+            "perpatch",
+            "per_patch",
+            "patchconstant",
+            "patch_constant",
+        }
+        if normalized in patch_markers:
+            return member_name
+        if semantic is not None:
+            return member_name
+        if node is not None and self.explicit_location_attribute(node) is not None:
+            return member_name
+        return None
+
+    def register_tessellation_patch_constant_interface_variable(
+        self,
+        name: str,
+        type_id: SpirvId,
+        storage_class: str,
+        source_node,
+        preferred_location: Optional[int] = None,
+    ):
+        self.require_capability("Tessellation")
+        variable = self.create_variable(type_id, storage_class, name)
+        location = self.global_interface_location(
+            source_node, storage_class, preferred_location
+        )
+        self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
+        self.decorations.append(f"OpDecorate %{variable.id} Patch")
+        self.decorate_global_interface_variable(source_node, variable)
+        if storage_class == "Input":
+            self.readonly_pointer_names[variable.id] = name
+        self.mark_function_interface_variable(variable)
+        return variable, location
+
+    def store_tessellation_patch_constant_user_member(
+        self,
+        member_name: str,
+        member_type: SpirvId,
+        member_value: SpirvId,
+        metadata: dict,
+    ) -> bool:
+        interface_key = self.tessellation_patch_constant_user_member_key(
+            member_name, metadata
+        )
+        if interface_key is None:
+            return False
+
+        source_node = metadata.get("node")
+        if source_node is None:
+            return False
+
+        variable = self.tessellation_patch_constant_output_variables.get(interface_key)
+        if variable is None:
+            variable, location = (
+                self.register_tessellation_patch_constant_interface_variable(
+                    member_name, member_type, "Output", source_node
+                )
+            )
+            self.tessellation_patch_constant_output_variables[interface_key] = variable
+            self.tessellation_patch_constant_interfaces[interface_key] = {
+                "location": location,
+                "name": member_name,
+                "node": source_node,
+                "type": member_type,
+            }
+
+        self.store_to_variable(
+            variable, self.convert_value_to_type(member_value, member_type)
+        )
+        return True
+
+    def ensure_tessellation_patch_constant_input(self, name: str) -> Optional[SpirvId]:
+        if self.current_execution_model != "TessellationEvaluation":
+            return None
+
+        metadata = self.tessellation_patch_constant_interfaces.get(name)
+        if metadata is None:
+            return None
+
+        variable = self.tessellation_patch_constant_input_variables.get(name)
+        if variable is not None:
+            self.mark_function_interface_variable(variable)
+            return variable
+
+        variable, _location = (
+            self.register_tessellation_patch_constant_interface_variable(
+                metadata["name"],
+                metadata["type"],
+                "Input",
+                metadata["node"],
+                metadata["location"],
+            )
+        )
+        self.tessellation_patch_constant_input_variables[name] = variable
+        return variable
+
     def store_tessellation_patch_constant_semantics(
         self, result: SpirvId, result_type: SpirvId, function_name: str
     ):
@@ -11144,20 +11256,24 @@ class VulkanSPIRVCodeGen:
             builtin_name = self.tessellation_patch_constant_builtin_name(
                 metadata.get("semantic")
             )
-            if builtin_name is None:
+            member_value = self.composite_extract(result, member_type, member_index)
+
+            if builtin_name is not None:
+                for (
+                    component_index,
+                    component,
+                ) in self.tessellation_patch_constant_member_components(
+                    member_value, member_type
+                ):
+                    self.store_tessellation_patch_constant_builtin_component(
+                        builtin_name, component_index, component
+                    )
+                    stored_any = True
                 continue
 
-            member_value = self.composite_extract(result, member_type, member_index)
-            for (
-                component_index,
-                component,
-            ) in self.tessellation_patch_constant_member_components(
-                member_value, member_type
-            ):
-                self.store_tessellation_patch_constant_builtin_component(
-                    builtin_name, component_index, component
-                )
-                stored_any = True
+            self.store_tessellation_patch_constant_user_member(
+                member_name, member_type, member_value, metadata
+            )
 
         if not stored_any:
             self.emit(
@@ -11331,6 +11447,7 @@ class VulkanSPIRVCodeGen:
 
     def interface_component_width(self, node: VariableNode) -> int:
         type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
+        type_source = getattr(node, "member_type", type_source)
         type_name = self.type_name_from_value(type_source)
         vector_info = self.vector_component_type_and_count(type_name)
         if vector_info is not None:
@@ -13697,6 +13814,7 @@ class VulkanSPIRVCodeGen:
             self.local_variables.get(name)
             or self.global_variables.get(name)
             or self.cbuffer_member_pointer(name)
+            or self.ensure_tessellation_patch_constant_input(name)
             or self.ensure_compute_builtin(name)
             or self.ensure_stage_builtin(name)
         )
@@ -14025,7 +14143,11 @@ class VulkanSPIRVCodeGen:
             self.local_variables[name] = mutable_id
             return mutable_id
 
-        return self.global_variables.get(name) or self.ensure_stage_builtin(name)
+        return (
+            self.global_variables.get(name)
+            or self.ensure_tessellation_patch_constant_input(name)
+            or self.ensure_stage_builtin(name)
+        )
 
     def assignable_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         if isinstance(expr, IdentifierNode):
@@ -15588,6 +15710,10 @@ class VulkanSPIRVCodeGen:
                 if member_pointer is not None:
                     return self.get_variable_value(member_pointer)
             else:
+                patch_input = self.ensure_tessellation_patch_constant_input(expr)
+                if patch_input is not None:
+                    return self.get_variable_value(patch_input)
+
                 builtin_component = self.process_dotted_builtin(expr)
                 if builtin_component is not None:
                     return builtin_component
@@ -15645,6 +15771,10 @@ class VulkanSPIRVCodeGen:
                 if member_pointer is not None:
                     return self.get_variable_value(member_pointer)
             else:
+                patch_input = self.ensure_tessellation_patch_constant_input(expr.name)
+                if patch_input is not None:
+                    return self.get_variable_value(patch_input)
+
                 builtin = self.ensure_builtin_variable(expr.name)
                 if builtin is not None:
                     return self.get_variable_value(builtin)

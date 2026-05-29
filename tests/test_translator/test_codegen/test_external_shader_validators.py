@@ -36,6 +36,37 @@ shader ExternalValidatorSynchronization {
 """
 
 
+CROSSGL_WAVE_QUAD_COMPUTE_SHADER = """
+shader ExternalValidatorWaveQuad {
+    RWBuffer<uint> outputValues @register(u0);
+
+    compute {
+        @numthreads(4, 1, 1)
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint lane = WaveGetLaneIndex();
+            uint laneCount = WaveGetLaneCount();
+            bool firstLane = WaveIsFirstLane();
+            uint value = lane + tid.x;
+            uint sumValue = WaveActiveSum(value);
+            uint prefixValue = WavePrefixSum(sumValue);
+            bool anyLane = WaveActiveAnyTrue(prefixValue >= lane);
+            bool allLane = WaveActiveAllTrue(laneCount > 0u);
+            uvec4 ballot = WaveActiveBallot(anyLane || allLane || firstLane);
+            uvec4 matchMask = WaveMatch(prefixValue);
+            uint broadcast = WaveReadLaneAt(prefixValue, 0u);
+            uint firstValue = WaveReadLaneFirst(broadcast + ballot.x + matchMask.x);
+            uint quadX = QuadReadAcrossX(firstValue);
+            uint quadLane = QuadReadLaneAt(value, 3u);
+            bool quadAny = QuadAny(anyLane);
+            bool quadAll = QuadAll(allLane);
+            outputValues[tid.x] = quadX + quadLane
+                + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+        }
+    }
+}
+"""
+
+
 CROSSGL_TYPED_BUFFER_ATOMICS_COMPUTE_SHADER = """
 shader ExternalValidatorTypedBufferAtomics {
     struct Counter {
@@ -1317,6 +1348,52 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
             dxc,
             "-T",
             "cs_6_0",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_wave_quad_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "wave_quad.hlsl"
+    output_path = tmp_path / "wave_quad.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_WAVE_QUAD_COMPUTE_SHADER)
+    )
+    assert "[numthreads(4, 1, 1)]" in code
+    for snippet in [
+        "RWBuffer<uint> outputValues : register(u0);",
+        "WaveGetLaneIndex()",
+        "WaveGetLaneCount()",
+        "WaveIsFirstLane()",
+        "WaveActiveSum(value)",
+        "WavePrefixSum(sumValue)",
+        "WaveActiveAnyTrue((prefixValue >= lane))",
+        "WaveActiveAllTrue((laneCount > 0u))",
+        "WaveActiveBallot(((anyLane || allLane) || firstLane))",
+        "WaveMatch(prefixValue)",
+        "WaveReadLaneAt(prefixValue, 0u)",
+        "WaveReadLaneFirst(((broadcast + ballot.x) + matchMask.x))",
+        "QuadReadAcrossX(firstValue)",
+        "QuadReadLaneAt(value, 3u)",
+        "QuadAny(anyLane)",
+        "QuadAll(allLane)",
+    ]:
+        assert snippet in code
+    assert "uvec4" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_5",
             "-E",
             "CSMain",
             str(shader_path),
