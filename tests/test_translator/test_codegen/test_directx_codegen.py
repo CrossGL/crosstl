@@ -16138,6 +16138,67 @@ def test_directx_rejects_invalid_image_atomic_format_and_type_context(shader, ma
 
 
 @pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, -1, value);",
+            "DirectX image atomic operation 'imageAtomicCompSwap' requires uint "
+            "data argument for r32ui images: -1 has type int",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, value, 2.0);",
+            "DirectX image atomic operation 'imageAtomicCompSwap' requires uint "
+            "data argument for r32ui images: 2.0 has type float",
+        ),
+        (
+            "vec2 uv = vec2(0.0, 1.0); "
+            "uint oldValue = imageAtomicAdd(counters, uv, value);",
+            "DirectX resource operation 'imageAtomicAdd' requires an integer "
+            "coordinate argument: uv has type float2",
+        ),
+        (
+            "ivec3 voxel = ivec3(0, 1, 2); "
+            "uint oldValue = imageAtomicAdd(counters, voxel, value);",
+            "DirectX resource operation 'imageAtomicAdd' requires a 2D integer "
+            "coordinate for RWTexture2D<uint>: voxel has type int3",
+        ),
+        (
+            "uint oldValue = imageAtomicAdd(counters, pixel);",
+            "DirectX texture operation 'imageAtomicAdd' requires at least "
+            "3 argument(s), got 2",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap(counters, pixel, value);",
+            "DirectX texture operation 'imageAtomicCompSwap' requires at least "
+            "4 argument(s), got 3",
+        ),
+        (
+            "uint oldValue = imageAtomicCompSwap("
+            "counters, pixel, value, value, value);",
+            "DirectX texture operation 'imageAtomicCompSwap' accepts at most "
+            "4 argument(s), got 5",
+        ),
+    ],
+)
+def test_directx_image_atomics_validate_operands_and_arity(body, match):
+    shader = f"""
+    shader InvalidImageAtomicOperands {{
+        uimage2D counters @r32ui;
+
+        compute {{
+            void main(ivec2 pixel @ TEXCOORD0) {{
+                uint value = 1u;
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+@pytest.mark.parametrize(
     ("declaration", "match"),
     [
         (

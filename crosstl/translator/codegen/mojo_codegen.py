@@ -884,6 +884,7 @@ class MojoCodeGen:
         self.function_parameter_types = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -899,6 +900,7 @@ class MojoCodeGen:
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
         self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -1086,6 +1088,7 @@ class MojoCodeGen:
         self.function_parameter_types = {}
         self.function_return_resource_aliases = {}
         self.function_return_resource_static_aliases = {}
+        self.function_return_resource_field_aliases = {}
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -1101,6 +1104,7 @@ class MojoCodeGen:
         self.current_enum_value_aliases = {}
         self.resource_access_qualifiers = {}
         self.resource_access_qualifier_aliases = {}
+        self.resource_access_path_qualifier_aliases = {}
         self.struct_resource_access_qualifiers = {}
         self.mojo_resource_binding_cursors = {}
         self.mojo_used_resource_bindings = {}
@@ -1423,6 +1427,7 @@ class MojoCodeGen:
         }
         aliases = []
         static_aliases = []
+        field_aliases = []
         for return_node in self.return_nodes(getattr(func, "body", [])):
             value = getattr(return_node, "value", None)
             for index in self.return_resource_alias_param_indices(
@@ -1430,21 +1435,32 @@ class MojoCodeGen:
             ):
                 if index not in aliases:
                     aliases.append(index)
+            for ref in self.return_resource_alias_field_paths(
+                value, param_indices, target_type=return_type
+            ):
+                if ref not in field_aliases:
+                    field_aliases.append(ref)
             for candidate in self.return_resource_static_alias_candidates(
                 value, param_indices, target_type=return_type
             ):
                 if candidate not in static_aliases:
                     static_aliases.append(candidate)
-        if aliases == self.function_return_resource_aliases.get(
-            func.name
-        ) and static_aliases == self.function_return_resource_static_aliases.get(
-            func.name
+        if (
+            aliases == self.function_return_resource_aliases.get(func.name)
+            and static_aliases
+            == self.function_return_resource_static_aliases.get(func.name)
+            and field_aliases
+            == self.function_return_resource_field_aliases.get(func.name)
         ):
             return False
         if aliases:
             self.function_return_resource_aliases[func.name] = aliases
         else:
             self.function_return_resource_aliases.pop(func.name, None)
+        if field_aliases:
+            self.function_return_resource_field_aliases[func.name] = field_aliases
+        else:
+            self.function_return_resource_field_aliases.pop(func.name, None)
         if static_aliases:
             self.function_return_resource_static_aliases[func.name] = static_aliases
         else:
@@ -1467,19 +1483,7 @@ class MojoCodeGen:
             self.collect_return_nodes(child, nodes)
 
     def function_return_resource_aliasable_type(self, return_type):
-        if self.mojo_resource_kind(return_type) is not None:
-            return True
-
-        specialization = self.generic_enum_specialization_for_type(return_type)
-        if specialization is None:
-            return False
-
-        return any(
-            self.resource_access_aliasable_type(field_type)
-            for _field_name, field_type in generic_enum_specialized_fields(
-                self, specialization
-            )
-        )
+        return self.resource_access_aliasable_type(return_type)
 
     def return_resource_alias_param_indices(
         self, expr, param_indices, target_type=None
@@ -1553,6 +1557,165 @@ class MojoCodeGen:
                 if index not in indices:
                     indices.append(index)
         return indices
+
+    def return_resource_alias_field_paths(self, expr, param_indices, target_type=None):
+        if isinstance(expr, list):
+            return []
+
+        target_type = self.type_name(target_type)
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [
+                (path, param_indices[root_name], path)
+                for path in self.resource_aliasable_field_paths_for_type(target_type)
+            ]
+
+        if isinstance(expr, TernaryOpNode):
+            refs = []
+            for branch in (expr.true_expr, expr.false_expr):
+                for ref in self.return_resource_alias_field_paths(
+                    branch, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, MatchNode):
+            refs = []
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                for ref in self.return_resource_alias_field_paths(
+                    arm_expr, param_indices, target_type=target_type
+                ):
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        if isinstance(expr, FunctionCallNode):
+            return self.return_resource_alias_field_paths_from_call(
+                expr, param_indices, target_type=target_type
+            )
+
+        return []
+
+    def return_resource_alias_field_paths_from_call(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        refs = []
+
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is not None and len(fields) == len(expr.args):
+            for arg, (field_name, field_type) in zip(expr.args, fields):
+                if not self.resource_access_aliasable_type(field_type):
+                    continue
+                for (
+                    return_path,
+                    alias_index,
+                    arg_path,
+                ) in self.return_resource_alias_field_paths(
+                    arg, param_indices, target_type=field_type
+                ):
+                    path = f"{field_name}.{return_path}" if return_path else field_name
+                    ref = (path, alias_index, arg_path)
+                    if ref not in refs:
+                        refs.append(ref)
+            return refs
+
+        struct_refs = self.return_struct_constructor_resource_field_alias_paths(
+            expr, param_indices, target_type
+        )
+        if struct_refs:
+            return struct_refs
+
+        callee_refs = self.function_return_resource_field_aliases.get(func_name) or []
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, callee_arg_path in callee_refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            for (
+                current_index,
+                current_arg_path,
+            ) in self.return_resource_alias_field_paths_for_relative_path(
+                expr.args[alias_index],
+                param_indices,
+                callee_arg_path,
+                arg_type,
+            ):
+                ref = (return_path, current_index, current_arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_struct_constructor_resource_field_alias_paths(
+        self, expr, param_indices, target_type=None
+    ):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type = target_base if target_base in self.struct_types else func_name
+        if struct_type not in self.struct_types or func_name != struct_type:
+            return []
+
+        refs = []
+        field_items = list(self.struct_types.get(struct_type, {}).items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            for (
+                return_path,
+                alias_index,
+                arg_path,
+            ) in self.return_resource_alias_field_paths(
+                arg, param_indices, target_type=field_type
+            ):
+                path = f"{field_name}.{return_path}" if return_path else field_name
+                ref = (path, alias_index, arg_path)
+                if ref not in refs:
+                    refs.append(ref)
+        return refs
+
+    def return_resource_alias_field_paths_for_relative_path(
+        self, expr, param_indices, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return [
+                (alias_index, arg_path)
+                for return_path, alias_index, arg_path in (
+                    self.return_resource_alias_field_paths(
+                        expr, param_indices, target_type=target_type
+                    )
+                )
+                if not return_path
+            ]
+
+        root_name = self.resource_access_root_name(expr)
+        if root_name in param_indices:
+            return [(param_indices[root_name], relative_path)]
+
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.function_call_name(expr)
+            target_base, _ = self.resource_base_type_and_count(
+                self.type_name(target_type)
+            )
+            struct_type = target_base if target_base in self.struct_types else func_name
+            if struct_type in self.struct_types and func_name == struct_type:
+                first, _, rest = relative_path.partition(".")
+                field_items = list(self.struct_types.get(struct_type, {}).items())
+                for arg, (field_name, field_type) in zip(expr.args, field_items):
+                    if field_name == first:
+                        return self.return_resource_alias_field_paths_for_relative_path(
+                            arg, param_indices, rest, field_type
+                        )
+
+        return []
 
     def return_resource_static_alias_candidates(
         self, expr, param_indices, target_type=None
@@ -2362,10 +2525,8 @@ class MojoCodeGen:
         if not name or initializer is None:
             return
         type_name = self.type_name(type_name)
-        if self.mojo_resource_kind(type_name) is None:
-            specialization = self.generic_enum_specialization_for_type(type_name)
-            if specialization is None:
-                return
+        if not self.resource_access_aliasable_type(type_name):
+            return
 
         candidates = self.resource_access_qualifier_candidates(
             initializer, target_type=type_name
@@ -2374,6 +2535,22 @@ class MojoCodeGen:
             self.resource_access_qualifier_aliases[name] = candidates
         else:
             self.resource_access_qualifier_aliases.pop(name, None)
+
+        self.clear_resource_access_path_aliases(name)
+        for path, path_candidates in self.resource_access_field_alias_candidates(
+            initializer, target_type=type_name
+        ).items():
+            if not path:
+                continue
+            self.resource_access_path_qualifier_aliases[f"{name}.{path}"] = (
+                path_candidates
+            )
+
+    def clear_resource_access_path_aliases(self, name):
+        prefix = f"{name}."
+        for path in list(self.resource_access_path_qualifier_aliases):
+            if path == name or path.startswith(prefix):
+                self.resource_access_path_qualifier_aliases.pop(path, None)
 
     def register_resource_assignment_alias_metadata(self, target, value, operator):
         if self.map_operator(operator) != "=":
@@ -2417,6 +2594,8 @@ class MojoCodeGen:
             return self.resource_access_root_name(expr.object)
         name = getattr(expr, "name", None)
         if name is not None:
+            if not isinstance(name, str):
+                return None
             replacement = self.expression_identifier_replacements.get(name)
             if isinstance(replacement, str):
                 match = re.match(r"\s*([A-Za-z_]\w*)", replacement)
@@ -2435,8 +2614,34 @@ class MojoCodeGen:
             return expr.member
         name = getattr(expr, "name", None)
         if name is not None:
+            if not isinstance(name, str):
+                return None
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                return replacement.strip()
             return name
         return None
+
+    def resource_access_source_path_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            return self.resource_access_source_path_name(expr.array)
+        if isinstance(expr, MemberAccessNode):
+            obj_path = self.resource_access_source_path_name(expr.object)
+            if obj_path:
+                return f"{obj_path}.{expr.member}"
+            return expr.member
+        if isinstance(expr, str):
+            return expr
+        name = getattr(expr, "name", None)
+        if isinstance(name, str):
+            return name
+        return None
+
+    def resource_access_diagnostic_name(self, expr, resource_name):
+        source_name = self.resource_access_source_path_name(expr)
+        if resource_name and source_name != resource_name:
+            return resource_name
+        return source_name or resource_name
 
     def struct_field_resource_access(self, expr):
         if isinstance(expr, ArrayAccessNode):
@@ -2447,7 +2652,7 @@ class MojoCodeGen:
                 expr.member
             )
             if access is not None:
-                return access, self.resource_access_path_name(expr)
+                return access, self.resource_access_source_path_name(expr)
             return self.struct_field_resource_access(expr.object)
         return None
 
@@ -2492,6 +2697,12 @@ class MojoCodeGen:
                 )
             return self.unique_resource_access_qualifiers(candidates)
 
+        path_name = self.resource_access_path_name(expr)
+        if path_name is not None:
+            candidates = self.resource_access_path_qualifier_aliases.get(path_name)
+            if candidates:
+                return list(candidates)
+
         if isinstance(expr, FunctionCallNode):
             candidates = self.function_return_resource_alias_candidates(expr)
             if candidates:
@@ -2527,8 +2738,234 @@ class MojoCodeGen:
         return self.unique_resource_access_qualifiers(candidates)
 
     def resource_access_aliasable_type(self, type_name):
+        return self._resource_access_aliasable_type(self.type_name(type_name), set())
+
+    def _resource_access_aliasable_type(self, type_name, seen):
         base_type, _ = self.resource_base_type_and_count(type_name)
-        return self.mojo_resource_kind(base_type) is not None
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+
+        if base_type in seen:
+            return False
+
+        if base_type in self.struct_types:
+            next_seen = {*seen, base_type}
+            return any(
+                self._resource_access_aliasable_type(field_type, next_seen)
+                for field_type in self.struct_types.get(base_type, {}).values()
+            )
+
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None:
+            return False
+
+        next_seen = {*seen, type_name}
+        return any(
+            self._resource_access_aliasable_type(field_type, next_seen)
+            for _field_name, field_type in generic_enum_specialized_fields(
+                self, specialization
+            )
+        )
+
+    def resource_aliasable_field_paths_for_type(self, type_name, seen=None):
+        if seen is None:
+            seen = set()
+
+        type_name = self.type_name(type_name)
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        if self.mojo_resource_kind(base_type) is not None:
+            return [""]
+
+        if base_type in seen:
+            return []
+
+        if base_type in self.struct_types:
+            paths = []
+            next_seen = {*seen, base_type}
+            for field_name, field_type in self.struct_types.get(base_type, {}).items():
+                for subpath in self.resource_aliasable_field_paths_for_type(
+                    field_type, next_seen
+                ):
+                    paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+            return paths
+
+        specialization = self.generic_enum_specialization_for_type(type_name)
+        if specialization is None or type_name in seen:
+            return []
+
+        paths = []
+        next_seen = {*seen, type_name}
+        for field_name, field_type in generic_enum_specialized_fields(
+            self, specialization
+        ):
+            for subpath in self.resource_aliasable_field_paths_for_type(
+                field_type, next_seen
+            ):
+                paths.append(f"{field_name}.{subpath}" if subpath else field_name)
+        return paths
+
+    def resource_access_field_alias_candidates(self, expr, target_type=None):
+        target_type = self.type_name(target_type)
+        if not target_type or not self.resource_access_aliasable_type(target_type):
+            return {}
+
+        field_aliases = self.resource_access_path_aliases_for_expression(expr)
+        if field_aliases:
+            return field_aliases
+
+        if isinstance(expr, TernaryOpNode):
+            return self.merge_resource_field_alias_maps(
+                self.resource_access_field_alias_candidates(
+                    expr.true_expr, target_type=target_type
+                ),
+                self.resource_access_field_alias_candidates(
+                    expr.false_expr, target_type=target_type
+                ),
+            )
+
+        if isinstance(expr, MatchNode):
+            merged = {}
+            for arm in getattr(expr, "arms", []) or []:
+                try:
+                    arm_expr, _ = self.match_arm_value_expression(arm)
+                except ValueError:
+                    continue
+                merged = self.merge_resource_field_alias_maps(
+                    merged,
+                    self.resource_access_field_alias_candidates(
+                        arm_expr, target_type=target_type
+                    ),
+                )
+            return merged
+
+        if isinstance(expr, FunctionCallNode):
+            aliases = self.generic_enum_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            aliases = self.struct_constructor_field_alias_candidates(expr, target_type)
+            if aliases:
+                return aliases
+            return self.function_return_resource_field_alias_candidates(
+                expr, target_type
+            )
+
+        candidates = self.resource_access_qualifier_candidates(
+            expr, target_type=target_type
+        )
+        return {"": candidates} if candidates else {}
+
+    def resource_access_path_aliases_for_expression(self, expr):
+        path_name = self.resource_access_path_name(expr)
+        if not path_name:
+            return {}
+
+        aliases = {}
+        exact = self.resource_access_path_qualifier_aliases.get(path_name)
+        if exact:
+            aliases[""] = list(exact)
+
+        prefix = f"{path_name}."
+        for (
+            alias_path,
+            candidates,
+        ) in self.resource_access_path_qualifier_aliases.items():
+            if alias_path.startswith(prefix):
+                aliases[alias_path[len(prefix) :]] = list(candidates)
+        return aliases
+
+    def merge_resource_field_alias_maps(self, *maps):
+        merged = {}
+        for alias_map in maps:
+            for path, candidates in alias_map.items():
+                current = merged.setdefault(path, [])
+                for candidate in candidates:
+                    if candidate not in current:
+                        current.append(candidate)
+        return merged
+
+    def generic_enum_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return {}
+
+        aliases = {}
+        for arg, (field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def struct_constructor_field_alias_candidates(self, expr, target_type):
+        func_name = self.function_call_name(expr)
+        target_base, _ = self.resource_base_type_and_count(self.type_name(target_type))
+        struct_type = target_base if target_base in self.struct_types else func_name
+        if struct_type not in self.struct_types or func_name != struct_type:
+            return {}
+
+        aliases = {}
+        field_items = list(self.struct_types.get(struct_type, {}).items())
+        for arg, (field_name, field_type) in zip(expr.args, field_items):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            nested = self.resource_access_field_alias_candidates(
+                arg, target_type=field_type
+            )
+            for path, candidates in nested.items():
+                field_path = f"{field_name}.{path}" if path else field_name
+                aliases[field_path] = candidates
+        return aliases
+
+    def function_return_resource_field_alias_candidates(self, expr, target_type=None):
+        func_name = self.function_call_name(expr)
+        refs = self.function_return_resource_field_aliases.get(func_name) or []
+        if not refs:
+            return {}
+
+        aliases = {}
+        parameter_types = self.function_parameter_types.get(func_name, [])
+        for return_path, alias_index, arg_path in refs:
+            if alias_index >= len(expr.args):
+                continue
+            arg_type = (
+                parameter_types[alias_index]
+                if alias_index < len(parameter_types)
+                else None
+            )
+            candidates = self.resource_access_candidates_for_relative_path(
+                expr.args[alias_index], arg_path, arg_type
+            )
+            if candidates:
+                aliases.setdefault(return_path, [])
+                for candidate in candidates:
+                    if candidate not in aliases[return_path]:
+                        aliases[return_path].append(candidate)
+        return aliases
+
+    def resource_access_candidates_for_relative_path(
+        self, expr, relative_path, target_type=None
+    ):
+        if not relative_path:
+            return self.resource_access_qualifier_candidates(
+                expr, target_type=target_type
+            )
+
+        path_name = self.resource_access_path_name(expr)
+        if path_name:
+            exact_path = f"{path_name}.{relative_path}"
+            candidates = self.resource_access_path_qualifier_aliases.get(exact_path)
+            if candidates:
+                return list(candidates)
+
+        field_aliases = self.resource_access_field_alias_candidates(
+            expr, target_type=target_type
+        )
+        return list(field_aliases.get(relative_path, []))
 
     def function_return_resource_alias_candidates(self, expr):
         func_name = self.function_call_name(expr)
@@ -2579,9 +3016,12 @@ class MojoCodeGen:
             return
         for access, resource_name in self.resource_access_qualifier_candidates(expr):
             if access == "writeonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
                 raise ValueError(
                     f"Unsupported {operation} for Mojo codegen; "
-                    f"resource '{resource_name}' is writeonly"
+                    f"resource '{diagnostic_name}' is writeonly"
                 )
 
     def validate_resource_write_access(self, expr, operation):
@@ -2589,9 +3029,12 @@ class MojoCodeGen:
             return
         for access, resource_name in self.resource_access_qualifier_candidates(expr):
             if access == "readonly":
+                diagnostic_name = self.resource_access_diagnostic_name(
+                    expr, resource_name
+                )
                 raise ValueError(
                     f"Unsupported {operation} for Mojo codegen; "
-                    f"resource '{resource_name}' is readonly"
+                    f"resource '{diagnostic_name}' is readonly"
                 )
 
     def validate_resource_read_write_access(self, expr, operation):
@@ -3303,6 +3746,10 @@ class MojoCodeGen:
             name: list(candidates)
             for name, candidates in self.resource_access_qualifier_aliases.items()
         }
+        previous_resource_access_path_qualifier_aliases = {
+            path: list(candidates)
+            for path, candidates in self.resource_access_path_qualifier_aliases.items()
+        }
         previous_return_type = self.current_return_type
 
         param_list = getattr(func, "parameters", getattr(func, "params", []))
@@ -3386,6 +3833,9 @@ class MojoCodeGen:
         self.resource_access_qualifiers = previous_resource_access_qualifiers
         self.resource_access_qualifier_aliases = (
             previous_resource_access_qualifier_aliases
+        )
+        self.resource_access_path_qualifier_aliases = (
+            previous_resource_access_path_qualifier_aliases
         )
         self.current_return_type = previous_return_type
         return code
