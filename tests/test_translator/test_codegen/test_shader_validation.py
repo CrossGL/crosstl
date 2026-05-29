@@ -70,6 +70,10 @@ shader MetalWaveIntrinsicsValidation {
         return WaveMatch(seed);
     }
 
+    uint helperMulti(uint seed, uvec4 mask) {
+        return WaveMultiPrefixSum(seed, mask);
+    }
+
     compute {
         void main() {
             uint value = 1u;
@@ -90,6 +94,13 @@ shader MetalWaveIntrinsicsValidation {
             bool allLane = WaveActiveAllTrue(prefixProduct > 0u);
             uvec4 ballot = WaveActiveBallot(anyLane);
             uvec4 matchMask = WaveMatch(value);
+            uint multiSum = WaveMultiPrefixSum(value, ballot);
+            uint multiProduct = WaveMultiPrefixProduct(value + 1u, ballot);
+            uint multiCount = WaveMultiPrefixCountBits(anyLane, ballot);
+            uint multiAnd = WaveMultiPrefixBitAnd(value, ballot);
+            uint multiOr = WaveMultiPrefixBitOr(value, ballot);
+            uint multiXor = WaveMultiPrefixBitXor(value, ballot);
+            uint helperMultiValue = helperMulti(value, ballot);
             uint count = WaveActiveCountBits(allLane);
             uint prefixCount = WavePrefixCountBits(anyLane);
             uint broadcast = WaveReadLaneAt(prefixSum, 0u);
@@ -100,7 +111,7 @@ shader MetalWaveIntrinsicsValidation {
             uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
             bool quadAny = QuadAny(anyLane);
             bool quadAll = QuadAll(allLane);
-            uint folded = minValue + count + prefixCount + quadLane + ballot.x + matchMask.x + helperMatchValue.y + lane + helperValue;
+            uint folded = minValue + count + prefixCount + quadLane + ballot.x + matchMask.x + helperMatchValue.y + lane + helperValue + multiSum + multiProduct + multiCount + multiAnd + multiOr + multiXor + helperMultiValue;
             folded = folded + (quadAny ? quadX : quadY);
             folded = folded + (quadAll ? quadDiagonal : firstValue) + laneCount;
         }
@@ -5955,10 +5966,29 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
         "uint crossglWaveLaneCount)" in code
     )
     assert "uint4 helperMatch(uint seed, uint crossglWaveLaneCount)" in code
+    assert (
+        "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in code
+    )
     assert "helperBoth(value, crossglWaveLaneIndex, crossglWaveLaneCount)" in code
     assert "helperMatch(value, crossglWaveLaneCount)" in code
+    assert (
+        "helperMulti(value, ballot, crossglWaveLaneIndex, crossglWaveLaneCount)" in code
+    )
     assert "__crossgl_metal_wave_ballot(anyLane)" in code
     assert "__crossgl_metal_wave_match(value, crossglWaveLaneCount)" in code
+    assert (
+        "__crossgl_metal_wave_multi_prefix_sum(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount)" in code
+    )
+    assert (
+        "__crossgl_metal_wave_multi_prefix_count_bits(anyLane, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount)" in code
+    )
+    assert (
+        "__crossgl_metal_wave_multi_prefix_bit_xor(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount)" in code
+    )
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code
     assert "WaveOpNode" not in code

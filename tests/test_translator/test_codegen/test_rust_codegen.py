@@ -15880,7 +15880,7 @@ def test_local_struct_outputs_initialize_with_default_before_field_assignment():
     assert "let mut output: Out;" not in generated_code
 
 
-def test_if_statement():
+def test_if_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -15924,6 +15924,7 @@ def test_if_statement():
         generated_code = generate_code(ast)
         assert "if " in generated_code
         assert "else" in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("If statement codegen not implemented.")
@@ -17306,7 +17307,7 @@ def test_direct_literal_nodes_emit_rust_escaping():
     )
 
 
-def test_else_if_statement():
+def test_else_if_statement(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -17353,6 +17354,7 @@ def test_else_if_statement():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert "else if " in generated_code
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
         print(generated_code)
     except SyntaxError:
         pytest.fail("Else if codegen not implemented.")

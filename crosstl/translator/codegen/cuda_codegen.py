@@ -797,6 +797,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if structured_atomic_call is not None:
                 return structured_atomic_call
 
+            plain_atomic_call = self.generate_plain_atomic_call(
+                func_name, raw_args, args
+            )
+            if plain_atomic_call is not None:
+                return plain_atomic_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
@@ -1126,6 +1132,83 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         target_expr = self.visit(target["target_expr"])
         value_args = ", ".join(args[1:])
         return f"{intrinsic}(&{target_expr}, {value_args})"
+
+    def generate_plain_atomic_call(self, func_name, raw_args, args):
+        """Lower CUDA atomics on ordinary scalar lvalues to pointer operands."""
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None:
+            return None
+
+        intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
+            operation
+        )
+        target_expr = (
+            self.strip_address_of_expression(raw_args[0]) if raw_args else None
+        )
+        target_type = self.expression_result_type(target_expr) if target_expr else None
+        pointee_type = self.cuda_atomic_pointer_pointee_type(target_type)
+        atomic_type = pointee_type or target_type
+        fallback = self.diagnostic_zero_value_for_type(atomic_type)
+
+        if len(args) != required_arg_count:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"requires {required_arg_count} argument(s)",
+                fallback,
+            )
+
+        if target_expr is None or (
+            pointee_type is None and not self.is_plain_atomic_lvalue(target_expr)
+        ):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                "requires assignable scalar target",
+                fallback,
+            )
+
+        scalar_kind = self.cuda_atomic_scalar_kind(atomic_type)
+        if scalar_kind not in supported_kinds:
+            type_label = self.type_name_string(atomic_type) or "unknown target"
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {type_label} requires supported scalar "
+                f"{supported_kinds_label} target",
+                fallback,
+            )
+
+        target_code = self.visit(target_expr)
+        target_pointer = target_code if pointee_type is not None else f"&{target_code}"
+        value_args = ", ".join(args[1:])
+        return f"{intrinsic}({target_pointer}, {value_args})"
+
+    def is_plain_atomic_lvalue(self, expr):
+        """Return whether an expression can be addressed for a CUDA atomic."""
+        return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+
+    def cuda_atomic_pointer_pointee_type(self, type_name):
+        """Return a scalar pointee type for pointer-typed CUDA atomic operands."""
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        if type_name.startswith("ptr<") and type_name.endswith(">"):
+            return type_name[4:-1].strip()
+
+        mapped_type = self.convert_crossgl_type_to_cuda(type_name)
+        for candidate in (type_name, mapped_type):
+            if candidate.endswith("*"):
+                pointee = candidate[:-1].strip()
+                if pointee.startswith("const "):
+                    pointee = pointee[len("const ") :].strip()
+                return pointee
+        return None
+
+    def unsupported_plain_atomic_call(self, operation, reason, fallback):
+        """Return diagnostic code for unsupported plain CUDA atomics."""
+        return (
+            f"/* unsupported {self.resource_backend_name()} atomic call: "
+            f"{operation} {reason} */ {fallback}"
+        )
 
     def structured_buffer_atomic_target(self, target_expr):
         """Return RWStructuredBuffer target metadata for an atomic lvalue."""

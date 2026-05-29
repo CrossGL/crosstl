@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 597
+        "test_count": 598
       },
       "translator_codegen": {
         "exists": true,
@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 518
+        "test_count": 520
       },
       "translator_codegen": {
         "exists": true,
@@ -465,7 +465,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 88,
+        "unsupported_marker_count": 94,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -505,6 +505,30 @@
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_plain_atomic_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_plain_atomic_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "return self.unsupported_plain_atomic_call("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "def unsupported_plain_atomic_call(self, operation, reason, fallback):"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "\"\"\"Return diagnostic code for unsupported plain CUDA atomics.\"\"\""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"/* unsupported {self.resource_backend_name()} atomic call: \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "def unsupported_structured_buffer_atomic_call("
           },
           {
@@ -522,30 +546,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_byte_address_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_byte_address_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_byte_address_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "def unsupported_byte_address_buffer_call(self, operation, buffer_type, fallback):"
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "\"\"\"Return diagnostic code for unsupported byte-address buffer operations.\"\"\""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} byte-address buffer call: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "def unsupported_structured_buffer_call(self, operation, buffer_type, fallback):"
           }
         ]
       },
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 383
+        "test_count": 384
       },
       "translator_codegen": {
         "exists": true,
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 380
+        "test_count": 382
       },
       "translator_codegen": {
         "exists": true,

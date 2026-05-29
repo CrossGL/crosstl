@@ -3902,6 +3902,107 @@ def test_dispatch_mesh_payload_argument_accepts_array_element_lvalue():
     assert "void MSMain(in payload MeshPayload payload)" in generated_code
 
 
+def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
+    code = """
+    shader SlangDispatchMeshPayloadHelperLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payloads[2];
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                uint slot = 1u;
+                payloads[slot].meshlet = 7u;
+                launchMesh(payloads[slot]);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void launchMesh(inout MeshPayload payload)" in generated_code
+    assert "DispatchMesh(1, 1, 1, payload);" in generated_code
+    assert "launchMesh(payloads[slot]);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "call_source", "message"),
+    [
+        (
+            "",
+            "launchMesh(makePayload());",
+            "launchMesh payload argument must be an lvalue, got MeshPayload",
+        ),
+        (
+            "OtherPayload otherPayload;",
+            "launchMesh(otherPayload);",
+            (
+                "launchMesh payload argument type OtherPayload "
+                "must match parameter type MeshPayload"
+            ),
+        ),
+    ],
+)
+def test_dispatch_mesh_payload_helper_rejects_invalid_payload_arguments(
+    setup_source, call_source, message
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadHelper {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+        struct OtherPayload {{
+            uint meshlet;
+        }};
+
+        MeshPayload makePayload() {{
+            MeshPayload payload;
+            payload.meshlet = 7u;
+            return payload;
+        }}
+
+        task {{
+            void launchMesh(inout MeshPayload payload) {{
+                DispatchMesh(1, 1, 1, payload);
+            }}
+
+            void main() @numthreads(1, 1, 1) {{
+                {setup_source}
+                {call_source}
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     "payload_expression",
     [

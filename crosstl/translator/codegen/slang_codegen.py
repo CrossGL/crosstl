@@ -6281,22 +6281,146 @@ class SlangCodeGen:
         if visited_helpers is None:
             visited_helpers = set()
 
-        for operation, args in self.slang_mesh_intrinsic_calls(func):
-            if operation in self.SLANG_MESH_INTRINSIC_ARITIES:
-                expected_arities = self.SLANG_MESH_INTRINSIC_ARITIES[operation]
-                if len(args) not in expected_arities:
-                    continue
-                self.validate_slang_mesh_op_stage_for_shader(operation, shader_type)
+        saved_variable_types = self.variable_types.copy()
+        try:
+            for parameter in (
+                getattr(func, "parameters", getattr(func, "params", [])) or []
+            ):
+                type_name = self.slang_parameter_type_name(parameter)
+                if type_name:
+                    self.register_variable_type(parameter.name, type_name, parameter)
+            for name, type_name in self.slang_function_scope_variable_types(
+                func
+            ).items():
+                self.register_variable_type(name, type_name)
 
-        for helper_call in self.slang_user_function_call_nodes(func):
-            helper_name = self.slang_function_call_name(helper_call)
+            for operation, args in self.slang_mesh_intrinsic_calls(func):
+                if operation in self.SLANG_MESH_INTRINSIC_ARITIES:
+                    expected_arities = self.SLANG_MESH_INTRINSIC_ARITIES[operation]
+                    if len(args) not in expected_arities:
+                        continue
+                    self.validate_slang_mesh_op_stage_for_shader(operation, shader_type)
+
+            for helper_call in self.slang_user_function_call_nodes(func):
+                helper_name = self.slang_function_call_name(helper_call)
+                if helper_name in visited_helpers:
+                    continue
+                helper_func = self.user_functions_by_name.get(helper_name)
+                if helper_func is None or helper_func is func:
+                    continue
+                self.validate_slang_mesh_helper_call_arguments(helper_call, shader_type)
+                self.validate_slang_mesh_intrinsic_calls(
+                    helper_func, shader_type, visited_helpers | {helper_name}
+                )
+        finally:
+            self.variable_types = saved_variable_types
+
+    def slang_mesh_interface_argument_role(self, operation, args):
+        if operation == "DispatchMesh" and len(args) >= 4:
+            return args[3], "payload"
+        return None, None
+
+    def slang_mesh_interface_parameter_roles(self, func, visited_helpers=None):
+        if visited_helpers is None:
+            visited_helpers = set()
+
+        func_name = getattr(func, "name", None)
+        if func_name in visited_helpers:
+            return {}
+        if func_name:
+            visited_helpers = visited_helpers | {func_name}
+
+        parameters = getattr(func, "parameters", getattr(func, "params", []))
+        parameter_names = {
+            getattr(parameter, "name", None) for parameter in parameters or []
+        }
+        parameter_names.discard(None)
+        roles = {}
+        alias_roots = self.slang_parameter_alias_roots(func, parameter_names)
+
+        for operation, args in self.slang_mesh_intrinsic_calls(func):
+            argument, role = self.slang_mesh_interface_argument_role(operation, args)
+            if argument is None:
+                continue
+            root_name = self.slang_expression_root_identifier(argument)
+            root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+            if root_name in parameter_names and root_name not in roles:
+                roles[root_name] = role
+
+        for call_node in self.slang_user_function_call_nodes(func):
+            helper_name = self.slang_function_call_name(call_node)
             if helper_name in visited_helpers:
                 continue
             helper_func = self.user_functions_by_name.get(helper_name)
-            if helper_func is None or helper_func is func:
+            if helper_func is None:
                 continue
-            self.validate_slang_mesh_intrinsic_calls(
-                helper_func, shader_type, visited_helpers | {helper_name}
+            helper_roles = self.slang_mesh_interface_parameter_roles(
+                helper_func, visited_helpers
+            )
+            if not helper_roles:
+                continue
+            helper_params = getattr(
+                helper_func, "parameters", getattr(helper_func, "params", [])
+            )
+            args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+            for index, helper_param in enumerate(helper_params or []):
+                helper_param_name = getattr(helper_param, "name", None)
+                if helper_param_name not in helper_roles or index >= len(args):
+                    continue
+                root_name = self.slang_expression_root_identifier(args[index])
+                root_name = self.slang_resolve_alias_root(root_name, alias_roots)
+                if root_name in parameter_names and root_name not in roles:
+                    roles[root_name] = helper_roles[helper_param_name]
+
+        return roles
+
+    def validate_slang_mesh_helper_call_arguments(self, call_node, shader_type):
+        helper_name = self.slang_function_call_name(call_node)
+        helper_func = self.user_functions_by_name.get(helper_name)
+        if helper_func is None:
+            return
+
+        roles = self.slang_mesh_interface_parameter_roles(helper_func)
+        if not roles:
+            return
+
+        parameters = getattr(
+            helper_func, "parameters", getattr(helper_func, "params", [])
+        )
+        args = getattr(call_node, "arguments", getattr(call_node, "args", []))
+        for index, parameter in enumerate(parameters or []):
+            param_name = getattr(parameter, "name", None)
+            if param_name not in roles or index >= len(args):
+                continue
+            role = roles[param_name]
+            expected_type = self.slang_parameter_type_name(parameter)
+            if not expected_type:
+                continue
+            expected_compare_type = (
+                self.reference_referent_type_name(expected_type) or expected_type
+            )
+            expected_base, expected_suffix = split_array_type_suffix(
+                self.convert_type(expected_compare_type)
+            )
+            actual_base, actual_suffix = (
+                self.slang_expression_mapped_base_and_array_suffix(args[index])
+            )
+            if actual_base is None:
+                continue
+            if actual_base == expected_base and actual_suffix == expected_suffix:
+                if role == "payload" and self.slang_parameter_requires_lvalue_argument(
+                    parameter
+                ):
+                    self.validate_slang_ray_lvalue_argument(
+                        args[index], shader_type, helper_name, role
+                    )
+                continue
+            actual_type = f"{actual_base}{actual_suffix}"
+            expected_label = self.convert_type(expected_type)
+            raise ValueError(
+                f"Slang {shader_type} {helper_name} {role} "
+                f"argument type {actual_type} must match parameter type "
+                f"{expected_label}"
             )
 
     def validate_slang_dispatch_mesh_payload_argument(self, node):

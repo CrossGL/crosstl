@@ -371,13 +371,31 @@ class MetalCodeGen:
         "QuadAny": "quad_any",
         "QuadAll": "quad_all",
     }
-    METAL_WAVE_UNSUPPORTED_OPERATIONS = {
-        "WaveMultiPrefixSum": "has no Metal partitioned prefix equivalent",
-        "WaveMultiPrefixCountBits": "has no Metal partitioned prefix equivalent",
-        "WaveMultiPrefixProduct": "has no Metal partitioned prefix equivalent",
-        "WaveMultiPrefixBitAnd": "has no Metal partitioned prefix equivalent",
-        "WaveMultiPrefixBitOr": "has no Metal partitioned prefix equivalent",
-        "WaveMultiPrefixBitXor": "has no Metal partitioned prefix equivalent",
+    METAL_WAVE_UNSUPPORTED_OPERATIONS = {}
+    METAL_WAVE_MULTI_PREFIX_INTRINSICS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits",
+        "WaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS = {
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    METAL_WAVE_MULTI_PREFIX_HELPERS = {
+        "WaveMultiPrefixSum": "__crossgl_metal_wave_multi_prefix_sum",
+        "WaveMultiPrefixCountBits": "__crossgl_metal_wave_multi_prefix_count_bits",
+        "WaveMultiPrefixProduct": "__crossgl_metal_wave_multi_prefix_product",
+        "WaveMultiPrefixBitAnd": "__crossgl_metal_wave_multi_prefix_bit_and",
+        "WaveMultiPrefixBitOr": "__crossgl_metal_wave_multi_prefix_bit_or",
+        "WaveMultiPrefixBitXor": "__crossgl_metal_wave_multi_prefix_bit_xor",
     }
     METAL_WAVE_BOOL_ARGUMENT_INTRINSICS = {
         "WaveActiveAllTrue",
@@ -516,6 +534,8 @@ class MetalCodeGen:
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
         self.required_metal_wave_match_helper = False
+        self.required_metal_wave_mask_contains_helper = False
+        self.required_metal_wave_multi_prefix_helpers = set()
         self.current_metal_wave_lane_index_parameter = None
         self.current_metal_wave_lane_count_parameter = None
         self.required_glsl_buffer_aggregate_load_helpers = {}
@@ -1052,6 +1072,8 @@ class MetalCodeGen:
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
         self.required_metal_wave_match_helper = False
+        self.required_metal_wave_mask_contains_helper = False
+        self.required_metal_wave_multi_prefix_helpers = set()
         self.local_variable_types = {}
         (
             self.lowered_glsl_buffer_blocks,
@@ -2709,6 +2731,9 @@ class MetalCodeGen:
             else:
                 continue
             if operation == "WaveMatch":
+                operations.add("WaveGetLaneCount")
+            elif operation in self.METAL_WAVE_MULTI_PREFIX_INTRINSICS:
+                operations.add("WaveGetLaneIndex")
                 operations.add("WaveGetLaneCount")
             elif operation in {"WaveGetLaneIndex", "WaveGetLaneCount"}:
                 operations.add(operation)
@@ -5486,6 +5511,28 @@ class MetalCodeGen:
             self.required_metal_wave_match_helper = True
             value = self.generate_expression(arguments[0])
             return f"__crossgl_metal_wave_match({value}, {lane_count_parameter})"
+        if operation in self.METAL_WAVE_MULTI_PREFIX_INTRINSICS:
+            lane_index_parameter = self.current_metal_wave_lane_index_parameter
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_index_parameter is None or lane_count_parameter is None:
+                return self.metal_wave_diagnostic_expression(
+                    operation,
+                    arguments,
+                    (
+                        "requires compute-stage thread_index_in_simdgroup "
+                        "and threads_per_simdgroup values"
+                    ),
+                )
+            self.required_metal_wave_ballot_helper = True
+            self.required_metal_wave_mask_contains_helper = True
+            self.required_metal_wave_multi_prefix_helpers.add(operation)
+            value = self.generate_expression(arguments[0])
+            mask = self.generate_expression(arguments[1])
+            helper = self.METAL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            return (
+                f"{helper}({value}, {mask}, {lane_index_parameter}, "
+                f"{lane_count_parameter})"
+            )
         if operation == "WaveReadLaneAt":
             value = self.generate_expression(arguments[0])
             lane = self.generate_expression(arguments[1])
@@ -5593,6 +5640,44 @@ class MetalCodeGen:
             )
         return None
 
+    def metal_wave_validate_scalar_value_argument(
+        self, operation, argument, allowed_components, description
+    ):
+        mapped_type, component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        if (
+            array_suffix
+            or mapped_type != component_type
+            or component_type not in allowed_components
+        ):
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                [argument],
+                f"value argument must be {description}, got {mapped_type}",
+            )
+        return None
+
+    def metal_wave_validate_multi_prefix_mask_argument(
+        self, operation, argument, value_argument=None
+    ):
+        mapped_type, _component_type, array_suffix = (
+            self.metal_wave_argument_mapped_type(argument)
+        )
+        if mapped_type is None:
+            return None
+        diagnostic_arguments = [value_argument] if value_argument is not None else []
+        diagnostic_arguments.append(argument)
+        if array_suffix or mapped_type != "uint4":
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                diagnostic_arguments,
+                f"mask argument must be uint4, got {mapped_type}",
+            )
+        return None
+
     def metal_wave_validate_quad_lane_range(self, operation, argument):
         lane_index = self.literal_int_value(argument, self.literal_int_constants)
         if lane_index is None:
@@ -5606,6 +5691,39 @@ class MetalCodeGen:
         return None
 
     def metal_wave_type_diagnostic(self, operation, arguments):
+        if operation == "WaveMultiPrefixCountBits":
+            diagnostic = self.metal_wave_validate_predicate_argument(
+                operation, arguments[0]
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
+        if operation in self.METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS:
+            diagnostic = self.metal_wave_validate_scalar_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar",
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
+        if operation in self.METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS:
+            diagnostic = self.metal_wave_validate_scalar_value_argument(
+                operation,
+                arguments[0],
+                self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
+                "integer scalar",
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.metal_wave_validate_multi_prefix_mask_argument(
+                operation, arguments[1], arguments[0]
+            )
         if operation in self.METAL_WAVE_BOOL_ARGUMENT_INTRINSICS:
             return self.metal_wave_validate_predicate_argument(operation, arguments[0])
         if operation in self.METAL_WAVE_NUMERIC_VALUE_INTRINSICS:
@@ -5700,6 +5818,74 @@ class MetalCodeGen:
                 "        }\n"
                 "    }\n"
                 "    return mask;\n"
+                "}\n\n"
+            )
+        if self.required_metal_wave_mask_contains_helper:
+            code += (
+                "bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane) {\n"
+                "    if (lane < 32u) {\n"
+                "        return (mask.x & (1u << lane)) != 0u;\n"
+                "    }\n"
+                "    if (lane < 64u) {\n"
+                "        return (mask.y & (1u << (lane - 32u))) != 0u;\n"
+                "    }\n"
+                "    if (lane < 96u) {\n"
+                "        return (mask.z & (1u << (lane - 64u))) != 0u;\n"
+                "    }\n"
+                "    return (mask.w & (1u << (lane - 96u))) != 0u;\n"
+                "}\n\n"
+            )
+        for operation in self.METAL_WAVE_MULTI_PREFIX_HELPERS:
+            if operation not in self.required_metal_wave_multi_prefix_helpers:
+                continue
+            helper_name = self.METAL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            if operation == "WaveMultiPrefixCountBits":
+                code += (
+                    f"uint {helper_name}(bool value, uint4 mask, uint laneIndex, "
+                    "uint laneCount) {\n"
+                    "    uint laneValue = value ? 1u : 0u;\n"
+                    "    uint result = 0u;\n"
+                    "    uint4 activeMask = __crossgl_metal_wave_ballot(true);\n"
+                    "    uint limit = min(laneIndex, laneCount);\n"
+                    "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                    "        if (__crossgl_metal_wave_mask_contains(mask, lane) && "
+                    "__crossgl_metal_wave_mask_contains(activeMask, lane)) {\n"
+                    "            result += simd_broadcast(laneValue, ushort(lane));\n"
+                    "        }\n"
+                    "    }\n"
+                    "    return result;\n"
+                    "}\n\n"
+                )
+                continue
+            if operation == "WaveMultiPrefixSum":
+                identity = "T(0)"
+                assignment = "+="
+            elif operation == "WaveMultiPrefixProduct":
+                identity = "T(1)"
+                assignment = "*="
+            elif operation == "WaveMultiPrefixBitAnd":
+                identity = "~T(0)"
+                assignment = "&="
+            elif operation == "WaveMultiPrefixBitOr":
+                identity = "T(0)"
+                assignment = "|="
+            else:
+                identity = "T(0)"
+                assignment = "^="
+            code += (
+                "template <typename T>\n"
+                f"T {helper_name}(T value, uint4 mask, uint laneIndex, "
+                "uint laneCount) {\n"
+                f"    T result = {identity};\n"
+                "    uint4 activeMask = __crossgl_metal_wave_ballot(true);\n"
+                "    uint limit = min(laneIndex, laneCount);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (__crossgl_metal_wave_mask_contains(mask, lane) && "
+                "__crossgl_metal_wave_mask_contains(activeMask, lane)) {\n"
+                f"            result {assignment} simd_broadcast(value, ushort(lane));\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
                 "}\n\n"
             )
         return code

@@ -9317,6 +9317,160 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_structured_buffer_counter_methods_emit_sidecar_atomics(self, tmp_path):
+        source_code = """
+        shader StructuredBufferCounters {
+            RWStructuredBuffer<uint> counters[2] @set(3) @binding(0);
+            RWStructuredBuffer<uint> directCounters @set(3) @binding(3);
+
+            uint helper(RWStructuredBuffer<uint> queue) {
+                uint next = queue.IncrementCounter();
+                uint old = buffer_decrement_counter(queue);
+                return next + old;
+            }
+
+            compute {
+                void main() {
+                    uint slot = 1u;
+                    uint next = counters[slot].IncrementCounter();
+                    uint old = counters[slot].DecrementCounter();
+                    uint helperValue = helper(counters[slot]);
+                    uint direct = buffer_increment_counter(directCounters);
+                    counters[slot].Store(next, old + helperValue + direct);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        counters_var = spirv_named_variable(
+            spv_code, "counters", storage_class="Uniform"
+        )
+        counters_counter = spirv_named_variable(
+            spv_code, "countersCounter", storage_class="Uniform"
+        )
+        direct_var = spirv_named_variable(
+            spv_code, "directCounters", storage_class="Uniform"
+        )
+        direct_counter = spirv_named_variable(
+            spv_code, "directCountersCounter", storage_class="Uniform"
+        )
+
+        for block_name in ("countersCounterBuffer", "directCountersCounterBuffer"):
+            block = spirv_named_id(spv_code, block_name)
+            assert f"OpDecorate {block} BufferBlock" in spv_code
+            assert f"OpMemberDecorate {block} 0 Offset 0" in spv_code
+
+        assert f"OpDecorate {counters_var} DescriptorSet 3" in spv_code
+        assert f"OpDecorate {counters_var} Binding 0" in spv_code
+        assert f"OpDecorate {counters_counter} Binding 1" in spv_code
+        assert f"OpDecorate {direct_counter} Binding 2" in spv_code
+        assert f"OpDecorate {direct_var} Binding 3" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(counters_counter)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("OpAtomicIAdd") >= 3
+        assert spv_code.count("OpAtomicISub") >= 2
+        assert spv_code.count("OpISub") >= 2
+        assert "IncrementCounter" not in spv_code
+        assert "DecrementCounter" not in spv_code
+        assert "buffer_increment_counter" not in spv_code
+        assert "buffer_decrement_counter" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_counter_methods_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidStructuredBufferCounters {
+            StructuredBuffer<uint> readonlyValues;
+            AppendStructuredBuffer<uint> appendValues;
+            ConsumeStructuredBuffer<uint> consumeValues;
+            RWStructuredBuffer<uint> readOnlyCounters @readonly;
+            RWStructuredBuffer<uint> writeOnlyCounters @writeonly;
+            RWStructuredBuffer<uint> counters;
+
+            uint bump(RWStructuredBuffer<uint> data) {
+                return data.IncrementCounter();
+            }
+
+            compute {
+                void main() {
+                    uint a = readonlyValues.IncrementCounter();
+                    uint b = appendValues.DecrementCounter();
+                    uint c = consumeValues.IncrementCounter();
+                    uint d = readOnlyCounters.IncrementCounter();
+                    uint e = writeOnlyCounters.DecrementCounter();
+                    uint f = counters.IncrementCounter(1u);
+                    uint g = buffer_increment_counter(readonlyValues);
+                    uint h = buffer_decrement_counter(appendValues);
+                    uint i = buffer_increment_counter(counters, counters);
+                    uint j = bump(readOnlyCounters);
+                    uint k = bump(writeOnlyCounters);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter requires an "
+            "RWStructuredBuffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.DecrementCounter requires an "
+            "RWStructuredBuffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter requires a read-write "
+            "buffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.DecrementCounter requires a read-write "
+            "buffer"
+        ) in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.IncrementCounter accepts no operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_increment_counter requires an RWStructuredBuffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_decrement_counter requires an RWStructuredBuffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_increment_counter accepts only a buffer operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: function call 'bump' requires read-write storage buffer "
+            "access for argument readOnlyCounters passed to parameter data: "
+            "got readonly"
+        ) in spv_code
+        assert (
+            "WARNING: function call 'bump' requires read-write storage buffer "
+            "access for argument writeOnlyCounters passed to parameter data: "
+            "got writeonly"
+        ) in spv_code
+        assert "SPIR-V backend cannot lower unknown function" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+        assert "OpAtomicISub" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_append_consume_structured_buffers_emit_invalid_diagnostics(self, tmp_path):
         source_code = """
         shader InvalidAppendConsumeStorageBuffers {

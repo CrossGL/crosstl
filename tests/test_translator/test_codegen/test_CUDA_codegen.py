@@ -3798,6 +3798,75 @@ class TestCudaCodeGen:
         assert "buffer_append(" not in cuda_code
         assert "buffer_consume(" not in cuda_code
 
+    def test_plain_shared_array_atomics_emit_cuda_pointer_atomics(self, tmp_path):
+        """Test CUDA atomics on ordinary shared/array lvalues use pointer operands."""
+        source_code = """
+        shader SharedArrayAtomicsCUDA {
+            compute {
+                void bump(uint counters[32], uint index, uint value) {
+                    uint old = atomicAdd(counters[index], value);
+                    uint swapped = atomicCompareExchange(counters[index], old, value);
+                    uint missing = atomicAdd(counters[index]);
+                    uint invalid = atomicAdd(index + value, value);
+                }
+
+                void main() {
+                    shared uint sharedCounters[32];
+                    shared uint2 vectorCounters[32];
+                    uint oldShared = atomicAdd(
+                        sharedCounters[gl_LocalInvocationID.x],
+                        1u
+                    );
+                    uint oldExplicit = atomicAdd(
+                        &sharedCounters[gl_LocalInvocationID.x],
+                        oldShared
+                    );
+                    uint2 badVector = atomicAdd(
+                        vectorCounters[gl_LocalInvocationID.x],
+                        uint2(1u, 2u)
+                    );
+                    bump(sharedCounters, gl_LocalInvocationID.x, oldExplicit);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__shared__ uint sharedCounters[32];" in cuda_code
+        assert "__shared__ uint2 vectorCounters[32];" in cuda_code
+        assert "uint old = atomicAdd(&counters[index], value);" in cuda_code
+        assert "uint swapped = atomicCAS(&counters[index], old, value);" in cuda_code
+        assert (
+            "uint oldShared = atomicAdd(&sharedCounters[threadIdx.x], 1u);" in cuda_code
+        )
+        assert (
+            "uint oldExplicit = atomicAdd(&sharedCounters[threadIdx.x], oldShared);"
+            in cuda_code
+        )
+        assert (
+            "uint missing = /* unsupported CUDA atomic call: atomicAdd requires "
+            "2 argument(s) */ 0u;" in cuda_code
+        )
+        assert (
+            "uint invalid = /* unsupported CUDA atomic call: atomicAdd requires "
+            "assignable scalar target */ 0u;" in cuda_code
+        )
+        assert (
+            "uint2 badVector = /* unsupported CUDA atomic call: atomicAdd on "
+            "uint2 requires supported scalar int/uint/float target */ "
+            "make_uint2(0u, 0u);" in cuda_code
+        )
+        assert "atomicAdd(sharedCounters[" not in cuda_code
+        assert "atomicAdd(counters[" not in cuda_code
+        assert "atomicAdd(&&" not in cuda_code
+        assert "atomicCompareExchange(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_structured_buffer_element_atomics_emit_cuda_pointer_atomics(
         self, tmp_path
     ):

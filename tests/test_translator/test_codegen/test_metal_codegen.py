@@ -197,6 +197,14 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
 
     assert "uint4 __crossgl_metal_wave_ballot(bool predicate)" in generated_code
     assert "uint4 __crossgl_metal_wave_match(T value, uint laneCount)" in generated_code
+    assert (
+        "bool __crossgl_metal_wave_mask_contains(uint4 mask, uint lane)"
+        in generated_code
+    )
+    assert (
+        "T __crossgl_metal_wave_multi_prefix_sum(T value, uint4 mask, "
+        "uint laneIndex, uint laneCount)" in generated_code
+    )
     assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
     assert "uint sumValue = simd_sum(value);" in generated_code
@@ -239,9 +247,10 @@ def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps():
     assert "uint lane = crossglWaveLaneIndex;" in generated_code
     assert "uint laneCount = crossglWaveLaneCount;" in generated_code
     assert (
-        "uint multi = /* unsupported Metal wave intrinsic: WaveMultiPrefixSum "
-        "has no Metal partitioned prefix equivalent */ 0u;" in generated_code
+        "uint multi = __crossgl_metal_wave_multi_prefix_sum(value, ballot, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
     )
+    assert "unsupported Metal wave intrinsic: WaveMultiPrefixSum" not in generated_code
     assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
     assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
     assert "WaveActiveSum(value)" not in generated_code
@@ -420,6 +429,129 @@ def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts(
     assert "[[threads_per_simdgroup]]" not in generated_code
 
 
+def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_contexts():
+    compute_shader = """
+    shader MetalWaveMultiPrefixHelperForwarding {
+        uint helperMulti(uint seed, uvec4 mask) {
+            return WaveMultiPrefixSum(seed, mask);
+        }
+
+        uint helperCount(bool predicate, uvec4 mask) {
+            return WaveMultiPrefixCountBits(predicate, mask);
+        }
+
+        uint helperBits(uint seed, uvec4 mask) {
+            return WaveMultiPrefixBitXor(seed, mask);
+        }
+
+        compute {
+            void main() {
+                uint value = 3u;
+                uvec4 mask = WaveMatch(value);
+                uint directSum = WaveMultiPrefixSum(value, mask);
+                uint directCount = WaveMultiPrefixCountBits(value > 0u, mask);
+                uint directBits = WaveMultiPrefixBitXor(value, mask);
+                uint viaHelper =
+                    helperMulti(value, mask) +
+                    helperCount(value > 0u, mask) +
+                    helperBits(value, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(compute_shader)))
+
+    assert (
+        "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint helperCount(bool predicate, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint helperBits(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_sum(seed, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_count_bits(predicate, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "return __crossgl_metal_wave_multi_prefix_bit_xor(seed, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint directSum = __crossgl_metal_wave_multi_prefix_sum(value, mask, "
+        "crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "uint directCount = __crossgl_metal_wave_multi_prefix_count_bits("
+        "value > 0u, mask, crossglWaveLaneIndex, crossglWaveLaneCount);"
+        in generated_code
+    )
+    assert (
+        "uint directBits = __crossgl_metal_wave_multi_prefix_bit_xor(value, "
+        "mask, crossglWaveLaneIndex, crossglWaveLaneCount);" in generated_code
+    )
+    assert (
+        "helperMulti(value, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert (
+        "helperCount(value > 0u, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert (
+        "helperBits(value, mask, crossglWaveLaneIndex, crossglWaveLaneCount)"
+        in generated_code
+    )
+    assert "unsupported Metal wave intrinsic: WaveMultiPrefix" not in generated_code
+
+    fragment_shader = """
+    shader MetalWaveMultiPrefixFragmentDiagnostics {
+        uint helperMulti(uint seed, uvec4 mask) {
+            return WaveMultiPrefixSum(seed, mask);
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
+                uint prefix = helperMulti(1u, mask);
+                uint direct = WaveMultiPrefixSum(prefix, mask);
+                return vec4(float(prefix + direct), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(fragment_shader)))
+
+    assert (
+        "uint helperMulti(uint seed, uint4 mask, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert (
+        "uint prefix = 0u /* unsupported Metal wave helper call: function "
+        "'helperMulti' requires compute-stage thread_index_in_simdgroup and "
+        "threads_per_simdgroup value */;" in generated_code
+    )
+    assert (
+        "uint direct = /* unsupported Metal wave intrinsic: WaveMultiPrefixSum "
+        "requires compute-stage thread_index_in_simdgroup and "
+        "threads_per_simdgroup values */ 0u;" in generated_code
+    )
+    assert "[[thread_index_in_simdgroup]]" not in generated_code
+    assert "[[threads_per_simdgroup]]" not in generated_code
+
+
 def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     shader = """
     shader InvalidMetalWaveIntrinsics {
@@ -427,12 +559,17 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
             void main() {
                 uint value = 1u;
                 uvec2 lanes = uvec2(1u, 2u);
+                uvec4 mask = uvec4(1u, 0u, 0u, 0u);
                 uint missing = WaveActiveSum();
                 bool badAnyValue = WaveActiveAnyTrue(value);
                 uvec4 badBallotVector =
                     WaveActiveBallot(lanes == uvec2(1u, 2u));
                 uvec4 badMatchBool = WaveMatch(badAnyValue);
                 uvec4 badMatchVector = WaveMatch(lanes);
+                uint badMultiVector = WaveMultiPrefixSum(lanes, mask);
+                uint badMultiMask = WaveMultiPrefixSum(value, value);
+                uint badMultiCount = WaveMultiPrefixCountBits(value, mask);
+                uint badMultiBit = WaveMultiPrefixBitAnd(badAnyValue, mask);
                 uint badLane = WaveReadLaneAt(value, vec2(0.0, 1.0));
                 uint badQuad = QuadReadLaneAt(value, 4u);
             }
@@ -467,6 +604,26 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
         in generated_code
     )
     assert (
+        "uint badMultiVector = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum value argument must be numeric scalar, got uint2 */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "uint badMultiMask = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixSum mask argument must be uint4, got uint */ 0u;"
+        in generated_code
+    )
+    assert (
+        "uint badMultiCount = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixCountBits predicate argument must be scalar bool, got uint */ "
+        "0u;" in generated_code
+    )
+    assert (
+        "uint badMultiBit = /* unsupported Metal wave intrinsic: "
+        "WaveMultiPrefixBitAnd value argument must be integer scalar, got bool */ "
+        "0u;" in generated_code
+    )
+    assert (
         "uint badLane = /* unsupported Metal wave intrinsic: WaveReadLaneAt "
         "lane index must be scalar int or uint, got float2 */ 0u;" in generated_code
     )
@@ -477,6 +634,7 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     assert "WaveActiveSum()" not in generated_code
     assert "WaveActiveAnyTrue(value)" not in generated_code
     assert "WaveMatch(badAnyValue)" not in generated_code
+    assert "WaveMultiPrefixSum(lanes, mask)" not in generated_code
     assert "WaveReadLaneAt(value, float2(0.0, 1.0))" not in generated_code
     assert "WaveOpNode" not in generated_code
 

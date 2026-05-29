@@ -1615,6 +1615,8 @@ class VulkanSPIRVCodeGen:
             "buffer_store4",
             "buffer_append",
             "buffer_consume",
+            "buffer_increment_counter",
+            "buffer_decrement_counter",
             "texture",
             "texture2D",
             "textureCube",
@@ -1692,6 +1694,8 @@ class VulkanSPIRVCodeGen:
             "buffer_store4",
             "buffer_append",
             "buffer_consume",
+            "buffer_increment_counter",
+            "buffer_decrement_counter",
         }
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
@@ -2834,6 +2838,29 @@ class VulkanSPIRVCodeGen:
                 return self.default_value_for_buffer_load_failure(args)
             return self.process_structured_buffer_consume_call(
                 args[0], metadata, [], "buffer_consume"
+            )[1]
+
+        if function_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+            if not args:
+                self.emit(f"; WARNING: {function_name} requires a buffer operand")
+                return self.structured_buffer_counter_default_value()
+            if len(args) > 1:
+                self.emit(f"; WARNING: {function_name} accepts only a buffer operand")
+                return self.structured_buffer_counter_default_value()
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    f"; WARNING: {function_name} requires an RWStructuredBuffer "
+                    "operand"
+                )
+                return self.structured_buffer_counter_default_value()
+            return self.process_structured_buffer_counter_method_call(
+                args[0],
+                metadata,
+                [],
+                function_name,
+                function_name == "buffer_increment_counter",
             )[1]
 
         if function_name == "buffer_load":
@@ -9257,6 +9284,9 @@ class VulkanSPIRVCodeGen:
         buffer_metadata = {
             **metadata,
             **memory_flags,
+            "buffer_variable": var_id,
+            "declaration_node": node,
+            "declared_type_name": type_name,
             "element_type": element_type,
             "runtime_array_type": runtime_array_type,
             "block_type": block_type,
@@ -9278,7 +9308,7 @@ class VulkanSPIRVCodeGen:
     def process_structured_buffer_counter_declaration(
         self, node: VariableNode, type_name: str
     ) -> dict:
-        """Emit the sidecar counter SSBO used for append/consume buffers."""
+        """Emit the sidecar counter SSBO used for structured-buffer counters."""
         uint_type = self.register_primitive_type("uint")
         block_name = f"{node.name}CounterBuffer"
         block_type = self.register_struct_type(block_name, [(uint_type, "counter")])
@@ -11003,6 +11033,8 @@ class VulkanSPIRVCodeGen:
             return "write"
         if func_name == "buffer_consume":
             return "read_write"
+        if func_name in {"buffer_increment_counter", "buffer_decrement_counter"}:
+            return "read_write"
         if func_name in self.buffer_atomic_function_names():
             return "read_write"
         return None
@@ -11017,6 +11049,8 @@ class VulkanSPIRVCodeGen:
         if method_name == "Append":
             return "write"
         if method_name == "Consume":
+            return "read_write"
+        if method_name in {"IncrementCounter", "DecrementCounter"}:
             return "read_write"
         if self.byte_address_method_interlocked_info(method_name) is not None:
             return "read_write"
@@ -12132,6 +12166,48 @@ class VulkanSPIRVCodeGen:
             return self.default_value_for_type(element_type)
         return self.register_constant(0.0, self.register_primitive_type("float"))
 
+    def structured_buffer_counter_default_value(self) -> SpirvId:
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def ensure_structured_buffer_counter_metadata(self, metadata) -> bool:
+        if metadata.get("counter_variable") is not None:
+            return True
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            return False
+
+        root_pointer = metadata.get("buffer_variable")
+        root_metadata = (
+            self.structured_buffer_metadata.get(root_pointer.id)
+            if root_pointer is not None
+            else None
+        )
+        if root_metadata is not None and root_metadata.get("counter_variable"):
+            counter_metadata = {
+                key: value
+                for key, value in root_metadata.items()
+                if key.startswith("counter_")
+            }
+            counter_metadata["counter_variable"] = root_metadata["counter_variable"]
+            metadata.update(counter_metadata)
+            return True
+
+        declaration_node = metadata.get("declaration_node")
+        declared_type_name = metadata.get("declared_type_name")
+        if declaration_node is None or declared_type_name is None:
+            return False
+
+        counter_metadata = self.process_structured_buffer_counter_declaration(
+            declaration_node, declared_type_name
+        )
+        metadata.update(counter_metadata)
+        if root_metadata is not None:
+            root_metadata.update(counter_metadata)
+            self.structured_buffer_metadata[root_pointer.id] = root_metadata
+            block_type = root_metadata.get("block_type")
+            if block_type is not None:
+                self.structured_buffer_metadata[block_type.id] = root_metadata
+        return True
+
     def structured_buffer_counter_pointer(
         self, buffer_pointer: SpirvId
     ) -> Optional[SpirvId]:
@@ -12281,6 +12357,45 @@ class VulkanSPIRVCodeGen:
         element_type = self.variable_value_types[element_pointer.id]
         return True, self.load_from_variable(element_pointer, element_type)
 
+    def process_structured_buffer_counter_method_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+        increment: bool,
+    ) -> Tuple[bool, SpirvId]:
+        if args:
+            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            return True, self.structured_buffer_counter_default_value()
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            self.emit(f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer")
+            return True, self.structured_buffer_counter_default_value()
+        if metadata.get("readonly") or metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a read-write buffer")
+            return True, self.structured_buffer_counter_default_value()
+        if not self.ensure_structured_buffer_counter_metadata(metadata):
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_counter_default_value()
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_counter_default_value()
+
+        uint_type = self.register_primitive_type("uint")
+        one = self.register_constant(1, uint_type)
+        if increment:
+            counter_value = self.emit_structured_buffer_counter_atomic(
+                "OpAtomicIAdd", counter_pointer, one
+            )
+            return True, counter_value
+
+        old_count = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicISub", counter_pointer, one
+        )
+        return True, self.binary_operation("-", uint_type, old_count, one)
+
     def process_structured_buffer_method_call(
         self, expr: FunctionCallNode
     ) -> Tuple[bool, Optional[SpirvId]]:
@@ -12289,7 +12404,14 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         method_name = getattr(callee_expr, "member", None)
-        if method_name not in {"Load", "Store", "Append", "Consume"}:
+        if method_name not in {
+            "Load",
+            "Store",
+            "Append",
+            "Consume",
+            "IncrementCounter",
+            "DecrementCounter",
+        }:
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -12314,6 +12436,14 @@ class VulkanSPIRVCodeGen:
                 metadata,
                 args,
                 "ConsumeStructuredBuffer.Consume",
+            )
+        if method_name in {"IncrementCounter", "DecrementCounter"}:
+            return self.process_structured_buffer_counter_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                f"RWStructuredBuffer.{method_name}",
+                method_name == "IncrementCounter",
             )
 
         if method_name == "Load":
