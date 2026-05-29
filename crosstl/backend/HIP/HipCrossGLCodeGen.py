@@ -2128,8 +2128,8 @@ class HipToCrossGLConverter:
             "hipOccupancyMaxPotentialBlockSizeVariableSMemWithFlags",
         }:
             if len(args) >= 5:
-                grid_output = self.format_runtime_pointer_target(node.args[0])
-                block_output = self.format_runtime_pointer_target(node.args[1])
+                grid_output = self.format_runtime_raw_output_target(node.args[0])
+                block_output = self.format_runtime_raw_output_target(node.args[1])
                 grid_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 block_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 query_kind = {
@@ -2169,7 +2169,7 @@ class HipToCrossGLConverter:
             "hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags",
         }:
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 query_kind = (
                     "maxActiveBlocksPerMultiprocessorWithFlags"
@@ -2201,7 +2201,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipFuncGetAttribute":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2214,7 +2214,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipFuncGetAttributes":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(

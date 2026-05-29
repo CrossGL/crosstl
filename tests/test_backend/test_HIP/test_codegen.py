@@ -7066,6 +7066,91 @@ class TestHipCodeGen:
         assert "var manualBlockSize: i32 = (/* HIP device query:" not in result
         assert "var manualActiveBlocks: i32 = (/* HIP device query:" not in result
 
+    def test_hip_occupancy_function_array_outputs_clear_stale_metadata(self):
+        """Test occupancy/function array outputs clear prior query metadata."""
+        code = """
+        void queryOccupancyFunctionArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            void* kernel,
+            void* dynamicSmem,
+            hipFunction_t function,
+            int* grids,
+            int* blocks,
+            int* active,
+            int* values,
+            hipFuncAttributes* attrs,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&grids, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&blocks, &staleSize, devicePtr);
+            hipOccupancyMaxPotentialBlockSize(
+                &grids[0],
+                &blocks[0],
+                kernel,
+                dynamicSmem,
+                256
+            );
+            out[0] = grids[0];
+            out[1] = blocks[0];
+
+            hipMemGetAddressRange((void**)&active, &staleSize, devicePtr);
+            hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
+                &active[0],
+                kernel,
+                blocks[0],
+                0,
+                1
+            );
+            out[2] = active[0];
+
+            hipMemGetAddressRange((void**)&values, &staleSize, devicePtr);
+            hipFuncGetAttribute(
+                &values[0],
+                HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                function
+            );
+            out[3] = values[0];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipFuncGetAttributes(&attrs[0], function);
+            out[4] = attrs[0].maxThreadsPerBlock;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP occupancy max potential block size: grid output: grids[0], "
+            "block output: blocks[0], kernel: kernel, dynamic shared memory: "
+            "dynamicSmem, block size limit: 256"
+        ) in result
+        assert "out[0] = grids[0];" in result
+        assert "out[1] = blocks[0];" in result
+        assert (
+            "// HIP occupancy active blocks per multiprocessor: output: active[0], "
+            "kernel: kernel, block size: blocks[0], dynamic shared memory: 0, "
+            "flags: 1"
+        ) in result
+        assert "out[2] = active[0];" in result
+        assert (
+            "// HIP function get attribute: output: values[0], attribute: "
+            "HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, function: function"
+        ) in result
+        assert "out[3] = values[0];" in result
+        assert (
+            "// HIP function get attributes: output: attrs[0], function: function"
+            in result
+        )
+        assert "out[4] = attrs[0].maxThreadsPerBlock;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_memory_event_output_reads_emit_metadata_expressions(self):
         """Test HIP memory and event outputs lower to explicit metadata."""
         code = """

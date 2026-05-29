@@ -3593,6 +3593,13 @@ class MetalCodeGen:
                     self.local_variable_address_space_mismatch_diagnostic(stmt)
                 )
                 if is_atomic_local:
+                    array_initializer = (
+                        self.generate_metal_atomic_array_initializer_stores(
+                            stmt.name, var_type, initial_value, indent_str
+                        )
+                    )
+                    if array_initializer is not None:
+                        return f"{indent_str}{declaration};\n{array_initializer}"
                     return (
                         f"{indent_str}{declaration};\n"
                         f"{indent_str}atomic_store_explicit(&{stmt.name}, {init_expr}, "
@@ -4319,6 +4326,71 @@ class MetalCodeGen:
             "atomic_int",
             "atomic_uint",
         }
+
+    def metal_atomic_array_type_parts(self, vtype):
+        type_name = self.type_name_string(vtype)
+        if type_name is None or "[" not in type_name:
+            return None
+
+        atomic_type = type_name.split("[", 1)[0].strip()
+        if not self.is_metal_atomic_value_type(atomic_type):
+            return None
+
+        size = None
+        if hasattr(vtype, "element_type") and str(type(vtype)).find("ArrayType") != -1:
+            size = evaluate_literal_int_expression(
+                getattr(vtype, "size", None),
+                self.literal_int_constants,
+            )
+        if size is None:
+            _base_type, size = parse_array_type(type_name)
+        return atomic_type, size
+
+    def metal_atomic_value_type(self, atomic_type):
+        return {
+            "atomic_bool": "bool",
+            "atomic_int": "int",
+            "atomic_uint": "uint",
+        }.get(str(atomic_type), atomic_type)
+
+    def metal_atomic_zero_value(self, atomic_type):
+        return {
+            "atomic_bool": "false",
+            "atomic_int": "0",
+            "atomic_uint": "0u",
+        }.get(str(atomic_type), "0")
+
+    def generate_metal_atomic_array_initializer_stores(
+        self, name, var_type, initial_value, indent_str
+    ):
+        array_parts = self.metal_atomic_array_type_parts(var_type)
+        if array_parts is None or not isinstance(initial_value, ArrayLiteralNode):
+            return None
+
+        atomic_type, declared_size = array_parts
+        elements = list(getattr(initial_value, "elements", []) or [])
+        store_count = declared_size if declared_size is not None else len(elements)
+        value_type = self.metal_atomic_value_type(atomic_type)
+        zero_value = self.metal_atomic_zero_value(atomic_type)
+        lines = []
+        for index in range(store_count):
+            if index < len(elements):
+                value = self.generate_expression_with_expected(
+                    elements[index], value_type
+                )
+            else:
+                value = zero_value
+            lines.append(
+                f"{indent_str}atomic_store_explicit(&{name}[{index}], {value}, "
+                "memory_order_relaxed);\n"
+            )
+        if declared_size is not None and len(elements) > declared_size:
+            lines.append(
+                f"{indent_str}/* unsupported Metal atomic array initializer: "
+                f"'{name}' has {len(elements)} initializers for {declared_size} "
+                "elements; extra values were ignored */\n"
+            )
+        return "".join(lines)
 
     def type_name_string(self, vtype):
         if vtype is None:

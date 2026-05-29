@@ -2013,6 +2013,28 @@ shader MetalThreadgroupAtomicBarrierValidation {
 """
 
 
+METAL_ATOMIC_ARRAY_INITIALIZER_SHADER = """
+shader MetalAtomicArrayInitializerValidation {
+    compute {
+        void main() {
+            uint index = gl_LocalInvocationIndex;
+            shared atomic_uint counters[4] = {0u, 1u, uint(index), 3u};
+            atomic_int signedCounters[2] = {-1, 2};
+            uint oldValue = atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed
+            );
+            int signedValue = atomic_load_explicit(
+                signedCounters[index % 2u],
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_SCOPED_ATOMIC_SHADER = """
 shader MetalScopedAtomicValidation {
     bool claim(
@@ -8332,6 +8354,35 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_atomic_array_initializers_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "atomic_array_initializers.metal"
+    output = tmp_path / "atomic_array_initializers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_ATOMIC_ARRAY_INITIALIZER_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_uint counters[4];" in code
+    assert "threadgroup atomic_int signedCounters[2];" in code
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in code
+    assert (
+        "atomic_store_explicit(&counters[2], uint(index), memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);" in code
+    )
+    assert "atomic_store_explicit(&counters, {" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

@@ -9121,6 +9121,58 @@ def test_metal_atomic_local_initializers_use_atomic_store():
     assert "threadgroup atomic_uint counter = 0;" not in generated
 
 
+def test_metal_atomic_array_initializers_use_element_stores():
+    code = """
+    shader MetalAtomicArrayInitializerValidation {
+        compute {
+            void main() {
+                uint index = gl_LocalInvocationIndex;
+                shared atomic_uint counters[4] = {0u, 1u, uint(index), 3u};
+                atomic_int signedCounters[2] = {-1, 2};
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed
+                );
+                int signedValue = atomic_load_explicit(
+                    signedCounters[index % 2u],
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_uint counters[4];" in generated
+    assert "threadgroup atomic_int signedCounters[2];" in generated
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[1], 1u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&counters[2], uint(index), memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters[3], 3u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[1], 2, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "int signedValue = atomic_load_explicit(&signedCounters[index % 2u], memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters, {" not in generated
+    assert "threadgroup atomic_uint counters[4] = {" not in generated
+
+
 def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     code = """
     shader main {
