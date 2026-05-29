@@ -9930,6 +9930,164 @@ class TestHipCodeGen:
         assert "symbol.size(kernelName)" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hip_module_library_load_array_outputs_clear_stale_metadata(self):
+        """Test module/library/link load outputs clear stale array/member metadata."""
+        code = """
+        struct RuntimeHandles {
+            hipModule_t module;
+            hipLibrary_t library;
+            hipLinkState_t link;
+            void* entry;
+            hipDriverEntryPointQueryResult status;
+        };
+
+        void queryModuleLoadOutputs(
+            hipDeviceptr_t devicePtr,
+            const void* image,
+            const void* fatBinary,
+            hiprtcJIT_option* options,
+            void** optionValues,
+            RuntimeHandles* holder,
+            hipModule_t* modules,
+            hipLibrary_t* libraries,
+            hipLinkState_t* links,
+            void** entries,
+            hipDriverEntryPointQueryResult* statuses,
+            void** ptrs,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoad(&modules[0], "kernel.hsaco");
+            ptrs[0] = modules[0];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadData(&modules[1], image);
+            ptrs[1] = modules[1];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadDataEx(
+                &modules[2],
+                image,
+                1,
+                options,
+                optionValues
+            );
+            ptrs[2] = modules[2];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadFatBinary(&modules[3], fatBinary);
+            ptrs[3] = modules[3];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipLibraryLoadData(
+                &libraries[0],
+                image,
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[4] = libraries[0];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipLibraryLoadFromFile(
+                &libraries[1],
+                "kernel.hipfb",
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[5] = libraries[1];
+
+            hipMemGetAddressRange((void**)&links, &staleSize, devicePtr);
+            hipLinkCreate(1, options, optionValues, &links[0]);
+            ptrs[6] = links[0];
+
+            hipMemGetAddressRange((void**)&entries, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&statuses, &staleSize, devicePtr);
+            hipGetDriverEntryPoint("hipMalloc", &entries[0], 0, &statuses[0]);
+            ptrs[7] = entries[0];
+            values[0] = statuses[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleLoad(&holder->module, "member.hsaco");
+            ptrs[8] = holder->module;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryLoadData(
+                &holder->library,
+                image,
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[9] = holder->library;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLinkCreate(1, options, optionValues, &holder->link);
+            ptrs[10] = holder->link;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetDriverEntryPoint("hipLaunchKernel", &holder->entry, 0, &holder->status);
+            ptrs[11] = holder->entry;
+            values[1] = holder->status;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert '// HIP module load: output: modules[0], file: "kernel.hsaco"' in result
+        assert "// HIP module load: output: modules[1], image: image" in result
+        assert "// HIP module load data ex: output: modules[2], image: image" in result
+        assert (
+            "// HIP module load fat binary: output: modules[3], "
+            "fat binary: fatBinary"
+        ) in result
+        assert "// HIP library load: output: libraries[0], code: image" in result
+        assert (
+            '// HIP library load: output: libraries[1], file: "kernel.hipfb"' in result
+        )
+        assert (
+            "// HIP link create: options: 1, option keys: options, "
+            "option values: optionValues, state output: links[0]"
+        ) in result
+        assert (
+            '// HIP get driver entry point: symbol: "hipMalloc", '
+            "output: entries[0], flags: 0, status output: statuses[0]"
+        ) in result
+        assert (
+            '// HIP module load: output: holder->module, file: "member.hsaco"' in result
+        )
+        assert "// HIP library load: output: holder->library, code: image" in result
+        assert "state output: holder->link" in result
+        assert (
+            '// HIP get driver entry point: symbol: "hipLaunchKernel", '
+            "output: holder->entry, flags: 0, status output: holder->status"
+        ) in result
+        for index in range(8):
+            assert f"ptrs[{index}] = " in result
+        assert "ptrs[8] = holder->module;" in result
+        assert "ptrs[9] = holder->library;" in result
+        assert "ptrs[10] = holder->link;" in result
+        assert "ptrs[11] = holder->entry;" in result
+        assert "values[0] = statuses[0];" in result
+        assert "values[1] = holder->status;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_hip_link_complete_outputs_replace_stale_metadata(self):
         """Test link-complete outputs clear handles and retain size metadata."""
         code = """

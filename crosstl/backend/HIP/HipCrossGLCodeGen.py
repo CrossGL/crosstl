@@ -2250,7 +2250,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipModuleLoad", "hipModuleLoadData"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 source_label = "file" if name == "hipModuleLoad" else "image"
                 return [
                     f"// HIP module load: output: {output}, "
@@ -2258,7 +2258,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipModuleLoadDataEx":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP module load data ex: output: {output}, image: {args[1]}, "
                     f"options: {args[2]}, option keys: {args[3]}, "
@@ -2266,7 +2266,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipModuleLoadFatBinary":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP module load fat binary: output: {output}, "
                     f"fat binary: {args[1]}"
@@ -2583,8 +2583,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetDriverEntryPoint":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[1])
-                status_output = self.format_runtime_pointer_target(node.args[3])
+                output = self.format_runtime_raw_output_target(node.args[1])
+                status_output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP get driver entry point: symbol: {args[0]}, "
                     f"output: {output}, flags: {args[2]}, "
@@ -2592,7 +2592,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipLibraryLoadData", "hipLibraryLoadFromFile"}:
             if len(args) >= 8:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 source_label = "file" if name == "hipLibraryLoadFromFile" else "code"
                 return [
                     f"// HIP library load: output: {output}, "
@@ -2705,7 +2705,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipLinkCreate":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[3])
+                output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP link create: options: {args[0]}, "
                     f"option keys: {args[1]}, option values: {args[2]}, "
