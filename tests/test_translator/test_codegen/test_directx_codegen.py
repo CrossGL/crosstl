@@ -1835,6 +1835,14 @@ def test_directx_typed_buffer_atomics_reject_non_lvalue_explicit_originals(
             "useFloat(atomicAdd(counters[index], 1u)); return 0u;",
             "atomic 'atomicAdd' requires uint result context.*expected float",
         ),
+        (
+            "uvec2 wrong = atomicAdd(counters[index], 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected uint2",
+        ),
+        (
+            "bool wrong = atomicAdd(counters[index], 1u); return 0u;",
+            "atomic 'atomicAdd' requires uint result context.*expected bool",
+        ),
     ],
 )
 def test_directx_typed_buffer_atomics_validate_result_contexts(function_body, match):
@@ -15736,6 +15744,39 @@ def test_directx_rejects_invalid_image_atomic_format_and_type_context(shader, ma
 
     with pytest.raises(ValueError, match=re.escape(match)):
         HLSLCodeGen().generate(ast)
+
+
+@pytest.mark.parametrize(
+    ("declaration", "match"),
+    [
+        (
+            "uvec2 wrong = imageAtomicAdd(counters, pixel, value);",
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "result context for r32ui images: expected uint2",
+        ),
+        (
+            "bool wrong = imageAtomicAdd(counters, pixel, value);",
+            "DirectX image atomic operation 'imageAtomicAdd' requires uint "
+            "result context for r32ui images: expected bool",
+        ),
+    ],
+)
+def test_directx_image_atomics_reject_non_scalar_result_contexts(declaration, match):
+    shader = f"""
+    shader InvalidImageAtomicNonScalarResult {{
+        uimage2D counters @r32ui;
+
+        compute {{
+            void main(ivec2 pixel @ TEXCOORD0) {{
+                uint value = 1u;
+                {declaration}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=re.escape(match)):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
 def test_directx_explicit_vector_integer_image_formats():

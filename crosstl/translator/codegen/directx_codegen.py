@@ -10113,18 +10113,40 @@ class HLSLCodeGen:
             self.map_type,
         )
 
+    def hlsl_atomic_result_expected_label(self, expected_type):
+        type_name = self.type_name_string(expected_type)
+        if not type_name:
+            return None
+        expected_kind = numeric_scalar_type_kind(
+            type_name,
+            self.type_name_string,
+            self.map_type,
+        )
+        if expected_kind is not None:
+            return expected_kind
+        return self.map_type(type_name)
+
     def validate_image_atomic_result_type(
         self, func_name, image_type, component_kind, image_format
     ):
-        expected_kind = image_atomic_result_kind_mismatch(
-            self.scalar_expected_kind(), component_kind
+        expected_label = self.hlsl_atomic_result_expected_label(
+            self.current_expression_expected_type
         )
-        if expected_kind is None:
+        if expected_label is None:
+            return
+        expected_kind = image_atomic_result_kind_mismatch(
+            expected_label, component_kind
+        )
+        if expected_kind is None and expected_label == component_kind:
             return
         format_label = image_format or self.resource_base_type(image_type)
         raise ValueError(
             image_atomic_result_kind_error(
-                "DirectX", func_name, format_label, component_kind, expected_kind
+                "DirectX",
+                func_name,
+                format_label,
+                component_kind,
+                expected_kind or expected_label,
             )
         )
 
@@ -12082,13 +12104,14 @@ class HLSLCodeGen:
         }
 
     def validate_hlsl_typed_buffer_atomic_result_context(self, parts, expected_type):
+        expected_label = self.hlsl_atomic_result_expected_label(expected_type)
+        if expected_label is None:
+            return
         expected_kind = image_atomic_result_kind_mismatch(
-            numeric_scalar_type_kind(
-                expected_type, self.type_name_string, self.map_type
-            ),
+            expected_label,
             parts["target_kind"],
         )
-        if expected_kind is None:
+        if expected_kind is None and expected_label == parts["target_kind"]:
             return
 
         target_type = (
@@ -12097,7 +12120,7 @@ class HLSLCodeGen:
         raise ValueError(
             f"DirectX typed buffer atomic '{parts['func_name']}' requires "
             f"{parts['target_kind']} result context for {target_type} target: "
-            f"expected {expected_kind}"
+            f"expected {expected_kind or expected_label}"
         )
 
     def hlsl_typed_buffer_atomic_original_is_lvalue(self, expr):
