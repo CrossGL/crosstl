@@ -5336,6 +5336,82 @@ def test_resource_struct_fields_default_initialize_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_struct_arrays_default_initialize_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        image2D inputImage;
+        sampler2D textures[2];
+        image2D images[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet chooseSet(ResourceSet sets[2], int index) {
+        return sets[index];
+    }
+
+    ResourceSet buildSet(
+        sampler2D texture,
+        sampler state,
+        image2D image,
+        RWStructuredBuffer<int> values[2],
+        RWByteAddressBuffer rawBuffers[2]
+    ) {
+        ResourceSet partials[2] = {
+            ResourceSet {
+                texture: texture,
+                state: state,
+                inputImage: image,
+                values: values,
+                rawBuffers: rawBuffers
+            }
+        };
+        ResourceSet locals[2];
+        locals[0] = partials[0];
+        return chooseSet(locals, 0);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn chooseSet(sets: InlineArray[ResourceSet, 2], index: Int32)" in (
+        generated_code
+    )
+    assert "var locals = InlineArray[ResourceSet, 2](ResourceSet(" in generated_code
+    assert (
+        "var locals = InlineArray[ResourceSet, 2](unsafe_uninitialized=True)"
+        not in generated_code
+    )
+    assert (
+        "textures=InlineArray[Texture2D, 2](Texture2D(), Texture2D())" in generated_code
+    )
+    assert "images=InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
+    assert (
+        "InlineArray[RWStructuredBuffer[Int32], 2]"
+        "(RWStructuredBuffer[Int32](), RWStructuredBuffer[Int32]())" in generated_code
+    )
+    assert (
+        "InlineArray[RWByteAddressBuffer, 2]"
+        "(RWByteAddressBuffer(), RWByteAddressBuffer())" in generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "resource_struct_array_defaults.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholders():
     code = """
     struct SampleSet {

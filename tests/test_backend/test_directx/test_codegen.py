@@ -2463,6 +2463,104 @@ def test_codegen_nonuniform_resource_index_multidimensional_arrays_roundtrip():
     assert "float nonUniformTile" not in hlsl
 
 
+def test_codegen_nonuniform_resource_index_typed_and_raw_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        StructuredBuffer<float4> positions[4] : register(t0, space3);
+        RWStructuredBuffer<float4> outPositions[4] : register(u0, space3);
+        ByteAddressBuffer rawBuffers[4] : register(t4, space3);
+        RWByteAddressBuffer rwRawBuffers[4] : register(u4, space3);
+
+        float4 main(
+            uint materialIndex : TEXCOORD0,
+            uint outputIndex : TEXCOORD1
+        ) : SV_Target0 {
+            uint src = NonUniformResourceIndex(materialIndex);
+            uint dst = NonUniformResourceIndex(outputIndex);
+            float4 value = positions[src][0];
+            outPositions[dst][0] = value;
+            uint raw = rawBuffers[src].Load(0);
+            rwRawBuffers[dst].Store(0, raw);
+            return value + float4(raw & 1u, 0, 0, 0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "StructuredBuffer<float4> positions[4];" in crossgl
+    assert "RWStructuredBuffer<float4> outPositions[4];" in crossgl
+    assert "ByteAddressBuffer rawBuffers[4];" in crossgl
+    assert "RWByteAddressBuffer rwRawBuffers[4];" in crossgl
+    assert "uint src = NonUniformResourceIndex(materialIndex);" in crossgl
+    assert "uint dst = NonUniformResourceIndex(outputIndex);" in crossgl
+    assert "vec4 value = positions[src][0];" in crossgl
+    assert "outPositions[dst][0] = value;" in crossgl
+    assert "uint raw = buffer_load(rawBuffers[src], 0);" in crossgl
+    assert "buffer_store(rwRawBuffers[dst], 0, raw);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "StructuredBuffer<float4> positions[4] : register(t0, space3);" in hlsl
+    assert "RWStructuredBuffer<float4> outPositions[4] : register(u0, space3);" in hlsl
+    assert "ByteAddressBuffer rawBuffers[4] : register(t4, space3);" in hlsl
+    assert "RWByteAddressBuffer rwRawBuffers[4] : register(u4, space3);" in hlsl
+    assert "uint src = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint dst = NonUniformResourceIndex(outputIndex);" in hlsl
+    assert "float4 value = positions[src][0];" in hlsl
+    assert "outPositions[dst][0] = value;" in hlsl
+    assert "uint raw = rawBuffers[src].Load(0);" in hlsl
+    assert "rwRawBuffers[dst].Store(0, raw);" in hlsl
+    assert "float src" not in hlsl
+    assert "float dst" not in hlsl
+    assert "buffer_load(" not in hlsl
+    assert "buffer_store(" not in hlsl
+
+
+def test_codegen_nonuniform_resource_index_multidimensional_typed_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        Buffer<float4> coefficients[][2] : register(t0, space4);
+        RWBuffer<uint> counters[] : register(u0, space4);
+
+        float4 main(
+            uint materialIndex : TEXCOORD0,
+            uint tileIndex : TEXCOORD1
+        ) : SV_Target0 {
+            uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);
+            uint nonUniformTile = NonUniformResourceIndex(tileIndex);
+            float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];
+            uint oldValue;
+            InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);
+            return value + float4(oldValue, 0, 0, 0);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "Buffer<float4> coefficients[][2];" in crossgl
+    assert "RWBuffer<uint> counters[];" in crossgl
+    assert (
+        "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in crossgl
+    )
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in crossgl
+    assert (
+        "vec4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in crossgl
+    )
+    assert "oldValue = atomicAdd(counters[nonUniformMaterial][0], 1u);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "Buffer<float4> coefficients[][2] : register(t0, space4);" in hlsl
+    assert "RWBuffer<uint> counters[] : register(u0, space4);" in hlsl
+    assert "uint nonUniformMaterial = NonUniformResourceIndex(materialIndex);" in hlsl
+    assert "uint nonUniformTile = NonUniformResourceIndex(tileIndex);" in hlsl
+    assert "float4 value = coefficients[nonUniformMaterial][nonUniformTile][0];" in (
+        hlsl
+    )
+    assert "InterlockedAdd(counters[nonUniformMaterial][0], 1u, oldValue);" in hlsl
+    assert "float nonUniformMaterial" not in hlsl
+    assert "float nonUniformTile" not in hlsl
+    assert "atomicAdd(" not in hlsl
+
+
 def test_codegen_append_consume_structured_buffers_roundtrip():
     code = textwrap.dedent("""
         AppendStructuredBuffer<int> appendValues : register(u1);

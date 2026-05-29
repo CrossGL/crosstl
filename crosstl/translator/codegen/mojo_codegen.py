@@ -7759,11 +7759,18 @@ class MojoCodeGen:
         array_type = self.array_storage_type(element_type, size)
         if size is None:
             return f"{array_type}()"
+        if self.should_zero_initialize_array_elements(element_type):
+            return self.zero_array_value(element_type, size)
         return f"{array_type}(unsafe_uninitialized=True)"
 
     def array_initial_value_for_type(self, type_name):
         element_type, size = self.parse_array_type_name(type_name)
         return self.array_initial_value(element_type, size)
+
+    def should_zero_initialize_array_elements(self, element_type):
+        return self.is_struct_type_name(element_type) or self.is_resource_type_name(
+            element_type
+        )
 
     def array_element_type(self, type_name):
         if not self.is_array_type_name(type_name):
