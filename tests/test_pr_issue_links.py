@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -118,11 +119,8 @@ def test_sync_assigns_unassigned_issues_and_updates_pr_body():
                     "Resolves #11",
                     "",
                     "<!-- crossgl-pr-issue-links:start -->",
-                    "## Fixing Issues",
-                    "",
-                    "This PR is marked as fixing:",
-                    "- Fixes #10",
-                    "- Fixes #11",
+                    "Closes #10",
+                    "Closes #11",
                     "<!-- crossgl-pr-issue-links:end -->",
                 ]
             ),
@@ -183,7 +181,7 @@ def test_sync_skips_pull_request_refs_and_non_assignable_authors():
     assert summary["assignment_skipped"] == 1
     assert summary["missing_or_pull"] == 1
     assert client.assigned == []
-    assert "- Fixes #11" in client.updated_bodies[0][1]
+    assert "Closes #11" in client.updated_bodies[0][1]
     assert "- Fixes #10" not in client.updated_bodies[0][1]
 
 
@@ -346,3 +344,82 @@ def test_traceability_policy_ignores_non_support_paths():
     assert summary["traceability_required"] == 0
     assert summary["traceability_satisfied"] == 0
     assert summary["traceability_failed"] == 0
+
+
+def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, capsys):
+    module = load_sync_module()
+    event = {
+        "pull_request": {
+            "number": 5,
+            "title": "Improve Metal support",
+            "body": "No linked issue.",
+            "user": {"login": "alice"},
+        }
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    summary_path = tmp_path / "summary.md"
+    client = FakeClient(
+        module,
+        pull_files=("tests/test_translator/test_codegen/test_metal_codegen.py",),
+    )
+    monkeypatch.setenv("TOKEN", "token")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    monkeypatch.setattr(module, "GitHubClient", lambda *args, **kwargs: client)
+
+    result = module.main(
+        [
+            "--repo",
+            "CrossGL/crosstl",
+            "--event-path",
+            str(event_path),
+            "--token-env",
+            "TOKEN",
+            "--check-support-traceability",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert "::warning::Support-relevant PR changes" in captured.out
+    assert "Support Traceability" in summary_path.read_text(encoding="utf-8")
+
+
+def test_traceability_enforcement_cli_fails_when_opted_in(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    event = {
+        "pull_request": {
+            "number": 5,
+            "title": "Improve Metal support",
+            "body": "No linked issue.",
+            "user": {"login": "alice"},
+        }
+    }
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    client = FakeClient(
+        module,
+        pull_files=("tests/test_translator/test_codegen/test_metal_codegen.py",),
+    )
+    monkeypatch.setenv("TOKEN", "token")
+    monkeypatch.setattr(module, "GitHubClient", lambda *args, **kwargs: client)
+
+    result = module.main(
+        [
+            "--repo",
+            "CrossGL/crosstl",
+            "--event-path",
+            str(event_path),
+            "--token-env",
+            "TOKEN",
+            "--enforce-support-traceability",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert "Support-relevant PR changes must include" in captured.err

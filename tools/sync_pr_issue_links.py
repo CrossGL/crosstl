@@ -2,8 +2,8 @@
 """Synchronize PR closing-keyword issue links.
 
 When a pull request title or body uses GitHub closing keywords for same-repo
-issues, this tool assigns those issues to the PR author and maintains a small
-managed PR body section listing the issues being fixed.
+issues, this tool assigns those issues to the PR author and maintains concise
+managed closing lines in the PR body.
 """
 
 from __future__ import annotations
@@ -280,13 +280,8 @@ def has_support_traceability_opt_out(body: str) -> bool:
 
 
 def managed_section(issue_numbers: list[int]) -> str:
-    lines = [
-        SECTION_BEGIN,
-        "## Fixing Issues",
-        "",
-        "This PR is marked as fixing:",
-    ]
-    lines.extend("- Fixes #{}".format(number) for number in issue_numbers)
+    lines = [SECTION_BEGIN]
+    lines.extend("Closes #{}".format(number) for number in issue_numbers)
     lines.append(SECTION_END)
     return "\n".join(lines)
 
@@ -311,6 +306,7 @@ def sync_pr_issue_links(
     repo: str,
     *,
     dry_run: bool = False,
+    check_support_traceability: bool = False,
     enforce_support_traceability: bool = False,
 ) -> dict[str, int]:
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
@@ -352,7 +348,7 @@ def sync_pr_issue_links(
         if not dry_run:
             client.update_pull_body(pr.number, new_body)
 
-    if enforce_support_traceability:
+    if check_support_traceability or enforce_support_traceability:
         changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
         relevant_paths = support_relevant_paths(changed_files)
         traceability_required = bool(relevant_paths)
@@ -398,6 +394,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--check-support-traceability",
+        action="store_true",
+        help=(
+            "Report whether support-relevant PR files have closing issue refs or "
+            "an explicit 'Support issue traceability: no issue closed' marker"
+        ),
+    )
+    parser.add_argument(
         "--enforce-support-traceability",
         action="store_true",
         help=(
@@ -430,6 +434,9 @@ def main(argv: list[str] | None = None) -> int:
         pr,
         args.repo,
         dry_run=args.dry_run,
+        check_support_traceability=(
+            args.check_support_traceability or args.enforce_support_traceability
+        ),
         enforce_support_traceability=args.enforce_support_traceability,
     )
     print(
@@ -437,13 +444,33 @@ def main(argv: list[str] | None = None) -> int:
             **summary
         )
     )
-    if args.enforce_support_traceability:
+    if args.check_support_traceability or args.enforce_support_traceability:
         print(
             "Support traceability: required={traceability_required}, satisfied={traceability_satisfied}, failed={traceability_failed}, support_relevant_files={support_relevant_files}".format(
                 **summary
             )
         )
+        if summary.get("traceability_failed"):
+            warning = (
+                "Support-relevant PR changes have no same-repo closing issue "
+                "reference and no explicit 'Support issue traceability: no issue "
+                "closed' marker."
+            )
+            print("::warning::{}".format(warning))
+            step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+            if step_summary:
+                with open(step_summary, "a", encoding="utf-8") as handle:
+                    handle.write("## Support Traceability\n\n")
+                    handle.write("- Status: advisory warning\n")
+                    handle.write(
+                        "- Support-relevant files: {support_relevant_files}\n".format(
+                            **summary
+                        )
+                    )
+                    handle.write("- Action: {}\n".format(warning))
     if summary.get("traceability_failed"):
+        if not args.enforce_support_traceability:
+            return 0
         print(
             "Support-relevant PR changes must include a same-repo closing issue "
             "reference or an explicit 'Support issue traceability: no issue closed' "
