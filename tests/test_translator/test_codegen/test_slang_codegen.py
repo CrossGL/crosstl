@@ -9809,6 +9809,88 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
     assert "colorImage.Sample" not in generated_code
 
 
+def test_sampled_texture_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(sampler2d tex, vec2 uv) {
+                return texture(tex, uv);
+            }
+
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 pixel = ivec2(2, 3);
+                bool take = true;
+                vec4 validTexture = texture(colorMap, uv);
+                float scalarTexture = texture(colorMap, uv);
+                ivec2 vectorLod = textureLod(colorMap, uv, 1.0);
+                acceptFloat(textureGrad(colorMap, uv, ddx, ddy));
+                float fetchedScalar = texelFetch(colorMap, pixel, 0);
+                float scalarTernary = take ? texture(colorMap, uv) : 1.0;
+                float scalarArray[2] = {textureLod(colorMap, uv, 1.0), 1.0};
+                float missingTexture = texture(colorMap);
+                float missingFetch = texelFetch(colorMap, pixel);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validTexture = colorMap.Sample(uv);" in generated_code
+    assert (
+        "float scalarTexture = /* unsupported Slang sampled texture: "
+        "texture returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorLod = /* unsupported Slang sampled texture: "
+        "textureLod returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang sampled texture: textureGrad "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float fetchedScalar = /* unsupported Slang sampled texture: "
+        "texelFetch returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "return /* unsupported Slang sampled texture: texture returns float4 "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang sampled texture: "
+        "texture returns float4 but target expects float */ 0 : 1.0);" in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang sampled texture: "
+        "textureLod returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingTexture = /* unsupported Slang sampled texture: "
+        "texture requires texture and coordinate arguments */ 0;" in generated_code
+    )
+    assert (
+        "float missingFetch = /* unsupported Slang sampled texture: "
+        "texelFetch requires one lod/sample argument */ 0;" in generated_code
+    )
+    assert "float scalarTexture = colorMap.Sample(uv);" not in generated_code
+    assert "int2 vectorLod = colorMap.SampleLevel" not in generated_code
+    assert "acceptFloat(colorMap.SampleGrad" not in generated_code
+    assert "float fetchedScalar = colorMap.Load" not in generated_code
+
+
 def test_texture_and_shadow_arrays_preserve_expression_sizes_and_group_indices():
     code = """
     shader TextureArrays {

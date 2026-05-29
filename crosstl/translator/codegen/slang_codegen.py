@@ -8554,14 +8554,37 @@ class SlangCodeGen:
                         return self.unsupported_sampled_texture_call(
                             func_name, bias_reason
                         )
+                    expected_reason = (
+                        self.texture_result_expected_type_unsupported_reason(
+                            func_name, "float4"
+                        )
+                    )
+                    if expected_reason:
+                        return self.unsupported_sampled_texture_call(
+                            func_name, expected_reason
+                        )
                     bias = self.generate_expression(extra_args[0])
                     return f"{texture_name}.SampleBias({coord}, {bias})"
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 return f"{texture_name}.Sample({coord})"
 
             if func_name == "textureLod" and extra_args:
                 lod_reason = self.scalar_texture_lod_unsupported_reason(extra_args[0])
                 if lod_reason:
                     return self.unsupported_sampled_texture_call(func_name, lod_reason)
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 lod = self.generate_expression(extra_args[0])
                 return f"{texture_name}.SampleLevel({coord}, {lod})"
 
@@ -8573,6 +8596,13 @@ class SlangCodeGen:
                 )
                 if grad_reason:
                     return self.unsupported_sampled_texture_call(func_name, grad_reason)
+                expected_reason = self.texture_result_expected_type_unsupported_reason(
+                    func_name, "float4"
+                )
+                if expected_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, expected_reason
+                    )
                 ddx = self.generate_expression(extra_args[0])
                 ddy = self.generate_expression(extra_args[1])
                 return f"{texture_name}.SampleGrad({coord}, {ddx}, {ddy})"
@@ -8637,6 +8667,11 @@ class SlangCodeGen:
                 return self.unsupported_sampled_texture_call(
                     func_name, fetch_index_reason
                 )
+            expected_reason = self.texture_result_expected_type_unsupported_reason(
+                func_name, "float4"
+            )
+            if expected_reason:
+                return self.unsupported_sampled_texture_call(func_name, expected_reason)
             lod_or_sample = self.generate_expression(extra_args[0])
             texture_type = self.get_expression_type(args[0])
             if self.is_multisample_sampler_type(texture_type):
@@ -8874,9 +8909,10 @@ class SlangCodeGen:
         return "has unsupported arguments"
 
     def unsupported_sampled_texture_call(self, func_name, reason):
+        fallback = self.texture_result_diagnostic_fallback("float4")
         return (
             f"/* unsupported Slang sampled texture: "
-            f"{func_name} {reason} */ float4(0.0)"
+            f"{func_name} {reason} */ {fallback}"
         )
 
     def generate_texture_offset(self, func_name, args):
