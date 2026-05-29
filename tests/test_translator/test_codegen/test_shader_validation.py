@@ -61,6 +61,8 @@ shader MetalWaveIntrinsicsValidation {
     compute {
         void main() {
             uint value = 1u;
+            uint lane = WaveGetLaneIndex();
+            uint laneCount = WaveGetLaneCount();
             uint sumValue = WaveActiveSum(value);
             uint productValue = WaveActiveProduct(value + 1u);
             uint minValue = WaveActiveMin(sumValue);
@@ -83,9 +85,9 @@ shader MetalWaveIntrinsicsValidation {
             uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
             bool quadAny = QuadAny(anyLane);
             bool quadAll = QuadAll(allLane);
-            uint folded = minValue + count + prefixCount + quadLane + ballot.x;
+            uint folded = minValue + count + prefixCount + quadLane + ballot.x + lane;
             folded = folded + (quadAny ? quadX : quadY);
-            folded = folded + (quadAll ? quadDiagonal : firstValue);
+            folded = folded + (quadAll ? quadDiagonal : firstValue) + laneCount;
         }
     }
 }
@@ -5928,6 +5930,10 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
         "compute",
     )
     assert "simd_sum(value)" in code
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in code
+    assert "uint lane = crossglWaveLaneIndex;" in code
+    assert "uint laneCount = crossglWaveLaneCount;" in code
     assert "__crossgl_metal_wave_ballot(anyLane)" in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code

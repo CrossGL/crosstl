@@ -2223,14 +2223,17 @@ class MojoCodeGen:
             self.resource_access_qualifiers[name] = access
 
     def register_resource_access_alias_metadata(self, name, type_name, initializer):
-        if (
-            not name
-            or initializer is None
-            or self.mojo_resource_kind(type_name) is None
-        ):
+        if not name or initializer is None:
             return
+        type_name = self.type_name(type_name)
+        if self.mojo_resource_kind(type_name) is None:
+            specialization = self.generic_enum_specialization_for_type(type_name)
+            if specialization is None:
+                return
 
-        candidates = self.resource_access_qualifier_candidates(initializer)
+        candidates = self.resource_access_qualifier_candidates(
+            initializer, target_type=type_name
+        )
         if candidates:
             self.resource_access_qualifier_aliases[name] = candidates
         else:
@@ -2278,6 +2281,11 @@ class MojoCodeGen:
             return self.resource_access_root_name(expr.object)
         name = getattr(expr, "name", None)
         if name is not None:
+            replacement = self.expression_identifier_replacements.get(name)
+            if isinstance(replacement, str):
+                match = re.match(r"\s*([A-Za-z_]\w*)", replacement)
+                if match is not None:
+                    return match.group(1)
             return name
         return None
 
@@ -2319,15 +2327,21 @@ class MojoCodeGen:
             return field_access
         return None, root_name
 
-    def resource_access_qualifier_candidates(self, expr):
+    def resource_access_qualifier_candidates(self, expr, target_type=None):
         if isinstance(expr, ArrayAccessNode):
             return self.resource_access_qualifier_candidates(expr.array)
 
         if isinstance(expr, TernaryOpNode):
             candidates = []
-            candidates.extend(self.resource_access_qualifier_candidates(expr.true_expr))
             candidates.extend(
-                self.resource_access_qualifier_candidates(expr.false_expr)
+                self.resource_access_qualifier_candidates(
+                    expr.true_expr, target_type=target_type
+                )
+            )
+            candidates.extend(
+                self.resource_access_qualifier_candidates(
+                    expr.false_expr, target_type=target_type
+                )
             )
             return self.unique_resource_access_qualifiers(candidates)
 
@@ -2335,11 +2349,18 @@ class MojoCodeGen:
             candidates = []
             for arm in getattr(expr, "arms", []) or []:
                 arm_expr, _ = self.match_arm_value_expression(arm)
-                candidates.extend(self.resource_access_qualifier_candidates(arm_expr))
+                candidates.extend(
+                    self.resource_access_qualifier_candidates(
+                        arm_expr, target_type=target_type
+                    )
+                )
             return self.unique_resource_access_qualifiers(candidates)
 
         if isinstance(expr, FunctionCallNode):
             candidates = self.function_return_resource_alias_candidates(expr)
+            if candidates:
+                return candidates
+            candidates = self.generic_enum_resource_alias_candidates(expr, target_type)
             if candidates:
                 return candidates
 
@@ -2352,6 +2373,26 @@ class MojoCodeGen:
         if root_name is not None:
             candidates.extend(self.resource_access_qualifier_aliases.get(root_name, []))
         return self.unique_resource_access_qualifiers(candidates)
+
+    def generic_enum_resource_alias_candidates(self, expr, target_type):
+        if target_type is None:
+            return []
+
+        func_name = self.function_call_name(expr)
+        fields = self.generic_enum_variant_fields_for_type(func_name, target_type)
+        if fields is None or len(fields) != len(expr.args):
+            return []
+
+        candidates = []
+        for arg, (_field_name, field_type) in zip(expr.args, fields):
+            if not self.resource_access_aliasable_type(field_type):
+                continue
+            candidates.extend(self.resource_access_qualifier_candidates(arg))
+        return self.unique_resource_access_qualifiers(candidates)
+
+    def resource_access_aliasable_type(self, type_name):
+        base_type, _ = self.resource_base_type_and_count(type_name)
+        return self.mojo_resource_kind(base_type) is not None
 
     def function_return_resource_alias_candidates(self, expr):
         func_name = self.function_call_name(expr)
@@ -2385,7 +2426,19 @@ class MojoCodeGen:
             return candidates[0]
         return self.direct_resource_access_qualifier(expr)
 
+    def expression_has_resource_type(self, expr):
+        expr_type = self.expression_result_type(expr)
+        if expr_type is None:
+            return True
+        base_type, _ = self.resource_base_type_and_count(expr_type)
+        if self.mojo_resource_kind(base_type) is not None:
+            return True
+        access, _ = self.direct_resource_access_qualifier(expr)
+        return access is not None
+
     def validate_resource_read_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
         for access, resource_name in self.resource_access_qualifier_candidates(expr):
             if access == "writeonly":
                 raise ValueError(
@@ -2394,6 +2447,8 @@ class MojoCodeGen:
                 )
 
     def validate_resource_write_access(self, expr, operation):
+        if not self.expression_has_resource_type(expr):
+            return
         for access, resource_name in self.resource_access_qualifier_candidates(expr):
             if access == "readonly":
                 raise ValueError(

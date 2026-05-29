@@ -4774,6 +4774,8 @@ def _generic_payload_enum_direct_resource_payload_source():
         int tag;
     };
 
+    readonly image2D readonlyImages[2];
+
     Result<sampler2D, int> makeTexture(sampler2D texture) {
         return Result::Ok(texture);
     }
@@ -4788,8 +4790,36 @@ def _generic_payload_enum_direct_resource_payload_source():
         return Result::Ok(values);
     }
 
+    Result<sampler2D[2], int> makeTextureArray(sampler2D textures[2]) {
+        return Result::Ok(textures);
+    }
+
+    Result<image2D[2], int> makeImageArray(image2D images[2]) {
+        return Result::Ok(images);
+    }
+
+    Result<RWStructuredBuffer<int>[2], int> makeBufferArray(
+        RWStructuredBuffer<int> values[2]
+    ) {
+        return Result::Ok(values);
+    }
+
     Result<ResourceBox, int> makeBox(ResourceBox payload) {
         return Result::Ok(payload);
+    }
+
+    ivec2 queryDirectTexture(Result<sampler2D, int> value) {
+        return match value {
+            Result::Ok(texture) => textureSize(texture, 0),
+            Result::Err(_) => ivec2(0)
+        };
+    }
+
+    ivec2 queryDirectImage(Result<image2D, int> value) {
+        return match value {
+            Result::Ok(image) => imageSize(image),
+            Result::Err(_) => ivec2(0)
+        };
     }
 
     vec4 sampleDirectPayload(
@@ -4810,11 +4840,108 @@ def _generic_payload_enum_direct_resource_payload_source():
         };
     }
 
+    void storeDirectImagePayload(
+        Result<image2D, int> value,
+        ivec2 pixel,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(image) => {
+                imageStore(image, pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
     int loadBufferPayload(Result<RWStructuredBuffer<int>, int> value, uint index) {
         return match value {
             Result::Ok(values) => values.Load(index),
             Result::Err(err) => err
         };
+    }
+
+    void storeBufferPayload(
+        Result<RWStructuredBuffer<int>, int> value,
+        uint index,
+        int scalar
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values.Store(index, scalar);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    vec4 sampleTextureArrayPayload(
+        Result<sampler2D[2], int> value,
+        sampler state,
+        int slot,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(textures) => texture(textures[slot], state, uv),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadImageArrayPayload(
+        Result<image2D[2], int> value,
+        int slot,
+        ivec2 pixel
+    ) {
+        return match value {
+            Result::Ok(images) => imageLoad(images[slot], pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    void storeImageArrayPayload(
+        Result<image2D[2], int> value,
+        int slot,
+        ivec2 pixel,
+        vec4 color
+    ) {
+        match value {
+            Result::Ok(images) => {
+                imageStore(images[slot], pixel, color);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    int loadBufferArrayPayload(
+        Result<RWStructuredBuffer<int>[2], int> value,
+        int slot,
+        uint index
+    ) {
+        return match value {
+            Result::Ok(values) => values[slot].Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    void storeBufferArrayPayload(
+        Result<RWStructuredBuffer<int>[2], int> value,
+        int slot,
+        uint index,
+        int scalar
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values[slot].Store(index, scalar);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
+    void reassignDirectPayloadWrapper() {
+        Result<image2D, int> value = Result::Ok(readonlyImages[0]);
+        value = Result::Err(0);
     }
 
     int loadNestedPayload(Result<ResourceBox, int> value, uint index) {
@@ -4842,17 +4969,39 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
 
     assert "struct Result_sampler2D_int:" in generated_code
     assert "var Ok_0: Texture2D" in generated_code
+    assert "struct Result_sampler2D_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Texture2D, 2]" in generated_code
     assert "struct Result_image2D_int:" in generated_code
     assert "var Ok_0: Image2D" in generated_code
+    assert "struct Result_image2D_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Image2D, 2]" in generated_code
     assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
     assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
+    assert "struct Result_RWStructuredBuffer_int_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert "texture_size(value.Ok_0, 0)" in generated_code
+    assert "image_size(value.Ok_0)" in generated_code
     assert "sample(value.Ok_0, uv)" in generated_code
     assert "image_load(value.Ok_0, pixel)" in generated_code
+    assert "image_store(value.Ok_0, pixel, color)" in generated_code
     assert "buffer_load(value.Ok_0, index)" in generated_code
+    assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
+    assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
+    assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
+    assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
+    assert "buffer_load(value.Ok_0[int(slot)], index)" in generated_code
+    assert "buffer_store(value.Ok_0[int(slot)], index, scalar)" in generated_code
     assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
     assert "image_load(value.Ok_0.image, pixel)" in generated_code
+    assert "fn reassignDirectPayloadWrapper() -> None:" in generated_code
+    assert "value = Result_image2D_int_Err_make(0)" in generated_code
+    assert "fn texture_size(tex: Texture2D, lod: Int32)" in generated_code
+    assert "fn image_size(image: Image2D)" in generated_code
+    assert "fn image_store(image: Image2D, " in generated_code
+    assert "fn buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
     assert "Result<" not in generated_code
     assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
 
 
 def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_path):
@@ -4875,6 +5024,76 @@ def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_pat
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly image2D inputs[2];
+            void invalidAssignedStore(ivec2 pixel, vec4 color) {
+                Result<image2D, int> value = Result::Err(0);
+                value = Result::Ok(inputs[0]);
+                match value {
+                    Result::Ok(image) => {
+                        imageStore(image, pixel, color);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"imageStore.*inputs.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly image2D outputs[2];
+            vec4 invalidArrayRead(int slot, ivec2 pixel) {
+                Result<image2D[2], int> value = Result::Ok(outputs);
+                return match value {
+                    Result::Ok(images) => imageLoad(images[slot], pixel),
+                    Result::Err(_) => vec4(0.0)
+                };
+            }
+            """,
+            r"imageLoad.*outputs.*writeonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWStructuredBuffer<int> values[2];
+            void invalidArrayBufferStore(int slot, uint index, int scalar) {
+                Result<RWStructuredBuffer<int>[2], int> value = Result::Ok(values);
+                match value {
+                    Result::Ok(buffers) => {
+                        buffers[slot].Store(index, scalar);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store.*values.*readonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_local_direct_resource_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
 
 
 def _generic_payload_enum_resource_query_source():

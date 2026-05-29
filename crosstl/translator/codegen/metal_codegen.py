@@ -372,8 +372,6 @@ class MetalCodeGen:
         "QuadAll": "quad_all",
     }
     METAL_WAVE_UNSUPPORTED_OPERATIONS = {
-        "WaveGetLaneIndex": "requires a stage-provided thread_index_in_simdgroup value",
-        "WaveGetLaneCount": "requires a stage-provided threads_per_simdgroup value",
         "WaveMatch": "has no uint4-compatible Metal simdgroup mask lowering yet",
         "WaveMultiPrefixSum": "has no Metal partitioned prefix equivalent",
         "WaveMultiPrefixCountBits": "has no Metal partitioned prefix equivalent",
@@ -516,6 +514,8 @@ class MetalCodeGen:
         self.lowered_glsl_buffer_blocks = {}
         self.required_buffer_atomic_compare_helpers = set()
         self.required_metal_wave_ballot_helper = False
+        self.current_metal_wave_lane_index_parameter = None
+        self.current_metal_wave_lane_count_parameter = None
         self.required_glsl_buffer_aggregate_load_helpers = {}
         self.unsupported_glsl_buffer_block_variables = set()
         self.unsupported_glsl_buffer_block_variable_types = {}
@@ -2064,6 +2064,12 @@ class MetalCodeGen:
         previous_readonly_metal_parameter_reasons = (
             self.current_readonly_metal_parameter_reasons
         )
+        previous_metal_wave_lane_index_parameter = (
+            self.current_metal_wave_lane_index_parameter
+        )
+        previous_metal_wave_lane_count_parameter = (
+            self.current_metal_wave_lane_count_parameter
+        )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
         self.current_generic_function_substitutions = (
@@ -2098,6 +2104,8 @@ class MetalCodeGen:
         self.current_readonly_raw_buffer_parameters = set()
         self.current_readonly_metal_parameters = set()
         self.current_readonly_metal_parameter_reasons = {}
+        self.current_metal_wave_lane_index_parameter = None
+        self.current_metal_wave_lane_count_parameter = None
         self.local_variable_types = {}
         self.current_address_space_variables = {}
         for p in param_list:
@@ -2223,12 +2231,29 @@ class MetalCodeGen:
 
         if shader_type == "compute":
             existing_param_names = {getattr(p, "name", None) for p in param_list}
+            explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
+                param_list
+            )
+            self.current_metal_wave_lane_index_parameter = explicit_stage_builtins.get(
+                "thread_index_in_simdgroup"
+            )
+            self.current_metal_wave_lane_count_parameter = explicit_stage_builtins.get(
+                "threads_per_simdgroup"
+            )
+            reserved_builtin_names = set(existing_param_names)
+            reserved_builtin_names.update(
+                self.metal_function_local_variable_names(func)
+            )
             for name, param_type, attribute in self.required_compute_builtin_parameters(
-                func
+                func, reserved_builtin_names, explicit_stage_builtins
             ):
                 if name not in existing_param_names:
                     params.append(f"{param_type} {name} [[{attribute}]]")
                     reserved_parameter_names.add(name)
+                if attribute == "thread_index_in_simdgroup":
+                    self.current_metal_wave_lane_index_parameter = name
+                elif attribute == "threads_per_simdgroup":
+                    self.current_metal_wave_lane_count_parameter = name
 
         reserved_parameter_names.update(self.global_resource_parameter_names())
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
@@ -2346,6 +2371,12 @@ class MetalCodeGen:
             self.current_readonly_metal_parameters = previous_readonly_metal_parameters
             self.current_readonly_metal_parameter_reasons = (
                 previous_readonly_metal_parameter_reasons
+            )
+            self.current_metal_wave_lane_index_parameter = (
+                previous_metal_wave_lane_index_parameter
+            )
+            self.current_metal_wave_lane_count_parameter = (
+                previous_metal_wave_lane_count_parameter
             )
             return code
 
@@ -2541,6 +2572,12 @@ class MetalCodeGen:
         self.current_readonly_metal_parameter_reasons = (
             previous_readonly_metal_parameter_reasons
         )
+        self.current_metal_wave_lane_index_parameter = (
+            previous_metal_wave_lane_index_parameter
+        )
+        self.current_metal_wave_lane_count_parameter = (
+            previous_metal_wave_lane_count_parameter
+        )
         self.current_function_name = previous_function_name
         self.current_function_return_type = previous_function_return_type
         self.current_function_return_wrapper = previous_function_return_wrapper
@@ -2574,8 +2611,15 @@ class MetalCodeGen:
         code += "}\n\n"
         return code
 
-    def required_compute_builtin_parameters(self, func):
+    def required_compute_builtin_parameters(
+        self, func, reserved_names=None, explicit_stage_builtins=None
+    ):
         used_names = self.used_compute_builtin_names(getattr(func, "body", []))
+        used_wave_operations = self.used_wave_stage_builtin_operations(
+            getattr(func, "body", [])
+        )
+        reserved_names = set(reserved_names or ())
+        explicit_stage_builtins = explicit_stage_builtins or {}
         builtin_parameters = [
             ("gl_GlobalInvocationID", "uint3", "thread_position_in_grid"),
             ("gl_LocalInvocationID", "uint3", "thread_position_in_threadgroup"),
@@ -2584,9 +2628,32 @@ class MetalCodeGen:
             ("gl_WorkGroupSize", "uint3", "threads_per_threadgroup"),
             ("gl_NumWorkGroups", "uint3", "threadgroups_per_grid"),
         ]
-        return [
+        required_parameters = [
             parameter for parameter in builtin_parameters if parameter[0] in used_names
         ]
+        wave_builtin_parameters = [
+            (
+                "WaveGetLaneIndex",
+                "crossglWaveLaneIndex",
+                "uint",
+                "thread_index_in_simdgroup",
+            ),
+            (
+                "WaveGetLaneCount",
+                "crossglWaveLaneCount",
+                "uint",
+                "threads_per_simdgroup",
+            ),
+        ]
+        for operation, base_name, param_type, attribute in wave_builtin_parameters:
+            if operation not in used_wave_operations:
+                continue
+            if attribute in explicit_stage_builtins:
+                continue
+            name = self.unique_metal_generated_name(base_name, reserved_names)
+            reserved_names.add(name)
+            required_parameters.append((name, param_type, attribute))
+        return required_parameters
 
     def used_compute_builtin_names(self, body):
         builtin_names = {
@@ -2606,6 +2673,31 @@ class MetalCodeGen:
                     used_names.add(base_name)
         return used_names
 
+    def used_wave_stage_builtin_operations(self, body):
+        operations = set()
+        for node in self.iter_ast_nodes(body):
+            if isinstance(node, WaveOpNode):
+                operation = getattr(node, "operation", None)
+            elif isinstance(node, FunctionCallNode):
+                operation = self.function_call_name(node)
+            else:
+                continue
+            if operation in {"WaveGetLaneIndex", "WaveGetLaneCount"}:
+                operations.add(operation)
+        return operations
+
+    def explicit_compute_stage_builtin_parameters(self, parameters):
+        stage_parameters = {}
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            metal_semantic = self.canonical_metal_semantic(semantic)
+            if metal_semantic in {
+                "thread_index_in_simdgroup",
+                "threads_per_simdgroup",
+            }:
+                stage_parameters[metal_semantic] = getattr(parameter, "name", None)
+        return stage_parameters
+
     def validate_compute_builtin_parameter_types(self, parameters):
         expected_types = {
             "thread_position_in_grid": "uint3",
@@ -2614,6 +2706,8 @@ class MetalCodeGen:
             "thread_index_in_threadgroup": "uint",
             "threads_per_threadgroup": "uint3",
             "threadgroups_per_grid": "uint3",
+            "thread_index_in_simdgroup": "uint",
+            "threads_per_simdgroup": "uint",
         }
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)
@@ -5200,6 +5294,24 @@ class MetalCodeGen:
         if type_diagnostic is not None:
             return type_diagnostic
 
+        if operation == "WaveGetLaneIndex":
+            lane_index_parameter = self.current_metal_wave_lane_index_parameter
+            if lane_index_parameter is not None:
+                return lane_index_parameter
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                "requires a compute-stage thread_index_in_simdgroup value",
+            )
+        if operation == "WaveGetLaneCount":
+            lane_count_parameter = self.current_metal_wave_lane_count_parameter
+            if lane_count_parameter is not None:
+                return lane_count_parameter
+            return self.metal_wave_diagnostic_expression(
+                operation,
+                arguments,
+                "requires a compute-stage threads_per_simdgroup value",
+            )
         if operation == "WaveIsFirstLane":
             return "simd_is_first()"
         if operation == "WaveActiveCountBits":
