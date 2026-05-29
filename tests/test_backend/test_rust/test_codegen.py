@@ -6391,6 +6391,45 @@ def test_local_closure_names_shadow_resource_builtin_function_names():
     assert "let local_lod = textureLod(tex, lod);" not in result
 
 
+def test_block_local_closure_names_do_not_shadow_resource_builtins_after_block():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+
+    fn block_local_callable_shadowing(
+        tex: ColorTexture,
+        uv: Vec2<f32>,
+        fallback: Vec4<f32>,
+        flag: bool,
+        lod: f32,
+    ) -> Vec4<f32> {
+        let block_value = {
+            let sample = |resource: ColorTexture| -> Vec4<f32> {
+                fallback
+            };
+            sample(tex)
+        };
+        if flag {
+            let sample_lod = |resource: ColorTexture, level: f32| -> Vec4<f32> {
+                fallback + Vec4::<f32>::new(level, 0.0, 0.0, 0.0)
+            };
+            let branch_value = sample_lod(tex, lod);
+        }
+        let builtin_value = sample(tex, uv);
+        let builtin_lod = sample_lod(tex, lod);
+        return block_value + builtin_value + builtin_lod;
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "block_value = sample(tex);" in result
+    assert "let branch_value = sample_lod(tex, lod);" in result
+    assert "let builtin_value = texture(tex, uv);" in result
+    assert "let builtin_lod = textureLod(tex, lod);" in result
+    assert "let builtin_value = sample(tex, uv);" not in result
+    assert "let builtin_lod = sample_lod(tex, lod);" not in result
+
+
 def test_typed_pattern_closures_emit_helpers():
     code = """
     struct Point {

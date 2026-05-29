@@ -651,6 +651,13 @@ class RustToCrossGLConverter:
                 return callable_name
         return None
 
+    def generate_scoped_function_body(self, body, indent=1, loop_contexts=None):
+        self.push_local_callable_scope()
+        try:
+            return self.generate_function_body(body, indent, loop_contexts)
+        finally:
+            self.pop_local_callable_scope()
+
     def resolve_name_alias(self, name):
         if not isinstance(name, str):
             return name
@@ -2092,7 +2099,7 @@ class RustToCrossGLConverter:
         code += match_code
         code += f"{indent_str}}}\n"
         code += f"{indent_str}if (!{matched_flag}) {{\n"
-        code += self.generate_function_body(
+        code += self.generate_scoped_function_body(
             stmt.else_body,
             indent + 1,
             loop_contexts,
@@ -2809,7 +2816,7 @@ class RustToCrossGLConverter:
                 branch, indent, result_target, loop_contexts
             )
         if isinstance(branch, list):
-            return self.generate_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(branch, indent, loop_contexts)
         if branch is not None:
             return self.generate_expression_result(
                 branch, indent, result_target, loop_contexts
@@ -2872,44 +2879,50 @@ class RustToCrossGLConverter:
     ):
         block_node = self.get_block_expression_node(block_node)
         indent_str = "    " * indent
-        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
-        expression = self.get_block_expression(block_node)
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(
+                block_node.statements, indent, loop_contexts
+            )
+            expression = self.get_block_expression(block_node)
 
-        if isinstance(expression, LoopNode):
-            code += self.generate_loop(
-                expression,
-                indent,
-                result_target=result_target,
-                loop_contexts=loop_contexts,
-            )
-        elif isinstance(expression, IfNode):
-            code += self.generate_if_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif isinstance(expression, MatchNode):
-            code += self.generate_match_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif expression is not None:
-            code += self.generate_expression_result(
-                expression,
-                indent,
-                result_target,
-                loop_contexts,
-            )
-        elif (
-            result_target is self.return_result_target
-            and not self.branch_guarantees_control_transfer(block_node)
-        ):
-            code += f"{indent_str}return;\n"
+            if isinstance(expression, LoopNode):
+                code += self.generate_loop(
+                    expression,
+                    indent,
+                    result_target=result_target,
+                    loop_contexts=loop_contexts,
+                )
+            elif isinstance(expression, IfNode):
+                code += self.generate_if_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif isinstance(expression, MatchNode):
+                code += self.generate_match_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif expression is not None:
+                code += self.generate_expression_result(
+                    expression,
+                    indent,
+                    result_target,
+                    loop_contexts,
+                )
+            elif (
+                result_target is self.return_result_target
+                and not self.branch_guarantees_control_transfer(block_node)
+            ):
+                code += f"{indent_str}return;\n"
 
-        return code
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def generate_expression_result(
         self, expression, indent, result_target, loop_contexts=None
@@ -3845,10 +3858,14 @@ class RustToCrossGLConverter:
         return "\n".join(rewritten) + ("\n" if code.endswith("\n") else "")
 
     def generate_try_block_body_code(self, block_node, indent=0):
-        code = self.generate_function_body(block_node.statements, indent=indent)
-        expression = self.get_block_expression(block_node)
-        code += self.generate_try_block_success_return(expression, indent)
-        return code
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(block_node.statements, indent=indent)
+            expression = self.get_block_expression(block_node)
+            code += self.generate_try_block_success_return(expression, indent)
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def generate_try_block_success_return(self, expression, indent):
         indent_str = "    " * indent
@@ -4019,7 +4036,9 @@ class RustToCrossGLConverter:
 
         code = condition_code
         code += f"{indent_str}if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
+        code += self.generate_scoped_function_body(
+            node.if_body, indent + 1, loop_contexts
+        )
         code += f"{indent_str}}}"
 
         if node.else_body:
@@ -4035,11 +4054,11 @@ class RustToCrossGLConverter:
             else:
                 code += " else {\n"
                 if isinstance(node.else_body, list):
-                    code += self.generate_function_body(
+                    code += self.generate_scoped_function_body(
                         node.else_body, indent + 1, loop_contexts
                     )
                 else:
-                    code += self.generate_function_body(
+                    code += self.generate_scoped_function_body(
                         [node.else_body], indent + 1, loop_contexts
                     )
                 code += f"{indent_str}}}"
@@ -4049,7 +4068,7 @@ class RustToCrossGLConverter:
 
     def generate_condition_chain_if_statement(self, node, indent, loop_contexts=None):
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.if_body,
                 success_indent,
                 loop_contexts,
@@ -4060,12 +4079,12 @@ class RustToCrossGLConverter:
 
             def failure(failure_indent):
                 if isinstance(node.else_body, list):
-                    return self.generate_function_body(
+                    return self.generate_scoped_function_body(
                         node.else_body,
                         failure_indent,
                         loop_contexts,
                     )
-                return self.generate_function_body(
+                return self.generate_scoped_function_body(
                     [node.else_body],
                     failure_indent,
                     loop_contexts,
@@ -4088,19 +4107,21 @@ class RustToCrossGLConverter:
         indent_str = "    " * indent
 
         code += f"{indent_str}if ({condition}) {{\n"
-        code += self.generate_function_body(node.if_body, indent + 1, loop_contexts)
+        code += self.generate_scoped_function_body(
+            node.if_body, indent + 1, loop_contexts
+        )
         code += f"{indent_str}}}"
 
         if node.else_body is not None:
             code += " else {\n"
             if isinstance(node.else_body, list):
-                code += self.generate_function_body(
+                code += self.generate_scoped_function_body(
                     node.else_body,
                     indent + 1,
                     loop_contexts,
                 )
             else:
-                code += self.generate_function_body(
+                code += self.generate_scoped_function_body(
                     [node.else_body],
                     indent + 1,
                     loop_contexts,
@@ -4112,7 +4133,7 @@ class RustToCrossGLConverter:
 
     def generate_if_let_statement(self, node, indent, loop_contexts=None):
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.if_body,
                 success_indent,
                 loop_contexts,
@@ -4123,12 +4144,12 @@ class RustToCrossGLConverter:
 
             def failure(failure_indent):
                 if isinstance(node.else_body, list):
-                    return self.generate_function_body(
+                    return self.generate_scoped_function_body(
                         node.else_body,
                         failure_indent,
                         loop_contexts,
                     )
-                return self.generate_function_body(
+                return self.generate_scoped_function_body(
                     [node.else_body],
                     failure_indent,
                     loop_contexts,
@@ -4324,7 +4345,9 @@ class RustToCrossGLConverter:
             indent,
             loop_contexts,
         )
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4386,7 +4409,7 @@ class RustToCrossGLConverter:
             index_name,
             indent + 1,
         )
-        code += self.generate_function_body(
+        code += self.generate_scoped_function_body(
             node.body,
             indent + 1,
             nested_contexts,
@@ -4681,13 +4704,17 @@ class RustToCrossGLConverter:
             code += f"{indent_str}    if (!{condition}) {{\n"
             code += f"{indent_str}        break;\n"
             code += f"{indent_str}    }}\n"
-            code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+            code += self.generate_scoped_function_body(
+                node.body, indent + 1, nested_contexts
+            )
             code += f"{indent_str}}}\n"
             return code
 
         condition = self.generate_expression(node.condition)
         code += f"{indent_str}while ({condition}) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4701,7 +4728,7 @@ class RustToCrossGLConverter:
         code += f"{indent_str}while (true) {{\n"
 
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.body,
                 success_indent,
                 nested_contexts,
@@ -4738,7 +4765,9 @@ class RustToCrossGLConverter:
         code += f"{indent_str}    if (!{condition}) {{\n"
         code += f"{indent_str}        break;\n"
         code += f"{indent_str}    }}\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4752,7 +4781,7 @@ class RustToCrossGLConverter:
         code += f"{indent_str}while (true) {{\n"
 
         def success(success_indent):
-            return self.generate_function_body(
+            return self.generate_scoped_function_body(
                 node.body,
                 success_indent,
                 nested_contexts,
@@ -4783,7 +4812,9 @@ class RustToCrossGLConverter:
         # Convert Rust infinite loop to while(true)
         code = self.generate_labeled_control_declarations(loop_context, indent)
         code += f"{indent_str}while (true) {{\n"
-        code += self.generate_function_body(node.body, indent + 1, nested_contexts)
+        code += self.generate_scoped_function_body(
+            node.body, indent + 1, nested_contexts
+        )
         code += f"{indent_str}}}\n"
 
         return code
@@ -4793,7 +4824,7 @@ class RustToCrossGLConverter:
             return self.generate_match_if_chain(
                 node,
                 indent,
-                self.generate_function_body,
+                self.generate_scoped_function_body,
                 loop_contexts,
             )
 
@@ -4816,7 +4847,7 @@ class RustToCrossGLConverter:
 
         for arm in node.arms:
             code += self.generate_match_case_label(arm.pattern, indent + 1)
-            code += self.generate_function_body(
+            code += self.generate_scoped_function_body(
                 arm.body,
                 indent + 2,
                 arm_loop_contexts,
@@ -6442,7 +6473,7 @@ class RustToCrossGLConverter:
                 loop_contexts,
             )
         if isinstance(branch, list):
-            return self.generate_function_body(branch, indent, loop_contexts)
+            return self.generate_scoped_function_body(branch, indent, loop_contexts)
         if branch is not None:
             return self.generate_discarded_expression(
                 branch,
@@ -6455,15 +6486,21 @@ class RustToCrossGLConverter:
         self, block_node, indent, loop_contexts=None
     ):
         block_node = self.get_block_expression_node(block_node)
-        code = self.generate_function_body(block_node.statements, indent, loop_contexts)
-        expression = self.get_block_expression(block_node)
-        if expression is not None:
-            code += self.generate_discarded_expression(
-                expression,
-                indent,
-                loop_contexts,
+        self.push_local_callable_scope()
+        try:
+            code = self.generate_function_body(
+                block_node.statements, indent, loop_contexts
             )
-        return code
+            expression = self.get_block_expression(block_node)
+            if expression is not None:
+                code += self.generate_discarded_expression(
+                    expression,
+                    indent,
+                    loop_contexts,
+                )
+            return code
+        finally:
+            self.pop_local_callable_scope()
 
     def expression_has_side_effects(self, expression):
         if isinstance(expression, FunctionCallNode):
@@ -8097,15 +8134,19 @@ class RustToCrossGLConverter:
     def generate_closure_body_code(self, body, indent=0):
         if self.is_block_expression_node(body):
             block_node = self.get_block_expression_node(body)
-            code = self.generate_function_body(block_node.statements, indent=indent)
-            expression = self.get_block_expression(block_node)
-            if expression is not None:
-                code += self.generate_expression_result(
-                    expression,
-                    indent=indent,
-                    result_target=self.return_result_target,
-                )
-            return code
+            self.push_local_callable_scope()
+            try:
+                code = self.generate_function_body(block_node.statements, indent=indent)
+                expression = self.get_block_expression(block_node)
+                if expression is not None:
+                    code += self.generate_expression_result(
+                        expression,
+                        indent=indent,
+                        result_target=self.return_result_target,
+                    )
+                return code
+            finally:
+                self.pop_local_callable_scope()
 
         return self.generate_expression_result(
             body,
