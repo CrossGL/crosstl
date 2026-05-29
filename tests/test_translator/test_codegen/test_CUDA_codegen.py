@@ -9957,6 +9957,133 @@ class TestCudaCodeGen:
         assert "textureQueryLevels(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_local_aliases_avoid_unsafe_cuda_metadata_indices(self):
+        """Test CUDA local alias sidecars avoid side-effecting resource indices."""
+        source_code = """
+        shader ResourceQueryAliasIndexSafety {
+            sampler2d textureGrid[4][4];
+            image2D imageGrid[4][4];
+
+            sampler2d chooseTex(sampler2d texs[4], int slot) {
+                return texs[slot];
+            }
+
+            image2D chooseImage(image2D imgs[4], int slot) {
+                return imgs[slot];
+            }
+
+            int nextLayer() {
+                return 1;
+            }
+
+            void consume(sampler2d tex, image2D img) {
+                ivec2 texSize = textureSize(tex, 0);
+                ivec2 imgSize = imageSize(img);
+            }
+
+            compute {
+                void main(int layer, int slot) {
+                    int imageLayer = layer;
+                    sampler2d safeTexAlias = textureGrid[layer + 1][slot + 1];
+                    image2D safeImageAlias = imageGrid[layer + 1][slot + 1];
+                    ivec2 safeTexSize = textureSize(safeTexAlias, 0);
+                    ivec2 safeImageSize = imageSize(safeImageAlias);
+
+                    sampler2d unsafeCallTexAlias =
+                        textureGrid[nextLayer()][slot];
+                    image2D unsafeCallImageAlias =
+                        imageGrid[nextLayer()][slot];
+                    ivec2 unsafeCallTexSize =
+                        textureSize(unsafeCallTexAlias, 0);
+                    ivec2 unsafeCallImageSize =
+                        imageSize(unsafeCallImageAlias);
+
+                    sampler2d unsafePostTexAlias =
+                        textureGrid[layer++][slot];
+                    image2D unsafeReturnedImageAlias =
+                        chooseImage(imageGrid[imageLayer++], slot);
+                    ivec2 unsafePostTexSize =
+                        textureSize(unsafePostTexAlias, 0);
+                    ivec2 unsafeReturnedImageSize =
+                        imageSize(unsafeReturnedImageAlias);
+
+                    sampler2d unsafeReturnedTexAlias =
+                        chooseTex(textureGrid[nextLayer()], slot);
+                    ivec2 unsafeReturnedTexSize =
+                        textureSize(unsafeReturnedTexAlias, 0);
+                    consume(unsafeCallTexAlias, unsafeCallImageAlias);
+                    consume(unsafeReturnedTexAlias, unsafeReturnedImageAlias);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo textureGrid_metadata[4][4] = {};" in cuda_code
+        assert "CglResourceQueryInfo imageGrid_metadata[4][4] = {};" in cuda_code
+        assert (
+            "int2 safeTexSize = cgl_textureSize_sampler2D"
+            "(textureGrid_metadata[(layer + 1)][(slot + 1)], 0);" in cuda_code
+        )
+        assert (
+            "int2 safeImageSize = cgl_imageSize_image2D"
+            "(imageGrid_metadata[(layer + 1)][(slot + 1)]);" in cuda_code
+        )
+        assert (
+            "int2 unsafeCallTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int2 unsafeCallImageSize = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "int2 unsafePostTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int2 unsafeReturnedImageSize = /* unsupported CUDA resource query: "
+            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "int2 unsafeReturnedTexSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "consume(unsafeCallTexAlias, /* unsupported CUDA resource query: "
+            "metadata unavailable for sampler2D argument tex */ "
+            "CglResourceQueryInfo{}, unsafeCallImageAlias, "
+            "/* unsupported CUDA resource query: metadata unavailable for "
+            "image2D argument img */ CglResourceQueryInfo{});" in cuda_code
+        )
+        assert (
+            "consume(unsafeReturnedTexAlias, "
+            "/* unsupported CUDA resource query: metadata unavailable for "
+            "sampler2D argument tex */ CglResourceQueryInfo{}, "
+            "unsafeReturnedImageAlias, "
+            "/* unsupported CUDA resource query: metadata unavailable for "
+            "image2D argument img */ CglResourceQueryInfo{});" in cuda_code
+        )
+        assert "textureGrid_metadata[nextLayer()]" not in cuda_code
+        assert "imageGrid_metadata[nextLayer()]" not in cuda_code
+        assert "textureGrid_metadata[layer++]" not in cuda_code
+        assert "imageGrid_metadata[imageLayer++]" not in cuda_code
+        assert "unsafeCallTexAlias_metadata" not in cuda_code
+        assert "unsafeCallImageAlias_metadata" not in cuda_code
+        assert "unsafePostTexAlias_metadata" not in cuda_code
+        assert "unsafeReturnedTexAlias_metadata" not in cuda_code
+        assert "unsafeReturnedImageAlias_metadata" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """

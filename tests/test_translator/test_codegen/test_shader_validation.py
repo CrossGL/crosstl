@@ -1988,6 +1988,47 @@ shader MetalThreadgroupAtomicAliasValidation {
 """
 
 
+METAL_THREADGROUP_ATOMIC_TERNARY_ALIAS_SHADER = """
+shader MetalThreadgroupAtomicTernaryAliasValidation {
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratchA[64];
+            shared atomic_int scratchB[64];
+            bool useA = index == 0u;
+            atomic_int* alias = useA ? scratchA + index : scratchB + index;
+            int oldValue = bumpThreadgroup(alias, 1);
+            atomic_store_explicit(alias, oldValue, memory_order_relaxed);
+
+            bool useShared = oldValue == 0;
+            atomic_int* mixedAlias = useShared ? scratchA + index : counters + index;
+            int rejected = bumpThreadgroup(mixedAlias, oldValue);
+            int directRejected = bumpThreadgroup(
+                useShared ? scratchA + index : counters + index,
+                rejected
+            );
+            atomic_store_explicit(counters + index, rejected, memory_order_relaxed);
+            atomic_store_explicit(
+                counters + index,
+                directRejected,
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER = """
 shader MetalPointerMemberAddressSpaceValidation {
     struct PointerBank {
@@ -7840,6 +7881,50 @@ def test_generated_metal_threadgroup_atomic_pointer_alias_compile_with_metal(tmp
         "'bumpDevice' requires device */;"
     ) in code
     assert "bumpDevice(alias + 2" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_threadgroup_atomic_ternary_alias_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "threadgroup_atomic_ternary_alias.metal"
+    output = tmp_path / "threadgroup_atomic_ternary_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_THREADGROUP_ATOMIC_TERNARY_ALIAS_SHADER),
+        "compute",
+    )
+    assert (
+        "threadgroup atomic_int* alias = useA ? scratchA + index : scratchB + index;"
+        in code
+    )
+    assert "thread atomic_int* alias = useA" not in code
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratchA' (threadgroup) and 'counters' (device) use different address "
+        "spaces; using uninitialized thread alias */"
+    ) in code
+    assert "thread atomic_int* mixedAlias;" in code
+    assert "thread atomic_int* mixedAlias = useShared" not in code
+    assert (
+        "int rejected = 0 /* unsupported Metal address-space call: argument "
+        "'mixedAlias' uses thread address space but parameter 'counters' of "
+        "'bumpThreadgroup' requires threadgroup */;"
+    ) in code
+    assert (
+        "int directRejected = 0 /* unsupported Metal address-space call: "
+        "argument '<expr>' mixes branches 'scratchA' (threadgroup) and "
+        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
+        "requires threadgroup */;"
+    ) in code
+    assert "bumpThreadgroup(useShared ? scratchA" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

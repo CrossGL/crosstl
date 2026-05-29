@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 645
+        "test_count": 648
       },
       "translator_codegen": {
         "exists": true,
@@ -260,7 +260,7 @@
         "path": "crosstl/backend/Metal"
       },
       "signals": {
-        "unsupported_marker_count": 393,
+        "unsupported_marker_count": 395,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/metal_codegen.py",
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 583
+        "test_count": 585
       },
       "translator_codegen": {
         "exists": true,
@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 12,
+        "unsupported_marker_count": 13,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -411,7 +411,11 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "\"Unsupported match arm for SPIR-V codegen; only unguarded \""
+            "text": "raise ValueError(f\"SPIR-V match pattern unsupported: {detail}\")"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "f\"; WARNING: Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}\""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -437,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 492
+        "test_count": 500
       },
       "translator_codegen": {
         "exists": true,
@@ -551,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 366
+        "test_count": 367
       },
       "translator_codegen": {
         "exists": true,

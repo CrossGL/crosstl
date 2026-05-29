@@ -302,6 +302,12 @@ class HLSLCodeGen:
     """Emit HLSL source from the shared CrossGL translator AST."""
 
     HLSL_PATCH_CONTROL_POINT_LIMIT = 32
+    HLSL_FEEDBACK_WRITE_HELPERS = {
+        "write_sampler_feedback": ("WriteSamplerFeedback", {4, 5}),
+        "write_sampler_feedback_bias": ("WriteSamplerFeedbackBias", {5, 6}),
+        "write_sampler_feedback_grad": ("WriteSamplerFeedbackGrad", {6, 7}),
+        "write_sampler_feedback_level": ("WriteSamplerFeedbackLevel", {5}),
+    }
     HLSL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -14371,9 +14377,96 @@ class HLSLCodeGen:
             "RasterizerOrderedByteAddressBuffer",
         }
 
+    def generate_hlsl_feedback_write_call(self, func_name, args):
+        descriptor = self.HLSL_FEEDBACK_WRITE_HELPERS.get(func_name)
+        if descriptor is None:
+            return None
+
+        method_name, allowed_arities = descriptor
+        if len(args) not in allowed_arities:
+            expected = " or ".join(str(count) for count in sorted(allowed_arities))
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+
+        self.validate_hlsl_feedback_write_arguments(func_name, method_name, args)
+        feedback = self.generate_expression(args[0])
+        rendered_args = [self.generate_expression(arg) for arg in args[1:]]
+        return f"{feedback}.{method_name}({', '.join(rendered_args)})"
+
+    def validate_hlsl_feedback_write_arguments(self, func_name, method_name, args):
+        feedback_type = self.texture_resource_type(args[0])
+        feedback_base = self.hlsl_resource_type_name(feedback_type)
+        if not feedback_base.startswith("FeedbackTexture"):
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' requires "
+                f"FeedbackTexture2D or FeedbackTexture2DArray receiver, got "
+                f"{feedback_type or self.type_name_string(self.expression_result_type(args[0]))}"
+            )
+
+        sampled_type = self.texture_resource_type(args[1])
+        sampled_base = self.hlsl_resource_type_name(sampled_type)
+        if sampled_base not in {"Texture2D", "Texture2DArray"}:
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' sampled texture argument "
+                f"must be Texture2D or Texture2DArray, got "
+                f"{sampled_type or self.type_name_string(self.expression_result_type(args[1]))}"
+            )
+
+        expected_sampled_base = (
+            "Texture2DArray"
+            if feedback_base == "FeedbackTexture2DArray"
+            else "Texture2D"
+        )
+        if sampled_base != expected_sampled_base:
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' receiver "
+                f"{feedback_base} requires paired {expected_sampled_base}, got "
+                f"{sampled_base}"
+            )
+
+        sampler_type = self.expression_result_type(args[2])
+        mapped_sampler_type = self.map_type(self.resource_base_type(sampler_type))
+        if sampler_type is not None and mapped_sampler_type != "SamplerState":
+            raise ValueError(
+                f"DirectX feedback helper '{func_name}' sampler argument must be "
+                f"SamplerState, got {mapped_sampler_type}"
+            )
+
+        expected_dimension = 3 if sampled_base == "Texture2DArray" else 2
+        self.validate_hlsl_feedback_coordinate_dimension(
+            func_name, args[3], "location", expected_dimension
+        )
+        if method_name == "WriteSamplerFeedbackGrad":
+            self.validate_hlsl_feedback_coordinate_dimension(
+                func_name, args[4], "ddx", expected_dimension
+            )
+            self.validate_hlsl_feedback_coordinate_dimension(
+                func_name, args[5], "ddy", expected_dimension
+            )
+
+    def validate_hlsl_feedback_coordinate_dimension(
+        self, func_name, argument, role, expected_dimension
+    ):
+        arg_type = self.expression_result_type(argument)
+        dimension = floating_coordinate_dimension_from_type_name(
+            self.type_name_string(arg_type), self.map_type
+        )
+        if dimension is None or dimension == expected_dimension:
+            return
+        raise ValueError(
+            f"DirectX feedback helper '{func_name}' {role} argument must be "
+            f"float{expected_dimension}, got {self.type_name_string(arg_type)}"
+        )
+
     def generate_texture_call(self, func_name, args):
         if not func_name:
             return None
+
+        feedback_call = self.generate_hlsl_feedback_write_call(func_name, args)
+        if feedback_call is not None:
+            return feedback_call
 
         self.validate_texture_call_arity(func_name, args)
         self.validate_image_resource_argument(func_name, args)

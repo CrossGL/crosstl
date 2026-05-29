@@ -15,6 +15,7 @@ from crosstl.translator.ast import (
     ShaderNode,
     StageNode,
     StructNode,
+    EnumNode,
     VariableNode,
     FunctionNode,
     AssignmentNode,
@@ -487,6 +488,34 @@ class TestVulkanSPIRVCodeGen:
         assert "OpTypeStruct" in spv_code
         assert "OpFunction" in spv_code
         assert "OpReturn" in spv_code
+        assert "OpFunctionEnd" in spv_code
+
+    def test_shader_generation_ignores_frontend_enum_declarations_in_structs(self):
+        source_code = """
+        shader EnumDeclarations {
+            enum Mode {
+                Read,
+                Write
+            }
+
+            struct Payload {
+                float value;
+            };
+
+            float passthrough(float value) {
+                return value;
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        assert any(isinstance(node, EnumNode) for node in ast.structs)
+
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpName" in spv_code
+        assert '"Payload"' in spv_code
+        assert "OpFunction" in spv_code
         assert "OpFunctionEnd" in spv_code
 
     def test_generic_vector_composite_types(self):
@@ -12820,8 +12849,8 @@ class TestVulkanSPIRVCodeGen:
         assert "OpSelectionMerge" in spv_code
         assert "WARNING" not in spv_code
 
-    def test_match_guarded_arm_rejected_for_spirv_codegen(self):
-        invalid_code = """
+    def test_match_guarded_literal_arm_lowers_to_spirv_selection_chain(self):
+        source_code = """
         shader MatchSmoke {
             int helper(int mode) {
                 int value = 0;
@@ -12838,10 +12867,316 @@ class TestVulkanSPIRVCodeGen:
         }
         """
 
-        ast = Parser(Lexer(invalid_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
 
-        with pytest.raises(ValueError, match="Unsupported match arm for SPIR-V"):
-            VulkanSPIRVCodeGen().generate(ast)
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert "OpLogicalAnd" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_identifier_binding_guard_and_fallback_lowers_for_spirv_codegen(
+        self,
+    ):
+        source_code = """
+        shader MatchBindingSmoke {
+            int helper(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    candidate if candidate > 2 => {
+                        value = candidate;
+                    }
+                    _ => {
+                        value = 7;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "candidate")
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpStore") >= 4
+        assert "MatchNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_plain_struct_pattern_binds_spirv_fields(self):
+        source_code = """
+        shader MatchStructSmoke {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            int helper(Pair pair) {
+                int value = 0;
+                match pair {
+                    Pair { left, right } => {
+                        value = left + right;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "left")
+        assert spirv_named_ids(spv_code, "right")
+        assert spv_code.count("OpCompositeExtract") >= 2
+        assert "OpIAdd" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_enum_path_pattern_lowers_to_spirv_integer_discriminants(self):
+        source_code = """
+        shader MatchEnumSmoke {
+            enum Mode {
+                Add,
+                Multiply = 4,
+                Divide
+            }
+
+            int helper(Mode mode) {
+                int value = Mode::Divide;
+                match mode {
+                    Mode::Add => {
+                        value = 1;
+                    }
+                    Mode::Multiply => {
+                        value = 2;
+                    }
+                    _ => {
+                        value = 3;
+                    }
+                }
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        int_type_id = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code).group(1)
+        assert f"OpConstant {int_type_id} 0" in spv_code
+        assert f"OpConstant {int_type_id} 4" in spv_code
+        assert f"OpConstant {int_type_id} 5" in spv_code
+        assert spv_code.count("OpIEqual") >= 2
+        assert "Unknown type Mode" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_tuple_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchTuplePayloadEnumSmoke {
+            enum MaybeInt {
+                Value(int),
+                Pair(int, float),
+                Missing
+            }
+
+            int read(MaybeInt item) {
+                match item {
+                    MaybeInt::Value(value) => {
+                        return value;
+                    }
+                    MaybeInt::Pair(left, scale) => {
+                        return left;
+                    }
+                    MaybeInt::Missing => {
+                        return 0;
+                    }
+                }
+            }
+
+            MaybeInt make_value(int value) {
+                return MaybeInt::Value(value);
+            }
+
+            MaybeInt make_missing() {
+                return MaybeInt::Missing;
+            }
+
+            compute {
+                void main() {
+                    MaybeInt value = make_value(7);
+                    MaybeInt missing = make_missing();
+                    int selected = read(value) + read(missing);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"MaybeInt"' in spv_code
+        assert '"variant"' in spv_code
+        assert '"Value_0"' in spv_code
+        assert '"Pair_0"' in spv_code
+        assert '"Pair_1"' in spv_code
+        assert spirv_named_ids(spv_code, "value")
+        assert spirv_named_ids(spv_code, "left")
+        assert spirv_named_ids(spv_code, "scale")
+        assert spv_code.count("OpIEqual") >= 3
+        assert spv_code.count("OpCompositeExtract") >= 4
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_struct_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchStructPayloadEnumSmoke {
+            enum LightingModel {
+                Phong {
+                    ambient: vec3,
+                    diffuse: vec3,
+                    shininess: float
+                },
+                Toon {
+                    base_color: vec3,
+                    levels: int
+                }
+            }
+
+            vec3 shade(LightingModel model) {
+                vec3 result = vec3(0.0);
+                match model {
+                    LightingModel::Phong { ambient, diffuse, shininess } => {
+                        result = ambient + diffuse * shininess;
+                    }
+                    LightingModel::Toon { base_color, .. } => {
+                        result = base_color;
+                    }
+                }
+                return result;
+            }
+
+            LightingModel make_phong(float shininess) {
+                return LightingModel::Phong {
+                    ambient: vec3(1.0),
+                    diffuse: vec3(0.5),
+                    shininess
+                };
+            }
+
+            compute {
+                void main() {
+                    LightingModel model = make_phong(8.0);
+                    vec3 selected = shade(model);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"LightingModel"' in spv_code
+        assert '"variant"' in spv_code
+        assert '"ambient"' in spv_code
+        assert '"base_color"' in spv_code
+        assert spirv_named_ids(spv_code, "ambient")
+        assert spirv_named_ids(spv_code, "diffuse")
+        assert spirv_named_ids(spv_code, "shininess")
+        assert spirv_named_ids(spv_code, "base_color")
+        assert spv_code.count("OpIEqual") >= 2
+        assert spv_code.count("OpCompositeExtract") >= 5
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_match_expression_initializer_stores_selected_spirv_value(self):
+        source_code = """
+        shader MatchExpressionSmoke {
+            int helper(int mode) {
+                int value = match mode {
+                    0 => 1,
+                    _ => 2
+                };
+                return value;
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert spv_code.count("OpStore") >= 2
+        assert "MatchNode(" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_match_generic_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
+        source_code = """
+        shader MatchPayloadSmoke {
+            generic<T> struct Option {
+                enum OptionType {
+                    Some(T),
+                    None
+                }
+                OptionType variant;
+            }
+
+            int helper(Option<int> item) {
+                match item {
+                    Option::Some(value) => {
+                        return value;
+                    }
+                    Option::None => {
+                        return 0;
+                    }
+                }
+            }
+
+            Option<int> make_some(int value) {
+                return Option::Some(value);
+            }
+
+            Option<int> make_none() {
+                return Option::None;
+            }
+
+            compute {
+                void main() {
+                    Option<int> some = make_some(7);
+                    Option<int> none = make_none();
+                    int selected = helper(some) + helper(none);
+                }
+            }
+
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert '"Option_int"' in spv_code
+        assert '"variant"' in spv_code
+        assert "OpIEqual" in spv_code
+        assert "OpCompositeExtract" in spv_code
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_resource_calls_in_loops_use_spirv_loop_control_and_indices(self):
         source_code = """

@@ -8397,6 +8397,98 @@ def test_metal_threadgroup_atomic_pointer_aliases_preserve_address_space():
     assert "bumpDevice(alias + 2" not in generated
 
 
+def test_metal_threadgroup_atomic_ternary_pointer_aliases_preserve_address_space():
+    code = """
+    shader MetalThreadgroupAtomicTernaryAliasValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(uint index @gl_LocalInvocationIndex) {
+                shared atomic_int scratchA[64];
+                shared atomic_int scratchB[64];
+                bool useA = index == 0u;
+                atomic_int* alias = useA ? scratchA + index : scratchB + index;
+                int oldValue = bumpThreadgroup(alias, 1);
+                atomic_store_explicit(alias, oldValue, memory_order_relaxed);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "threadgroup atomic_int* alias = useA ? scratchA + index : scratchB + index;"
+        in generated
+    )
+    assert "thread atomic_int* alias = useA" not in generated
+    assert "int oldValue = bumpThreadgroup(alias, 1);" in generated
+    assert "atomic_store_explicit(alias, oldValue, memory_order_relaxed);" in generated
+    assert "unsupported Metal address-space" not in generated
+
+
+def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
+    code = """
+    shader MetalMixedAddressSpaceTernaryAliasValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_int* counters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_int scratch[64];
+                bool useShared = index == 0u;
+                atomic_int* alias = useShared ? scratch + index : counters + index;
+                int rejected = bumpThreadgroup(alias, 1);
+                int directRejected = bumpThreadgroup(
+                    useShared ? scratch + index : counters + index,
+                    rejected
+                );
+                atomic_store_explicit(counters + index, rejected, memory_order_relaxed);
+                atomic_store_explicit(
+                    counters + index,
+                    directRejected,
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratch' (threadgroup) and 'counters' (device) use different address "
+        "spaces; using uninitialized thread alias */"
+    ) in generated
+    assert "thread atomic_int* alias;" in generated
+    assert "thread atomic_int* alias = useShared" not in generated
+    assert (
+        "int rejected = 0 /* unsupported Metal address-space call: argument "
+        "'alias' uses thread address space but parameter 'counters' of "
+        "'bumpThreadgroup' requires threadgroup */;"
+    ) in generated
+    assert (
+        "int directRejected = 0 /* unsupported Metal address-space call: "
+        "argument '<expr>' mixes branches 'scratch' (threadgroup) and "
+        "'counters' (device) but parameter 'counters' of 'bumpThreadgroup' "
+        "requires threadgroup */;"
+    ) in generated
+    assert "bumpThreadgroup(useShared ? scratch" not in generated
+
+
 def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
     code = """
     shader MetalPointerMemberAddressSpaceValidation {

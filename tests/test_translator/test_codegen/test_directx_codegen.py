@@ -26263,5 +26263,110 @@ def test_directx_storage_image_access_rejects_incompatible_helper_calls(shader, 
         HLSLCodeGen().generate(ast)
 
 
+def test_directx_feedback_texture_helpers_lower_to_native_methods():
+    shader = """
+    shader FeedbackTextureWrites {
+        sampler2D pairedTexture @ register(t0, space10);
+        sampler2DArray pairedLayers @ register(t1, space10);
+        sampler pairedSampler @ register(s0, space10);
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin @ register(u0, space10);
+        feedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed @ register(u1, space10);
+
+        fragment {
+            void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {
+                vec2 ddxValue = vec2(0.25, 0.0);
+                vec2 ddyValue = vec2(0.0, 0.25);
+                vec3 uvLayer = vec3(uv, layer);
+                write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);
+                write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv, 0.5);
+                write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+                write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
+                write_sampler_feedback_level(feedbackUsed, pairedLayers, pairedSampler, uvLayer, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin : "
+        "register(u0, space10);" in generated_code
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed : "
+        "register(u1, space10);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedback(pairedTexture, pairedSampler, uv);"
+        in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackBias("
+        "pairedTexture, pairedSampler, uv, 0.5);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in generated_code
+    )
+    assert (
+        "feedbackUsed.WriteSamplerFeedbackLevel("
+        "pairedLayers, pairedSampler, uvLayer, 1.0);" in generated_code
+    )
+    assert "write_sampler_feedback" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "write_sampler_feedback(pairedTexture, pairedTexture, pairedSampler, uv);",
+            "requires FeedbackTexture2D or FeedbackTexture2DArray receiver",
+        ),
+        (
+            "write_sampler_feedback(feedbackMin, pairedLayers, pairedSampler, uv);",
+            "receiver FeedbackTexture2D requires paired Texture2D, got Texture2DArray",
+        ),
+        (
+            "write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uvLayer);",
+            "location argument must be float2",
+        ),
+        (
+            "write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxLayer, ddyLayer);",
+            "ddx argument must be float2",
+        ),
+        (
+            "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv);",
+            "requires 5 or 6 argument",
+        ),
+    ],
+)
+def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, match):
+    shader = f"""
+    shader InvalidFeedbackTextureWrites {{
+        sampler2D pairedTexture;
+        sampler2DArray pairedLayers;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        fragment {{
+            void main(vec2 uv @ TexCoord0, float layer @ TexCoord1) {{
+                vec3 uvLayer = vec3(uv, layer);
+                vec3 ddxLayer = vec3(0.25, 0.0, 0.0);
+                vec3 ddyLayer = vec3(0.0, 0.25, 0.0);
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 if __name__ == "__main__":
     pytest.main()

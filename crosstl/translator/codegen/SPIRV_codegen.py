@@ -4,6 +4,16 @@ import re
 from typing import List, Optional, Tuple, Union
 
 from .array_utils import parse_array_type, detect_array_element_type
+from .enum_utils import (
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    enum_struct_fields,
+    enum_variant_payload_fields,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
+    resolve_generic_enum_specialization,
+)
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -18,12 +28,16 @@ from ..ast import (
     ArrayNode,
     BinaryOpNode,
     BreakNode,
+    ConstructorNode,
+    ConstructorPatternNode,
     ContinueNode,
     DoWhileNode,
+    EnumNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
     IdentifierNode,
+    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     LiteralPatternNode,
@@ -36,6 +50,7 @@ from ..ast import (
     RayTracingOpNode,
     ReturnNode,
     ShaderNode,
+    StructPatternNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -107,6 +122,13 @@ class VulkanSPIRVCodeGen:
         self.resource_types = {}
         self.resource_image_types = {}
         self.ray_query_types = {}
+        self.enum_type_names = set()
+        self.enum_variant_values = {}
+        self.enum_struct_type_names = set()
+        self.enum_struct_fields = {}
+        self.enum_struct_variant_fields = {}
+        self.generic_enum_struct_definitions = {}
+        self.generic_enum_specializations = {}
 
         self.required_capabilities = set()
         self.global_variables = {}
@@ -140,6 +162,8 @@ class VulkanSPIRVCodeGen:
         self.current_function_id = None
         self.current_stage = None
         self.current_return_type = None
+        self.current_return_type_source = None
+        self.current_expression_expected_type = None
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
         self.mesh_vertex_output_limit = None
@@ -5048,7 +5072,10 @@ class VulkanSPIRVCodeGen:
                 info, member_name, member_component
             ):
                 return True
-            value = self.process_expression(value_expr)
+            member_type = member_info["type"]
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
             if value is not None:
                 self.store_mesh_output_member_component(
                     info,
@@ -5068,7 +5095,10 @@ class VulkanSPIRVCodeGen:
                     f"member {member_name}"
                 )
                 return True
-            value = self.process_expression(value_expr)
+            member_type = member_info["type"]
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
             if value is not None:
                 self.store_mesh_output_member(
                     info, member_name, index, literal_index, value
@@ -7803,6 +7833,10 @@ class VulkanSPIRVCodeGen:
             value = self.convert_value_to_type(value, self.current_return_type)
         self.emit(f"OpReturnValue %{value.id}")
 
+    def create_unreachable(self):
+        """Create an unreachable terminator for impossible fallthrough paths."""
+        self.emit("OpUnreachable")
+
     def current_block_has_terminator(self) -> bool:
         """Return whether the current block already ends in a terminator."""
         for line in reversed(self.code_lines):
@@ -7812,7 +7846,13 @@ class VulkanSPIRVCodeGen:
             if re.match(r"%\d+ = OpLabel$", stripped):
                 return False
             return stripped.startswith(
-                ("OpBranch", "OpReturn", "OpKill", "OpEmitMeshTasksEXT")
+                (
+                    "OpBranch",
+                    "OpReturn",
+                    "OpKill",
+                    "OpUnreachable",
+                    "OpEmitMeshTasksEXT",
+                )
             )
         return False
 
@@ -8490,6 +8530,25 @@ class VulkanSPIRVCodeGen:
             col_type = self.register_vector_type(component_type, row_count)
             return self.register_matrix_type(col_type, col_count)
 
+        if type_str == "str":
+            return self.register_primitive_type("int")
+
+        generic_enum_type = self.generic_enum_specialization_for_type(type_str)
+        if generic_enum_type is not None:
+            return generic_enum_type
+
+        generic_base_name, generic_args = generic_type_parts(type_str)
+        if generic_args and generic_base_name in self.struct_types:
+            return self.struct_types[generic_base_name]
+
+        if type_str in self.enum_struct_type_names:
+            enum_struct_type = self.struct_types.get(type_str)
+            if enum_struct_type is not None:
+                return enum_struct_type
+
+        if type_str in self.enum_type_names:
+            return self.register_primitive_type("int")
+
         registered_type = self.find_registered_type_by_base(type_str)
         if registered_type:
             return registered_type
@@ -8548,8 +8607,376 @@ class VulkanSPIRVCodeGen:
         else:
             return str(type_node)
 
+    def collect_enum_metadata(self, nodes):
+        """Collect SPIR-V-lowerable enum types and variant discriminants."""
+        for node in nodes or []:
+            if isinstance(node, EnumNode):
+                self.register_enum_metadata(node)
+            elif isinstance(node, StructNode):
+                if node.name in self.generic_enum_struct_definitions:
+                    continue
+                self.collect_enum_metadata(getattr(node, "members", []) or [])
+
+    def register_enum_metadata(self, enum_node: EnumNode):
+        variants = getattr(enum_node, "variants", []) or []
+        has_payload = any(
+            self.enum_variant_has_payload(variant) for variant in variants
+        )
+        if has_payload:
+            fields = enum_struct_fields(enum_node)
+            if fields is not None:
+                self.enum_struct_type_names.add(enum_node.name)
+                self.enum_struct_fields[enum_node.name] = fields
+                self.enum_struct_variant_fields[enum_node.name] = {
+                    variant.name: enum_variant_payload_fields(variant) or []
+                    for variant in variants
+                }
+        else:
+            self.enum_type_names.add(enum_node.name)
+
+        next_value = 0
+        for variant in variants:
+            explicit_value = self.literal_int_argument(getattr(variant, "value", None))
+            if explicit_value is not None:
+                next_value = explicit_value
+            self.enum_variant_values[f"{enum_node.name}::{variant.name}"] = next_value
+            next_value += 1
+
+    def register_generic_enum_metadata(self):
+        """Collect generic enum wrapper variant tags shared by all specializations."""
+        for name, definition in self.generic_enum_struct_definitions.items():
+            self.enum_struct_type_names.add(name)
+            next_value = 0
+            for variant in definition["enum"].variants or []:
+                explicit_value = self.literal_int_argument(
+                    getattr(variant, "value", None)
+                )
+                if explicit_value is not None:
+                    next_value = explicit_value
+                self.enum_variant_values[f"{name}::{variant.name}"] = next_value
+                next_value += 1
+
+    def generic_enum_specialization_for_type(self, type_value) -> Optional[SpirvId]:
+        specialization = resolve_generic_enum_specialization(self, type_value)
+        if specialization is None:
+            return None
+        return self.ensure_generic_enum_specialization_registered(specialization)
+
+    def generic_enum_specialization_for_struct_name(self, struct_name: str):
+        for specialization in self.generic_enum_specializations.values():
+            if specialization["struct_name"] == struct_name:
+                return specialization
+        return None
+
+    def generic_enum_constructor_specialization(self, enum_name: str):
+        expected_type = self.current_expression_expected_type
+        specialization = resolve_generic_enum_specialization(
+            self, expected_type, expected_base=enum_name
+        )
+        if specialization is not None:
+            self.ensure_generic_enum_specialization_registered(specialization)
+            return specialization
+
+        specialization = self.generic_enum_specialization_for_struct_name(
+            str(expected_type)
+        )
+        if specialization is not None and specialization["base_name"] == enum_name:
+            return specialization
+
+        candidates = [
+            specialization
+            for specialization in self.generic_enum_specializations.values()
+            if specialization["base_name"] == enum_name
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def ensure_generic_enum_specialization_registered(self, specialization) -> SpirvId:
+        type_name = specialization["type_name"]
+        struct_name = specialization["struct_name"]
+        self.generic_enum_specializations.setdefault(type_name, specialization)
+        self.enum_struct_type_names.add(struct_name)
+
+        if struct_name not in self.enum_struct_fields:
+            self.enum_struct_fields[struct_name] = generic_enum_specialized_fields(
+                self, specialization
+            )
+            self.enum_struct_variant_fields[struct_name] = {
+                variant.name: (
+                    generic_enum_specialized_variant_fields(
+                        self, specialization, variant.name
+                    )
+                    or []
+                )
+                for variant in specialization["definition"]["enum"].variants or []
+            }
+
+        if struct_name not in self.struct_types:
+            int_type = self.register_primitive_type("int")
+            members = [(int_type, "variant")]
+            for field_name, field_type in self.enum_struct_fields.get(struct_name, []):
+                members.append((self.map_crossgl_type(field_type), field_name))
+            self.register_struct_type(struct_name, members)
+
+        return self.struct_types[struct_name]
+
+    def enum_variant_has_payload(self, variant) -> bool:
+        return bool(getattr(variant, "data", None) or getattr(variant, "fields", None))
+
+    def enum_variant_constant(self, name: str) -> Optional[SpirvId]:
+        value = self.enum_variant_values.get(name)
+        if value is None:
+            return None
+        return self.register_constant(value, self.register_primitive_type("int"))
+
+    def process_enum_structs(self, nodes):
+        """Register tagged-struct representations for payload enums."""
+        for node in nodes or []:
+            if isinstance(node, EnumNode) and node.name in self.enum_struct_type_names:
+                if node.name in self.struct_types:
+                    continue
+                int_type = self.register_primitive_type("int")
+                members = [(int_type, "variant")]
+                for field_name, field_type in self.enum_struct_fields.get(
+                    node.name, []
+                ):
+                    members.append((self.map_crossgl_type(field_type), field_name))
+                self.register_struct_type(node.name, members)
+            elif isinstance(node, StructNode):
+                self.process_enum_structs(getattr(node, "members", []) or [])
+
+    def enum_path_parts(self, path: str):
+        if "::" not in str(path):
+            return None
+        enum_name, variant_name = str(path).split("::", 1)
+        return enum_name, variant_name
+
+    def enum_variant_is_payload_path(self, path: str) -> bool:
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return False
+        enum_name, _variant_name = parts
+        return enum_name in self.enum_struct_type_names
+
+    def enum_variant_fields_for_path(
+        self, path: str, expression: Optional[SpirvId] = None
+    ):
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return None
+        enum_name, variant_name = parts
+        if enum_name in self.generic_enum_struct_definitions:
+            specialization = None
+            if expression is not None:
+                specialization = self.generic_enum_specialization_for_struct_name(
+                    expression.type.base_type
+                )
+            if specialization is None:
+                specialization = self.generic_enum_constructor_specialization(enum_name)
+            if specialization is None:
+                return None
+            return generic_enum_specialized_variant_fields(
+                self, specialization, variant_name
+            )
+        return self.enum_struct_variant_fields.get(enum_name, {}).get(variant_name)
+
+    def process_enum_variant_constructor(
+        self,
+        path: str,
+        positional_args,
+        named_args=None,
+    ) -> Optional[SpirvId]:
+        parts = self.enum_path_parts(path)
+        if parts is None:
+            return None
+        enum_name, _variant_name = parts
+        if enum_name in self.generic_enum_struct_definitions:
+            return self.process_generic_enum_variant_constructor(
+                path, positional_args, named_args
+            )
+
+        if enum_name not in self.enum_struct_type_names:
+            if positional_args or named_args:
+                return None
+            return self.enum_variant_constant(path)
+
+        enum_type = self.struct_types.get(enum_name)
+        if enum_type is None:
+            return None
+
+        variant_fields = self.enum_variant_fields_for_path(path)
+        if variant_fields is None:
+            return None
+
+        named_args = dict(named_args or {})
+        if len(positional_args) > len(variant_fields):
+            raise ValueError(
+                f"Enum constructor {path} expects at most {len(variant_fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+
+        unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
+        if unknown_names:
+            raise ValueError(
+                f"Enum constructor {path} has no field {', '.join(unknown_names)}"
+            )
+
+        active_values = {}
+        missing_names = []
+        for index, (field_name, field_type) in enumerate(variant_fields):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif field_name in named_args:
+                value_expr = named_args[field_name]
+            else:
+                missing_names.append(field_name)
+                continue
+
+            value = self.process_expression(value_expr)
+            if value is None:
+                return None
+            active_values[field_name] = self.convert_value_to_type(
+                value, self.map_crossgl_type(field_type)
+            )
+
+        if missing_names:
+            raise ValueError(
+                f"Enum constructor {path} is missing field {', '.join(missing_names)}"
+            )
+
+        components = [self.enum_variant_constant(path)]
+        for field_name, field_type in self.enum_struct_fields.get(enum_name, []):
+            field_type_id = self.map_crossgl_type(field_type)
+            components.append(
+                active_values.get(field_name)
+                or self.default_value_for_type(field_type_id)
+            )
+
+        return self.composite_construct(enum_type, components)
+
+    def process_generic_enum_variant_constructor(
+        self,
+        path: str,
+        positional_args,
+        named_args=None,
+    ) -> Optional[SpirvId]:
+        enum_name, variant_name = self.enum_path_parts(path)
+        specialization = self.generic_enum_constructor_specialization(enum_name)
+        if specialization is None:
+            return None
+
+        enum_type = self.ensure_generic_enum_specialization_registered(specialization)
+        variant_fields = generic_enum_specialized_variant_fields(
+            self, specialization, variant_name
+        )
+        if variant_fields is None:
+            return None
+
+        named_args = dict(named_args or {})
+        if len(positional_args) > len(variant_fields):
+            raise ValueError(
+                f"Enum constructor {path} expects at most {len(variant_fields)} "
+                f"arguments, got {len(positional_args)}"
+            )
+
+        unknown_names = sorted(set(named_args) - {name for name, _ in variant_fields})
+        if unknown_names:
+            raise ValueError(
+                f"Enum constructor {path} has no field {', '.join(unknown_names)}"
+            )
+
+        active_values = {}
+        missing_names = []
+        for index, (field_name, field_type) in enumerate(variant_fields):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif field_name in named_args:
+                value_expr = named_args[field_name]
+            else:
+                missing_names.append(field_name)
+                continue
+
+            value = self.process_expression_with_expected_type(value_expr, field_type)
+            if value is None:
+                return None
+            active_values[field_name] = self.convert_value_to_type(
+                value, self.map_crossgl_type(field_type)
+            )
+
+        if missing_names:
+            raise ValueError(
+                f"Enum constructor {path} is missing field {', '.join(missing_names)}"
+            )
+
+        components = [self.enum_variant_constant(path)]
+        for field_name, field_type in self.enum_struct_fields.get(
+            specialization["struct_name"], []
+        ):
+            field_type_id = self.map_crossgl_type(field_type)
+            components.append(
+                active_values.get(field_name)
+                or self.default_value_for_type(field_type_id)
+            )
+
+        return self.composite_construct(enum_type, components)
+
+    def process_struct_constructor_node(
+        self, expr: ConstructorNode
+    ) -> Optional[SpirvId]:
+        type_name = self.convert_type_node_to_string(expr.constructor_type)
+        if "::" in type_name:
+            return self.process_enum_variant_constructor(
+                type_name,
+                list(getattr(expr, "arguments", []) or []),
+                getattr(expr, "named_arguments", {}) or {},
+            )
+
+        struct_type = self.struct_types.get(type_name)
+        if struct_type is None:
+            return None
+
+        members = self.current_struct_members.get(type_name, [])
+        positional_args = list(getattr(expr, "arguments", []) or [])
+        named_args = dict(getattr(expr, "named_arguments", {}) or {})
+        member_names = [member_name for _member_type, member_name in members]
+        unknown_names = sorted(set(named_args) - set(member_names))
+        if unknown_names:
+            raise ValueError(
+                f"Struct constructor {type_name} has no field "
+                f"{', '.join(unknown_names)}"
+            )
+
+        components = []
+        for index, (member_type, member_name) in enumerate(members):
+            if index < len(positional_args):
+                value_expr = positional_args[index]
+            elif member_name in named_args:
+                value_expr = named_args[member_name]
+            else:
+                components.append(self.default_value_for_type(member_type))
+                continue
+
+            value = self.process_expression_with_expected_type(
+                value_expr, member_type.type.base_type
+            )
+            if value is None:
+                return None
+            components.append(self.convert_value_to_type(value, member_type))
+
+        if len(positional_args) > len(members):
+            self.emit(
+                f"; WARNING: Constructor {type_name} expected {len(members)} "
+                f"members but got {len(positional_args)}; truncating extra arguments"
+            )
+
+        return self.composite_construct(struct_type, components)
+
     def process_crossgl_struct(self, struct_node: StructNode) -> SpirvId:
         """Process a CrossGL struct definition."""
+        if struct_node.name in self.generic_enum_struct_definitions:
+            return self.struct_types.get(struct_node.name)
+
         members = []
         member_metadata = {}
 
@@ -9368,9 +9795,13 @@ class VulkanSPIRVCodeGen:
         """Process a CrossGL function definition."""
         return_type = self.map_crossgl_type(function_node.return_type)
         previous_return_type = self.current_return_type
+        previous_return_type_source = self.current_return_type_source
         previous_stage = self.current_stage
         previous_function_name = self.current_function_name
         self.current_return_type = return_type
+        self.current_return_type_source = self.type_name_from_value(
+            function_node.return_type
+        )
         self.current_function_name = function_node.name
         if stage is not None:
             self.current_stage = stage
@@ -9474,11 +9905,11 @@ class VulkanSPIRVCodeGen:
 
         self.process_statements(function_node.body)
 
-        if (
-            self.convert_type_node_to_string(function_node.return_type) == "void"
-            and not self.current_block_has_terminator()
-        ):
-            self.create_return()
+        if not self.current_block_has_terminator():
+            if self.convert_type_node_to_string(function_node.return_type) == "void":
+                self.create_return()
+            else:
+                self.create_unreachable()
 
         self.end_function()
 
@@ -9488,6 +9919,7 @@ class VulkanSPIRVCodeGen:
         self.current_function_name = previous_function_name
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
+        self.current_return_type_source = previous_return_type_source
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()
@@ -9543,6 +9975,18 @@ class VulkanSPIRVCodeGen:
             expression = stmt.expression
             if isinstance(expression, AssignmentNode):
                 self.process_assignment(expression)
+            elif (
+                getattr(stmt, "is_tail_expression", False)
+                and self.current_return_type is not None
+                and self.current_return_type.type.base_type != "void"
+            ):
+                return_value = self.process_expression_with_expected_type(
+                    expression, self.current_return_type_source
+                )
+                if return_value is not None:
+                    self.create_return_value(return_value)
+                else:
+                    self.create_return()
             else:
                 self.process_expression(expression)
 
@@ -9561,6 +10005,25 @@ class VulkanSPIRVCodeGen:
                 "inside a function; declare it at shader or stage scope"
             )
 
+        initial_value = getattr(node, "initial_value", None)
+        is_precise = self.has_attribute(node, "precise")
+        if (
+            var_type_source is None
+            and initial_value is not None
+            and not isinstance(initial_value, (ArrayLiteralNode, MatchNode))
+        ):
+            rhs_value = self.process_expression_with_precision(
+                initial_value, is_precise
+            )
+            if rhs_value is not None:
+                var_type = self.ensure_registered_type(rhs_value.type)
+                var_id = self.create_variable(var_type, "Function", node.name)
+                self.local_variables[node.name] = var_id
+                if is_precise:
+                    self.precise_local_variables.add(node.name)
+                self.store_to_variable(var_id, rhs_value)
+                return
+
         var_type = self.map_resource_type_with_format(var_type_source, node)
         if self.type_contains_runtime_array(var_type):
             self.emit(
@@ -9571,20 +10034,29 @@ class VulkanSPIRVCodeGen:
 
         var_id = self.create_variable(var_type, "Function", node.name)
         self.local_variables[node.name] = var_id
-        is_precise = self.has_attribute(node, "precise")
         if is_precise:
             self.precise_local_variables.add(node.name)
 
-        initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
-            if isinstance(initial_value, ArrayLiteralNode):
-                rhs_value = self.process_array_literal(initial_value, var_type)
-            else:
-                rhs_value = self.process_expression_with_precision(
-                    initial_value, is_precise
+            if isinstance(initial_value, MatchNode):
+                self.process_match_expression_assignment(
+                    initial_value, var_id, var_type
                 )
-            if rhs_value is not None:
-                self.store_to_variable(var_id, rhs_value)
+            elif isinstance(initial_value, ArrayLiteralNode):
+                rhs_value = self.process_array_literal(initial_value, var_type)
+                if rhs_value is not None:
+                    self.store_to_variable(var_id, rhs_value)
+            else:
+                if is_precise:
+                    rhs_value = self.process_expression_with_precision(
+                        initial_value, is_precise
+                    )
+                else:
+                    rhs_value = self.process_expression_with_expected_type(
+                        initial_value, var_type_name
+                    )
+                if rhs_value is not None:
+                    self.store_to_variable(var_id, rhs_value)
 
     def process_local_resource_alias_declaration(
         self, node: VariableNode, var_type_source, var_type_name: str
@@ -9616,6 +10088,8 @@ class VulkanSPIRVCodeGen:
     def local_variable_requires_descriptor_storage(
         self, node: VariableNode, type_name: str
     ) -> bool:
+        if not type_name:
+            return False
         base_type = self.array_base_type_name(type_name)
         return (
             self.is_resource_type_name(base_type)
@@ -10041,9 +10515,22 @@ class VulkanSPIRVCodeGen:
         return default_storage_class
 
     def type_name_from_value(self, type_value) -> str:
+        if type_value is None:
+            return None
         if hasattr(type_value, "name") or hasattr(type_value, "element_type"):
             return self.convert_type_node_to_string(type_value)
         return str(type_value)
+
+    def type_name_string(self, type_value) -> str:
+        return self.type_name_from_value(type_value)
+
+    def process_expression_with_expected_type(self, expr, expected_type):
+        previous_expected_type = self.current_expression_expected_type
+        self.current_expression_expected_type = self.type_name_string(expected_type)
+        try:
+            return self.process_expression(expr)
+        finally:
+            self.current_expression_expected_type = previous_expected_type
 
     def collect_ast_functions(self, root):
         functions = []
@@ -11809,6 +12296,21 @@ class VulkanSPIRVCodeGen:
         if self.process_mesh_output_assignment(target, node.value):
             return
 
+        if isinstance(node.value, MatchNode):
+            target_pointer = self.assignable_pointer_from_expression(target)
+            target_type = (
+                self.variable_value_types.get(target_pointer.id)
+                if target_pointer is not None
+                else None
+            )
+            if target_pointer is None or target_type is None:
+                self.emit("; WARNING: Could not determine match assignment target type")
+                return
+            self.process_match_expression_assignment(
+                node.value, target_pointer, target_type
+            )
+            return
+
         if isinstance(node.value, ArrayLiteralNode):
             target_pointer = self.assignable_pointer_from_expression(target)
             target_type = (
@@ -12271,7 +12773,9 @@ class VulkanSPIRVCodeGen:
         """Process a CrossGL return statement."""
         if hasattr(node, "value") and node.value:
             if isinstance(node.value, list) and node.value:
-                return_value = self.process_expression(node.value[0])
+                return_value = self.process_expression_with_expected_type(
+                    node.value[0], self.current_return_type_source
+                )
                 if return_value:
                     self.create_return_value(return_value)
                 else:
@@ -12282,7 +12786,9 @@ class VulkanSPIRVCodeGen:
                         node.value, self.current_return_type
                     )
                 else:
-                    return_value = self.process_expression(node.value)
+                    return_value = self.process_expression_with_expected_type(
+                        node.value, self.current_return_type_source
+                    )
                 if return_value:
                     self.create_return_value(return_value)
                 else:
@@ -12437,71 +12943,338 @@ class VulkanSPIRVCodeGen:
             self.local_variables[pattern] = previous_variable
 
     def process_match(self, node: MatchNode):
-        """Process simple literal/wildcard matches as a structured if-chain."""
-        arms = getattr(node, "arms", []) or []
-        if not self.validate_match_arms(arms):
-            raise ValueError(
-                "Unsupported match arm for SPIR-V codegen; only unguarded "
-                "literal patterns and a final wildcard are supported"
-            )
+        """Process CrossGL match statements as an ordered SPIR-V selection chain."""
+        self.process_match_selection(
+            node,
+            lambda arm: self.process_match_statement_body(getattr(arm, "body", [])),
+        )
 
+    def process_match_expression_assignment(
+        self, node: MatchNode, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        """Lower a value-position match into stores to an existing local."""
+        self.process_match_selection(
+            node,
+            lambda arm: self.process_match_expression_arm_body(
+                getattr(arm, "body", []), target_pointer, target_type
+            ),
+        )
+
+    def process_match_selection(self, node: MatchNode, process_arm_body):
+        arms = getattr(node, "arms", []) or []
         expression = self.process_expression(getattr(node, "expression", None))
         if expression is None:
             expression = self.register_constant(0, self.register_primitive_type("int"))
 
-        literal_arms = [
-            arm
-            for arm in arms
-            if isinstance(getattr(arm, "pattern", None), LiteralPatternNode)
-        ]
-        wildcard_body = None
-        for arm in arms:
-            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
-                wildcard_body = getattr(arm, "body", [])
-                break
-
-        if not literal_arms:
-            if wildcard_body is not None:
-                self.process_statements(wildcard_body)
+        if not arms:
             return
 
-        merge_label = SpirvId(self.get_id(), SpirvType("label"))
+        bool_type = self.register_primitive_type("bool")
+        matched_variable = self.create_variable(
+            bool_type, "Function", "__match_matched"
+        )
+        self.store_to_variable(
+            matched_variable, self.register_constant(False, bool_type)
+        )
+        matched_true = self.register_constant(True, bool_type)
 
-        for arm in literal_arms:
-            body_label = SpirvId(self.get_id(), SpirvType("label"))
-            next_label = SpirvId(self.get_id(), SpirvType("label"))
-            pattern_value = self.process_expression(arm.pattern.literal)
+        for arm in arms:
+            condition, bindings = self.lower_match_pattern_condition(
+                getattr(arm, "pattern", None), expression
+            )
+            restore_bindings = self.apply_match_bindings(bindings)
+            try:
+                guard = getattr(arm, "guard", None)
+                if guard is not None:
+                    guard_condition = self.process_expression(guard)
+                    condition = self.combine_match_conditions(
+                        condition, guard_condition
+                    )
+
+                already_matched = self.load_from_variable(matched_variable, bool_type)
+                not_matched = self.unary_operation("!", bool_type, already_matched)
+                condition = self.combine_match_conditions(not_matched, condition)
+
+                body_label = SpirvId(self.get_id(), SpirvType("label"))
+                next_label = SpirvId(self.get_id(), SpirvType("label"))
+
+                self.create_selection_merge(next_label)
+                self.create_conditional_branch(condition, body_label, next_label)
+
+                self.emit(f"%{body_label.id} = OpLabel")
+                self.current_label = body_label.id
+                process_arm_body(arm)
+                if not self.current_block_has_terminator():
+                    self.store_to_variable(matched_variable, matched_true)
+                    self.create_branch(next_label)
+
+                self.emit(f"%{next_label.id} = OpLabel")
+                self.current_label = next_label.id
+            finally:
+                restore_bindings()
+
+    def process_match_statement_body(self, body):
+        self.process_statements(body)
+
+    def process_match_expression_arm_body(
+        self, body, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        statements = getattr(body, "statements", None)
+        if statements is not None:
+            statements = list(statements)
+            if statements and getattr(statements[-1], "is_tail_expression", False):
+                self.process_statements(statements[:-1])
+                self.store_match_expression_result(
+                    getattr(statements[-1], "expression", None),
+                    target_pointer,
+                    target_type,
+                )
+                return
+            self.process_statements(statements)
+            return
+
+        if hasattr(body, "expression"):
+            self.store_match_expression_result(
+                getattr(body, "expression", None), target_pointer, target_type
+            )
+            return
+
+        self.process_statement(body)
+
+    def store_match_expression_result(
+        self, expression, target_pointer: SpirvId, target_type: SpirvId
+    ):
+        value = self.process_expression_with_expected_type(
+            expression, target_type.type.base_type
+        )
+        if value is None:
+            return
+        self.store_to_variable(
+            target_pointer, self.convert_value_to_type(value, target_type)
+        )
+
+    def lower_match_pattern_condition(self, pattern, expression: SpirvId):
+        if isinstance(pattern, LiteralPatternNode):
+            pattern_value = self.process_expression(pattern.literal)
             if pattern_value is None:
                 pattern_value = self.register_constant(
                     0, self.register_primitive_type("int")
                 )
-            condition = self.binary_operation(
-                "==",
-                self.ensure_registered_type(expression.type),
-                expression,
-                pattern_value,
+            return self.compare_match_values(expression, pattern_value), []
+
+        if isinstance(pattern, WildcardPatternNode):
+            return None, []
+
+        if isinstance(pattern, IdentifierPatternNode):
+            return self.lower_identifier_match_pattern(pattern, expression)
+
+        if isinstance(pattern, StructPatternNode):
+            return self.lower_struct_match_pattern(pattern, expression)
+
+        if isinstance(pattern, ConstructorPatternNode):
+            return self.lower_constructor_match_pattern(pattern, expression)
+
+        self.raise_match_pattern_gap(
+            f"{type(pattern).__name__} patterns are not lowerable"
+        )
+
+    def lower_identifier_match_pattern(
+        self, pattern: IdentifierPatternNode, expression: SpirvId
+    ):
+        name = pattern.name
+        if name in {"_", ".."}:
+            return None, []
+
+        enum_constant = self.enum_variant_constant(name)
+        if enum_constant is not None:
+            return self.enum_variant_match_condition(expression, name), []
+
+        if "::" in name:
+            self.raise_match_pattern_gap(
+                "enum path patterns without a registered plain enum "
+                f"discriminant are not lowerable: {name}"
             )
 
-            self.create_selection_merge(merge_label)
-            self.create_conditional_branch(condition, body_label, next_label)
+        return None, [(name, expression)]
 
-            self.emit(f"%{body_label.id} = OpLabel")
-            self.current_label = body_label.id
-            self.process_statements(getattr(arm, "body", []))
-            if not self.current_block_has_terminator():
-                self.create_branch(merge_label)
+    def lower_constructor_match_pattern(
+        self, pattern: ConstructorPatternNode, expression: SpirvId
+    ):
+        if pattern.type_name in self.enum_variant_values:
+            condition = self.enum_variant_match_condition(expression, pattern.type_name)
+            field_condition, bindings = self.lower_enum_payload_pattern_bindings(
+                expression,
+                pattern.type_name,
+                list(getattr(pattern, "arguments", []) or []),
+            )
+            return self.combine_match_conditions(condition, field_condition), bindings
 
-            self.emit(f"%{next_label.id} = OpLabel")
-            self.current_label = next_label.id
+        self.raise_match_pattern_gap(
+            "payload enum constructor patterns require tagged enum struct lowering"
+        )
 
-        if wildcard_body is not None:
-            self.process_statements(wildcard_body)
+    def lower_struct_match_pattern(
+        self, pattern: StructPatternNode, expression: SpirvId
+    ):
+        if "::" in pattern.type_name:
+            condition = self.enum_variant_match_condition(expression, pattern.type_name)
+            field_condition, bindings = self.lower_enum_struct_pattern_bindings(
+                expression,
+                pattern.type_name,
+                getattr(pattern, "field_patterns", {}) or {},
+            )
+            return self.combine_match_conditions(condition, field_condition), bindings
 
-        if not self.current_block_has_terminator():
-            self.create_branch(merge_label)
+        struct_type_name = expression.type.base_type
+        if pattern.type_name != struct_type_name:
+            self.raise_match_pattern_gap(
+                "struct pattern " f"{pattern.type_name} cannot match {struct_type_name}"
+            )
 
-        self.emit(f"%{merge_label.id} = OpLabel")
-        self.current_label = merge_label.id
+        condition = None
+        bindings = []
+        for field_name, field_pattern in (pattern.field_patterns or {}).items():
+            member_info = self.struct_member_info(struct_type_name, field_name)
+            if member_info is None:
+                self.raise_match_pattern_gap(
+                    "struct pattern "
+                    f"field {field_name} does not exist on {struct_type_name}"
+                )
+            member_index, member_type = member_info
+            field_value = self.composite_extract(expression, member_type, member_index)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                field_pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+
+        return condition, bindings
+
+    def enum_variant_match_condition(self, expression: SpirvId, path: str) -> SpirvId:
+        enum_constant = self.enum_variant_constant(path)
+        if enum_constant is None:
+            self.raise_match_pattern_gap(f"unknown enum variant {path}")
+
+        parts = self.enum_path_parts(path)
+        enum_name = parts[0] if parts else None
+        if enum_name in self.enum_struct_type_names:
+            variant_value = self.enum_struct_variant_value(expression, enum_name)
+            return self.compare_match_values(variant_value, enum_constant)
+
+        return self.compare_match_values(expression, enum_constant)
+
+    def enum_struct_variant_value(self, expression: SpirvId, enum_name: str) -> SpirvId:
+        struct_name = expression.type.base_type
+        if struct_name != enum_name:
+            specialization = self.generic_enum_specialization_for_struct_name(
+                struct_name
+            )
+            if specialization is None or specialization["base_name"] != enum_name:
+                self.raise_match_pattern_gap(
+                    f"enum pattern {enum_name} cannot match {struct_name}"
+                )
+        member_info = self.struct_member_info(struct_name, "variant")
+        if member_info is None:
+            self.raise_match_pattern_gap(f"enum {struct_name} has no variant tag")
+        member_index, member_type = member_info
+        return self.composite_extract(expression, member_type, member_index)
+
+    def lower_enum_payload_pattern_bindings(
+        self, expression: SpirvId, path: str, argument_patterns
+    ):
+        variant_fields = self.enum_variant_fields_for_path(path, expression)
+        if variant_fields is None:
+            return []
+        if len(argument_patterns) != len(variant_fields):
+            raise ValueError(
+                f"Enum pattern {path} expects {len(variant_fields)} arguments, "
+                f"got {len(argument_patterns)}"
+            )
+
+        condition = None
+        bindings = []
+        for pattern, (field_name, _field_type) in zip(
+            argument_patterns, variant_fields
+        ):
+            field_value = self.enum_struct_field_value(expression, field_name)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+        return condition, bindings
+
+    def lower_enum_struct_pattern_bindings(
+        self, expression: SpirvId, path: str, field_patterns
+    ):
+        variant_fields = dict(self.enum_variant_fields_for_path(path, expression) or [])
+        condition = None
+        bindings = []
+        for field_name, field_pattern in field_patterns.items():
+            if field_name not in variant_fields:
+                self.raise_match_pattern_gap(
+                    f"enum pattern {path} has no payload field {field_name}"
+                )
+            field_value = self.enum_struct_field_value(expression, field_name)
+            field_condition, field_bindings = self.lower_match_pattern_condition(
+                field_pattern, field_value
+            )
+            condition = self.combine_match_conditions(condition, field_condition)
+            bindings.extend(field_bindings)
+        return condition, bindings
+
+    def enum_struct_field_value(self, expression: SpirvId, field_name: str) -> SpirvId:
+        member_info = self.struct_member_info(expression.type.base_type, field_name)
+        if member_info is None:
+            self.raise_match_pattern_gap(
+                f"enum payload field {field_name} does not exist on "
+                f"{expression.type.base_type}"
+            )
+        member_index, member_type = member_info
+        return self.composite_extract(expression, member_type, member_index)
+
+    def raise_match_pattern_gap(self, detail: str):
+        raise ValueError(f"SPIR-V match pattern unsupported: {detail}")
+
+    def compare_match_values(self, expression: SpirvId, pattern_value: SpirvId):
+        return self.binary_operation(
+            "==",
+            self.ensure_registered_type(expression.type),
+            expression,
+            pattern_value,
+        )
+
+    def combine_match_conditions(
+        self, left: Optional[SpirvId], right: Optional[SpirvId]
+    ) -> Optional[SpirvId]:
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return self.binary_operation(
+            "&&", self.register_primitive_type("bool"), left, right
+        )
+
+    def apply_match_bindings(self, bindings):
+        missing = object()
+        previous_values = []
+        for name, value in bindings:
+            if name in {"_", ".."}:
+                continue
+            previous_values.append((name, self.local_variables.get(name, missing)))
+            value_type = self.ensure_registered_type(value.type)
+            variable = self.create_variable(value_type, "Function", name)
+            self.local_variables[name] = variable
+            self.store_to_variable(variable, value)
+
+        def restore():
+            for name, previous in reversed(previous_values):
+                if previous is missing:
+                    self.local_variables.pop(name, None)
+                else:
+                    self.local_variables[name] = previous
+
+        return restore
 
     def is_supported_match_arm(self, arm):
         if getattr(arm, "guard", None) is not None:
@@ -12789,6 +13562,15 @@ class VulkanSPIRVCodeGen:
             return self.register_constant(expr, float_type)
 
         elif isinstance(expr, str):
+            if self.enum_variant_is_payload_path(expr):
+                enum_value = self.process_enum_variant_constructor(expr, [])
+                if enum_value is not None:
+                    return enum_value
+            else:
+                enum_constant = self.enum_variant_constant(expr)
+                if enum_constant is not None:
+                    return enum_constant
+
             if expr in self.local_variables:
                 var_id = self.local_variables[expr]
                 return self.get_variable_value(var_id)
@@ -12950,6 +13732,15 @@ class VulkanSPIRVCodeGen:
         elif isinstance(expr, MeshOpNode):
             return self.process_mesh_operation(expr)
 
+        elif isinstance(expr, ConstructorNode):
+            constructed = self.process_struct_constructor_node(expr)
+            if constructed is not None:
+                return constructed
+            self.emit(
+                f"; WARNING: Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}"
+            )
+            return None
+
         elif isinstance(expr, FunctionCallNode):
             ray_query_call = self.ray_query_call_from_function_call(expr)
             if ray_query_call is not None:
@@ -12964,6 +13755,17 @@ class VulkanSPIRVCodeGen:
 
             if callee_name in {"SetVertex", "SetPrimitive"}:
                 return self.process_mesh_output_function_call(callee_name, expr.args)
+
+            if (
+                isinstance(callee_name, str)
+                and self.enum_path_parts(callee_name) is not None
+            ):
+                enum_value = self.process_enum_variant_constructor(
+                    callee_name,
+                    list(getattr(expr, "args", []) or []),
+                )
+                if enum_value is not None:
+                    return enum_value
 
             if callee_name == "lambda":
                 return self.unsupported_lambda_default_value("lambda expression")
@@ -13734,10 +14536,36 @@ class VulkanSPIRVCodeGen:
         for i in range(2, 5):
             self.register_vector_type(float_type, i)
 
+        struct_declarations = list(getattr(ast, "structs", []) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            struct_declarations.extend(getattr(stage, "local_structs", []) or [])
+
+        self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
+            struct_declarations
+        )
+        self.generic_enum_specializations = collect_generic_enum_specializations(
+            ast,
+            self.generic_enum_struct_definitions,
+            self.type_name_string,
+        )
+
+        self.collect_enum_metadata(ast.structs)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            self.collect_enum_metadata(getattr(stage, "local_structs", []) or [])
+        self.register_generic_enum_metadata()
+
+        self.process_enum_structs(ast.structs)
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            self.process_enum_structs(getattr(stage, "local_structs", []) or [])
+
         for struct in ast.structs:
+            if not isinstance(struct, StructNode):
+                continue
             self.process_crossgl_struct(struct)
         for stage in (getattr(ast, "stages", None) or {}).values():
             for struct in getattr(stage, "local_structs", []) or []:
+                if not isinstance(struct, StructNode):
+                    continue
                 self.process_crossgl_struct(struct)
 
         self.function_resource_array_type_hints = (

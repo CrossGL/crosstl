@@ -3021,6 +3021,11 @@ class MetalCodeGen:
                 )
                 return code
             if initial_value is not None:
+                address_space_conflict = (
+                    self.local_variable_address_space_conflict_diagnostic(stmt)
+                )
+                if address_space_conflict is not None:
+                    return f"{indent_str}{address_space_conflict}\n{indent_str}{declaration};\n"
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
@@ -3551,6 +3556,21 @@ class MetalCodeGen:
             f"'{initializer_name}' uses {initializer_address_space} address space "
             f"but local '{node.name}' was declared {explicit_address_space}; "
             f"using read-only {initializer_address_space} alias */"
+        )
+
+    def local_variable_address_space_conflict_diagnostic(self, node):
+        if not isinstance(self.local_variable_type_node(node), PointerType):
+            return None
+        conflict = self.argument_address_space_conflict(
+            getattr(node, "initial_value", None)
+        )
+        if conflict is None:
+            return None
+        target_address_space = self.local_variable_address_space(node)
+        return (
+            "/* unsupported Metal address-space local alias: initializer "
+            f"{self.address_space_conflict_description(conflict)} use different "
+            f"address spaces; using uninitialized {target_address_space} alias */"
         )
 
     def record_readonly_metal_mesh_payload_local_alias(self, node):
@@ -7316,6 +7336,18 @@ class MetalCodeGen:
         return None
 
     def argument_address_space(self, arg):
+        if isinstance(arg, TernaryOpNode):
+            if self.argument_address_space_conflict(arg) is not None:
+                return None
+            true_space = self.argument_address_space(getattr(arg, "true_expr", None))
+            false_space = self.argument_address_space(getattr(arg, "false_expr", None))
+            if (
+                true_space is not None
+                and false_space is not None
+                and true_space == false_space
+            ):
+                return true_space
+            return None
         member_address_space = self.address_space_qualified_member_address_space(arg)
         if member_address_space is not None:
             return member_address_space
@@ -7360,6 +7392,57 @@ class MetalCodeGen:
             ).get(str(getattr(expr, "member", "")))
         return None
 
+    def argument_address_space_conflict(self, arg):
+        if arg is None:
+            return None
+        if isinstance(arg, TernaryOpNode):
+            true_expr = getattr(arg, "true_expr", None)
+            false_expr = getattr(arg, "false_expr", None)
+            true_conflict = self.argument_address_space_conflict(true_expr)
+            if true_conflict is not None:
+                return true_conflict
+            false_conflict = self.argument_address_space_conflict(false_expr)
+            if false_conflict is not None:
+                return false_conflict
+            true_space = self.argument_address_space(true_expr)
+            false_space = self.argument_address_space(false_expr)
+            if (
+                true_space is not None
+                and false_space is not None
+                and true_space != false_space
+            ):
+                return (
+                    true_space,
+                    false_space,
+                    self.assignment_target_display_name(true_expr) or "<expr>",
+                    self.assignment_target_display_name(false_expr) or "<expr>",
+                )
+            return None
+        if isinstance(arg, UnaryOpNode) and getattr(arg, "operator", None) in {
+            "&",
+            "*",
+        }:
+            return self.argument_address_space_conflict(getattr(arg, "operand", None))
+        if isinstance(arg, BinaryOpNode) and getattr(arg, "operator", None) in {
+            "+",
+            "-",
+        }:
+            return self.argument_address_space_conflict(
+                getattr(arg, "left", None)
+            ) or self.argument_address_space_conflict(getattr(arg, "right", None))
+        if isinstance(arg, ArrayAccessNode):
+            return self.argument_address_space_conflict(
+                getattr(arg, "array", getattr(arg, "array_expr", None))
+            )
+        return None
+
+    def address_space_conflict_description(self, conflict):
+        true_space, false_space, true_name, false_name = conflict
+        return (
+            f"branches '{true_name}' ({true_space}) and "
+            f"'{false_name}' ({false_space})"
+        )
+
     def address_space_call_diagnostic(self, func_name, call_args):
         if func_name not in self.user_function_names:
             return None
@@ -7376,6 +7459,23 @@ class MetalCodeGen:
             )
             if expected_address_space is None:
                 continue
+            address_space_conflict = self.argument_address_space_conflict(arg)
+            if address_space_conflict is not None:
+                arg_name = self.assignment_target_display_name(arg) or "<expr>"
+                parameter_name = getattr(parameter, "name", f"arg{index}")
+                diagnostic = (
+                    "/* unsupported Metal address-space call: argument "
+                    f"'{arg_name}' mixes "
+                    f"{self.address_space_conflict_description(address_space_conflict)} "
+                    f"but parameter '{parameter_name}' of '{func_name}' requires "
+                    f"{expected_address_space} */"
+                )
+                return_type = self.function_return_types.get(func_name)
+                if self.map_type(return_type) == "void":
+                    return diagnostic
+                return (
+                    f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
+                )
             actual_address_space = self.argument_address_space(arg)
             if (
                 actual_address_space is None

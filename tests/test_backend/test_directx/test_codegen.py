@@ -2505,6 +2505,86 @@ def test_codegen_feedback_texture_arrays_preserve_feedback_kind_and_uav_register
     assert "feedbackTexture2DArray" not in hlsl
 
 
+def test_codegen_feedback_texture_write_methods_roundtrip_to_canonical_helpers():
+    code = textwrap.dedent("""
+        Texture2D<float4> pairedTexture : register(t0, space10);
+        Texture2DArray<float4> pairedLayers : register(t1, space10);
+        SamplerState pairedSampler : register(s0, space10);
+        FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : register(u0, space10);
+        FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : register(u2, space10);
+
+        float4 main(float2 uv : TEXCOORD0, float layer : TEXCOORD1, uint feedbackIndex : TEXCOORD2) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(feedbackIndex);
+            float2 ddxValue = float2(0.25, 0.0);
+            float2 ddyValue = float2(0.0, 0.25);
+            float3 uvLayer = float3(uv, layer);
+            feedbackMin[slot].WriteSamplerFeedback(pairedTexture, pairedSampler, uv);
+            feedbackMin[slot].WriteSamplerFeedbackBias(pairedTexture, pairedSampler, uv, 0.5);
+            feedbackMin[slot].WriteSamplerFeedbackGrad(pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+            feedbackMin[slot].WriteSamplerFeedbackLevel(pairedTexture, pairedSampler, uv, 2.0);
+            feedbackUsed[slot].WriteSamplerFeedbackLevel(pairedLayers, pairedSampler, uvLayer, 1.0);
+            return pairedTexture.Sample(pairedSampler, uv);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert (
+        "write_sampler_feedback(feedbackMin[slot], pairedTexture, pairedSampler, uv);"
+        in crossgl
+    )
+    assert (
+        "write_sampler_feedback_bias("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, 0.5);" in crossgl
+    )
+    assert (
+        "write_sampler_feedback_grad("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, ddxValue, ddyValue);"
+        in crossgl
+    )
+    assert (
+        "write_sampler_feedback_level("
+        "feedbackMin[slot], pairedTexture, pairedSampler, uv, 2.0);" in crossgl
+    )
+    assert (
+        "write_sampler_feedback_level("
+        "feedbackUsed[slot], pairedLayers, pairedSampler, uvLayer, 1.0);" in crossgl
+    )
+    assert ".WriteSamplerFeedback" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin[2] : "
+        "register(u0, space10);" in hlsl
+    )
+    assert (
+        "FeedbackTexture2DArray<SAMPLER_FEEDBACK_MIP_REGION_USED> feedbackUsed[] : "
+        "register(u2, space10);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedback(pairedTexture, pairedSampler, uv);"
+        in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackBias("
+        "pairedTexture, pairedSampler, uv, 0.5);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in hlsl
+    )
+    assert (
+        "feedbackMin[slot].WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in hlsl
+    )
+    assert (
+        "feedbackUsed[slot].WriteSamplerFeedbackLevel("
+        "pairedLayers, pairedSampler, uvLayer, 1.0);" in hlsl
+    )
+    assert "write_sampler_feedback" not in hlsl
+
+
 def test_codegen_nonuniform_resource_index_typed_and_raw_buffer_arrays_roundtrip():
     code = textwrap.dedent("""
         StructuredBuffer<float4> positions[4] : register(t0, space3);
