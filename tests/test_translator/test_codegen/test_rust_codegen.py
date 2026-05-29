@@ -20304,7 +20304,7 @@ def test_complex_vector_swizzles_use_single_evaluation_blocks():
     assert "Vec4::<f32>::new(1.0, 2.0, 3.0, 4.0).xy" not in generated_code
 
 
-def test_switch_statement_emits_rust_match():
+def test_switch_statement_emits_rust_match(tmp_path):
     code = """
     shader main {
         compute {
@@ -20336,9 +20336,10 @@ def test_switch_statement_emits_rust_match():
     assert "SwitchNode" not in generated_code
     assert "CaseNode" not in generated_code
     assert "BreakNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_match_statement_emits_rust_match():
+def test_match_statement_emits_rust_match(tmp_path):
     code = """
     shader main {
         compute {
@@ -20369,6 +20370,7 @@ def test_match_statement_emits_rust_match():
     assert "value = 2;" in generated_code
     assert "MatchNode" not in generated_code
     assert "MatchArmNode" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_match_arm_break_and_continue_preserve_loop_control_flow_and_smoke_compile(
