@@ -11924,6 +11924,93 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
+    def structured_buffer_default_value(self, metadata) -> SpirvId:
+        element_type = metadata.get("element_type") if metadata is not None else None
+        if element_type is not None:
+            return self.default_value_for_type(element_type)
+        return self.register_constant(0.0, self.register_primitive_type("float"))
+
+    def process_structured_buffer_method_call(
+        self, expr: FunctionCallNode
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        callee_expr = getattr(expr, "function", getattr(expr, "name", None))
+        if not isinstance(callee_expr, MemberAccessNode):
+            return False, None
+
+        method_name = getattr(callee_expr, "member", None)
+        if method_name not in {"Load", "Store"}:
+            return False, None
+
+        buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
+        if buffer_pointer is None:
+            return False, None
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None or metadata.get("byte_address"):
+            return False, None
+
+        args = list(getattr(expr, "args", []) or [])
+        if method_name == "Load":
+            diagnostic_name = "StructuredBuffer.Load"
+            if len(args) < 1:
+                self.emit(f"; WARNING: {diagnostic_name} requires an index operand")
+                return True, self.structured_buffer_default_value(metadata)
+            if len(args) > 1:
+                self.emit(f"; WARNING: {diagnostic_name} accepts only an index operand")
+                return True, self.structured_buffer_default_value(metadata)
+            if metadata.get("writeonly"):
+                self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+                return True, self.structured_buffer_default_value(metadata)
+
+            index = self.process_expression(args[0])
+            if index is None:
+                self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+                return True, self.structured_buffer_default_value(metadata)
+            element_pointer = self.structured_buffer_element_pointer(
+                buffer_pointer, index
+            )
+            if element_pointer is None:
+                self.emit(
+                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
+                    "element"
+                )
+                return True, self.structured_buffer_default_value(metadata)
+
+            element_type = self.variable_value_types[element_pointer.id]
+            return True, self.load_from_variable(element_pointer, element_type)
+
+        diagnostic_name = "RWStructuredBuffer.Store"
+        if len(args) < 2:
+            self.emit(f"; WARNING: {diagnostic_name} requires index and value operands")
+            return True, None
+        if len(args) > 2:
+            self.emit(
+                f"; WARNING: {diagnostic_name} accepts only index and value operands"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+
+        index = self.process_expression(args[0])
+        if index is None:
+            self.emit(f"; WARNING: {diagnostic_name} index could not be evaluated")
+            return True, None
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            )
+            return True, None
+
+        value = self.process_expression(args[1])
+        if value is None:
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            return True, None
+
+        self.store_to_variable(element_pointer, value)
+        return True, None
+
     def array_type_contains_element_type(
         self, array_type: Optional[SpirvId], target_type: Optional[SpirvId]
     ) -> bool:
@@ -14428,6 +14515,12 @@ class VulkanSPIRVCodeGen:
             )
             if handled_byte_address_call:
                 return byte_address_result
+
+            handled_structured_buffer_call, structured_buffer_result = (
+                self.process_structured_buffer_method_call(expr)
+            )
+            if handled_structured_buffer_call:
+                return structured_buffer_result
 
             callee_expr = getattr(expr, "function", getattr(expr, "name", None))
             callee_name = None

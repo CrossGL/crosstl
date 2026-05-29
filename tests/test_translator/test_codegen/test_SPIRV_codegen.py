@@ -8533,6 +8533,135 @@ class TestVulkanSPIRVCodeGen:
         assert "StructuredBuffer" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_structured_buffer_resource_arrays_emit_member_load_store_accesses(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TypedResourceArrays {
+            struct Particle {
+                vec4 position;
+                float mass;
+            };
+
+            RWStructuredBuffer<Particle> particles[2] @set(5) @binding(1);
+            StructuredBuffer<float> weights[2] @set(5) @binding(3);
+
+            compute {
+                void main() {
+                    float w = weights[1].Load(0u);
+                    Particle p = particles[0].Load(1u);
+                    p.mass = p.mass + w;
+                    particles[1].Store(2u, p);
+                    particles[0][3u].mass = w;
+                    float direct = weights[0][4u];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        particle_type = spirv_named_id(spv_code, "Particle")
+        particles_block = spirv_named_id(spv_code, "particlesBuffer")
+        weights_block = spirv_named_id(spv_code, "weightsBuffer")
+        particles_var = spirv_named_variable(
+            spv_code, "particles", storage_class="Uniform"
+        )
+        weights_var = spirv_named_variable(spv_code, "weights", storage_class="Uniform")
+
+        particles_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(particles_block)} %\d+",
+            spv_code,
+        )
+        weights_array = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(weights_block)} %\d+",
+            spv_code,
+        )
+        assert particles_array is not None
+        assert weights_array is not None
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(particles_array.group(1))}\b",
+            spv_code,
+        )
+        assert re.search(
+            rf"%\d+ = OpTypePointer Uniform {re.escape(weights_array.group(1))}\b",
+            spv_code,
+        )
+        assert f"OpMemberDecorate {particle_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {particle_type} 1 Offset 16" in spv_code
+        assert f"OpDecorate {particles_block} BufferBlock" in spv_code
+        assert f"OpDecorate {weights_block} BufferBlock" in spv_code
+        assert f"OpDecorate {particles_var} DescriptorSet 5" in spv_code
+        assert f"OpDecorate {particles_var} Binding 1" in spv_code
+        assert f"OpDecorate {weights_var} DescriptorSet 5" in spv_code
+        assert f"OpDecorate {weights_var} Binding 3" in spv_code
+
+        particle_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(particles_var)} ([^\n]+)",
+            spv_code,
+        )
+        weight_descriptor_accesses = re.findall(
+            rf"OpAccessChain %\d+ {re.escape(weights_var)} ([^\n]+)",
+            spv_code,
+        )
+        assert any(len(access.split()) == 1 for access in particle_descriptor_accesses)
+        assert any(len(access.split()) == 1 for access in weight_descriptor_accesses)
+
+        assert "OpLoad" in spv_code
+        assert "OpStore" in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_resource_array_methods_emit_invalid_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TypedResourceArrayDiagnostics {
+            StructuredBuffer<float> weights[2];
+            RWStructuredBuffer<float> outputs[2] @writeonly;
+
+            compute {
+                void main() {
+                    float missing = weights[0].Load();
+                    float extra = weights[0].Load(0u, 1u);
+                    weights[1].Store(0u, 1.0);
+                    float rejected = outputs[0].Load(1u);
+                    outputs[1].Store(2u);
+                    outputs[1].Store(3u, 1.0, 2.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: StructuredBuffer.Load requires an index operand" in spv_code
+        assert (
+            "WARNING: StructuredBuffer.Load accepts only an index operand" in spv_code
+        )
+        assert (
+            "WARNING: RWStructuredBuffer.Store requires a writable buffer" in spv_code
+        )
+        assert "WARNING: StructuredBuffer.Load requires a readable buffer" in spv_code
+        assert (
+            "WARNING: RWStructuredBuffer.Store requires index and value operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWStructuredBuffer.Store accepts only index and value operands"
+            in spv_code
+        )
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_byte_address_buffers_emit_scalar_load_store_accesses(self, tmp_path):
         source_code = """
         shader ByteAddressBuffers {
