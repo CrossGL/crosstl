@@ -6381,6 +6381,34 @@ def test_directx_set_mesh_output_counts_validates_control_flow_placement():
     assert "SetMeshOutputCounts(3, 1);" in generated
 
 
+def test_directx_set_mesh_output_counts_rejects_thread_varying_switch():
+    shader = """
+    shader MeshOutputCountInThreadVaryingSwitch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint groupIndex @ SV_GroupIndex,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (groupIndex) {
+                    case 0:
+                    default:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="thread-varying control flow"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+
 def test_directx_mesh_output_writes_validate_order_and_indices():
     write_before_count_code = """
     shader MeshOutputWriteBeforeCount {
@@ -6504,6 +6532,102 @@ def test_directx_mesh_output_writes_track_literal_branch_dominance():
         crosstl.translator.parse(else_branch_code), "mesh"
     )
     assert "SetMeshOutputCounts(3, 1);" in generated
+
+
+def test_directx_mesh_output_writes_reject_switch_count_without_full_dominance():
+    missing_default_code = """
+    shader MeshOutputCountSwitchMissingDefault {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(missing_default_code), "mesh"
+        )
+
+    default_without_count_code = """
+    shader MeshOutputCountSwitchDefaultWithoutCount {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                    default:
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(default_without_count_code), "mesh"
+        )
+
+
+def test_directx_mesh_output_writes_track_switch_count_dominance():
+    shader = """
+    shader MeshOutputCountDominatesThroughSwitch {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                uint selector @ TEXCOORD0,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                switch (selector) {
+                    case 0:
+                    case 1:
+                    default:
+                        SetMeshOutputCounts(3, 1);
+                        break;
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "mesh")
+
+    assert "case 0:" in generated
+    assert "case 1:" in generated
+    assert "default:" in generated
+    assert generated.count("SetMeshOutputCounts(3, 1);") == 1
+    assert "verts[0].position" in generated
 
 
 def test_directx_mesh_output_writes_validate_literal_bounds():

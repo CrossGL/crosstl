@@ -18946,7 +18946,7 @@ def test_matrix_constructors_flatten_vector_args_once(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type():
+def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type(tmp_path):
     code = """
     void probe(float weight, int index, uint count) {
         mat2 mixedFloat = mat2(weight, index, 2, 1.0);
@@ -18978,6 +18978,7 @@ def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type():
     assert "Mat2::<f32>::new(weight, index, 2, 1.0)" not in generated_code
     assert "Mat2::<f64>::new(weight, index, 2, 1.0)" not in generated_code
     assert "Mat2::<f32>::new(__cgl_vec_arg_0.x, __cgl_vec_arg_0.y" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_matrix_constructor_bindings_use_matrix_types():

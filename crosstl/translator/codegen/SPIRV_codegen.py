@@ -182,6 +182,7 @@ class VulkanSPIRVCodeGen:
         self.task_payload_interface_by_function = {}
         self.entry_point_private_variables = []
         self.local_size_warning_keys = set()
+        self.tessellation_control_stage = None
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -15637,7 +15638,7 @@ class VulkanSPIRVCodeGen:
 
     def stage_attribute_value(self, stage, attribute_name: str):
         """Return the first argument for a stage entry-point attribute."""
-        entry_point = getattr(stage, "entry_point", None)
+        entry_point = getattr(stage, "entry_point", stage)
         for attr in getattr(entry_point, "attributes", []) or []:
             if str(getattr(attr, "name", "")).lower() != attribute_name:
                 continue
@@ -15647,6 +15648,26 @@ class VulkanSPIRVCodeGen:
             if arguments:
                 return arguments[0]
         return None
+
+    def stage_has_attribute(self, stage, attribute_name: str) -> bool:
+        """Return whether a stage entry point has a flag-style attribute."""
+        entry_point = getattr(stage, "entry_point", stage)
+        for attr in getattr(entry_point, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() == attribute_name:
+                return True
+        return False
+
+    def stage_attribute_flag_names(self, stage) -> List[str]:
+        """Return normalized no-argument stage entry-point attribute names."""
+        entry_point = getattr(stage, "entry_point", stage)
+        flags = []
+        for attr in getattr(entry_point, "attributes", []) or []:
+            arguments = getattr(attr, "arguments", None)
+            if arguments is None:
+                arguments = getattr(attr, "args", [])
+            if not arguments:
+                flags.append(str(getattr(attr, "name", "")).lower())
+        return flags
 
     def stage_layout_value(self, stage, attribute_name: str):
         """Return the first argument for a stage layout qualifier."""
@@ -15660,6 +15681,81 @@ class VulkanSPIRVCodeGen:
                 if arguments:
                     return arguments[0]
         return None
+
+    def stage_layout_direction_value(self, stage, direction: str, attribute_names):
+        """Return a stage layout value matching a direction and name set."""
+        names = {str(name).lower() for name in attribute_names}
+        for layout in getattr(stage, "layout_qualifiers", []) or []:
+            if getattr(layout, "direction", None) != direction:
+                continue
+            for entry in getattr(layout, "entries", []) or []:
+                if str(getattr(entry, "name", "")).lower() not in names:
+                    continue
+                arguments = getattr(entry, "arguments", None)
+                if arguments is None:
+                    arguments = getattr(entry, "args", [])
+                if arguments:
+                    return arguments[0]
+        return None
+
+    def stage_layout_flag_names(self, stage, direction: Optional[str] = None):
+        """Return normalized no-argument stage layout entries."""
+        flags = []
+        for layout in getattr(stage, "layout_qualifiers", []) or []:
+            if (
+                direction is not None
+                and getattr(layout, "direction", None) != direction
+            ):
+                continue
+            for entry in getattr(layout, "entries", []) or []:
+                arguments = getattr(entry, "arguments", None)
+                if arguments is None:
+                    arguments = getattr(entry, "args", [])
+                if not arguments:
+                    flags.append(str(getattr(entry, "name", "")).lower())
+        return flags
+
+    def normalized_stage_value(self, value) -> Optional[str]:
+        """Return a normalized string for stage metadata values."""
+        text = self.attribute_value_to_string(value)
+        if text is None:
+            return None
+        return str(text).strip().strip('"').lower()
+
+    def positive_stage_int_value(self, value, context: str, default: int = 1) -> int:
+        """Return a positive integer stage metadata value or a safe default."""
+        literal = self.literal_int_argument(value)
+        if literal is not None and literal > 0:
+            return literal
+        self.emit(
+            f"; WARNING: SPIR-V {context} must be a positive integer literal; "
+            f"using {default}"
+        )
+        return default
+
+    def stage_positive_int_metadata(
+        self,
+        stage,
+        context: str,
+        attribute_names=(),
+        layout_direction: Optional[str] = None,
+        layout_names=(),
+        default: int = 1,
+    ) -> int:
+        """Return positive integer metadata from attributes or layouts."""
+        for attribute_name in attribute_names:
+            value = self.stage_attribute_value(stage, attribute_name)
+            if value is not None:
+                return self.positive_stage_int_value(value, context, default)
+
+        if layout_direction is not None and layout_names:
+            value = self.stage_layout_direction_value(
+                stage, layout_direction, layout_names
+            )
+            if value is not None:
+                return self.positive_stage_int_value(value, context, default)
+
+        return default
 
     def mesh_stage_limit(self, stage, attribute_name: str) -> Optional[int]:
         """Return a literal mesh output limit from function or layout metadata."""
@@ -15707,6 +15803,221 @@ class VulkanSPIRVCodeGen:
             )
         return topology_modes[normalized]
 
+    def geometry_input_mode(self, stage) -> str:
+        """Return the SPIR-V geometry input primitive execution mode."""
+        mode_map = {
+            "point": "InputPoints",
+            "points": "InputPoints",
+            "line": "InputLines",
+            "lines": "InputLines",
+            "line_adjacency": "InputLinesAdjacency",
+            "lines_adjacency": "InputLinesAdjacency",
+            "lineadj": "InputLinesAdjacency",
+            "triangle": "Triangles",
+            "triangles": "Triangles",
+            "tri": "Triangles",
+            "triangle_adjacency": "InputTrianglesAdjacency",
+            "triangles_adjacency": "InputTrianglesAdjacency",
+            "triangleadj": "InputTrianglesAdjacency",
+        }
+        for flag in self.stage_attribute_flag_names(stage):
+            if flag in mode_map:
+                return mode_map[flag]
+        for flag in self.stage_layout_flag_names(stage, "in"):
+            if flag in mode_map:
+                return mode_map[flag]
+        return "InputPoints"
+
+    def geometry_output_mode(self, stage) -> str:
+        """Return the SPIR-V geometry output primitive execution mode."""
+        mode_map = {
+            "point": "OutputPoints",
+            "points": "OutputPoints",
+            "line": "OutputLineStrip",
+            "lines": "OutputLineStrip",
+            "line_strip": "OutputLineStrip",
+            "triangle": "OutputTriangleStrip",
+            "triangles": "OutputTriangleStrip",
+            "tri": "OutputTriangleStrip",
+            "triangle_strip": "OutputTriangleStrip",
+        }
+        value = self.stage_attribute_value(stage, "outputtopology")
+        normalized = self.normalized_stage_value(value)
+        if normalized in mode_map:
+            return mode_map[normalized]
+        if normalized is not None:
+            self.emit(
+                "; WARNING: SPIR-V geometry outputtopology must be point, "
+                f"line_strip, or triangle_strip; using points: {normalized}"
+            )
+        for flag in self.stage_layout_flag_names(stage, "out"):
+            if flag in mode_map:
+                return mode_map[flag]
+        return "OutputPoints"
+
+    def emit_geometry_execution_modes(self, function_id: SpirvId, stage):
+        """Emit geometry capability and execution modes."""
+        self.require_capability("Geometry")
+        max_vertices = self.stage_positive_int_metadata(
+            stage,
+            "geometry OutputVertices",
+            attribute_names=("max_vertices", "maxvertexcount"),
+            layout_direction="out",
+            layout_names=("max_vertices", "maxvertexcount"),
+        )
+        invocations = self.stage_positive_int_metadata(
+            stage,
+            "geometry Invocations",
+            attribute_names=("invocations",),
+            layout_direction="in",
+            layout_names=("invocations",),
+        )
+        self.emit(
+            f"OpExecutionMode %{function_id.id} {self.geometry_input_mode(stage)}"
+        )
+        self.emit(
+            f"OpExecutionMode %{function_id.id} {self.geometry_output_mode(stage)}"
+        )
+        self.emit(f"OpExecutionMode %{function_id.id} OutputVertices {max_vertices}")
+        if invocations != 1:
+            self.emit(f"OpExecutionMode %{function_id.id} Invocations {invocations}")
+
+    def tessellation_control_output_vertices(self, stage) -> int:
+        """Return tessellation-control output control-point count."""
+        return self.stage_positive_int_metadata(
+            stage,
+            "tessellation_control OutputVertices",
+            attribute_names=("outputcontrolpoints", "vertices"),
+            layout_direction="out",
+            layout_names=("vertices", "outputcontrolpoints"),
+        )
+
+    def tessellation_metadata_sources(self, stage):
+        """Return evaluation metadata sources, preferring evaluation metadata."""
+        sources = [stage]
+        if (
+            self.tessellation_control_stage is not None
+            and self.tessellation_control_stage is not stage
+        ):
+            sources.append(self.tessellation_control_stage)
+        return sources
+
+    def tessellation_domain_mode(self, stage) -> str:
+        """Return the tessellation-evaluation domain execution mode."""
+        mode_map = {
+            "tri": "Triangles",
+            "triangle": "Triangles",
+            "triangles": "Triangles",
+            "triangle_cw": "Triangles",
+            "triangle_ccw": "Triangles",
+            "quad": "Quads",
+            "quads": "Quads",
+            "isoline": "Isolines",
+            "isolines": "Isolines",
+        }
+        for source in self.tessellation_metadata_sources(stage):
+            for attribute_name in ("domain", "outputtopology"):
+                value = self.stage_attribute_value(source, attribute_name)
+                normalized = self.normalized_stage_value(value)
+                if normalized in mode_map:
+                    return mode_map[normalized]
+                if attribute_name == "domain" and normalized is not None:
+                    self.emit(
+                        "; WARNING: SPIR-V tessellation domain must be "
+                        f"triangle, quads, or isolines; using triangles: {normalized}"
+                    )
+            for flag in self.stage_layout_flag_names(source, "in"):
+                if flag in mode_map:
+                    return mode_map[flag]
+        return "Triangles"
+
+    def tessellation_spacing_mode(self, stage) -> str:
+        """Return the tessellation-evaluation spacing execution mode."""
+        mode_map = {
+            "integer": "SpacingEqual",
+            "equal": "SpacingEqual",
+            "equal_spacing": "SpacingEqual",
+            "fractional_even": "SpacingFractionalEven",
+            "fractional_even_spacing": "SpacingFractionalEven",
+            "fractional_odd": "SpacingFractionalOdd",
+            "fractional_odd_spacing": "SpacingFractionalOdd",
+        }
+        for source in self.tessellation_metadata_sources(stage):
+            value = self.stage_attribute_value(source, "partitioning")
+            normalized = self.normalized_stage_value(value)
+            if normalized in mode_map:
+                return mode_map[normalized]
+            if normalized is not None:
+                self.emit(
+                    "; WARNING: SPIR-V tessellation partitioning must be "
+                    "integer, fractional_even, or fractional_odd; using equal "
+                    f"spacing: {normalized}"
+                )
+            for flag in self.stage_layout_flag_names(source, "in"):
+                if flag in mode_map:
+                    return mode_map[flag]
+        return "SpacingEqual"
+
+    def tessellation_vertex_order_mode(self, stage) -> str:
+        """Return the tessellation-evaluation vertex-order execution mode."""
+        mode_map = {
+            "cw": "VertexOrderCw",
+            "triangle_cw": "VertexOrderCw",
+            "ccw": "VertexOrderCcw",
+            "triangle_ccw": "VertexOrderCcw",
+        }
+        for source in self.tessellation_metadata_sources(stage):
+            value = self.stage_attribute_value(source, "outputtopology")
+            normalized = self.normalized_stage_value(value)
+            if normalized in mode_map:
+                return mode_map[normalized]
+            for flag in self.stage_attribute_flag_names(source):
+                if flag in mode_map:
+                    return mode_map[flag]
+            for flag in self.stage_layout_flag_names(source, "in"):
+                if flag in mode_map:
+                    return mode_map[flag]
+        return "VertexOrderCcw"
+
+    def tessellation_point_mode(self, stage) -> bool:
+        """Return whether tessellation evaluation should emit PointMode."""
+        for source in self.tessellation_metadata_sources(stage):
+            topology = self.normalized_stage_value(
+                self.stage_attribute_value(source, "outputtopology")
+            )
+            if topology in {"point", "points"}:
+                return True
+            if self.stage_has_attribute(source, "point_mode"):
+                return True
+            if "point_mode" in self.stage_layout_flag_names(source, "in"):
+                return True
+        return False
+
+    def emit_tessellation_execution_modes(
+        self, execution_model: str, function_id: SpirvId, stage
+    ):
+        """Emit tessellation capability and execution modes."""
+        self.require_capability("Tessellation")
+        if execution_model == "TessellationControl":
+            self.emit(
+                f"OpExecutionMode %{function_id.id} OutputVertices "
+                f"{self.tessellation_control_output_vertices(stage)}"
+            )
+            return
+
+        self.emit(
+            f"OpExecutionMode %{function_id.id} {self.tessellation_domain_mode(stage)}"
+        )
+        self.emit(
+            f"OpExecutionMode %{function_id.id} {self.tessellation_spacing_mode(stage)}"
+        )
+        self.emit(
+            f"OpExecutionMode %{function_id.id} "
+            f"{self.tessellation_vertex_order_mode(stage)}"
+        )
+        if self.tessellation_point_mode(stage):
+            self.emit(f"OpExecutionMode %{function_id.id} PointMode")
+
     def mesh_stage_output_limits(self, function_id: SpirvId, stage) -> Tuple[int, int]:
         """Return OutputVertices and OutputPrimitivesEXT execution-mode limits."""
         observed_vertices, observed_primitives = (
@@ -15748,8 +16059,10 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+        elif execution_model == "Geometry":
+            self.emit_geometry_execution_modes(function_id, stage)
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
-            self.require_capability("Tessellation")
+            self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:
@@ -16018,6 +16331,10 @@ class VulkanSPIRVCodeGen:
             self.collect_storage_image_pointer_parameters(ast)
         )
         self.reserve_explicit_resource_bindings(ast)
+        for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
+            if self.stage_key(stage_type) == "tessellation_control":
+                self.tessellation_control_stage = stage
+                break
 
         for cbuffer in getattr(ast, "cbuffers", []) or []:
             self.process_cbuffer_declaration(cbuffer)

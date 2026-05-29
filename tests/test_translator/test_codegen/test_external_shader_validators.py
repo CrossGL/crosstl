@@ -356,6 +356,29 @@ shader GLSLArrayElementImageSpecializationValidator {
 """
 
 
+GLSL_DYNAMIC_IMAGE_ARRAY_HELPER_COMPUTE_SHADER = """
+shader GLSLDynamicImageArrayHelperValidator {
+    image2D counters @r32ui[2];
+
+    int queryElement(image2D image @r32ui) {
+        return imageSize(image).x;
+    }
+
+    int queryViaDynamic(image2D images[] @r32ui, int layer) {
+        return queryElement(images[layer]);
+    }
+
+    compute {
+        void main() {
+            int directCount = queryElement(counters[0]);
+            int nestedCount = queryViaDynamic(counters, 1);
+            imageStore(counters[1], ivec2(0, 0), uint(directCount + nestedCount));
+        }
+    }
+}
+"""
+
+
 GLSL_ADVANCED_IMAGE_ARRAY_SPECIALIZATION_COMPUTE_SHADER = """
 shader GLSLAdvancedImageArraySpecializationValidator {
     image2DMS msImages @rgba16f[2];
@@ -2379,7 +2402,17 @@ def test_generated_glsl_ray_generation_validates_with_glslangvalidator(tmp_path)
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "rgen", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "rgen",
+            "-o",
+            str(tmp_path / "ray_generation.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2403,7 +2436,17 @@ def test_generated_glsl_ray_query_compute_validates_with_glslangvalidator(tmp_pa
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "comp",
+            "-o",
+            str(tmp_path / "ray_query_compute.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2433,7 +2476,17 @@ def test_generated_glsl_ray_query_trace_ray_inline_validates_with_glslangvalidat
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator(
-        [glslang, "-V", "--target-env", "vulkan1.2", "-S", "comp", str(shader_path)]
+        [
+            glslang,
+            "-V",
+            "--target-env",
+            "vulkan1.2",
+            "-S",
+            "comp",
+            "-o",
+            str(tmp_path / "ray_query_trace_ray_inline.spv"),
+            str(shader_path),
+        ]
     )
 
 
@@ -2506,6 +2559,28 @@ def test_generated_glsl_array_element_image_specialization_validates_with_glslan
     assert "return imageSize(counters).x;" not in code
     assert "return queryElement__glsl_image_counters_0();" in code
     assert "imageStore(counters[1], ivec2(0, 0), uvec4(uint(" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_dynamic_image_array_helper_validates_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "dynamic_image_array_helper.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_DYNAMIC_IMAGE_ARRAY_HELPER_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "layout(r32ui, binding = 0) uniform uimage2D counters[2];" in code
+    assert "int queryElement__glsl_image_counters_0()" in code
+    assert "int queryElement__glsl_image_counters_layer(int layer)" in code
+    assert "return imageSize(counters[layer]).x;" in code
+    assert "int queryViaDynamic__glsl_images_counters(int layer)" in code
+    assert "return queryElement__glsl_image_counters_layer(layer);" in code
+    assert "return queryElement(counters[layer]);" not in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

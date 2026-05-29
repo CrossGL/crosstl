@@ -3710,6 +3710,75 @@ class TestCudaCodeGen:
         assert "buffer_dimensions(" not in cuda_code
         assert ".GetDimensions(" not in cuda_code
 
+    def test_buffer_reference_dimensions_emit_cuda_length_sidecars(self):
+        """Test CUDA length sidecars follow buffer reference parameters."""
+        source_code = """
+        shader BufferReferenceDimensionsCUDA {
+            RWStructuredBuffer<int> values;
+            StructuredBuffer<uint> readonlyCounts[2];
+            RWByteAddressBuffer output;
+
+            uint countStructuredRef(RWStructuredBuffer<int>& valuesRef) {
+                return buffer_dimensions(valuesRef);
+            }
+
+            uint countReadonlyRef(StructuredBuffer<uint>& countsRef) {
+                return buffer_dimensions(countsRef);
+            }
+
+            uint countBytesRef(RWByteAddressBuffer& outputRef) {
+                return buffer_dimensions(outputRef);
+            }
+
+            compute {
+                void main(uint which) {
+                    uint len = countStructuredRef(values);
+                    uint readLen = countReadonlyRef(readonlyCounts[which]);
+                    uint byteLen = countBytesRef(output);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int* values;" in cuda_code
+        assert "const uint* values_length;" in cuda_code
+        assert "const uint* readonlyCounts[2];" in cuda_code
+        assert "const uint* readonlyCounts_length[2];" in cuda_code
+        assert "unsigned char* output;" in cuda_code
+        assert "const uint* output_length;" in cuda_code
+        assert (
+            "__device__ uint countStructuredRef"
+            "(int* const& valuesRef, const uint* valuesRef_length)" in cuda_code
+        )
+        assert (
+            "__device__ uint countReadonlyRef"
+            "(const uint* const& countsRef, const uint* countsRef_length)" in cuda_code
+        )
+        assert (
+            "__device__ uint countBytesRef"
+            "(unsigned char* const& outputRef, const uint* outputRef_length)"
+            in cuda_code
+        )
+        assert "return valuesRef_length[0];" in cuda_code
+        assert "return countsRef_length[0];" in cuda_code
+        assert "return outputRef_length[0];" in cuda_code
+        assert "uint len = countStructuredRef(values, values_length);" in cuda_code
+        assert (
+            "uint readLen = countReadonlyRef(readonlyCounts[which], "
+            "readonlyCounts_length[which]);" in cuda_code
+        )
+        assert "uint byteLen = countBytesRef(output, output_length);" in cuda_code
+        assert "RWStructuredBuffer<" not in cuda_code
+        assert "StructuredBuffer<" not in cuda_code
+        assert "RWByteAddressBuffer" not in cuda_code
+        assert "buffer_dimensions(" not in cuda_code
+
     def test_append_consume_structured_buffers_emit_cuda_counter_helpers(self):
         """Test CUDA lowers append/consume buffers through explicit counters."""
         source_code = """
@@ -12074,6 +12143,52 @@ class TestCudaCodeGen:
         assert "consume(chooseBundle().tex, chooseBundle().img);" not in cuda_code
         assert "textureSize(" not in cuda_code
         assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_reference_parameters_emit_cuda_metadata(self):
+        """Test CUDA metadata follows resource reference helper parameters."""
+        source_code = """
+        shader ResourceReferenceQueries {
+            sampler2d colorMap;
+            image2D images[2];
+
+            void consumeRefs(sampler2d& tex, image2D& img) {
+                ivec2 texDims = textureSize(tex, 0);
+                ivec2 imageDims = imageSize(img);
+            }
+
+            compute {
+                void main(int slot) {
+                    consumeRefs(colorMap, images[slot]);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[2] = {};" in cuda_code
+        assert (
+            "__device__ void consumeRefs(const texture<float4, 2>& tex, "
+            "CglResourceQueryInfo tex_metadata, const cudaSurfaceObject_t& img, "
+            "CglResourceQueryInfo img_metadata)" in cuda_code
+        )
+        assert "int2 texDims = cgl_textureSize_sampler2D(tex_metadata, 0);" in cuda_code
+        assert "int2 imageDims = cgl_imageSize_image2D(img_metadata);" in cuda_code
+        assert (
+            "consumeRefs(colorMap, colorMap_metadata, images[slot], "
+            "images_metadata[slot]);" in cuda_code
+        )
+        assert "sampler2D&" not in cuda_code
+        assert "image2D&" not in cuda_code
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "metadata unavailable for image2D argument img" not in cuda_code
+        assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_simple_returned_resources_forward_cuda_metadata(self):

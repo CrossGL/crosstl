@@ -10637,6 +10637,108 @@ def test_projected_texture_invalid_slang_calls_emit_diagnostic_stubs():
     assert "msTex.Sample" not in generated_code
 
 
+def test_projected_texture_builtins_validate_target_result_types():
+    code = """
+    shader Resources {
+        sampler2d colorMap;
+
+        compute {
+            void acceptFloat(float value) {
+            }
+
+            float invalidReturn(sampler2d tex, vec3 uvq) {
+                return textureProj(tex, uvq);
+            }
+
+            void main() {
+                vec3 uvq = vec3(0.25, 0.75, 1.0);
+                vec2 ddx = vec2(0.1, 0.0);
+                vec2 ddy = vec2(0.0, 0.1);
+                ivec2 offset = ivec2(1, 0);
+                bool take = true;
+                vec4 validProjected = textureProj(colorMap, uvq);
+                float scalarProjected = textureProj(colorMap, uvq);
+                ivec2 vectorProjectedLod =
+                    textureProjLod(colorMap, uvq, 1.0);
+                acceptFloat(textureProjGrad(colorMap, uvq, ddx, ddy));
+                float offsetScalar =
+                    textureProjOffset(colorMap, uvq, offset);
+                float lodOffsetScalar =
+                    textureProjLodOffset(colorMap, uvq, 1.0, offset);
+                float gradOffsetScalar =
+                    textureProjGradOffset(colorMap, uvq, ddx, ddy, offset);
+                float scalarTernary =
+                    take ? textureProj(colorMap, uvq) : 1.0;
+                float scalarArray[2] = {
+                    textureProjLod(colorMap, uvq, 1.0),
+                    1.0
+                };
+                float missingProjected = textureProj(colorMap);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "float4 validProjected = colorMap.Sample(uvq.xy / uvq.z);" in generated_code
+    assert (
+        "float scalarProjected = /* unsupported Slang projected texture: "
+        "textureProj returns float4 but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "int2 vectorProjectedLod = /* unsupported Slang projected texture: "
+        "textureProjLod returns float4 but target expects int2 */ int2(0);"
+        in generated_code
+    )
+    assert (
+        "acceptFloat(/* unsupported Slang projected texture: textureProjGrad "
+        "returns float4 but target expects float */ 0);" in generated_code
+    )
+    assert (
+        "float offsetScalar = /* unsupported Slang projected texture: "
+        "textureProjOffset returns float4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "float lodOffsetScalar = /* unsupported Slang projected texture: "
+        "textureProjLodOffset returns float4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "float gradOffsetScalar = /* unsupported Slang projected texture: "
+        "textureProjGradOffset returns float4 but target expects float */ 0;"
+        in generated_code
+    )
+    assert (
+        "return /* unsupported Slang projected texture: textureProj returns float4 "
+        "but target expects float */ 0;" in generated_code
+    )
+    assert (
+        "float scalarTernary = (take ? /* unsupported Slang projected texture: "
+        "textureProj returns float4 but target expects float */ 0 : 1.0);"
+        in generated_code
+    )
+    assert (
+        "float scalarArray[2] = {/* unsupported Slang projected texture: "
+        "textureProjLod returns float4 but target expects float */ 0, 1.0};"
+        in generated_code
+    )
+    assert (
+        "float missingProjected = /* unsupported Slang projected texture: "
+        "textureProj requires texture and projected coordinate arguments */ 0;"
+        in generated_code
+    )
+    assert (
+        "float scalarProjected = colorMap.Sample(uvq.xy / uvq.z);" not in generated_code
+    )
+    assert "int2 vectorProjectedLod = colorMap.SampleLevel" not in generated_code
+    assert "acceptFloat(colorMap.SampleGrad" not in generated_code
+    assert "float offsetScalar = colorMap.Sample" not in generated_code
+
+
 def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
     code = """
     shader Resources {
