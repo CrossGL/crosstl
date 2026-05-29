@@ -58,11 +58,20 @@ shader MetalFunctionConstantValidation {
 
 METAL_WAVE_INTRINSICS_COMPUTE_SHADER = """
 shader MetalWaveIntrinsicsValidation {
+    uint helperLane(uint seed) {
+        return WaveGetLaneIndex() + seed;
+    }
+
+    uint helperBoth(uint seed) {
+        return helperLane(seed) + WaveGetLaneCount();
+    }
+
     compute {
         void main() {
             uint value = 1u;
             uint lane = WaveGetLaneIndex();
             uint laneCount = WaveGetLaneCount();
+            uint helperValue = helperBoth(value);
             uint sumValue = WaveActiveSum(value);
             uint productValue = WaveActiveProduct(value + 1u);
             uint minValue = WaveActiveMin(sumValue);
@@ -85,7 +94,7 @@ shader MetalWaveIntrinsicsValidation {
             uint quadLane = QuadReadLaneAt(quadDiagonal, 0u);
             bool quadAny = QuadAny(anyLane);
             bool quadAll = QuadAll(allLane);
-            uint folded = minValue + count + prefixCount + quadLane + ballot.x + lane;
+            uint folded = minValue + count + prefixCount + quadLane + ballot.x + lane + helperValue;
             folded = folded + (quadAny ? quadX : quadY);
             folded = folded + (quadAll ? quadDiagonal : firstValue) + laneCount;
         }
@@ -5934,6 +5943,12 @@ def test_generated_metal_wave_intrinsics_compile_with_metal(tmp_path):
     assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in code
     assert "uint lane = crossglWaveLaneIndex;" in code
     assert "uint laneCount = crossglWaveLaneCount;" in code
+    assert "uint helperLane(uint seed, uint crossglWaveLaneIndex)" in code
+    assert (
+        "uint helperBoth(uint seed, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in code
+    )
+    assert "helperBoth(value, crossglWaveLaneIndex, crossglWaveLaneCount)" in code
     assert "__crossgl_metal_wave_ballot(anyLane)" in code
     assert "quad_shuffle_xor(firstValue, ushort(1))" in code
     assert "WaveActiveSum(value)" not in code

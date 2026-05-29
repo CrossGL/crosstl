@@ -286,21 +286,21 @@ def test_metal_wave_lane_builtins_use_compute_stage_parameters():
     assert "crossglWaveLaneCount" not in generated_code
 
 
-def test_metal_wave_lane_builtins_diagnose_helper_contexts():
+def test_metal_wave_lane_builtins_thread_through_compute_helpers():
     shader = """
-    shader MetalWaveLaneHelperDiagnostics {
-        uint helperLane() {
-            return WaveGetLaneIndex();
+    shader MetalWaveLaneHelperForwarding {
+        uint helperLane(uint seed) {
+            uint crossglWaveLaneIndex = seed;
+            return crossglWaveLaneIndex + WaveGetLaneIndex();
         }
 
-        uint helperCount() {
-            return WaveGetLaneCount();
+        uint helperBoth(uint seed) {
+            return helperLane(seed) + WaveGetLaneCount();
         }
 
         compute {
             void main() {
-                uint lane = helperLane();
-                uint count = helperCount();
+                uint combined = helperBoth(2u);
             }
         }
     }
@@ -308,17 +308,51 @@ def test_metal_wave_lane_builtins_diagnose_helper_contexts():
 
     generated_code = generate_code(parse_code(tokenize_code(shader)))
 
+    assert "uint helperLane(uint seed, uint crossglWaveLaneIndex_1)" in generated_code
+    assert "return crossglWaveLaneIndex + crossglWaveLaneIndex_1;" in generated_code
     assert (
-        "return /* unsupported Metal wave intrinsic: WaveGetLaneIndex "
-        "requires a compute-stage thread_index_in_simdgroup value */ 0u;"
+        "uint helperBoth(uint seed, uint crossglWaveLaneIndex, "
+        "uint crossglWaveLaneCount)" in generated_code
+    )
+    assert "return helperLane(seed, crossglWaveLaneIndex) + crossglWaveLaneCount;" in (
+        generated_code
+    )
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint crossglWaveLaneCount [[threads_per_simdgroup]]" in generated_code
+    assert (
+        "uint combined = helperBoth(2u, crossglWaveLaneIndex, crossglWaveLaneCount);"
+        in (generated_code)
+    )
+    assert "unsupported Metal wave intrinsic: WaveGetLaneIndex" not in generated_code
+    assert "unsupported Metal wave intrinsic: WaveGetLaneCount" not in generated_code
+
+
+def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts():
+    shader = """
+    shader MetalWaveLaneHelperDiagnostics {
+        uint helperLane() {
+            return WaveGetLaneIndex();
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                uint lane = helperLane();
+                return vec4(float(lane), 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint helperLane(uint crossglWaveLaneIndex)" in generated_code
+    assert "return crossglWaveLaneIndex;" in generated_code
+    assert (
+        "uint lane = 0u /* unsupported Metal wave helper call: function "
+        "'helperLane' requires compute-stage thread_index_in_simdgroup value */;"
         in generated_code
     )
-    assert (
-        "return /* unsupported Metal wave intrinsic: WaveGetLaneCount "
-        "requires a compute-stage threads_per_simdgroup value */ 0u;" in generated_code
-    )
     assert "[[thread_index_in_simdgroup]]" not in generated_code
-    assert "[[threads_per_simdgroup]]" not in generated_code
 
 
 def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():

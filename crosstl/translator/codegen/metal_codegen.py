@@ -475,6 +475,8 @@ class MetalCodeGen:
         self.function_image_access_requirements = {}
         self.function_cbuffer_dependencies = {}
         self.function_global_resource_dependencies = {}
+        self.function_metal_wave_lane_dependencies = {}
+        self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_sampler_parameters = set()
@@ -932,6 +934,8 @@ class MetalCodeGen:
         self.function_structured_buffer_length_dependencies = {}
         self.global_structured_buffer_length_dependencies = set()
         self.function_global_resource_dependencies = {}
+        self.function_metal_wave_lane_dependencies = {}
+        self.function_metal_wave_lane_parameter_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.required_image_atomic_compare_helpers = set()
@@ -1127,6 +1131,19 @@ class MetalCodeGen:
                     generic_function_specializations.values()
                 )
             )
+        wave_dependency_functions = list(all_functions) + list(
+            generic_function_specializations.values()
+        )
+        self.function_metal_wave_lane_dependencies = (
+            self.collect_function_metal_wave_lane_dependencies(
+                wave_dependency_functions
+            )
+        )
+        self.function_metal_wave_lane_parameter_names = (
+            self.collect_function_metal_wave_lane_parameter_names(
+                wave_dependency_functions
+            )
+        )
         self.function_metal_mesh_dispatch_contexts = (
             self.collect_function_metal_mesh_dispatch_contexts(
                 list(all_functions) + list(generic_function_specializations.values())
@@ -2276,6 +2293,9 @@ class MetalCodeGen:
                 func,
                 reserved_parameter_names,
             )
+            params_str = self.append_required_metal_wave_lane_parameters(
+                params_str, self.current_function_name
+            )
 
         if hasattr(func, "return_type"):
             raw_return_type = self.type_name_string(func.return_type)
@@ -2618,6 +2638,11 @@ class MetalCodeGen:
         used_wave_operations = self.used_wave_stage_builtin_operations(
             getattr(func, "body", [])
         )
+        func_name = getattr(func, "name", None)
+        if func_name:
+            used_wave_operations.update(
+                self.function_metal_wave_lane_dependencies.get(func_name, set())
+            )
         reserved_names = set(reserved_names or ())
         explicit_stage_builtins = explicit_stage_builtins or {}
         builtin_parameters = [
@@ -2723,6 +2748,121 @@ class MetalCodeGen:
                     f"'{metal_semantic}' and requires parameter '{name}' to "
                     f"have type {expected_type}, got {actual_type}"
                 )
+
+    def collect_function_metal_wave_lane_dependencies(self, functions):
+        direct_dependencies = {}
+        function_calls = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            if not func_name:
+                continue
+            direct_dependencies[func_name] = self.used_wave_stage_builtin_operations(
+                getattr(func, "body", [])
+            )
+            function_calls[func_name] = self.called_user_function_names(func)
+
+        dependencies = {name: set(deps) for name, deps in direct_dependencies.items()}
+        changed = True
+        while changed:
+            changed = False
+            for func_name, calls in function_calls.items():
+                current_dependencies = dependencies.setdefault(func_name, set())
+                before = set(current_dependencies)
+                for called_name in calls:
+                    current_dependencies.update(dependencies.get(called_name, set()))
+                if current_dependencies != before:
+                    changed = True
+        return dependencies
+
+    def collect_function_metal_wave_lane_parameter_names(self, functions):
+        parameter_names = {}
+        for func in functions or []:
+            func_name = getattr(func, "name", None)
+            dependencies = self.function_metal_wave_lane_dependencies.get(
+                func_name, set()
+            )
+            if not func_name or not dependencies:
+                continue
+            reserved_names = {
+                getattr(parameter, "name", None)
+                for parameter in getattr(
+                    func, "parameters", getattr(func, "params", [])
+                )
+                if getattr(parameter, "name", None)
+            }
+            reserved_names.update(self.metal_function_local_variable_names(func))
+            names = {}
+            for operation, base_name in (
+                ("WaveGetLaneIndex", "crossglWaveLaneIndex"),
+                ("WaveGetLaneCount", "crossglWaveLaneCount"),
+            ):
+                if operation not in dependencies:
+                    continue
+                name = self.unique_metal_generated_name(base_name, reserved_names)
+                reserved_names.add(name)
+                names[operation] = name
+            parameter_names[func_name] = names
+        return parameter_names
+
+    def append_required_metal_wave_lane_parameters(self, params_str, func_name):
+        parameter_names = self.function_metal_wave_lane_parameter_names.get(
+            func_name, {}
+        )
+        lane_index_name = parameter_names.get("WaveGetLaneIndex")
+        if lane_index_name is not None:
+            params_str = self.append_parameter_declaration(
+                params_str, f"uint {lane_index_name}"
+            )
+            self.current_metal_wave_lane_index_parameter = lane_index_name
+        lane_count_name = parameter_names.get("WaveGetLaneCount")
+        if lane_count_name is not None:
+            params_str = self.append_parameter_declaration(
+                params_str, f"uint {lane_count_name}"
+            )
+            self.current_metal_wave_lane_count_parameter = lane_count_name
+        return params_str
+
+    def required_metal_wave_lane_context_arguments(self, func_name):
+        dependencies = self.function_metal_wave_lane_dependencies.get(func_name, set())
+        if not dependencies:
+            return []
+        args = []
+        if "WaveGetLaneIndex" in dependencies:
+            if self.current_metal_wave_lane_index_parameter is None:
+                return None
+            args.append(self.current_metal_wave_lane_index_parameter)
+        if "WaveGetLaneCount" in dependencies:
+            if self.current_metal_wave_lane_count_parameter is None:
+                return None
+            args.append(self.current_metal_wave_lane_count_parameter)
+        return args
+
+    def metal_wave_lane_helper_call_diagnostic(self, func_name):
+        dependencies = self.function_metal_wave_lane_dependencies.get(func_name, set())
+        if not dependencies:
+            return None
+        missing_requirements = []
+        if (
+            "WaveGetLaneIndex" in dependencies
+            and self.current_metal_wave_lane_index_parameter is None
+        ):
+            missing_requirements.append("thread_index_in_simdgroup")
+        if (
+            "WaveGetLaneCount" in dependencies
+            and self.current_metal_wave_lane_count_parameter is None
+        ):
+            missing_requirements.append("threads_per_simdgroup")
+        if not missing_requirements:
+            return None
+        requirement = " and ".join(missing_requirements)
+        diagnostic = (
+            "/* unsupported Metal wave helper call: function "
+            f"'{func_name}' requires compute-stage {requirement} value */"
+        )
+        return_type = self.function_return_types.get(func_name, "void")
+        if self.map_type(return_type) == "void":
+            return diagnostic
+        return f"{self.diagnostic_zero_value_for_type(return_type)} {diagnostic}"
 
     def validate_graphics_builtin_parameter_types(self, parameters, stage_name):
         expected_types = {
@@ -5149,6 +5289,9 @@ class MetalCodeGen:
             )
             if address_space_call is not None:
                 return address_space_call
+            wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
+            if wave_lane_call is not None:
+                return wave_lane_call
             readonly_mesh_payload_call = (
                 self.readonly_metal_mesh_payload_call_diagnostic(
                     argument_func_name, expr.args
@@ -5168,6 +5311,11 @@ class MetalCodeGen:
                 args.extend(
                     self.required_metal_mesh_dispatch_context_arguments(func_name)
                 )
+                wave_lane_args = self.required_metal_wave_lane_context_arguments(
+                    func_name
+                )
+                if wave_lane_args is not None:
+                    args.extend(wave_lane_args)
             args = ", ".join(args)
             return f"{callee}({args})"
         elif isinstance(expr, MemberAccessNode):
