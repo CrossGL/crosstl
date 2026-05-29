@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 374
+        "test_count": 375
       },
       "translator_codegen": {
         "exists": true,

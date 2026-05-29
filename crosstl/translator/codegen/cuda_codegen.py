@@ -3078,7 +3078,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     break
                 var_type = self.get_variable_node_type(statement)
                 if not self.is_queryable_resource_type(var_type):
-                    continue
+                    supported_return_body = False
+                    break
                 name = getattr(statement, "name", None)
                 initial_value = getattr(
                     statement,

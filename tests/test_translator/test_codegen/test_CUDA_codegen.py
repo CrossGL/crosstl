@@ -10820,6 +10820,51 @@ class TestCudaCodeGen:
         assert "metadata unavailable for sampler2D argument tex" not in cuda_code
         assert "textureSize(" not in cuda_code
 
+    def test_resource_query_local_returned_aliases_reject_non_resource_locals(self):
+        """Test CUDA sidecars reject helpers with non-resource local work."""
+        source_code = """
+        shader ResourceQueryLocalReturnedAliasWithWork {
+            sampler2d colorMap;
+
+            int nextTicket() {
+                return 1;
+            }
+
+            sampler2d chooseWithLocalWork() {
+                int ticket = nextTicket();
+                sampler2d alias = colorMap;
+                return alias;
+            }
+
+            compute {
+                void main() {
+                    sampler2d selected = chooseWithLocalWork();
+                    ivec2 selectedSize = textureSize(selected, 0);
+                    ivec2 directSize = textureSize(chooseWithLocalWork(), 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "texture<float4, 2> selected = chooseWithLocalWork();" in cuda_code
+        assert (
+            "int2 selectedSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "int2 directSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert "cgl_textureSize_sampler2D(colorMap_metadata" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """
