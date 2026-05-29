@@ -9054,6 +9054,62 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hiprtc_version_outputs_replace_stale_metadata(self):
+        """Test HIPRTC version outputs replace prior scalar metadata."""
+        code = """
+        void queryRtcVersion(hipDeviceptr_t devicePtr, int* values) {
+            int major = 0;
+            int minor = 0;
+            int statusMajor = 0;
+            int statusMinor = 0;
+
+            hipPointerGetAttribute(
+                &major, hipPointerAttributeMemoryType, devicePtr
+            );
+            hipPointerGetAttribute(
+                &minor, hipPointerAttributeDevicePointer, devicePtr
+            );
+            hiprtcVersion(&major, &minor);
+            values[0] = major;
+            values[1] = minor;
+
+            hipPointerGetAttribute(
+                &statusMajor, hipPointerAttributeMemoryType, devicePtr
+            );
+            hipPointerGetAttribute(
+                &statusMinor, hipPointerAttributeDevicePointer, devicePtr
+            );
+            if (hiprtcVersion(&statusMajor, &statusMinor) == HIPRTC_SUCCESS) {
+                values[2] = statusMajor;
+                values[3] = statusMinor;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIPRTC version: major output: major, minor output: minor" in result
+        assert (
+            "if (((/* HIPRTC version: major output: statusMajor, minor output: "
+            "statusMinor */ HIPRTC_SUCCESS) == HIPRTC_SUCCESS))"
+        ) in result
+        assert "values[0] = (/* HIP device query: rtc.version.major */ 0);" in result
+        assert "values[1] = (/* HIP device query: rtc.version.minor */ 0);" in result
+        assert "values[2] = (/* HIP device query: rtc.version.major */ 0);" in result
+        assert "values[3] = (/* HIP device query: rtc.version.minor */ 0);" in result
+        assert "values[0] = (/* HIP device query: pointer.attribute" not in result
+        assert "values[1] = (/* HIP device query: pointer.attribute" not in result
+        assert "values[2] = (/* HIP device query: pointer.attribute" not in result
+        assert "values[3] = (/* HIP device query: pointer.attribute" not in result
+        assert "values[0] = major;" not in result
+        assert "values[1] = minor;" not in result
+        assert "values[2] = statusMajor;" not in result
+        assert "values[3] = statusMinor;" not in result
+
     def test_hiprtc_raw_outputs_clear_stale_metadata(self):
         """Test HIPRTC raw handle/string outputs clear prior query metadata."""
         code = """

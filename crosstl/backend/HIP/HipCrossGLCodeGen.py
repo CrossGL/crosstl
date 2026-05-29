@@ -3021,6 +3021,20 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 major_output = self.format_runtime_pointer_target(raw_args[0])
                 minor_output = self.format_runtime_pointer_target(raw_args[1])
+                major_output_name = self.get_runtime_pointer_target_name(raw_args[0])
+                minor_output_name = self.get_runtime_pointer_target_name(raw_args[1])
+                if major_output_name is not None:
+                    self.register_device_query_source(
+                        major_output_name, "rtc.version.major"
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(raw_args[0])
+                if minor_output_name is not None:
+                    self.register_device_query_source(
+                        minor_output_name, "rtc.version.minor"
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC version: major output: {major_output}, "
                     f"minor output: {minor_output}"
