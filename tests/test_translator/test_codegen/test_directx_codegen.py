@@ -26320,6 +26320,108 @@ def test_directx_feedback_texture_helpers_lower_to_native_methods():
     assert "write_sampler_feedback" not in generated_code
 
 
+def test_directx_feedback_texture_grad_and_level_helpers_are_compute_compatible():
+    shader = """
+    shader FeedbackTextureComputeWrites {
+        sampler2D pairedTexture @ register(t0, space11);
+        sampler pairedSampler @ register(s0, space11);
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin @ register(u0, space11);
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec2 ddxValue = vec2(0.25, 0.0);
+                vec2 ddyValue = vec2(0.0, 0.25);
+                write_sampler_feedback_grad(feedbackMin, pairedTexture, pairedSampler, uv, ddxValue, ddyValue);
+                write_sampler_feedback_level(feedbackMin, pairedTexture, pairedSampler, uv, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert (
+        "FeedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin : "
+        "register(u0, space11);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackGrad("
+        "pairedTexture, pairedSampler, uv, ddxValue, ddyValue);" in generated_code
+    )
+    assert (
+        "feedbackMin.WriteSamplerFeedbackLevel("
+        "pairedTexture, pairedSampler, uv, 2.0);" in generated_code
+    )
+    assert "write_sampler_feedback" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);",
+            "DirectX compute stage cannot call write_sampler_feedback; "
+            "WriteSamplerFeedback is only valid in fragment/pixel stages",
+        ),
+        (
+            "write_sampler_feedback_bias(feedbackMin, pairedTexture, pairedSampler, uv, 0.5);",
+            "DirectX compute stage cannot call write_sampler_feedback_bias; "
+            "WriteSamplerFeedbackBias is only valid in fragment/pixel stages",
+        ),
+    ],
+)
+def test_directx_feedback_texture_pixel_only_helpers_reject_compute_stage(body, match):
+    shader = f"""
+    shader InvalidComputeFeedbackTextureWrites {{
+        sampler2D pairedTexture;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        compute {{
+            void main() {{
+                vec2 uv = vec2(0.25, 0.75);
+                {body}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=match):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_feedback_texture_pixel_only_helpers_reject_transitive_compute_call():
+    shader = """
+    shader InvalidTransitiveComputeFeedbackTextureWrite {
+        sampler2D pairedTexture;
+        sampler pairedSampler;
+        feedbackTexture2D<SAMPLER_FEEDBACK_MIN_MIP> feedbackMin;
+
+        void recordFeedback(vec2 uv) {
+            write_sampler_feedback(feedbackMin, pairedTexture, pairedSampler, uv);
+        }
+
+        compute {
+            void main() {
+                recordFeedback(vec2(0.25, 0.75));
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "DirectX compute stage cannot call recordFeedback; "
+            "'recordFeedback' reaches WriteSamplerFeedback via "
+            "write_sampler_feedback, which is only valid in fragment/pixel stages"
+        ),
+    ):
+        HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
 @pytest.mark.parametrize(
     ("body", "match"),
     [

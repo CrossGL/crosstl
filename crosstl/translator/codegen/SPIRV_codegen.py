@@ -12785,6 +12785,8 @@ class VulkanSPIRVCodeGen:
                     return_value = self.process_array_literal(
                         node.value, self.current_return_type
                     )
+                elif isinstance(node.value, MatchNode):
+                    return_value = self.process_match_expression_return(node.value)
                 else:
                     return_value = self.process_expression_with_expected_type(
                         node.value, self.current_return_type_source
@@ -12795,6 +12797,20 @@ class VulkanSPIRVCodeGen:
                     self.create_return()
         else:
             self.create_return()
+
+    def process_match_expression_return(self, node: MatchNode) -> Optional[SpirvId]:
+        """Lower return-position matches through a temporary selected value."""
+        return_type = self.current_return_type
+        if return_type is None or return_type.type.base_type == "void":
+            self.process_match(node)
+            return None
+
+        result_pointer = self.create_variable(return_type, "Function", "__match_return")
+        default_value = self.default_value_for_type(return_type)
+        if default_value is not None:
+            self.store_to_variable(result_pointer, default_value)
+        self.process_match_expression_assignment(node, result_pointer, return_type)
+        return self.load_from_variable(result_pointer, return_type)
 
     def process_if(self, node: IfNode):
         """Process a CrossGL if statement."""

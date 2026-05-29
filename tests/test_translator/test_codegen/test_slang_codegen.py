@@ -9259,7 +9259,8 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                 vec3 uvw,
                 vec2 ddx,
                 vec2 ddy,
-                ivec2 offset
+                ivec2 offset,
+                float bias
             ) {
                 vec4 offsetColor = textureOffset(tex, uv, offset);
                 vec4 explicitOffset = textureOffset(
@@ -9269,6 +9270,14 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                     offset
                 );
                 vec4 arrayOffset = textureOffset(layers, sampleState, uvw, offset);
+                vec4 biasOffset = textureOffset(tex, uv, offset, bias);
+                vec4 explicitBiasOffset = textureOffset(
+                    tex,
+                    sampleState,
+                    uv,
+                    offset,
+                    0.5
+                );
                 vec4 lodOffset = textureLodOffset(tex, uv, 2.0, offset);
                 vec4 explicitLodOffset = textureLodOffset(
                     tex,
@@ -9289,6 +9298,8 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
                 return offsetColor
                     + explicitOffset
                     + arrayOffset
+                    + biasOffset
+                    + explicitBiasOffset
                     + lodOffset
                     + explicitLodOffset
                     + gradOffset
@@ -9310,6 +9321,10 @@ def test_texture_offset_builtins_emit_slang_offset_methods():
     assert "float4 offsetColor = tex.Sample(uv, offset);" in generated_code
     assert "float4 explicitOffset = tex.Sample(uv, offset);" in generated_code
     assert "float4 arrayOffset = layers.Sample(uvw, offset);" in generated_code
+    assert "float4 biasOffset = tex.SampleBias(uv, bias, offset);" in generated_code
+    assert (
+        "float4 explicitBiasOffset = tex.SampleBias(uv, 0.5, offset);" in generated_code
+    )
     assert "float4 lodOffset = tex.SampleLevel(uv, 2.0, offset);" in generated_code
     assert (
         "float4 explicitLodOffset = tex.SampleLevel(uv, 3.0, offset);" in generated_code
@@ -9346,8 +9361,17 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                 ivec3 badOffset = ivec3(1, 0, 0);
                 vec2 floatOffset = vec2(1.0, 0.0);
                 bvec2 boolOffset = bvec2(true, false);
+                bool boolBias = true;
                 bool boolLod = true;
+                vec2 badBias = vec2(0.0, 1.0);
                 vec4 missingOffset = textureOffset(colorMap, uv);
+                vec4 extraOffsetBias = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    0.5,
+                    1.0
+                );
                 vec4 missingLodOffset = textureLodOffset(colorMap, uv, offset);
                 vec4 missingGradOffset = textureGradOffset(colorMap, uv, ddx, offset);
                 vec4 samplerOffset = textureOffset(querySampler, uv, offset);
@@ -9369,6 +9393,18 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
                     offset
                 );
                 vec4 floatOffsetType = textureOffset(colorMap, uv, floatOffset);
+                vec4 boolBiasOffsetType = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    boolBias
+                );
+                vec4 badBiasOffsetRank = textureOffset(
+                    colorMap,
+                    uv,
+                    offset,
+                    badBias
+                );
                 vec4 boolOffsetType = textureLodOffset(
                     colorMap,
                     uv,
@@ -9400,7 +9436,13 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
 
     assert (
         "float4 missingOffset = /* unsupported Slang texture offset: "
-        "textureOffset requires one offset argument */ float4(0.0);" in generated_code
+        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
+        in generated_code
+    )
+    assert (
+        "float4 extraOffsetBias = /* unsupported Slang texture offset: "
+        "textureOffset requires offset and optional bias arguments */ float4(0.0);"
+        in generated_code
     )
     assert (
         "float4 missingLodOffset = /* unsupported Slang texture offset: "
@@ -9451,6 +9493,16 @@ def test_texture_offset_invalid_slang_calls_emit_diagnostic_stubs():
         "float4 floatOffsetType = /* unsupported Slang texture offset: "
         "textureOffset offset must be scalar or vector int, got float2 */ "
         "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolBiasOffsetType = /* unsupported Slang texture offset: "
+        "textureOffset bias argument must be scalar int, uint, float, or double, "
+        "got bool */ float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badBiasOffsetRank = /* unsupported Slang texture offset: "
+        "textureOffset requires a scalar bias argument */ float4(0.0);"
+        in generated_code
     )
     assert (
         "float4 boolOffsetType = /* unsupported Slang texture offset: "

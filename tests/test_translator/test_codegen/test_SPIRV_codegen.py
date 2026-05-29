@@ -13125,6 +13125,36 @@ class TestVulkanSPIRVCodeGen:
         assert "MatchNode(" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_match_expression_return_emits_selected_spirv_value(self, tmp_path):
+        source_code = """
+        shader MatchReturnSmoke {
+            int choose(int mode) {
+                return match mode {
+                    0 => 11,
+                    1 => 22,
+                    _ => 33
+                };
+            }
+
+            compute {
+                void main() {
+                    int selected = choose(1);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpSelectionMerge" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpReturnValue" in spv_code
+        assert "Unknown expression type MatchNode" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_match_generic_payload_enum_pattern_binds_spirv_fields(self, tmp_path):
         source_code = """
         shader MatchPayloadSmoke {

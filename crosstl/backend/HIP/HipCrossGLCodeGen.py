@@ -181,6 +181,7 @@ class HipToCrossGLConverter:
         "NumChannels",
         "Width",
     }
+    HIP_EXTENT_MEMBERS = {"depth", "height", "width"}
 
     def __init__(self):
         """Initialize HIP-to-CrossGL visitor state."""
@@ -811,7 +812,27 @@ class HipToCrossGLConverter:
                 descriptor_output = self.format_runtime_pointer_target(node.args[0])
                 extent_output = self.format_runtime_pointer_target(node.args[1])
                 flags_output = self.format_runtime_pointer_target(node.args[2])
+                descriptor_output_name = self.get_runtime_pointer_target_name(
+                    node.args[0]
+                )
+                extent_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 flags_output_name = self.get_runtime_pointer_target_name(node.args[2])
+                if descriptor_output_name is not None:
+                    self.register_member_query_sources(
+                        descriptor_output_name,
+                        {
+                            member: f"array.info.channelDesc.{member}({args[3]})"
+                            for member in self.HIP_CHANNEL_DESCRIPTOR_MEMBERS
+                        },
+                    )
+                if extent_output_name is not None:
+                    self.register_member_query_sources(
+                        extent_output_name,
+                        {
+                            member: f"array.info.extent.{member}({args[3]})"
+                            for member in self.HIP_EXTENT_MEMBERS
+                        },
+                    )
                 if flags_output_name is not None:
                     self.register_device_query_source(
                         flags_output_name,

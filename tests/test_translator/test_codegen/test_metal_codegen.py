@@ -8489,6 +8489,67 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
     assert "bumpThreadgroup(useShared ? scratch" not in generated
 
 
+def test_metal_mixed_address_space_ternary_reference_alias_emits_diagnostic():
+    code = """
+    shader MetalMixedAddressSpaceTernaryReferenceAliasValidation {
+        struct Payload {
+            float value;
+        };
+
+        void useThreadgroup(threadgroup Payload& payload, float delta) {
+            payload.value = payload.value + delta;
+        }
+
+        compute {
+            void main(
+                device Payload* payloads @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                threadgroup Payload scratchA[64];
+                threadgroup Payload scratchB[64];
+                bool useA = index == 0u;
+                Payload& alias = useA ? scratchA[index] : scratchB[index];
+                useThreadgroup(alias, 1.0);
+
+                bool useShared = alias.value == 0.0;
+                Payload& mixedAlias = useShared ? scratchA[index] : payloads[index];
+                useThreadgroup(mixedAlias, 2.0);
+                useThreadgroup(
+                    useShared ? scratchA[index] : payloads[index],
+                    3.0
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];"
+        in generated
+    )
+    assert "useThreadgroup(alias, 1.0);" in generated
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
+        "spaces; using uninitialized thread value */"
+    ) in generated
+    assert "thread Payload mixedAlias;" in generated
+    assert "thread Payload& mixedAlias = useShared" not in generated
+    assert (
+        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
+        "thread address space but parameter 'payload' of 'useThreadgroup' "
+        "requires threadgroup */"
+    ) in generated
+    assert (
+        "/* unsupported Metal address-space call: argument '<expr>' mixes "
+        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
+        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
+    ) in generated
+    assert "useThreadgroup(mixedAlias, 2.0);" not in generated
+    assert "useThreadgroup(useShared ? scratchA" not in generated
+
+
 def test_metal_struct_pointer_member_atomics_preserve_member_address_space():
     code = """
     shader MetalPointerMemberAddressSpaceValidation {

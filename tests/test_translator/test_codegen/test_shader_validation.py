@@ -2029,6 +2029,40 @@ shader MetalThreadgroupAtomicTernaryAliasValidation {
 """
 
 
+METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER = """
+shader MetalThreadgroupReferenceTernaryAliasValidation {
+    struct Payload {
+        float value;
+    };
+
+    void useThreadgroup(threadgroup Payload& payload, float delta) {
+        payload.value = payload.value + delta;
+    }
+
+    compute {
+        void main(
+            device Payload* payloads @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            threadgroup Payload scratchA[64];
+            threadgroup Payload scratchB[64];
+            bool useA = index == 0u;
+            Payload& alias = useA ? scratchA[index] : scratchB[index];
+            useThreadgroup(alias, 1.0);
+
+            bool useShared = alias.value == 0.0;
+            Payload& mixedAlias = useShared ? scratchA[index] : payloads[index];
+            useThreadgroup(mixedAlias, 2.0);
+            useThreadgroup(
+                useShared ? scratchA[index] : payloads[index],
+                3.0
+            );
+        }
+    }
+}
+"""
+
+
 METAL_POINTER_MEMBER_ATOMIC_ADDRESS_SPACE_SHADER = """
 shader MetalPointerMemberAddressSpaceValidation {
     struct PointerBank {
@@ -7925,6 +7959,48 @@ def test_generated_metal_threadgroup_atomic_ternary_alias_compile_with_metal(
         "requires threadgroup */;"
     ) in code
     assert "bumpThreadgroup(useShared ? scratchA" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_threadgroup_reference_ternary_alias_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "threadgroup_reference_ternary_alias.metal"
+    output = tmp_path / "threadgroup_reference_ternary_alias.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER),
+        "compute",
+    )
+    assert (
+        "threadgroup Payload& alias = useA ? scratchA[index] : scratchB[index];" in code
+    )
+    assert (
+        "/* unsupported Metal address-space local alias: initializer branches "
+        "'scratchA' (threadgroup) and 'payloads' (device) use different address "
+        "spaces; using uninitialized thread value */"
+    ) in code
+    assert "thread Payload mixedAlias;" in code
+    assert "thread Payload& mixedAlias = useShared" not in code
+    assert (
+        "/* unsupported Metal address-space call: argument 'mixedAlias' uses "
+        "thread address space but parameter 'payload' of 'useThreadgroup' "
+        "requires threadgroup */"
+    ) in code
+    assert (
+        "/* unsupported Metal address-space call: argument '<expr>' mixes "
+        "branches 'scratchA' (threadgroup) and 'payloads' (device) but "
+        "parameter 'payload' of 'useThreadgroup' requires threadgroup */"
+    ) in code
+    assert "useThreadgroup(mixedAlias, 2.0);" not in code
+    assert "useThreadgroup(useShared ? scratchA" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

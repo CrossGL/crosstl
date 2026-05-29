@@ -3025,7 +3025,15 @@ class MetalCodeGen:
                     self.local_variable_address_space_conflict_diagnostic(stmt)
                 )
                 if address_space_conflict is not None:
-                    return f"{indent_str}{address_space_conflict}\n{indent_str}{declaration};\n"
+                    conflict_declaration = (
+                        self.local_variable_address_space_conflict_declaration(
+                            stmt, declaration
+                        )
+                    )
+                    return (
+                        f"{indent_str}{address_space_conflict}\n"
+                        f"{indent_str}{conflict_declaration};\n"
+                    )
                 init_expr = self.generate_expression_with_expected(
                     initial_value, var_type
                 )
@@ -3559,7 +3567,8 @@ class MetalCodeGen:
         )
 
     def local_variable_address_space_conflict_diagnostic(self, node):
-        if not isinstance(self.local_variable_type_node(node), PointerType):
+        raw_type = self.local_variable_type_node(node)
+        if not isinstance(raw_type, (PointerType, ReferenceType)):
             return None
         conflict = self.argument_address_space_conflict(
             getattr(node, "initial_value", None)
@@ -3567,11 +3576,24 @@ class MetalCodeGen:
         if conflict is None:
             return None
         target_address_space = self.local_variable_address_space(node)
+        fallback_kind = "value" if isinstance(raw_type, ReferenceType) else "alias"
         return (
             "/* unsupported Metal address-space local alias: initializer "
             f"{self.address_space_conflict_description(conflict)} use different "
-            f"address spaces; using uninitialized {target_address_space} alias */"
+            f"address spaces; using uninitialized {target_address_space} "
+            f"{fallback_kind} */"
         )
+
+    def local_variable_address_space_conflict_declaration(self, node, declaration):
+        raw_type = self.local_variable_type_node(node)
+        if not isinstance(raw_type, ReferenceType):
+            return declaration
+        address_space = self.local_variable_address_space(node)
+        referent_type = self.map_resource_type_with_format(
+            raw_type.referenced_type, node
+        )
+        value_declaration = format_c_style_array_declaration(referent_type, node.name)
+        return f"{address_space} {value_declaration}"
 
     def record_readonly_metal_mesh_payload_local_alias(self, node):
         if self.local_variable_address_space(node) != "object_data":

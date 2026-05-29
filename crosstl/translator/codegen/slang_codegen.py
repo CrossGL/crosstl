@@ -8535,9 +8535,9 @@ class SlangCodeGen:
             return self.unsupported_texture_offset_call(func_name, coord_reason)
 
         if func_name == "textureOffset":
-            if len(extra_args) != 1:
+            if len(extra_args) not in {1, 2}:
                 return self.unsupported_texture_offset_call(
-                    func_name, "requires one offset argument"
+                    func_name, "requires offset and optional bias arguments"
                 )
             offset_reason = self.texture_offset_rank_unsupported_reason(
                 args[0], extra_args[0]
@@ -8545,6 +8545,12 @@ class SlangCodeGen:
             if offset_reason:
                 return self.unsupported_texture_offset_call(func_name, offset_reason)
             offset = self.generate_expression(extra_args[0])
+            if len(extra_args) == 2:
+                bias_reason = self.scalar_texture_bias_unsupported_reason(extra_args[1])
+                if bias_reason:
+                    return self.unsupported_texture_offset_call(func_name, bias_reason)
+                bias = self.generate_expression(extra_args[1])
+                return f"{texture_name}.SampleBias({coord}, {bias}, {offset})"
             return f"{texture_name}.Sample({coord}, {offset})"
 
         if func_name == "textureLodOffset":

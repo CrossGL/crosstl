@@ -4014,6 +4014,92 @@ class TestHipCodeGen:
         assert "var manualWidth: u32 = (/* HIP device query:" not in result
         assert "var manualFlags: i32 = (/* HIP device query:" not in result
 
+    def test_hip_array_info_descriptor_extent_member_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test hipArrayGetInfo output struct members lower to metadata."""
+        code = """
+        void host(hipArray_t array, int* ints, size_t* dims, unsigned int* flagsOut) {
+            hipChannelFormatDesc desc;
+            hipChannelFormatDesc statusDesc;
+            hipExtent extent;
+            hipExtent statusExtent;
+            unsigned int flags = 0;
+            unsigned int statusFlags = 0;
+            hipArrayGetInfo(&desc, &extent, &flags, array);
+            ints[0] = desc.x;
+            ints[1] = desc.y;
+            ints[2] = desc.z;
+            ints[3] = desc.w;
+            ints[4] = desc.f;
+            dims[0] = extent.width;
+            dims[1] = extent.height;
+            dims[2] = extent.depth;
+            flagsOut[0] = flags;
+            desc.x = 16;
+            int manualDescX = desc.x;
+            extent.width = 64;
+            size_t manualWidth = extent.width;
+            hipError_t err = hipArrayGetInfo(&statusDesc, &statusExtent, &statusFlags, array);
+            ints[5] = statusDesc.f;
+            dims[3] = statusExtent.height;
+            flagsOut[1] = statusFlags;
+            statusExtent.depth++;
+            size_t manualDepth = statusExtent.depth;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP array get info: desc output: desc, extent output: extent, "
+            "flags output: flags, array: array"
+        ) in result
+        for index, member in enumerate(["x", "y", "z", "w", "f"]):
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"array.info.channelDesc.{member}(array) */ 0);"
+            ) in result
+        for index, member in enumerate(["width", "height", "depth"]):
+            assert (
+                f"dims[{index}] = (/* HIP device query: "
+                f"array.info.extent.{member}(array) */ 0);"
+            ) in result
+        assert (
+            "flagsOut[0] = (/* HIP device query: array.info.flags(array) */ 0);"
+            in result
+        )
+        assert "desc.x = 16;" in result
+        assert "var manualDescX: i32 = desc.x;" in result
+        assert "extent.width = 64;" in result
+        assert "var manualWidth: u32 = extent.width;" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        assert (
+            "ints[5] = (/* HIP device query: " "array.info.channelDesc.f(array) */ 0);"
+        ) in result
+        assert (
+            "dims[3] = (/* HIP device query: " "array.info.extent.height(array) */ 0);"
+        ) in result
+        assert (
+            "flagsOut[1] = (/* HIP device query: array.info.flags(array) */ 0);"
+            in result
+        )
+        assert "(statusExtent.depth++);" in result
+        assert "var manualDepth: u32 = statusExtent.depth;" in result
+        assert "ints[0] = desc.x;" not in result
+        assert "dims[0] = extent.width;" not in result
+        assert "flagsOut[0] = flags;" not in result
+        assert "ints[5] = statusDesc.f;" not in result
+        assert "dims[3] = statusExtent.height;" not in result
+        assert "flagsOut[1] = statusFlags;" not in result
+        assert "var manualDescX: i32 = (/* HIP device query:" not in result
+        assert "var manualWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualDepth: u32 = (/* HIP device query:" not in result
+
     def test_hip_object_lifecycle_expression_contexts_emit_status(self):
         """Test object lifecycle calls in expressions stay explicit."""
         code = """

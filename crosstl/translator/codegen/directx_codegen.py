@@ -308,6 +308,10 @@ class HLSLCodeGen:
         "write_sampler_feedback_grad": ("WriteSamplerFeedbackGrad", {6, 7}),
         "write_sampler_feedback_level": ("WriteSamplerFeedbackLevel", {5}),
     }
+    HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS = {
+        "write_sampler_feedback": "WriteSamplerFeedback",
+        "write_sampler_feedback_bias": "WriteSamplerFeedbackBias",
+    }
     HLSL_WAVE_INTRINSIC_ARITIES = {
         "WaveGetLaneCount": 0,
         "WaveGetLaneIndex": 0,
@@ -454,6 +458,7 @@ class HLSLCodeGen:
         self.function_parameter_types = {}
         self.function_return_types = {}
         self.function_image_access_requirements = {}
+        self.hlsl_pixel_only_feedback_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.resource_array_size_hints = {}
@@ -742,6 +747,7 @@ class HLSLCodeGen:
         self.implicit_texture_sampler_parameters = {}
         self.function_parameter_types = {}
         self.function_image_access_requirements = {}
+        self.hlsl_pixel_only_feedback_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_function_return_type = None
@@ -925,6 +931,9 @@ class HLSLCodeGen:
                 self.function_call_name,
                 self.expression_name,
             )
+        )
+        self.hlsl_pixel_only_feedback_function_names = (
+            self.collect_hlsl_pixel_only_feedback_function_names(functions)
         )
         (
             self.resource_array_size_hints,
@@ -2136,6 +2145,7 @@ class HLSLCodeGen:
             self.validate_hlsl_stage_return_semantics(
                 func, effective_shader_type, return_semantic
             )
+            self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
         waveops_helper_lanes_attribute = (
             self.generate_hlsl_waveops_include_helper_lanes_attribute(
                 func, effective_shader_type
@@ -14376,6 +14386,80 @@ class HLSLCodeGen:
             "RasterizerOrderedStructuredBuffer",
             "RasterizerOrderedByteAddressBuffer",
         }
+
+    def collect_hlsl_pixel_only_feedback_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if callee in self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS:
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_helper = requirements.get(callee)
+                    if required_helper is not None:
+                        requirements[func_name] = required_helper
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_pixel_only_feedback_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if callee in self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS:
+                calls.append((callee, callee))
+            elif callee in self.hlsl_pixel_only_feedback_function_names:
+                calls.append(
+                    (callee, self.hlsl_pixel_only_feedback_function_names[callee])
+                )
+        return calls
+
+    def validate_hlsl_feedback_texture_stage_calls(self, func, shader_type):
+        if shader_type in {None, "fragment"}:
+            return
+
+        calls = self.hlsl_pixel_only_feedback_calls(func)
+        if not calls:
+            return
+
+        callee, helper_name = calls[0]
+        method_name = self.HLSL_PIXEL_ONLY_FEEDBACK_WRITE_HELPERS[helper_name]
+        if callee == helper_name:
+            detail = (
+                f"{method_name} is only valid in fragment/pixel stages; "
+                f"use write_sampler_feedback_grad or write_sampler_feedback_level "
+                f"from DirectX {shader_type} stages"
+            )
+        else:
+            detail = (
+                f"'{callee}' reaches {method_name} via {helper_name}, which is "
+                "only valid in fragment/pixel stages"
+            )
+        raise ValueError(f"DirectX {shader_type} stage cannot call {callee}; {detail}")
 
     def generate_hlsl_feedback_write_call(self, func_name, args):
         descriptor = self.HLSL_FEEDBACK_WRITE_HELPERS.get(func_name)
