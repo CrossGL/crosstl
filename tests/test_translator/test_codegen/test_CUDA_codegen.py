@@ -10541,6 +10541,73 @@ class TestCudaCodeGen:
         assert "textureGrid_metadata[layer++]" not in cuda_code
         assert "textureSize(" not in cuda_code
 
+    def test_resource_query_safe_ternary_indices_forward_cuda_metadata(self):
+        """Test CUDA sidecars allow side-effect-free ternary array indices."""
+        source_code = """
+        shader ReturnedResourceArrayTernaryMetadata {
+            sampler2d textures[8];
+            sampler2d textureGrid[4][8];
+
+            sampler2d chooseTex(sampler2d texs[8], int slot) {
+                return texs[slot];
+            }
+
+            void consume(sampler2d tex) {
+                ivec2 texSize = textureSize(tex, 0);
+            }
+
+            compute {
+                void main(bool useAlt, int layer, int slot) {
+                    ivec2 ternaryIndexSize =
+                        textureSize(
+                            chooseTex(textures, useAlt ? slot + 1 : slot),
+                            0
+                        );
+                    ivec2 ternaryBaseSize =
+                        textureSize(
+                            chooseTex(
+                                textureGrid[useAlt ? layer + 1 : layer],
+                                slot
+                            ),
+                            0
+                        );
+                    consume(
+                        chooseTex(
+                            textureGrid[useAlt ? layer + 1 : layer],
+                            useAlt ? slot + 1 : slot
+                        )
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo textures_metadata[8] = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[4][8] = {};" in cuda_code
+        assert (
+            "int2 ternaryIndexSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[(useAlt ? (slot + 1) : slot)], 0);" in cuda_code
+        )
+        assert (
+            "int2 ternaryBaseSize = cgl_textureSize_sampler2D"
+            "(textureGrid_metadata[(useAlt ? (layer + 1) : layer)][slot], 0);"
+            in cuda_code
+        )
+        assert (
+            "consume(chooseTex(textureGrid[(useAlt ? (layer + 1) : layer)], "
+            "(useAlt ? (slot + 1) : slot)), "
+            "textureGrid_metadata[(useAlt ? (layer + 1) : layer)]"
+            "[(useAlt ? (slot + 1) : slot)]);" in cuda_code
+        )
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

@@ -24,6 +24,7 @@ from ..ast import (
     IdentifierNode,
     MemberAccessNode,
     UnaryOpNode,
+    TernaryOpNode,
     BlockNode,
     WildcardPatternNode,
 )
@@ -3376,6 +3377,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 not getattr(actual_expr, "is_postfix", False)
                 and operator in {"+", "-", "~"}
                 and self.is_safe_query_return_actual_index(actual_expr.operand)
+            )
+        if isinstance(actual_expr, TernaryOpNode):
+            return (
+                self.is_safe_query_return_actual_index(actual_expr.condition)
+                and self.is_safe_query_return_actual_index(actual_expr.true_expr)
+                and self.is_safe_query_return_actual_index(actual_expr.false_expr)
             )
         if isinstance(actual_expr, ArrayAccessNode):
             array_node = getattr(
