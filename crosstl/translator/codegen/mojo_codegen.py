@@ -4570,7 +4570,9 @@ class MojoCodeGen:
                 field_pattern = field_patterns.get(field_name)
                 if field_pattern is None:
                     continue
-                if self.is_unconstrained_match_pattern(field_pattern):
+                if self.is_unconstrained_match_pattern(
+                    field_pattern, fields_by_name[field_name]
+                ):
                     continue
                 constrained_fields.setdefault(field_name, []).append(field_pattern)
 
@@ -4646,22 +4648,46 @@ class MojoCodeGen:
         if isinstance(pattern, ConstructorPatternNode):
             arguments = getattr(pattern, "arguments", []) or []
             return len(arguments) == len(variant_fields) and all(
-                self.is_unconstrained_match_pattern(argument) for argument in arguments
+                self.is_unconstrained_match_pattern(argument, field_type)
+                for argument, (_field_name, field_type) in zip(
+                    arguments, variant_fields
+                )
             )
         if isinstance(pattern, StructPatternNode):
+            field_types = dict(variant_fields)
             return all(
-                self.is_unconstrained_match_pattern(field_pattern)
-                for field_pattern in (
+                self.is_unconstrained_match_pattern(
+                    field_pattern, field_types.get(field_name)
+                )
+                for field_name, field_pattern in (
                     getattr(pattern, "field_patterns", {}) or {}
-                ).values()
+                ).items()
             )
         return False
 
-    def is_unconstrained_match_pattern(self, pattern):
+    def is_unconstrained_match_pattern(self, pattern, subject_type=None):
         if isinstance(pattern, WildcardPatternNode):
             return True
         if isinstance(pattern, IdentifierPatternNode):
             return not self.is_enum_identifier_pattern(pattern)
+        if isinstance(pattern, StructPatternNode):
+            pattern_type = getattr(pattern, "type_name", None)
+            if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
+                return False
+            struct_type = self.struct_pattern_type_name(pattern_type, subject_type)
+            field_types = self.struct_types.get(struct_type)
+            if field_types is None:
+                return False
+            for field_name, field_pattern in (
+                getattr(pattern, "field_patterns", {}) or {}
+            ).items():
+                if field_name not in field_types:
+                    return False
+                if not self.is_unconstrained_match_pattern(
+                    field_pattern, field_types[field_name]
+                ):
+                    return False
+            return True
         return False
 
     def match_pattern_enum_variant_path(self, pattern, subject_type=None):

@@ -4758,6 +4758,125 @@ def test_generic_payload_enum_direct_resource_fields_preserve_access_diagnostics
         generate_code(parse_code(tokenize_code(code)))
 
 
+def _generic_payload_enum_direct_resource_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct ResourceBox {
+        image2D image;
+        RWStructuredBuffer<int> values;
+        int tag;
+    };
+
+    Result<sampler2D, int> makeTexture(sampler2D texture) {
+        return Result::Ok(texture);
+    }
+
+    Result<image2D, int> makeImage(image2D image) {
+        return Result::Ok(image);
+    }
+
+    Result<RWStructuredBuffer<int>, int> makeBuffer(
+        RWStructuredBuffer<int> values
+    ) {
+        return Result::Ok(values);
+    }
+
+    Result<ResourceBox, int> makeBox(ResourceBox payload) {
+        return Result::Ok(payload);
+    }
+
+    vec4 sampleDirectPayload(
+        Result<sampler2D, int> value,
+        sampler state,
+        vec2 uv
+    ) {
+        return match value {
+            Result::Ok(texture) => texture(texture, state, uv),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    vec4 loadDirectPayload(Result<image2D, int> value, ivec2 pixel) {
+        return match value {
+            Result::Ok(image) => imageLoad(image, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+
+    int loadBufferPayload(Result<RWStructuredBuffer<int>, int> value, uint index) {
+        return match value {
+            Result::Ok(values) => values.Load(index),
+            Result::Err(err) => err
+        };
+    }
+
+    int loadNestedPayload(Result<ResourceBox, int> value, uint index) {
+        return match value {
+            Result::Ok(ResourceBox { image, values, tag }) => values.Load(index) + tag,
+            Result::Err(err) => err
+        };
+    }
+
+    vec4 loadNestedImagePayload(Result<ResourceBox, int> value, ivec2 pixel) {
+        return match value {
+            Result::Ok(ResourceBox { image, values, tag }) => imageLoad(image, pixel),
+            Result::Err(_) => vec4(0.0)
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+        )
+    )
+
+    assert "struct Result_sampler2D_int:" in generated_code
+    assert "var Ok_0: Texture2D" in generated_code
+    assert "struct Result_image2D_int:" in generated_code
+    assert "var Ok_0: Image2D" in generated_code
+    assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
+    assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
+    assert "sample(value.Ok_0, uv)" in generated_code
+    assert "image_load(value.Ok_0, pixel)" in generated_code
+    assert "buffer_load(value.Ok_0, index)" in generated_code
+    assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
+    assert "image_load(value.Ok_0.image, pixel)" in generated_code
+    assert "Result<" not in generated_code
+    assert ".Load(" not in generated_code
+
+
+def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(
+            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+        )
+    )
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_payload_direct_resource_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _generic_payload_enum_resource_query_source():
     return """
     generic<T, E> struct Result {

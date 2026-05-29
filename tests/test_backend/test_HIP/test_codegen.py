@@ -8755,6 +8755,117 @@ class TestHipCodeGen:
         assert "ptrs[0] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hip_module_library_kernel_scalar_outputs_replace_stale_metadata(self):
+        """Test scalar module/library/kernel outputs replace prior query metadata."""
+        code = """
+        void queryModuleKernelScalars(
+            hipModule_t module,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            unsigned int* counts,
+            int* values,
+            size_t* sizes,
+            const char** names
+        ) {
+            unsigned int moduleCount = 0;
+            unsigned int kernelCount = 0;
+            int attributeValue = 0;
+            size_t paramOffset = 0;
+            size_t paramSize = 0;
+            const char* kernelName = 0;
+
+            hipPointerGetAttribute(
+                &moduleCount,
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            hipModuleGetFunctionCount(&moduleCount, module);
+            counts[0] = moduleCount;
+
+            hipPointerGetAttribute(
+                &kernelCount,
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            hipLibraryGetKernelCount(&kernelCount, library);
+            counts[1] = kernelCount;
+
+            hipPointerGetAttribute(
+                &attributeValue,
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            hipKernelGetAttribute(
+                &attributeValue,
+                HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                kernel,
+                0
+            );
+            values[0] = attributeValue;
+
+            hipMemGetAddressRange((void**)&kernelName, &paramSize, devicePtr);
+            hipKernelGetName(&kernelName, kernel);
+            names[0] = kernelName;
+
+            hipGetSymbolSize(&paramOffset, kernelName);
+            hipGetSymbolSize(&paramSize, kernelName);
+            hipKernelGetParamInfo(kernel, 0, &paramOffset, &paramSize);
+            sizes[0] = paramOffset;
+            sizes[1] = paramSize;
+
+            if (hipModuleGetFunctionCount(&moduleCount, module) == hipSuccess) {
+                counts[2] = moduleCount;
+            }
+            if (hipKernelGetParamInfo(kernel, 1, &paramOffset, &paramSize) == hipSuccess) {
+                sizes[2] = paramOffset;
+                sizes[3] = paramSize;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "counts[0] = (/* HIP device query: module.functionCount(module) */ 0);"
+            in result
+        )
+        assert (
+            "counts[1] = (/* HIP device query: library.kernelCount(library) */ 0);"
+            in result
+        )
+        assert (
+            "values[0] = (/* HIP device query: "
+            "kernel.attribute(HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, "
+            "kernel, 0) */ 0);"
+        ) in result
+        assert "names[0] = kernelName;" in result
+        assert (
+            "sizes[0] = (/* HIP device query: " "kernel.param.offset(kernel, 0) */ 0);"
+        ) in result
+        assert (
+            "sizes[1] = (/* HIP device query: " "kernel.param.size(kernel, 0) */ 0);"
+        ) in result
+        assert (
+            "counts[2] = (/* HIP device query: module.functionCount(module) */ 0);"
+            in result
+        )
+        assert (
+            "sizes[2] = (/* HIP device query: " "kernel.param.offset(kernel, 1) */ 0);"
+        ) in result
+        assert (
+            "sizes[3] = (/* HIP device query: " "kernel.param.size(kernel, 1) */ 0);"
+        ) in result
+        assert "counts[0] = (/* HIP device query: pointer.attribute" not in result
+        assert "values[0] = (/* HIP device query: pointer.attribute" not in result
+        assert "names[0] = (/* HIP device query:" not in result
+        assert "symbol.size(kernelName)" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """

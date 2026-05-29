@@ -2283,6 +2283,14 @@ class HipToCrossGLConverter:
         elif name == "hipModuleGetFunctionCount":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"module.functionCount({args[1]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP module get function count: output: {output}, "
                     f"module: {args[1]}"
@@ -2606,6 +2614,14 @@ class HipToCrossGLConverter:
         elif name == "hipLibraryGetKernelCount":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"library.kernelCount({args[1]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP library get kernel count: output: {output}, "
                     f"library: {args[1]}"
@@ -2628,11 +2644,28 @@ class HipToCrossGLConverter:
         elif name == "hipKernelGetName":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [f"// HIP kernel get name: output: {output}, kernel: {args[1]}"]
         elif name == "hipKernelGetParamInfo":
             if len(args) >= 4:
                 offset_output = self.format_runtime_pointer_target(node.args[2])
                 size_output = self.format_runtime_pointer_target(node.args[3])
+                offset_output_name = self.get_runtime_pointer_target_name(node.args[2])
+                size_output_name = self.get_runtime_pointer_target_name(node.args[3])
+                if offset_output_name is not None:
+                    self.register_device_query_source(
+                        offset_output_name,
+                        f"kernel.param.offset({args[0]}, {args[1]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[2])
+                if size_output_name is not None:
+                    self.register_device_query_source(
+                        size_output_name,
+                        f"kernel.param.size({args[0]}, {args[1]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[3])
                 return [
                     f"// HIP kernel get parameter info: kernel: {args[0]}, "
                     f"param index: {args[1]}, offset output: {offset_output}, "
@@ -2649,6 +2682,14 @@ class HipToCrossGLConverter:
         elif name == "hipKernelGetAttribute":
             if len(args) >= 4:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"kernel.attribute({args[1]}, {args[2]}, {args[3]})",
+                    )
+                else:
+                    self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP kernel get attribute: output: {output}, "
                     f"attribute: {args[1]}, kernel: {args[2]}, device: {args[3]}"
