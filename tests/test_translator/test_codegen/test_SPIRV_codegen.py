@@ -12747,6 +12747,55 @@ class TestVulkanSPIRVCodeGen:
             "parameter data: got writeonly"
         ) in spv_code
 
+    def test_stage_local_storage_buffer_helpers_keep_access_contracts_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalStorageBufferIsolation {
+            StructuredBuffer<float> weights @readonly;
+            RWStructuredBuffer<float> outputs @writeonly;
+
+            compute {
+                float useBuffer(StructuredBuffer<float> data, uint index) {
+                    return data.Load(index);
+                }
+
+                void main() {
+                    float value = useBuffer(weights, 0u);
+                }
+            }
+
+            fragment {
+                void useBuffer(
+                    RWStructuredBuffer<float> data,
+                    uint index,
+                    float value
+                ) {
+                    data.Store(index, value);
+                }
+
+                void main() {
+                    useBuffer(outputs, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "requires read-write storage buffer access" not in spv_code
+        assert "requires read-capable storage buffer access" not in spv_code
+        assert "requires write-capable storage buffer access" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "OpLoad" in spv_code
+        assert "OpStore" in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_storage_image_memory_qualifiers_emit_decorations_and_diagnostics(self):
         source_code = """
         shader StorageImages {

@@ -158,10 +158,12 @@ class VulkanSPIRVCodeGen:
         self.stage_local_function_signatures = {}
         self.stage_local_function_parameter_names = {}
         self.stage_local_function_image_access_requirements = {}
+        self.stage_local_function_storage_buffer_access_requirements = {}
         self.function_parameter_names = {}
         self.function_image_access_requirements = {}
         self.function_storage_buffer_access_requirements = {}
         self.inline_storage_buffer_functions = {}
+        self.stage_local_inline_storage_buffer_functions = {}
         self.function_resource_array_params = {}
         self.stage_local_function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
@@ -1285,6 +1287,23 @@ class VulkanSPIRVCodeGen:
         if requirements is not None:
             return requirements
         return self.function_image_access_requirements.get(function_name)
+
+    def resolve_function_storage_buffer_access_requirements(self, function_name: str):
+        requirements = self.stage_local_metadata(
+            self.stage_local_function_storage_buffer_access_requirements,
+            function_name,
+        )
+        if requirements is not None:
+            return requirements
+        return self.function_storage_buffer_access_requirements.get(function_name)
+
+    def resolve_inline_storage_buffer_function(self, function_name: str):
+        function_node = self.stage_local_metadata(
+            self.stage_local_inline_storage_buffer_functions, function_name
+        )
+        if function_node is not None:
+            return function_node
+        return self.inline_storage_buffer_functions.get(function_name)
 
     def create_function_parameter(
         self, param_type: SpirvId, name: Optional[str] = None
@@ -12420,8 +12439,10 @@ class VulkanSPIRVCodeGen:
                     visited,
                 )
 
-    def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
-        functions = self.collect_ast_functions(ast)
+    def collect_function_storage_buffer_access_requirements_for_functions(
+        self, functions
+    ):
+        functions = list(functions)
         function_parameter_names = collect_function_parameter_names(functions)
         parameter_sets = {
             func_name: set(param_names)
@@ -12503,6 +12524,52 @@ class VulkanSPIRVCodeGen:
                             changed = True
 
         return {name: reqs for name, reqs in requirements.items() if reqs}
+
+    def collect_function_storage_buffer_access_requirements_for_ast(self, ast):
+        return self.collect_function_storage_buffer_access_requirements_for_functions(
+            self.collect_ast_functions(ast)
+        )
+
+    def collect_stage_local_function_storage_buffer_metadata(self, ast):
+        self.stage_local_function_storage_buffer_access_requirements = {}
+        self.stage_local_inline_storage_buffer_functions = {}
+        global_functions = list(getattr(ast, "functions", []) or [])
+
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            local_functions = list(getattr(stage, "local_functions", []) or [])
+            if not local_functions:
+                continue
+
+            local_names = {
+                getattr(func, "name", None)
+                for func in local_functions
+                if getattr(func, "name", None)
+            }
+            visible_functions = [
+                func
+                for func in global_functions
+                if getattr(func, "name", None) not in local_names
+            ] + local_functions
+            requirements = (
+                self.collect_function_storage_buffer_access_requirements_for_functions(
+                    visible_functions
+                )
+            )
+
+            for function_node in local_functions:
+                function_name = getattr(function_node, "name", None)
+                if not function_name:
+                    continue
+                key = self.stage_local_function_key(stage, function_name)
+                if key is None:
+                    continue
+                self.stage_local_function_storage_buffer_access_requirements[key] = (
+                    requirements.get(function_name, {})
+                )
+                if self.function_has_storage_buffer_parameters(function_node):
+                    self.stage_local_inline_storage_buffer_functions[key] = (
+                        function_node
+                    )
 
     def merge_resource_access_requirement(self, current, incoming):
         if incoming is None:
@@ -12589,13 +12656,13 @@ class VulkanSPIRVCodeGen:
     def validate_function_storage_buffer_access_arguments(
         self, func_name, args
     ) -> bool:
-        callee_requirements = self.function_storage_buffer_access_requirements.get(
+        callee_requirements = self.resolve_function_storage_buffer_access_requirements(
             func_name
         )
         if not callee_requirements:
             return True
 
-        param_names = self.function_parameter_names.get(func_name, [])
+        param_names = self.resolve_function_parameter_names(func_name)
         for index, param_name in enumerate(param_names):
             required_access = callee_requirements.get(param_name)
             if required_access is None or index >= len(args):
@@ -16155,8 +16222,8 @@ class VulkanSPIRVCodeGen:
                     result_type,
                 )
 
-            inline_storage_buffer_function = self.inline_storage_buffer_functions.get(
-                callee_name
+            inline_storage_buffer_function = (
+                self.resolve_inline_storage_buffer_function(callee_name)
             )
             if inline_storage_buffer_function is not None:
                 return self.inline_storage_buffer_function_call(
@@ -17471,6 +17538,7 @@ class VulkanSPIRVCodeGen:
         self.function_storage_buffer_access_requirements = (
             self.collect_function_storage_buffer_access_requirements_for_ast(ast)
         )
+        self.collect_stage_local_function_storage_buffer_metadata(ast)
         self.inline_storage_buffer_functions = (
             self.collect_inline_storage_buffer_functions(ast)
         )
