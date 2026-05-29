@@ -24145,6 +24145,152 @@ def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitiv
     assert "int nestedCount = queryViaArray__glsl_images_counters();" in generated_code
 
 
+def test_glsl_multisample_storage_image_helper_array_elements_specialize_operations():
+    shader = """
+    shader GLSLMultisampleImageArrayElementSpecializationValid {
+        image2DMS images @rgba16f[2];
+        uimage2DMS counters @r32ui[2];
+
+        vec4 touch(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+            vec4 oldValue = imageLoad(image, pixel, sampleIndex);
+            imageStore(image, pixel, sampleIndex, oldValue + value);
+            return oldValue;
+        }
+
+        uint bump(uimage2DMS image @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            return imageAtomicAdd(image, pixel, sampleIndex, value);
+        }
+
+        vec4 viaArray(image2DMS targets[] @rgba16f, ivec2 pixel, int sampleIndex, vec4 value) {
+            return touch(targets[1], pixel, sampleIndex, value);
+        }
+
+        uint viaCounter(uimage2DMS targets[] @r32ui, ivec2 pixel, int sampleIndex, uint value) {
+            return bump(targets[1], pixel, sampleIndex, value);
+        }
+
+        compute {
+            void main() {
+                vec4 directValue = touch(images[0], ivec2(0, 1), 2, vec4(1.0));
+                vec4 nestedValue = viaArray(images, ivec2(2, 3), 0, directValue);
+                uint directCount = bump(counters[0], ivec2(1, 2), 3, 4u);
+                uint nestedCount = viaCounter(counters, ivec2(3, 4), 1, directCount);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(rgba16f, binding = 0) uniform image2DMS images[2];" in generated_code
+    assert (
+        "layout(r32ui, binding = 2) uniform uimage2DMS counters[2];" in generated_code
+    )
+    assert "vec4 touch__glsl_image_images_0(" in generated_code
+    assert "vec4 touch__glsl_image_images_1(" in generated_code
+    assert "imageLoad(images[0], pixel, sampleIndex)" in generated_code
+    assert (
+        "imageStore(images[1], pixel, sampleIndex, (oldValue + value));"
+        in generated_code
+    )
+    assert "uint bump__glsl_image_counters_0(" in generated_code
+    assert "uint bump__glsl_image_counters_1(" in generated_code
+    assert (
+        "return imageAtomicAdd(counters[0], pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return imageAtomicAdd(counters[1], pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return touch__glsl_image_images_1(pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert (
+        "return bump__glsl_image_counters_1(pixel, sampleIndex, value);"
+        in generated_code
+    )
+    assert "vec4 directValue = touch__glsl_image_images_0(" in generated_code
+    assert "vec4 nestedValue = viaArray__glsl_targets_images(" in generated_code
+    assert "uint directCount = bump__glsl_image_counters_0(" in generated_code
+    assert "uint nestedCount = viaCounter__glsl_targets_counters(" in generated_code
+
+
+def test_glsl_cube_storage_image_helper_array_elements_specialize_load_store():
+    shader = """
+    shader GLSLCubeImageArrayElementSpecializationValid {
+        imageCube cubeImages @rgba16f[2];
+        imageCubeArray cubeLayerImages @rgba16f[2];
+
+        vec4 touchCube(imageCube image @rgba16f, ivec3 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 touchCubeLayer(imageCubeArray image @rgba16f, ivec3 coord, vec4 value) {
+            vec4 oldValue = imageLoad(image, coord);
+            imageStore(image, coord, oldValue + value);
+            return oldValue;
+        }
+
+        vec4 viaCube(imageCube images[] @rgba16f, ivec3 coord, vec4 value) {
+            return touchCube(images[1], coord, value);
+        }
+
+        vec4 viaCubeLayer(imageCubeArray images[] @rgba16f, ivec3 coord, vec4 value) {
+            return touchCubeLayer(images[1], coord, value);
+        }
+
+        compute {
+            void main() {
+                vec4 directCube = touchCube(cubeImages[0], ivec3(0, 1, 2), vec4(1.0));
+                vec4 nestedCube = viaCube(cubeImages, ivec3(2, 3, 4), directCube);
+                vec4 directLayer = touchCubeLayer(cubeLayerImages[0], ivec3(1, 2, 3), nestedCube);
+                vec4 nestedLayer = viaCubeLayer(cubeLayerImages, ivec3(3, 4, 5), directLayer);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert (
+        "layout(rgba16f, binding = 0) uniform imageCube cubeImages[2];"
+        in generated_code
+    )
+    assert (
+        "layout(rgba16f, binding = 2) uniform imageCubeArray cubeLayerImages[2];"
+        in generated_code
+    )
+    assert "vec4 touchCube__glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 touchCube__glsl_image_cubeImages_1(" in generated_code
+    assert "imageLoad(cubeImages[0], coord)" in generated_code
+    assert "imageStore(cubeImages[1], coord, (oldValue + value));" in generated_code
+    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_0(" in generated_code
+    assert "vec4 touchCubeLayer__glsl_image_cubeLayerImages_1(" in generated_code
+    assert "imageLoad(cubeLayerImages[0], coord)" in generated_code
+    assert (
+        "imageStore(cubeLayerImages[1], coord, (oldValue + value));" in generated_code
+    )
+    assert "return touchCube__glsl_image_cubeImages_1(coord, value);" in generated_code
+    assert (
+        "return touchCubeLayer__glsl_image_cubeLayerImages_1(coord, value);"
+        in generated_code
+    )
+    assert "vec4 directCube = touchCube__glsl_image_cubeImages_0(" in generated_code
+    assert "vec4 nestedCube = viaCube__glsl_images_cubeImages(" in generated_code
+    assert (
+        "vec4 directLayer = touchCubeLayer__glsl_image_cubeLayerImages_0("
+        in generated_code
+    )
+    assert (
+        "vec4 nestedLayer = viaCubeLayer__glsl_images_cubeLayerImages("
+        in generated_code
+    )
+
+
 @pytest.mark.parametrize(
     ("shader", "match"),
     [
@@ -24184,6 +24330,25 @@ def test_glsl_storage_image_helper_contracts_specialize_array_elements_transitiv
             }
             """,
             "function call 'queryElement' requires r32ui storage image format "
+            "for argument rgImages\\[0\\] passed to parameter image: got rg32f",
+        ),
+        (
+            """
+            shader StorageImageHelperMultisampleArrayElementFormatContractInvalid {
+                image2DMS rgImages @rg32f[2];
+
+                vec4 touch(image2DMS image @rgba16f, ivec2 pixel, int sampleIndex) {
+                    return imageLoad(image, pixel, sampleIndex);
+                }
+
+                compute {
+                    void main() {
+                        vec4 value = touch(rgImages[0], ivec2(0, 1), 2);
+                    }
+                }
+            }
+            """,
+            "function call 'touch' requires rgba16f storage image format "
             "for argument rgImages\\[0\\] passed to parameter image: got rg32f",
         ),
         (

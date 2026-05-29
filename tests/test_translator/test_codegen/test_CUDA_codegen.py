@@ -8,6 +8,7 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.ast import (
     AssignmentNode,
+    ArrayAccessNode,
     ArrayType,
     BlockNode,
     ExecutionModel,
@@ -15,8 +16,12 @@ from crosstl.translator.ast import (
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    ParameterNode,
+    PointerType,
     PrimitiveType,
+    ReturnNode,
     ShaderNode,
+    UnaryOpNode,
     VariableNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
@@ -4083,6 +4088,91 @@ class TestCudaCodeGen:
         assert "uint fromPointerMember = holderPtr->fallback[index];" in cuda_code
         assert "uint& selectedRef = chooseRef(left, right, flag);" in cuda_code
         assert "selectedRef = (fromPointer + fromPointerMember);" in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_pointer_address_and_dereference_unary_ir_emit_cuda(self, tmp_path):
+        """Test CUDA emits pointer address-of and dereference from canonical IR."""
+        uint_type = PrimitiveType("uint")
+        uint_pointer_type = PointerType(uint_type)
+        ast = ShaderNode(
+            name="PointerUnaryCUDA",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            functions=[
+                FunctionNode(
+                    "writeValue",
+                    PrimitiveType("void"),
+                    [
+                        ParameterNode("ptr", uint_pointer_type),
+                        ParameterNode("value", uint_type),
+                    ],
+                    BlockNode(
+                        [
+                            AssignmentNode(
+                                ArrayAccessNode(
+                                    IdentifierNode("ptr"),
+                                    LiteralNode(0, PrimitiveType("int")),
+                                ),
+                                IdentifierNode("value"),
+                            )
+                        ]
+                    ),
+                ),
+                FunctionNode(
+                    "loadValue",
+                    uint_type,
+                    [ParameterNode("ptr", PointerType(uint_type))],
+                    BlockNode(
+                        [
+                            ReturnNode(
+                                UnaryOpNode("*", IdentifierNode("ptr")),
+                            )
+                        ]
+                    ),
+                ),
+                FunctionNode(
+                    "useValue",
+                    PrimitiveType("void"),
+                    [ParameterNode("value", uint_type)],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "local",
+                                uint_type,
+                                IdentifierNode("value"),
+                            ),
+                            FunctionCallNode(
+                                IdentifierNode("writeValue"),
+                                [
+                                    UnaryOpNode("&", IdentifierNode("local")),
+                                    LiteralNode(7, uint_type),
+                                ],
+                            ),
+                            VariableNode(
+                                "loaded",
+                                uint_type,
+                                FunctionCallNode(
+                                    IdentifierNode("loadValue"),
+                                    [UnaryOpNode("&", IdentifierNode("local"))],
+                                ),
+                            ),
+                        ]
+                    ),
+                ),
+            ],
+        )
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "PointerType(" not in cuda_code
+        assert "UnaryOpNode(" not in cuda_code
+        assert "__device__ void writeValue(uint* ptr, uint value)" in cuda_code
+        assert "ptr[0] = value;" in cuda_code
+        assert "__device__ uint loadValue(uint* ptr)" in cuda_code
+        assert "return *ptr;" in cuda_code
+        assert "__device__ void useValue(uint value)" in cuda_code
+        assert "uint local = value;" in cuda_code
+        assert "writeValue(&local, 7u);" in cuda_code
+        assert "uint loaded = loadValue(&local);" in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_structured_buffer_element_atomics_emit_cuda_pointer_atomics(

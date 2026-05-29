@@ -18901,7 +18901,7 @@ def test_double_vector_and_matrix_types_emit_rust_names(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_matrix_constructors_flatten_vector_args_once():
+def test_matrix_constructors_flatten_vector_args_once(tmp_path):
     code = """
     vec2 makeCol0() {
         return vec2(1.0, 0.0);
@@ -18943,6 +18943,7 @@ def test_matrix_constructors_flatten_vector_args_once():
     assert "Mat2::<f32>::new(a, b)" not in generated_code
     assert "Mat2::<f32>::new(makeCol0(), makeCol1())" not in generated_code
     assert "makeCol0().xy" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_matrix_constructor_lanes_cast_to_component_type():
