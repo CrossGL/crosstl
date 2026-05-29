@@ -1903,6 +1903,62 @@ shader MetalThreadgroupAtomicBarrierValidation {
 """
 
 
+METAL_SCOPED_ATOMIC_SHADER = """
+shader MetalScopedAtomicValidation {
+    bool claim(
+        threadgroup atomic_uint counters[4],
+        thread uint expectedValues[4],
+        uint index,
+        uint desired
+    ) {
+        return atomic_compare_exchange_strong_explicit(
+            counters[index],
+            expectedValues[index],
+            desired,
+            memory_order_relaxed,
+            memory_order_relaxed,
+            memory_scope_device
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_uint* deviceCounters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_uint counters[4];
+            uint expectedValues[4];
+            expectedValues[index] = 0u;
+            atomic_store_explicit(
+                counters[index],
+                0u,
+                memory_order_relaxed,
+                memory_scope_workgroup
+            );
+            uint oldValue = atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed,
+                memory_scope_workgroup
+            );
+            uint loaded = atomic_load_explicit(
+                counters[index],
+                memory_order_relaxed,
+                memory_scope_workgroup
+            );
+            uint exchanged = atomic_exchange_explicit(
+                deviceCounters[index],
+                loaded + oldValue,
+                memory_order_relaxed,
+                memory_scope_device
+            );
+            bool claimed = claim(counters, expectedValues, index, exchanged);
+        }
+    }
+}
+"""
+
+
 METAL_ATOMIC_POINTER_TARGETS_SHADER = """
 shader MetalAtomicPointerTargetValidation {
     int bumpDevice(device atomic_int* counters, uint index, int delta) {
@@ -7936,6 +7992,44 @@ def test_generated_metal_threadgroup_atomic_barriers_compile_with_metal(tmp_path
     )
     assert "atomic_exchange_explicit(&counters[index]," in code
     assert code.count("threadgroup_barrier(mem_flags::mem_threadgroup);") == 2
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_scoped_atomics_compile_with_metal(tmp_path):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "scoped_atomics.metal"
+    output = tmp_path / "scoped_atomics.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SCOPED_ATOMIC_SHADER),
+        "compute",
+    )
+    assert "memory_scope_" not in code
+    assert (
+        "return atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expectedValues[index], desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in code
+    assert "atomic_store_explicit(&counters[index], 0u, memory_order_relaxed);" in code
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "uint loaded = atomic_load_explicit(&counters[index], memory_order_relaxed);"
+        in code
+    )
+    assert (
+        "uint exchanged = atomic_exchange_explicit(&deviceCounters[index], loaded + oldValue, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_compare_exchange_strong_explicit" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

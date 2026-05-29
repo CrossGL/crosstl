@@ -8357,6 +8357,88 @@ def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     assert "atomic_exchange_explicit(counters[index]" not in generated
 
 
+def test_metal_scoped_atomic_calls_strip_memory_scope_argument():
+    code = """
+    shader MetalScopedAtomicValidation {
+        bool claim(
+            threadgroup atomic_uint counters[4],
+            thread uint expectedValues[4],
+            uint index,
+            uint desired
+        ) {
+            return atomic_compare_exchange_strong_explicit(
+                counters[index],
+                expectedValues[index],
+                desired,
+                memory_order_relaxed,
+                memory_order_relaxed,
+                memory_scope_device
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_uint* deviceCounters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_uint counters[4];
+                uint expectedValues[4];
+                expectedValues[index] = 0u;
+                atomic_store_explicit(
+                    counters[index],
+                    0u,
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint loaded = atomic_load_explicit(
+                    counters[index],
+                    memory_order_relaxed,
+                    memory_scope_workgroup
+                );
+                uint exchanged = atomic_exchange_explicit(
+                    deviceCounters[index],
+                    loaded + oldValue,
+                    memory_order_relaxed,
+                    memory_scope_device
+                );
+                bool claimed = claim(counters, expectedValues, index, exchanged);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "memory_scope_" not in generated
+    assert (
+        "return atomic_compare_exchange_weak_explicit(&counters[index], "
+        "&expectedValues[index], desired, memory_order_relaxed, "
+        "memory_order_relaxed);"
+    ) in generated
+    assert (
+        "atomic_store_explicit(&counters[index], 0u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint oldValue = atomic_fetch_add_explicit(&counters[index], 1u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint loaded = atomic_load_explicit(&counters[index], memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "uint exchanged = atomic_exchange_explicit(&deviceCounters[index], loaded + oldValue, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_compare_exchange_strong_explicit" not in generated
+
+
 def test_metal_atomic_pointer_targets_cover_signed_and_bool_operations():
     code = """
     shader MetalAtomicPointerValidation {

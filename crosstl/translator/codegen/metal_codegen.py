@@ -5830,7 +5830,11 @@ class MetalCodeGen:
         if not self.is_metal_atomic_function_name(func_name) or not args:
             return None
 
+        args = list(args)
         rendered_args = [self.generate_expression(arg) for arg in args]
+        args, rendered_args = self.strip_metal_atomic_memory_scope_argument(
+            func_name, args, rendered_args
+        )
         if self.metal_atomic_target_needs_address(args[0], rendered_args[0]):
             rendered_args[0] = f"&{rendered_args[0]}"
         if self.is_metal_atomic_compare_exchange_name(func_name) and len(args) >= 2:
@@ -5846,6 +5850,61 @@ class MetalCodeGen:
         return (
             f"{self.metal_atomic_intrinsic_name(func_name)}({', '.join(rendered_args)})"
         )
+
+    def strip_metal_atomic_memory_scope_argument(self, func_name, args, rendered_args):
+        expected_count = self.metal_atomic_expected_argument_count(func_name)
+        if (
+            expected_count is not None
+            and len(args) == expected_count + 1
+            and self.is_metal_atomic_memory_scope_argument(args[-1], rendered_args[-1])
+        ):
+            return args[:-1], rendered_args[:-1]
+        return args, rendered_args
+
+    def metal_atomic_expected_argument_count(self, func_name):
+        if self.is_metal_atomic_compare_exchange_name(func_name):
+            return 5
+        if func_name == "atomic_load_explicit":
+            return 2
+        if func_name in {
+            "atomic_fetch_add_explicit",
+            "atomic_fetch_sub_explicit",
+            "atomic_fetch_min_explicit",
+            "atomic_fetch_max_explicit",
+            "atomic_fetch_and_explicit",
+            "atomic_fetch_or_explicit",
+            "atomic_fetch_xor_explicit",
+            "atomic_store_explicit",
+            "atomic_exchange_explicit",
+        }:
+            return 3
+        return None
+
+    def is_metal_atomic_memory_scope_argument(self, arg, rendered_arg):
+        scope_names = {
+            "memory_scope_device",
+            "memory_scope_grid",
+            "memory_scope_invocation",
+            "memory_scope_queuefamily",
+            "memory_scope_queue_family",
+            "memory_scope_simdgroup",
+            "memory_scope_subgroup",
+            "memory_scope_system",
+            "memory_scope_thread",
+            "memory_scope_threadgroup",
+            "memory_scope_workgroup",
+        }
+        for candidate in (self.expression_name(arg), rendered_arg):
+            if candidate is None:
+                continue
+            normalized = str(candidate).strip().lower()
+            normalized = normalized.replace(" ", "")
+            normalized = normalized.replace("::", "_").replace(".", "_")
+            if normalized.startswith("metal_") or normalized.startswith("msl_"):
+                normalized = normalized.split("_", 1)[1]
+            if normalized in scope_names:
+                return True
+        return False
 
     def metal_atomic_target_needs_address(self, arg, rendered_arg):
         if self.is_metal_address_expression(arg, rendered_arg):

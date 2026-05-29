@@ -1606,7 +1606,13 @@ class VulkanSPIRVCodeGen:
             "atomicExchange",
             "atomicCompSwap",
             "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
             "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
             "texture",
             "texture2D",
             "textureCube",
@@ -1673,7 +1679,16 @@ class VulkanSPIRVCodeGen:
         }
 
     def buffer_function_names(self):
-        return {"buffer_load", "buffer_store"}
+        return {
+            "buffer_load",
+            "buffer_load2",
+            "buffer_load3",
+            "buffer_load4",
+            "buffer_store",
+            "buffer_store2",
+            "buffer_store3",
+            "buffer_store4",
+        }
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
         dim = metadata.get("dim", "2D") if metadata else "2D"
@@ -2762,6 +2777,18 @@ class VulkanSPIRVCodeGen:
             return self.call_projected_texture_function(function_name, args)
         if function_name in self.projected_shadow_function_names():
             return self.call_projected_shadow_function(function_name, args)
+
+        byte_address_load_width = self.byte_address_helper_load_width(function_name)
+        if byte_address_load_width is not None:
+            return self.call_byte_address_buffer_load_helper(
+                function_name, args, byte_address_load_width
+            )
+
+        byte_address_store_width = self.byte_address_helper_store_width(function_name)
+        if byte_address_store_width is not None:
+            return self.call_byte_address_buffer_store_helper(
+                function_name, args, byte_address_store_width
+            )
 
         if function_name == "buffer_load":
             if len(args) < 2:
@@ -10795,9 +10822,15 @@ class VulkanSPIRVCodeGen:
         )
 
     def buffer_operation_access_requirement(self, func_name):
-        if func_name == "buffer_load":
+        if (
+            func_name == "buffer_load"
+            or self.byte_address_helper_load_width(func_name) is not None
+        ):
             return "read"
-        if func_name == "buffer_store":
+        if (
+            func_name == "buffer_store"
+            or self.byte_address_helper_store_width(func_name) is not None
+        ):
             return "write"
         if func_name in self.buffer_atomic_function_names():
             return "read_write"
@@ -11855,12 +11888,36 @@ class VulkanSPIRVCodeGen:
         self.structured_buffer_metadata[access.id] = access_metadata
         return access
 
-    def byte_address_buffer_element_index(self, offset_expr) -> Optional[SpirvId]:
-        byte_offset = self.process_expression(offset_expr)
-        if byte_offset is None:
-            self.emit("; WARNING: ByteAddressBuffer byte offset could not be evaluated")
-            return None
+    def byte_address_method_load_width(self, method_name: str) -> Optional[int]:
+        return {"Load": 1, "Load2": 2, "Load3": 3, "Load4": 4}.get(method_name)
 
+    def byte_address_method_store_width(self, method_name: str) -> Optional[int]:
+        return {"Store": 1, "Store2": 2, "Store3": 3, "Store4": 4}.get(method_name)
+
+    def byte_address_helper_load_width(self, function_name: str) -> Optional[int]:
+        return {"buffer_load2": 2, "buffer_load3": 3, "buffer_load4": 4}.get(
+            function_name
+        )
+
+    def byte_address_helper_store_width(self, function_name: str) -> Optional[int]:
+        return {"buffer_store2": 2, "buffer_store3": 3, "buffer_store4": 4}.get(
+            function_name
+        )
+
+    def byte_address_value_type(self, component_count: int) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        if component_count == 1:
+            return uint_type
+        return self.register_vector_type(uint_type, component_count)
+
+    def byte_address_default_value(self, component_count: int) -> SpirvId:
+        return self.default_value_for_type(
+            self.byte_address_value_type(component_count)
+        )
+
+    def byte_address_buffer_element_index_from_value(
+        self, byte_offset: SpirvId
+    ) -> Optional[SpirvId]:
         offset_type_name = self.normalize_primitive_name(byte_offset.type.base_type)
         if offset_type_name not in {"int", "uint"}:
             self.emit("; WARNING: ByteAddressBuffer byte offset must be an integer")
@@ -11871,6 +11928,169 @@ class VulkanSPIRVCodeGen:
         element_size = self.register_constant(4, uint_type)
         return self.binary_operation("/", uint_type, byte_offset, element_size)
 
+    def byte_address_buffer_element_index(self, offset_expr) -> Optional[SpirvId]:
+        byte_offset = self.process_expression(offset_expr)
+        if byte_offset is None:
+            self.emit("; WARNING: ByteAddressBuffer byte offset could not be evaluated")
+            return None
+
+        return self.byte_address_buffer_element_index_from_value(byte_offset)
+
+    def byte_address_component_index(
+        self, element_index: SpirvId, component_index: int
+    ) -> SpirvId:
+        if component_index == 0:
+            return element_index
+
+        uint_type = self.register_primitive_type("uint")
+        component_offset = self.register_constant(component_index, uint_type)
+        return self.binary_operation("+", uint_type, element_index, component_offset)
+
+    def load_byte_address_buffer_value(
+        self,
+        buffer_pointer: SpirvId,
+        element_index: SpirvId,
+        component_count: int,
+        diagnostic_name: str,
+    ) -> SpirvId:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is not None and metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            return self.byte_address_default_value(component_count)
+
+        uint_type = self.register_primitive_type("uint")
+        components = []
+        for component_index in range(component_count):
+            index = self.byte_address_component_index(element_index, component_index)
+            component = self.call_resource_function(
+                "buffer_load", [buffer_pointer, index]
+            )
+            if component is None:
+                component = self.default_value_for_type(uint_type)
+            components.append(self.convert_value_to_type(component, uint_type))
+
+        if component_count == 1:
+            return components[0]
+
+        return self.composite_construct(
+            self.byte_address_value_type(component_count), components
+        )
+
+    def store_byte_address_buffer_value(
+        self,
+        buffer_pointer: SpirvId,
+        element_index: SpirvId,
+        value: SpirvId,
+        component_count: int,
+        diagnostic_name: str,
+    ) -> None:
+        uint_type = self.register_primitive_type("uint")
+        if component_count == 1:
+            value = self.convert_value_to_type(value, uint_type)
+            self.call_resource_function(
+                "buffer_store", [buffer_pointer, element_index, value]
+            )
+            return
+
+        value_type = self.value_types.get(
+            value.id
+        ) or self.find_registered_type_by_base(value.type.base_type)
+        value_type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value.type.base_type
+        )
+        vector_info = self.vector_component_type_and_count(value_type_name)
+        if vector_info is None or vector_info[1] != component_count:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a uvec{component_count} value"
+            )
+            return
+        if vector_info[0] not in {"int", "uint"}:
+            self.emit(f"; WARNING: {diagnostic_name} requires an integer vector value")
+            return
+
+        vector_type = self.byte_address_value_type(component_count)
+        value = self.convert_value_to_type(value, vector_type)
+        if not self.value_has_type(value, vector_type):
+            self.emit(
+                f"; WARNING: {diagnostic_name} value could not be converted to "
+                f"uvec{component_count}"
+            )
+            return
+
+        for component_index in range(component_count):
+            component = self.composite_extract(value, uint_type, component_index)
+            index = self.byte_address_component_index(element_index, component_index)
+            self.call_resource_function(
+                "buffer_store", [buffer_pointer, index, component]
+            )
+
+    def call_byte_address_buffer_load_helper(
+        self, function_name: str, args: List[SpirvId], component_count: int
+    ) -> SpirvId:
+        if len(args) < 2:
+            self.emit(
+                f"; WARNING: {function_name} requires buffer and byte offset operands"
+            )
+            return self.byte_address_default_value(component_count)
+        if len(args) > 2:
+            self.emit(
+                f"; WARNING: {function_name} accepts only buffer and byte offset "
+                "operands"
+            )
+            return self.byte_address_default_value(component_count)
+
+        metadata = self.structured_buffer_metadata_for_pointer(args[0])
+        if metadata is None or not metadata.get("byte_address"):
+            self.emit(
+                f"; WARNING: {function_name} requires a ByteAddressBuffer operand"
+            )
+            return self.byte_address_default_value(component_count)
+
+        element_index = self.byte_address_buffer_element_index_from_value(args[1])
+        if element_index is None:
+            return self.byte_address_default_value(component_count)
+
+        return self.load_byte_address_buffer_value(
+            args[0], element_index, component_count, function_name
+        )
+
+    def call_byte_address_buffer_store_helper(
+        self, function_name: str, args: List[SpirvId], component_count: int
+    ) -> None:
+        if len(args) < 3:
+            self.emit(
+                f"; WARNING: {function_name} requires buffer, byte offset, and "
+                "value operands"
+            )
+            return None
+        if len(args) > 3:
+            self.emit(
+                f"; WARNING: {function_name} accepts only buffer, byte offset, and "
+                "value operands"
+            )
+            return None
+
+        metadata = self.structured_buffer_metadata_for_pointer(args[0])
+        if metadata is None or not metadata.get("byte_address"):
+            self.emit(
+                f"; WARNING: {function_name} requires an RWByteAddressBuffer operand"
+            )
+            return None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {function_name} requires a writable buffer")
+            return None
+
+        element_index = self.byte_address_buffer_element_index_from_value(args[1])
+        if element_index is None:
+            return None
+
+        self.store_byte_address_buffer_value(
+            args[0], element_index, args[2], component_count, function_name
+        )
+        return None
+
     def process_byte_address_buffer_method_call(
         self, expr: FunctionCallNode
     ) -> Tuple[bool, Optional[SpirvId]]:
@@ -11879,7 +12099,9 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         method_name = getattr(callee_expr, "member", None)
-        if method_name not in {"Load", "Store"}:
+        load_width = self.byte_address_method_load_width(method_name)
+        store_width = self.byte_address_method_store_width(method_name)
+        if load_width is None and store_width is None:
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -11891,38 +12113,36 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
-        uint_type = self.register_primitive_type("uint")
-        if method_name == "Load":
+        if load_width is not None:
+            diagnostic_name = f"ByteAddressBuffer.{method_name}"
             if len(args) < 1:
-                self.emit("; WARNING: ByteAddressBuffer.Load requires a byte offset")
-                return True, self.default_value_for_type(uint_type)
+                self.emit(f"; WARNING: {diagnostic_name} requires a byte offset")
+                return True, self.byte_address_default_value(load_width)
             if len(args) > 1:
-                self.emit(
-                    "; WARNING: ByteAddressBuffer.Load accepts only a byte offset"
-                )
-                return True, self.default_value_for_type(uint_type)
+                self.emit(f"; WARNING: {diagnostic_name} accepts only a byte offset")
+                return True, self.byte_address_default_value(load_width)
 
             element_index = self.byte_address_buffer_element_index(args[0])
             if element_index is None:
-                return True, self.default_value_for_type(uint_type)
-            return True, self.call_resource_function(
-                "buffer_load", [buffer_pointer, element_index]
+                return True, self.byte_address_default_value(load_width)
+            return True, self.load_byte_address_buffer_value(
+                buffer_pointer, element_index, load_width, diagnostic_name
             )
 
+        diagnostic_name = f"RWByteAddressBuffer.{method_name}"
         if len(args) < 2:
             self.emit(
-                "; WARNING: RWByteAddressBuffer.Store requires byte offset and value "
-                "operands"
+                f"; WARNING: {diagnostic_name} requires byte offset and value operands"
             )
             return True, None
         if len(args) > 2:
             self.emit(
-                "; WARNING: RWByteAddressBuffer.Store accepts only byte offset and "
-                "value operands"
+                f"; WARNING: {diagnostic_name} accepts only byte offset and value "
+                "operands"
             )
             return True, None
         if metadata.get("readonly"):
-            self.emit("; WARNING: RWByteAddressBuffer.Store requires a writable buffer")
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
             return True, None
 
         element_index = self.byte_address_buffer_element_index(args[0])
@@ -11931,14 +12151,11 @@ class VulkanSPIRVCodeGen:
 
         value = self.process_expression(args[1])
         if value is None:
-            self.emit(
-                "; WARNING: RWByteAddressBuffer.Store value could not be evaluated"
-            )
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
             return True, None
 
-        value = self.convert_value_to_type(value, uint_type)
-        self.call_resource_function(
-            "buffer_store", [buffer_pointer, element_index, value]
+        self.store_byte_address_buffer_value(
+            buffer_pointer, element_index, value, store_width, diagnostic_name
         )
         return True, None
 

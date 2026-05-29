@@ -2195,6 +2195,7 @@ class HipToCrossGLConverter:
         elif name == "hipGetFuncBySymbol":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP get function by symbol: output: {output}, symbol: {args[1]}"
                 ]
@@ -2274,6 +2275,7 @@ class HipToCrossGLConverter:
         elif name == "hipModuleGetFunction":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP module get function: output: {output}, "
                     f"module: {args[1]}, name: {args[2]}"
@@ -2596,6 +2598,7 @@ class HipToCrossGLConverter:
         elif name == "hipLibraryGetKernel":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP library get kernel: output: {output}, "
                     f"library: {args[1]}, name: {args[2]}"
@@ -2617,6 +2620,7 @@ class HipToCrossGLConverter:
         elif name == "hipKernelGetLibrary":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP kernel get library: output: {output}, "
                     f"kernel: {args[1]}"
@@ -2637,6 +2641,7 @@ class HipToCrossGLConverter:
         elif name == "hipKernelGetFunction":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                self.clear_lvalue_metadata_source(node.args[0])
                 return [
                     f"// HIP kernel get function: output: {output}, "
                     f"kernel: {args[1]}"

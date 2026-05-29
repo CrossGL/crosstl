@@ -10429,6 +10429,173 @@ def test_shadow_compare_builtins_validate_target_result_types():
     assert ".GatherCmp(" not in generated_code
 
 
+def test_shadow_compare_expected_types_flow_through_nested_contexts():
+    code = """
+    struct ShadowQueryResult {
+        float validCompare;
+        vec4 validGather;
+        int invalidCompare;
+        float invalidGather;
+    };
+
+    shader ShadowCompareNestedExpectedContexts {
+        sampler2dshadow shadowMap;
+
+        compute {
+            float chooseCompare(bool take, vec2 uv, float depth) {
+                return take ? textureCompare(shadowMap, uv, depth) : 1.0;
+            }
+
+            int chooseBadCompare(bool take, vec2 uv, float depth) {
+                return take
+                    ? textureCompare(shadowMap, uv, depth)
+                    : textureCompare(shadowMap, uv, depth);
+            }
+
+            vec4 chooseGather(bool take, vec2 uv, float depth) {
+                return take ? textureGatherCompare(shadowMap, uv, depth) : vec4(1.0);
+            }
+
+            float chooseBadGather(bool take, vec2 uv, float depth) {
+                return take
+                    ? textureGatherCompare(shadowMap, uv, depth)
+                    : textureGatherCompare(shadowMap, uv, depth);
+            }
+
+            void acceptCompareArray(float values[2]) {
+            }
+
+            void acceptBadCompareArray(int values[2]) {
+            }
+
+            void acceptGatherArray(vec4 values[2]) {
+            }
+
+            void acceptBadGatherArray(float values[2]) {
+            }
+
+            void main() {
+                bool take = true;
+                vec2 uv = vec2(0.25, 0.5);
+                ivec2 offset = ivec2(1, 0);
+                float depth = 0.5;
+                float validCompareArray[2] = {
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                };
+                int invalidCompareArray[2] = {
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                };
+                vec4 validGatherArray[2] = {
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                };
+                float invalidGatherArray[2] = {
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                };
+                ShadowQueryResult constructed = ShadowQueryResult(
+                    textureCompare(shadowMap, uv, depth),
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                );
+                acceptCompareArray({
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptBadCompareArray({
+                    textureCompare(shadowMap, uv, depth),
+                    textureCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptGatherArray({
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                });
+                acceptBadGatherArray({
+                    textureGatherCompare(shadowMap, uv, depth),
+                    textureGatherCompareOffset(shadowMap, uv, depth, offset)
+                });
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    shadow_compare_diag = "/* unsupported Slang shadow compare: "
+    shadow_gather_diag = "/* unsupported Slang shadow gather compare: "
+    compare_int = (
+        f"{shadow_compare_diag}textureCompare returns float but target expects int */ 0"
+    )
+    compare_offset_int = (
+        f"{shadow_compare_diag}textureCompareOffset returns float but target expects "
+        "int */ 0"
+    )
+    gather_float = (
+        f"{shadow_gather_diag}textureGatherCompare returns float4 but target "
+        "expects float */ 0"
+    )
+    gather_offset_float = (
+        f"{shadow_gather_diag}textureGatherCompareOffset returns float4 but target "
+        "expects float */ 0"
+    )
+
+    assert "return (take ? shadowMap.SampleCmp(uv, depth) : 1.0);" in generated_code
+    assert f"return (take ? {compare_int} : {compare_int});" in generated_code
+    assert (
+        "return (take ? shadowMap.GatherCmp(uv, depth) : float4(1.0));"
+        in generated_code
+    )
+    assert f"return (take ? {gather_float} : {gather_float});" in generated_code
+    assert (
+        "float validCompareArray[2] = {shadowMap.SampleCmp(uv, depth), "
+        "shadowMap.SampleCmp(uv, depth, offset)};" in generated_code
+    )
+    assert (
+        f"int invalidCompareArray[2] = {{{compare_int}, {compare_offset_int}}};"
+        in generated_code
+    )
+    assert (
+        "float4 validGatherArray[2] = {shadowMap.GatherCmp(uv, depth), "
+        "shadowMap.GatherCmp(uv, depth, offset)};" in generated_code
+    )
+    assert (
+        f"float invalidGatherArray[2] = {{{gather_float}, {gather_offset_float}}};"
+        in generated_code
+    )
+    assert (
+        "ShadowQueryResult constructed = ShadowQueryResult("
+        "shadowMap.SampleCmp(uv, depth), shadowMap.GatherCmp(uv, depth), "
+        f"{compare_offset_int}, {gather_offset_float});" in generated_code
+    )
+    assert (
+        "acceptCompareArray({shadowMap.SampleCmp(uv, depth), "
+        "shadowMap.SampleCmp(uv, depth, offset)});" in generated_code
+    )
+    assert (
+        f"acceptBadCompareArray({{{compare_int}, {compare_offset_int}}});"
+        in generated_code
+    )
+    assert (
+        "acceptGatherArray({shadowMap.GatherCmp(uv, depth), "
+        "shadowMap.GatherCmp(uv, depth, offset)});" in generated_code
+    )
+    assert (
+        f"acceptBadGatherArray({{{gather_float}, {gather_offset_float}}});"
+        in generated_code
+    )
+    assert generated_code.count(shadow_compare_diag) == 7
+    assert generated_code.count(shadow_gather_diag) == 7
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
 def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
     code = """
     shader Resources {

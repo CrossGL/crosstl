@@ -4760,6 +4760,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
 
     def image_resource_access(self, image_arg):
+        if isinstance(image_arg, FunctionCallNode):
+            callee_name = self.raw_function_call_name(image_arg)
+            return_source = self.query_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                image_arg,
+                "arguments",
+                getattr(image_arg, "args", []),
+            )
+            return self.query_return_source_image_access(return_source, raw_args)
+
         if isinstance(image_arg, ArrayAccessNode):
             array_node = getattr(
                 image_arg, "array", getattr(image_arg, "array_expr", None)
@@ -4784,6 +4796,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if not image_name:
             return None
         return self.image_resource_accesses.get(image_name)
+
+    def query_return_source_image_access(self, return_source, raw_args):
+        """Return storage-image access for a traceable returned resource."""
+        kind = return_source.get("kind")
+        if kind == "ternary":
+            true_access = self.query_return_source_image_access(
+                return_source["true_source"],
+                raw_args,
+            )
+            false_access = self.query_return_source_image_access(
+                return_source["false_source"],
+                raw_args,
+            )
+            if true_access is None or true_access != false_access:
+                return None
+            return true_access
+
+        if kind == "global":
+            return self.image_resource_access(return_source.get("name"))
+
+        if kind == "parameter":
+            index = return_source.get("index")
+            if index is None or index >= len(raw_args):
+                return None
+            return self.image_resource_access(raw_args[index])
+
+        return None
 
     def unsupported_image_access_call(self, func_name, image_type, reason):
         image_type = image_type or "unknown resource"

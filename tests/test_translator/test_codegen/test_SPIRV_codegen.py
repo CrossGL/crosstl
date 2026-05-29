@@ -8587,6 +8587,84 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_byte_address_buffers_emit_vector_load_store_accesses(self, tmp_path):
+        source_code = """
+        shader ByteAddressVectors {
+            ByteAddressBuffer rawData @set(2) @binding(5);
+            RWByteAddressBuffer outData @binding(6);
+
+            compute {
+                void main() {
+                    uvec2 pair = rawData.Load2(0u);
+                    uvec3 triple = outData.Load3(8u);
+                    uvec4 quad = rawData.Load4(20u);
+                    outData.Store2(40u, pair);
+                    outData.Store3(48u, triple);
+                    outData.Store4(64u, quad);
+                    uvec2 helperPair = buffer_load2(rawData, 80u);
+                    buffer_store2(outData, 88u, helperPair);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0\b", spv_code)
+        assert uint_type is not None
+        uvec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 2\b",
+            spv_code,
+        )
+        uvec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 3\b",
+            spv_code,
+        )
+        uvec4_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(uint_type.group(1))} 4\b",
+            spv_code,
+        )
+        assert uvec2_type is not None
+        assert uvec3_type is not None
+        assert uvec4_type is not None
+
+        assert "OpUDiv" in spv_code
+        assert "OpIAdd" in spv_code
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec2_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec3_type.group(1))} "
+            r"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeConstruct {re.escape(uvec4_type.group(1))} "
+            r"%\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpCompositeExtract {re.escape(uint_type.group(1))} %\d+ 3",
+            spv_code,
+        )
+        assert spv_code.count("OpLoad") >= 11
+        assert spv_code.count("OpStore") >= 9
+        assert "Load2" not in spv_code
+        assert "Load3" not in spv_code
+        assert "Load4" not in spv_code
+        assert "Store2" not in spv_code
+        assert "Store3" not in spv_code
+        assert "Store4" not in spv_code
+        assert "buffer_load2" not in spv_code
+        assert "buffer_store2" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_byte_address_buffer_methods_emit_invalid_operand_diagnostics(
         self, tmp_path
     ):
@@ -8624,6 +8702,58 @@ class TestVulkanSPIRVCodeGen:
         assert (
             "WARNING: RWByteAddressBuffer.Store requires a writable buffer" in spv_code
         )
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_byte_address_buffer_vector_methods_emit_invalid_operand_diagnostics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader ByteAddressVectors {
+            ByteAddressBuffer rawData;
+            RWByteAddressBuffer outData;
+
+            compute {
+                void main() {
+                    uvec2 missingOffset = rawData.Load2();
+                    uvec3 extraOffset = rawData.Load3(0u, 4u);
+                    uvec4 floatOffset = rawData.Load4(0.5);
+                    outData.Store2(4u);
+                    outData.Store3(8u, uvec2(1u, 2u));
+                    outData.Store4(12u, vec4(1.0));
+                    rawData.Store2(16u, uvec2(1u, 2u));
+                    uvec2 helperMissing = buffer_load2(rawData);
+                    buffer_store3(outData, 20u, uvec2(1u, 2u));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: ByteAddressBuffer.Load2 requires a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer.Load3 accepts only a byte offset" in spv_code
+        assert "WARNING: ByteAddressBuffer byte offset must be an integer" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store2 requires byte offset and value operands"
+            in spv_code
+        )
+        assert "WARNING: RWByteAddressBuffer.Store3 requires a uvec3 value" in spv_code
+        assert (
+            "WARNING: RWByteAddressBuffer.Store4 requires an integer vector value"
+            in spv_code
+        )
+        assert (
+            "WARNING: RWByteAddressBuffer.Store2 requires a writable buffer" in spv_code
+        )
+        assert (
+            "WARNING: buffer_load2 requires buffer and byte offset operands" in spv_code
+        )
+        assert "WARNING: buffer_store3 requires a uvec3 value" in spv_code
         assert "Unknown type ByteAddressBuffer" not in spv_code
         assert "Unknown type RWByteAddressBuffer" not in spv_code
         assert "Unsupported callee expression" not in spv_code

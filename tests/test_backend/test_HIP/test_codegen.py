@@ -8684,6 +8684,77 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_module_library_handle_outputs_clear_stale_metadata(self):
+        """Test raw module/library handle outputs clear prior query metadata."""
+        code = """
+        void queryModuleHandles(
+            hipModule_t module,
+            const void* symbol,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            void** ptrs
+        ) {
+            void* rawHandle = 0;
+            size_t rangeSize = 0;
+            hipMemGetAddressRange(&rawHandle, &rangeSize, devicePtr);
+            hipModuleGetFunction(
+                (void**)&rawHandle,
+                module,
+                "module_kernel"
+            );
+            ptrs[0] = rawHandle;
+            hipMemGetAddressRange(&rawHandle, &rangeSize, devicePtr);
+            hipGetFuncBySymbol((void**)&rawHandle, symbol);
+            ptrs[1] = rawHandle;
+            hipMemGetAddressRange(&rawHandle, &rangeSize, devicePtr);
+            hipLibraryGetKernel(
+                (void**)&rawHandle,
+                library,
+                "library_kernel"
+            );
+            ptrs[2] = rawHandle;
+            hipMemGetAddressRange(&rawHandle, &rangeSize, devicePtr);
+            hipKernelGetFunction((void**)&rawHandle, kernel);
+            ptrs[3] = rawHandle;
+            hipMemGetAddressRange(&rawHandle, &rangeSize, devicePtr);
+            hipKernelGetLibrary((void**)&rawHandle, kernel);
+            ptrs[4] = rawHandle;
+            hipError_t err =
+                hipModuleGetFunction(
+                    (void**)&rawHandle,
+                    module,
+                    "status_kernel"
+                );
+            ptrs[5] = rawHandle;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP module get function: output: rawHandle, module: module, "
+            'name: "module_kernel"'
+        ) in result
+        assert (
+            "// HIP get function by symbol: output: rawHandle, symbol: symbol" in result
+        )
+        assert (
+            "// HIP library get kernel: output: rawHandle, library: library, "
+            'name: "library_kernel"'
+        ) in result
+        assert "// HIP kernel get function: output: rawHandle, kernel: kernel" in result
+        assert "// HIP kernel get library: output: rawHandle, kernel: kernel" in result
+        assert "var err: hipError_t = hipSuccess;" in result
+        for index in range(6):
+            assert f"ptrs[{index}] = rawHandle;" in result
+        assert "ptrs[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """
