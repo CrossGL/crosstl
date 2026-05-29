@@ -67,6 +67,67 @@ shader ExternalValidatorWaveQuad {
 """
 
 
+CROSSGL_TEXTURE_RESOURCE_FRAGMENT_SHADER = """
+shader ExternalValidatorTextureResources {
+    sampler2D colorMap @register(t0);
+    sampler linearSampler @register(s0);
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec2 ddxValue @ TEXCOORD1;
+        vec2 ddyValue @ TEXCOORD2;
+    };
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            int lod = 0;
+            ivec2 pixel = ivec2(input.uv * 16.0);
+            ivec2 offset = ivec2(1, -1);
+            int component = int(input.uv.x);
+            vec4 base = texture(colorMap, linearSampler, input.uv);
+            vec4 biased = texture(colorMap, linearSampler, input.uv, 0.25);
+            vec4 level = textureLod(colorMap, linearSampler, input.uv, lod);
+            vec4 grad = textureGrad(
+                colorMap,
+                linearSampler,
+                input.uv,
+                input.ddxValue,
+                input.ddyValue
+            );
+            vec4 offsetSample = textureOffset(
+                colorMap,
+                linearSampler,
+                input.uv,
+                offset
+            );
+            vec4 fetched = texelFetch(colorMap, pixel, lod);
+            vec4 fetchedOffset = texelFetchOffset(colorMap, pixel, lod, offset);
+            vec4 gathered = textureGather(
+                colorMap,
+                linearSampler,
+                input.uv,
+                component
+            );
+            vec4 gatheredOffset = textureGatherOffset(
+                colorMap,
+                linearSampler,
+                input.uv,
+                offset,
+                1
+            );
+            ivec2 size = textureSize(colorMap, lod);
+            int levels = textureQueryLevels(colorMap);
+            vec2 lodInfo = textureQueryLod(colorMap, linearSampler, input.uv);
+            float scalar = float(size.x + size.y + levels) + lodInfo.x + lodInfo.y;
+            return base + biased + level + grad + offsetSample + fetched
+                + fetchedOffset + gathered + gatheredOffset
+                + vec4(scalar * 0.0001);
+        }
+    }
+}
+"""
+
+
 CROSSGL_TYPED_BUFFER_ATOMICS_COMPUTE_SHADER = """
 shader ExternalValidatorTypedBufferAtomics {
     struct Counter {
@@ -1396,6 +1457,61 @@ def test_generated_hlsl_wave_quad_intrinsics_compile_with_dxc(tmp_path):
             "cs_6_5",
             "-E",
             "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_texture_resource_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "texture_resources.hlsl"
+    output_path = tmp_path / "texture_resources.dxil"
+
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CROSSGL_TEXTURE_RESOURCE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    for snippet in [
+        "Texture2D colorMap : register(t0);",
+        "SamplerState linearSampler : register(s0);",
+        "int textureQueryLevels(Texture2D tex)",
+        "int2 textureSize(Texture2D tex, int lod)",
+        "colorMap.Sample(linearSampler, input.uv)",
+        "colorMap.SampleBias(linearSampler, input.uv, 0.25)",
+        "colorMap.SampleLevel(linearSampler, input.uv, lod)",
+        "colorMap.SampleGrad(linearSampler, input.uv, input.ddxValue, input.ddyValue)",
+        "colorMap.Sample(linearSampler, input.uv, offset)",
+        "colorMap.Load(int3(pixel, lod))",
+        "colorMap.Load(int3((pixel + offset), lod))",
+        "component == 0 ? colorMap.GatherRed(linearSampler, input.uv)",
+        "colorMap.GatherGreen(linearSampler, input.uv, offset)",
+        "colorMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uv)",
+        "colorMap.CalculateLevelOfDetail(linearSampler, input.uv)",
+    ]:
+        assert snippet in code
+    for unsupported in [
+        "textureLod(",
+        "textureGrad(",
+        "textureOffset(",
+        "textureGather(",
+        "textureGatherOffset(",
+        "texelFetch(",
+        "texelFetchOffset(",
+        "textureQueryLod(",
+    ]:
+        assert unsupported not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
             str(shader_path),
             "-Fo",
             str(output_path),
