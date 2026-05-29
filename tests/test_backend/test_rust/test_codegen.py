@@ -4252,6 +4252,101 @@ def test_gpu_resource_method_calls_convert_on_explicit_static_method_generic_ret
     assert ".buffer_load" not in result
 
 
+def test_gpu_resource_method_calls_convert_on_branch_expression_receivers():
+    code = """
+    type ColorTexture = Texture2D<f32>;
+    type Values = RwBuffer<i32>;
+
+    fn branch_expression_resource_methods(
+        flag: bool,
+        mode: u32,
+        left: ColorTexture,
+        right: ColorTexture,
+        values_left: Values,
+        values_right: Values,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+        index: u32,
+    ) -> Vec4<f32> {
+        let selected = if flag { left } else { right };
+        let local_base = selected.sample_sampler(sampler_state, uv);
+        let direct_base = (if flag { left } else { right }).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let block_selected = { if flag { left } else { right } };
+        let block_base = block_selected.sample_sampler(sampler_state, uv);
+        let direct_block_base = ({ if flag { left } else { right } }).sample_sampler(
+            sampler_state,
+            uv,
+        );
+        let matched = match mode {
+            0 => { left },
+            _ => { right },
+        };
+        let match_base = matched.sample_sampler(sampler_state, uv);
+        let direct_match_base = (match mode {
+            0 => left,
+            _ => right,
+        }).sample_sampler(sampler_state, uv);
+        let value = (if flag { values_left } else { values_right }).buffer_load(index);
+        let selected_values = match mode {
+            0 => values_left,
+            _ => values_right,
+        };
+        selected_values.buffer_store(index, value);
+        return local_base + direct_base + block_base + direct_block_base
+            + match_base + direct_match_base
+            + Vec4::<f32>::new(value as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let local_base = texture(selected, sampler_state, uv);" in result
+    assert (
+        "let direct_base = texture((flag ? left : right), sampler_state, uv);" in result
+    )
+    assert "let block_base = texture(block_selected, sampler_state, uv);" in result
+    assert (
+        "let direct_block_base = texture((flag ? left : right), sampler_state, uv);"
+        in result
+    )
+    assert "let match_base = texture(matched, sampler_state, uv);" in result
+    assert (
+        "let direct_match_base = texture(_rust_expr_value_0, sampler_state, uv);"
+        in result
+    )
+    assert (
+        "let value = buffer_load((flag ? values_left : values_right), index);" in result
+    )
+    assert "buffer_store(selected_values, index, value);" in result
+    assert ".sample_sampler" not in result
+    assert ".buffer_load" not in result
+    assert ".buffer_store" not in result
+
+
+def test_mixed_branch_resource_method_receivers_stay_unlowered():
+    code = """
+    fn mixed_branch_resource_methods(
+        flag: bool,
+        tex: Texture2D<f32>,
+        values: RwBuffer<i32>,
+        sampler_state: Sampler,
+        uv: Vec2<f32>,
+    ) -> Vec4<f32> {
+        let receiver = if flag { tex } else { values };
+        return receiver.sample_sampler(sampler_state, uv);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert "let receiver = (flag ? tex : values);" in result
+    assert "return receiver.sample_sampler(sampler_state, uv);" in result
+    assert "texture(receiver" not in result
+
+
 def test_unresolved_method_generic_impl_returns_stay_unlowered():
     code = """
     struct Provider {

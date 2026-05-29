@@ -888,11 +888,82 @@ class RustToCrossGLConverter:
             return expression.struct_name
         if isinstance(expression, FunctionCallNode):
             return self.infer_function_call_return_type(expression)
+        if isinstance(expression, TernaryOpNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_value_type(expression.true_expr),
+                    self.infer_value_type(expression.false_expr),
+                ]
+            )
+        if isinstance(expression, IfNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_branch_body_value_type(expression.if_body),
+                    self.infer_branch_body_value_type(expression.else_body),
+                ]
+            )
+        if isinstance(expression, MatchNode):
+            return self.common_inferred_value_type(
+                [
+                    self.infer_branch_body_value_type(arm.body)
+                    for arm in getattr(expression, "arms", [])
+                ]
+            )
+        if self.is_block_expression_node(expression):
+            return self.infer_block_expression_value_type(expression)
         if isinstance(
             expression, (str, VariableNode, MemberAccessNode, ArrayAccessNode)
         ):
             return self.lookup_value_type(self.generate_expression(expression))
         return None
+
+    def infer_branch_body_value_type(self, body):
+        if body is None:
+            return None
+        if isinstance(body, ReturnNode):
+            return self.infer_value_type(body.value)
+        if isinstance(body, list):
+            if not body:
+                return None
+            return self.infer_branch_body_value_type(body[-1])
+        return self.infer_value_type(body)
+
+    def infer_block_expression_value_type(self, expression):
+        block_node = self.get_block_expression_node(expression)
+        if block_node is None:
+            return None
+
+        block_expression = self.get_block_expression(block_node)
+        if block_expression is not None:
+            return self.infer_value_type(block_expression)
+
+        statements = getattr(block_node, "statements", []) or []
+        if not statements:
+            return None
+        return self.infer_branch_body_value_type(statements[-1])
+
+    def common_inferred_value_type(self, type_names):
+        if not type_names or any(not type_name for type_name in type_names):
+            return None
+
+        first_type = self.normalize_receiver_type(type_names[0])
+        if all(
+            self.normalize_receiver_type(type_name) == first_type
+            for type_name in type_names
+        ):
+            return first_type
+
+        first_resource_type = self.map_resource_receiver_type(first_type)
+        if not isinstance(
+            first_resource_type, str
+        ) or not first_resource_type.startswith(self.RESOURCE_TYPE_PREFIXES):
+            return None
+
+        for type_name in type_names[1:]:
+            resource_type = self.map_resource_receiver_type(type_name)
+            if resource_type != first_resource_type:
+                return None
+        return first_type
 
     def infer_function_call_return_type(self, expression):
         if isinstance(expression.name, MemberAccessNode):
@@ -2310,6 +2381,9 @@ class RustToCrossGLConverter:
     def generate_block_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -2346,6 +2420,9 @@ class RustToCrossGLConverter:
     def generate_if_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -2382,6 +2459,9 @@ class RustToCrossGLConverter:
     def generate_match_expression_let(self, stmt, indent, loop_contexts=None):
         indent_str = "    " * indent
         code = ""
+        inferred_type = stmt.vtype or self.infer_value_type(stmt.value)
+        if inferred_type:
+            self.add_value_type(stmt.name, inferred_type)
 
         if stmt.vtype:
             code += (
@@ -3270,6 +3350,7 @@ class RustToCrossGLConverter:
                 obj,
                 args,
                 expression.args,
+                self.infer_value_type(expression.name.object),
             )
             if method_call is not None:
                 return object_code + args_code, method_call
@@ -3306,12 +3387,24 @@ class RustToCrossGLConverter:
         )
         return name_code + args_code, f"{name}({', '.join(args)})"
 
-    def format_method_call_parts(self, method_name, obj, args, arg_nodes):
+    def format_method_call_parts(
+        self,
+        method_name,
+        obj,
+        args,
+        arg_nodes,
+        receiver_type=None,
+    ):
         impl_call = self.format_user_impl_method_call(method_name, obj, args)
         if impl_call is not None:
             return impl_call
 
-        resource_call = self.format_resource_method_call(method_name, obj, args)
+        resource_call = self.format_resource_method_call(
+            method_name,
+            obj,
+            args,
+            receiver_type,
+        )
         if resource_call is not None:
             return resource_call
 
@@ -3370,10 +3463,10 @@ class RustToCrossGLConverter:
 
         return None
 
-    def format_resource_method_call(self, method_name, obj, args):
+    def format_resource_method_call(self, method_name, obj, args, receiver_type=None):
         if not self.is_resource_method_name(method_name):
             return None
-        if not self.is_resource_method_receiver(obj):
+        if not self.is_resource_method_receiver(obj, receiver_type):
             return None
 
         mapped = self.function_map.get(method_name)
@@ -3387,8 +3480,9 @@ class RustToCrossGLConverter:
             self.RESOURCE_METHOD_PREFIXES
         )
 
-    def is_resource_method_receiver(self, obj):
-        receiver_type = self.lookup_value_type(obj)
+    def is_resource_method_receiver(self, obj, receiver_type=None):
+        if receiver_type is None:
+            receiver_type = self.lookup_value_type(obj)
         if receiver_type is None:
             return False
 
@@ -7140,6 +7234,7 @@ class RustToCrossGLConverter:
                 obj,
                 args,
                 expression.args,
+                self.infer_value_type(expression.name.object),
             )
             if method_call is not None:
                 return obj_code + args_code, method_call
@@ -8061,6 +8156,7 @@ class RustToCrossGLConverter:
 
         method_name = expr.name.member
         obj = self.generate_expression(expr.name.object)
+        receiver_type = self.infer_value_type(expr.name.object)
 
         if (
             method_name in {"map", "filter", "for_each", "any", "all"}
@@ -8093,7 +8189,13 @@ class RustToCrossGLConverter:
             )
 
         args = [self.generate_expression(arg) for arg in expr.args]
-        return self.format_method_call_parts(method_name, obj, args, expr.args)
+        return self.format_method_call_parts(
+            method_name,
+            obj,
+            args,
+            expr.args,
+            receiver_type,
+        )
 
     def format_path_constructor_call(self, function_name, args):
         arg_values = [self.generate_expression(arg) for arg in args]
