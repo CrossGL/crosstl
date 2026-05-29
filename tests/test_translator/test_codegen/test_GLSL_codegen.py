@@ -332,6 +332,123 @@ def test_glsl_structured_buffer_access_rejects_invalid_operations(shader, match)
         GLSLCodeGen().generate(ast)
 
 
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader InvalidStorageImageAccessOperand {
+                image2D image @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'image': access\\(foo\\)",
+        ),
+        (
+            """
+            shader MissingStorageImageAccessOperand {
+                image2D image @access;
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'image': "
+            "access\\(<missing>\\)",
+        ),
+        (
+            """
+            shader InvalidStructuredBufferAccessOperand {
+                RWStructuredBuffer<int> values @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'values': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidBufferBlockAccessOperand {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @access(foo);
+
+                compute {
+                    void main() {
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'data': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidSampledTextureAccessOperand {
+                sampler2D tex @access(foo);
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return texture(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'tex': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidSamplerStateAccessOperand {
+                sampler samp @access(foo);
+                sampler2D tex;
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return texture(tex, samp, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'samp': access\\(foo\\)",
+        ),
+        (
+            """
+            shader InvalidTextureParameterAccessOperand {
+                sampler2D tex;
+
+                vec4 sampleTex(sampler2D localTex @access(foo), vec2 uv) {
+                    return texture(localTex, uv);
+                }
+
+                fragment {
+                    vec4 main(vec2 uv) @gl_FragColor {
+                        return sampleTex(tex, uv);
+                    }
+                }
+            }
+            """,
+            "Invalid OpenGL resource access metadata for 'localTex': "
+            "access\\(foo\\)",
+        ),
+    ],
+)
+def test_glsl_resource_access_rejects_invalid_metadata_operands(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
 def test_glsl_structured_buffer_access_rejects_incompatible_helper_calls():
     shader = """
     shader StructuredBufferAccessInvalidHelper {

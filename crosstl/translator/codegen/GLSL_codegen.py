@@ -3973,6 +3973,7 @@ class GLSLCodeGen:
             else:
                 raw_param_type = "float"
             self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
+            self.validate_resource_access_metadata_operands(p)
             self.record_structured_buffer_access_metadata(
                 p.name, raw_param_type, p, parameter=True
             )
@@ -10928,6 +10929,7 @@ class GLSLCodeGen:
         return vtype, None, "", resource_count
 
     def resource_declaration_identity(self, node):
+        self.validate_resource_access_metadata_operands(node)
         vtype, _, array_suffix, resource_count = self.resource_declaration_shape(node)
         if self.is_glsl_buffer_block_variable(node, vtype):
             return (
@@ -11607,6 +11609,15 @@ class GLSLCodeGen:
             f"'{node_name}': {attr_name} {source} {requirement}"
         )
 
+    def invalid_resource_access_message(self, node, source):
+        node_name = self.resource_node_name(node, "<unnamed>")
+        source = source if source is not None else "<missing>"
+        return (
+            "Invalid OpenGL resource access metadata for "
+            f"'{node_name}': access({source}) must be readonly, writeonly, "
+            "or readwrite"
+        )
+
     def explicit_resource_binding_choices(self, node):
         choices = []
         if not hasattr(node, "attributes"):
@@ -11856,18 +11867,27 @@ class GLSLCodeGen:
             attr_name = str(attr_name).lower()
             if attr_name == "access":
                 arguments = getattr(attr, "arguments", []) or []
-                if not arguments:
-                    continue
+                source = (
+                    self.attribute_value_to_string(arguments[0])
+                    if len(arguments) == 1
+                    else None
+                )
+                if len(arguments) != 1:
+                    raise ValueError(self.invalid_resource_access_message(node, source))
                 source = self.attribute_value_to_string(arguments[0])
                 access = normalized_image_access(source)
-                if access is not None:
-                    choices.append((f"access({source})", access))
+                if access is None:
+                    raise ValueError(self.invalid_resource_access_message(node, source))
+                choices.append((f"access({source})", access))
                 continue
 
             access = normalized_image_access(attr_name)
             if access is not None:
                 choices.append((attr_name, access))
         return choices
+
+    def validate_resource_access_metadata_operands(self, node):
+        self.resource_access_metadata_choices(node)
 
     def validate_resource_access_metadata_consistency(self, node, choices):
         if not choices:
