@@ -5581,6 +5581,63 @@ def test_metal_trace_ray_forwards_helper_parameter_payload():
     ) in generated
 
 
+def test_metal_trace_ray_forwards_helper_local_payload_alias():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+        intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+        void shoot(Payload payload, vec3 origin, vec3 direction) {
+            Payload& payloadAlias = payload;
+            payloadAlias.color = vec3(1.0, 0.0, 0.0);
+            TraceRay(
+                topLevelAS,
+                0,
+                0xff,
+                0,
+                1,
+                0,
+                origin,
+                0.001,
+                direction,
+                1000.0,
+                payloadAlias
+            );
+        }
+
+        ray_generation {
+            void main() {
+                Payload payload;
+                payload.color = vec3(0.0);
+                shoot(payload, vec3(0.0), vec3(0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "void shoot(Payload payload, float3 origin, float3 direction, "
+        "instance_acceleration_structure topLevelAS, "
+        "intersection_function_table<instancing> intersectionFunctions)"
+    ) in generated
+    assert "thread Payload& payloadAlias = payload;" in generated
+    assert "payloadAlias.color = float3(1.0, 0.0, 0.0);" in generated
+    assert (
+        "__crossgl_intersector_1.intersect("
+        "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions, payloadAlias);"
+    ) in generated
+    assert (
+        "shoot(payload, float3(0.0), float3(0.0, 0.0, 1.0), "
+        "topLevelAS, intersectionFunctions);"
+    ) in generated
+    assert "unsupported Metal ray tracing intrinsic: TraceRay payload" not in generated
+
+
 def test_metal_trace_ray_payload_without_intersection_table_emits_diagnostic():
     code = """
     shader rt {

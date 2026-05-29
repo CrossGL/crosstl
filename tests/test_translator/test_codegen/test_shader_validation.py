@@ -4115,6 +4115,44 @@ shader MetalRayTracingPayloadTraceValidation {
 """
 
 
+METAL_RAY_TRACING_HELPER_PAYLOAD_ALIAS_SHADER = """
+shader MetalRayTracingHelperPayloadAliasValidation {
+    struct Payload {
+        vec3 color;
+    };
+
+    accelerationStructureEXT topLevelAS @binding(0);
+    intersection_function_table<instancing> intersectionFunctions @binding(1);
+
+    void shoot(Payload payload, vec3 origin, vec3 direction) {
+        Payload& payloadAlias = payload;
+        payloadAlias.color = vec3(1.0, 0.0, 0.0);
+        TraceRay(
+            topLevelAS,
+            0,
+            0xff,
+            0,
+            1,
+            0,
+            origin,
+            0.001,
+            direction,
+            1000.0,
+            payloadAlias
+        );
+    }
+
+    ray_generation {
+        void main() {
+            Payload payload;
+            payload.color = vec3(0.0);
+            shoot(payload, vec3(0.0), vec3(0.0, 0.0, 1.0));
+        }
+    }
+}
+"""
+
+
 METAL_RAY_TRACING_INVALID_ACCELERATION_STRUCTURE_SHADER = """
 shader MetalRayTracingInvalidAccelerationStructureValidation {
     struct Payload {
@@ -8082,6 +8120,39 @@ def test_generated_metal_payload_trace_compiles_with_metal3(
     assert (
         "intersect(" "__crossgl_ray_0, topLevelAS, 255, intersectionFunctions, payload)"
     ) in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [
+            xcrun,
+            "-sdk",
+            "macosx",
+            "metal",
+            "-std=metal3.0",
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ]
+    )
+
+
+def test_generated_metal_helper_payload_alias_trace_compiles_with_metal3(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "ray_tracing_helper_payload_alias.metal"
+    output = tmp_path / "ray_tracing_helper_payload_alias.air"
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(METAL_RAY_TRACING_HELPER_PAYLOAD_ALIAS_SHADER)
+    )
+    assert "thread Payload& payloadAlias = payload;" in code
+    assert "payloadAlias.color = float3(1.0, 0.0, 0.0);" in code
+    assert "intersectionFunctions, payloadAlias)" in code
+    assert "unsupported Metal ray tracing intrinsic: TraceRay payload" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

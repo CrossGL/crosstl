@@ -3510,6 +3510,311 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_allocation_array_outputs_clear_stale_metadata(self):
+        """Test HIP allocation outputs clear stale array/member metadata."""
+        code = """
+        struct AllocOutputs {
+            void* ptr;
+            void* hostPtr;
+            hipDeviceptr_t driverPtr;
+            hipPitchedPtr pitched;
+            size_t pitch;
+            hipArray_t array;
+            hipArray_t levelArray;
+            hipMipmappedArray_t mipmap;
+        };
+
+        void queryAllocationOutputTargets(
+            size_t bytes,
+            size_t width,
+            hipStream_t stream,
+            hipMemPool_t pool,
+            hipExtent extent,
+            hipChannelFormatDesc* desc,
+            HIP_ARRAY_DESCRIPTOR* arrayDesc,
+            HIP_ARRAY3D_DESCRIPTOR* array3DDesc,
+            void* devicePtr,
+            void** ptrs,
+            hipDeviceptr_t* driverPtrs,
+            hipPitchedPtr* pitchedPtrs,
+            size_t* pitches,
+            hipArray_t* arrays,
+            hipMipmappedArray_t* mipmaps,
+            AllocOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMalloc(&ptrs[0], bytes);
+            ptrs[8] = ptrs[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocManaged(&ptrs[1], bytes);
+            ptrs[9] = ptrs[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipExtMallocWithFlags(&ptrs[2], bytes, hipDeviceMallocDefault);
+            ptrs[10] = ptrs[2];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocAsync(&ptrs[3], bytes, stream);
+            ptrs[11] = ptrs[3];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocFromPoolAsync(&ptrs[4], bytes, pool, stream);
+            ptrs[12] = ptrs[4];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostMalloc(&ptrs[5], bytes, hipHostMallocMapped);
+            ptrs[13] = ptrs[5];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostAlloc(&ptrs[6], bytes, hipHostMallocDefault);
+            ptrs[14] = ptrs[6];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&pitches, &staleSize, devicePtr);
+            hipMallocPitch(&ptrs[7], &pitches[0], width, 4);
+            ptrs[15] = ptrs[7];
+            values[0] = pitches[0];
+
+            hipMemGetAddressRange((void**)&pitchedPtrs, &staleSize, devicePtr);
+            hipMalloc3D(&pitchedPtrs[0], extent);
+            values[1] = pitchedPtrs[0].pitch;
+
+            hipMemGetAddressRange((void**)&driverPtrs, &staleSize, devicePtr);
+            hipMemAlloc(&driverPtrs[0], bytes);
+            driverPtrs[8] = driverPtrs[0];
+
+            hipMemGetAddressRange((void**)&driverPtrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&pitches, &staleSize, devicePtr);
+            hipMemAllocPitch(&driverPtrs[1], &pitches[1], width, 4, 4);
+            driverPtrs[9] = driverPtrs[1];
+            values[2] = pitches[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemAllocHost(&ptrs[16], bytes);
+            ptrs[17] = ptrs[16];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemHostAlloc(&ptrs[18], bytes, hipHostMallocDefault);
+            ptrs[19] = ptrs[18];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMallocArray(&arrays[0], desc, width, 4, hipArrayDefault);
+            arrays[8] = arrays[0];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMalloc3DArray(&arrays[1], desc, extent, hipArrayLayered);
+            arrays[9] = arrays[1];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipArrayCreate(&arrays[2], arrayDesc);
+            arrays[10] = arrays[2];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipArray3DCreate(&arrays[3], array3DDesc);
+            arrays[11] = arrays[3];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipMallocMipmappedArray(
+                &mipmaps[0],
+                desc,
+                extent,
+                4,
+                hipArrayDefault
+            );
+            mipmaps[4] = mipmaps[0];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipMipmappedArrayCreate(&mipmaps[1], array3DDesc, 3);
+            mipmaps[5] = mipmaps[1];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipGetMipmappedArrayLevel(&arrays[4], mipmaps[0], 1);
+            arrays[12] = arrays[4];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMipmappedArrayGetLevel(&arrays[5], mipmaps[1], 2);
+            arrays[13] = arrays[5];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMalloc(&holder->ptr, bytes);
+            ptrs[20] = holder->ptr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocPitch(&holder->hostPtr, &holder->pitch, width, 4);
+            ptrs[21] = holder->hostPtr;
+            values[3] = holder->pitch;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemAlloc(&holder->driverPtr, bytes);
+            driverPtrs[10] = holder->driverPtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMalloc3D(&holder->pitched, extent);
+            values[4] = holder->pitched.pitch;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocArray(&holder->array, desc, width, 4, hipArrayDefault);
+            arrays[14] = holder->array;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocMipmappedArray(
+                &holder->mipmap,
+                desc,
+                extent,
+                2,
+                hipArrayDefault
+            );
+            mipmaps[6] = holder->mipmap;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetMipmappedArrayLevel(&holder->levelArray, holder->mipmap, 0);
+            arrays[15] = holder->levelArray;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP memory allocate: ptrs[0], bytes: bytes" in result
+        assert "// HIP memory allocate: ptrs[1], bytes: bytes" in result
+        assert (
+            "// HIP extended memory allocate: ptrs[2], bytes: bytes, "
+            "flags: hipDeviceMallocDefault"
+        ) in result
+        assert (
+            "// HIP async memory allocate: ptrs[3], bytes: bytes, stream: stream"
+            in result
+        )
+        assert (
+            "// HIP async memory allocate from pool: ptrs[4], bytes: bytes, "
+            "pool: pool, stream: stream"
+        ) in result
+        assert (
+            "// HIP host memory allocate: ptrs[5], bytes: bytes, "
+            "flags: hipHostMallocMapped"
+        ) in result
+        assert (
+            "// HIP host memory allocate: ptrs[6], bytes: bytes, "
+            "flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            "// HIP pitched memory allocate: ptrs[7], pitch: pitches[0], "
+            "width: width, height: 4"
+        ) in result
+        assert "// HIP 3D memory allocate: pitchedPtrs[0], extent: extent" in result
+        assert (
+            "// HIP driver memory allocate: output: driverPtrs[0], bytes: bytes"
+            in result
+        )
+        assert (
+            "// HIP driver pitched memory allocate: output: driverPtrs[1], "
+            "pitch output: pitches[1], width: width, height: 4, element bytes: 4"
+        ) in result
+        assert (
+            "// HIP driver host memory allocate: output: ptrs[16], bytes: bytes"
+            in result
+        )
+        assert (
+            "// HIP driver host memory allocate: output: ptrs[18], bytes: bytes, "
+            "flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            "// HIP array allocate: arrays[0], desc: desc, width: width, "
+            "height: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP 3D array allocate: arrays[1], desc: desc, extent: extent, "
+            "flags: hipArrayLayered"
+        ) in result
+        assert "// HIP array create: output: arrays[2], descriptor: arrayDesc" in result
+        assert (
+            "// HIP 3D array create: output: arrays[3], descriptor: array3DDesc"
+            in result
+        )
+        assert (
+            "// HIP mipmapped array allocate: output: mipmaps[0], desc: desc, "
+            "extent: extent, levels: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array create: output: mipmaps[1], "
+            "descriptor: array3DDesc, levels: 3"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: arrays[4], "
+            "mipmapped array: mipmaps[0], level: 1"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: arrays[5], "
+            "mipmapped array: mipmaps[1], level: 2"
+        ) in result
+        assert "// HIP memory allocate: holder->ptr, bytes: bytes" in result
+        assert (
+            "// HIP pitched memory allocate: holder->hostPtr, "
+            "pitch: holder->pitch, width: width, height: 4"
+        ) in result
+        assert (
+            "// HIP driver memory allocate: output: holder->driverPtr, bytes: bytes"
+            in result
+        )
+        assert "// HIP 3D memory allocate: holder->pitched, extent: extent" in result
+        assert (
+            "// HIP array allocate: holder->array, desc: desc, width: width, "
+            "height: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array allocate: output: holder->mipmap, desc: desc, "
+            "extent: extent, levels: 2, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: holder->levelArray, "
+            "mipmapped array: holder->mipmap, level: 0"
+        ) in result
+
+        for snippet in [
+            "ptrs[8] = ptrs[0];",
+            "ptrs[9] = ptrs[1];",
+            "ptrs[10] = ptrs[2];",
+            "ptrs[11] = ptrs[3];",
+            "ptrs[12] = ptrs[4];",
+            "ptrs[13] = ptrs[5];",
+            "ptrs[14] = ptrs[6];",
+            "ptrs[15] = ptrs[7];",
+            "values[0] = pitches[0];",
+            "values[1] = pitchedPtrs[0].pitch;",
+            "driverPtrs[8] = driverPtrs[0];",
+            "driverPtrs[9] = driverPtrs[1];",
+            "values[2] = pitches[1];",
+            "ptrs[17] = ptrs[16];",
+            "ptrs[19] = ptrs[18];",
+            "arrays[8] = arrays[0];",
+            "arrays[9] = arrays[1];",
+            "arrays[10] = arrays[2];",
+            "arrays[11] = arrays[3];",
+            "mipmaps[4] = mipmaps[0];",
+            "mipmaps[5] = mipmaps[1];",
+            "arrays[12] = arrays[4];",
+            "arrays[13] = arrays[5];",
+            "ptrs[20] = holder->ptr;",
+            "ptrs[21] = holder->hostPtr;",
+            "values[3] = holder->pitch;",
+            "driverPtrs[10] = holder->driverPtr;",
+            "values[4] = holder->pitched.pitch;",
+            "arrays[14] = holder->array;",
+            "mipmaps[6] = holder->mipmap;",
+            "arrays[15] = holder->levelArray;",
+        ]:
+            assert snippet in result
+
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_copy_memset_symbol_expression_contexts_emit_status(self):
         """Test HIP copy/memset/symbol expressions emit status metadata."""
         code = """

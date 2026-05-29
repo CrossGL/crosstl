@@ -742,52 +742,52 @@ class HipToCrossGLConverter:
 
         if name in {"hipMalloc", "hipMallocManaged"}:
             if len(node.args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 size = self.visit(node.args[1])
                 return [f"// HIP memory allocate: {target}, bytes: {size}"]
         elif name == "hipExtMallocWithFlags":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP extended memory allocate: {target}, "
                     f"bytes: {args[1]}, flags: {args[2]}"
                 ]
         elif name == "hipMallocAsync":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP async memory allocate: {target}, bytes: {args[1]}, "
                     f"stream: {args[2]}"
                 ]
         elif name == "hipMallocFromPoolAsync":
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP async memory allocate from pool: {target}, "
                     f"bytes: {args[1]}, pool: {args[2]}, stream: {args[3]}"
                 ]
         elif name in {"hipHostMalloc", "hipHostAlloc"}:
             if len(args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 comment = f"// HIP host memory allocate: {target}, bytes: {args[1]}"
                 if len(args) >= 3:
                     comment += f", flags: {args[2]}"
                 return [comment]
         elif name == "hipMallocPitch":
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
-                pitch = self.format_runtime_pointer_target(node.args[1])
+                target = self.format_runtime_raw_output_target(node.args[0])
+                pitch = self.format_runtime_raw_output_target(node.args[1])
                 return [
                     f"// HIP pitched memory allocate: {target}, pitch: {pitch}, "
                     f"width: {args[2]}, height: {args[3]}"
                 ]
         elif name == "hipMalloc3D":
             if len(args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [f"// HIP 3D memory allocate: {target}, extent: {args[1]}"]
         elif name in {"hipMallocArray", "hipMalloc3DArray"}:
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 if name == "hipMallocArray":
                     comment = (
@@ -804,7 +804,7 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMallocMipmappedArray":
             if len(args) >= 5:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 return [
                     f"// HIP mipmapped array allocate: output: {target}, "
@@ -813,7 +813,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMipmappedArrayCreate":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 return [
                     f"// HIP mipmapped array create: output: {target}, "
@@ -821,7 +821,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipGetMipmappedArrayLevel", "hipMipmappedArrayGetLevel"}:
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP mipmapped array get level: output: {output}, "
                     f"mipmapped array: {args[1]}, level: {args[2]}"
@@ -840,7 +840,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP array free: {args[0]}"]
         elif name in {"hipArrayCreate", "hipArray3DCreate"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 dimension = "3D " if name == "hipArray3DCreate" else ""
                 return [
@@ -1394,15 +1394,15 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMemAlloc":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP driver memory allocate: output: {output}, "
                     f"bytes: {args[1]}"
                 ]
         elif name == "hipMemAllocPitch":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
-                pitch = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[0])
+                pitch = self.format_runtime_raw_output_target(node.args[1])
                 return [
                     f"// HIP driver pitched memory allocate: output: {output}, "
                     f"pitch output: {pitch}, width: {args[2]}, height: {args[3]}, "
@@ -1413,7 +1413,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP driver memory free: {args[0]}"]
         elif name in {"hipMemAllocHost", "hipMemHostAlloc"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 comment = (
                     f"// HIP driver host memory allocate: output: {output}, "
                     f"bytes: {args[1]}"
