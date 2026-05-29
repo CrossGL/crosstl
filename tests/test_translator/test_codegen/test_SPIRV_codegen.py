@@ -59,6 +59,17 @@ def spirv_result_ids_for_opcode(spv_code, opcode):
     return re.findall(rf"(%\d+) = {re.escape(opcode)}\b", spv_code)
 
 
+def spirv_uint_constant_values(spv_code):
+    uint_types = set(re.findall(r"(%\d+) = OpTypeInt 32 0\b", spv_code))
+    return {
+        result_id: int(value)
+        for result_id, type_id, value in re.findall(
+            r"(%\d+) = OpConstant (%\d+) (-?\d+)\b", spv_code
+        )
+        if type_id in uint_types
+    }
+
+
 def spirv_vector_type_widths(spv_code):
     return {
         type_id: int(width)
@@ -8833,6 +8844,87 @@ class TestVulkanSPIRVCodeGen:
             assert operation in spv_code
         assert "imageAtomic" not in spv_code
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_atomic_operations_share_device_scope_and_none_memory_semantics(
+        self, tmp_path
+    ):
+        source_code = """
+        shader AtomicMemorySemantics {
+            struct AtomicBlock {
+                uint counter;
+                uint bins[2];
+            };
+
+            AtomicBlock atomicBlock @glsl_buffer_block(std430) @binding(0);
+            RWByteAddressBuffer rawData @binding(1);
+            RWStructuredBuffer<uint> counters @binding(2);
+            uimage2D image @r32ui @binding(4);
+
+            compute {
+                void main() {
+                    uint oldBuffer = atomicAdd(atomicBlock.counter, 1u);
+                    uint oldSwap =
+                        atomicCompSwap(atomicBlock.bins[0], oldBuffer, 2u);
+                    uint oldRaw = 0u;
+                    rawData.InterlockedAdd(0u, 1u, oldRaw);
+                    rawData.InterlockedCompareExchange(
+                        4u,
+                        oldRaw,
+                        2u,
+                        oldRaw
+                    );
+                    uint next = counters.IncrementCounter();
+                    uint oldCounter = counters.DecrementCounter();
+                    ivec2 pixel = ivec2(0, 1);
+                    uint oldImage = imageAtomicAdd(image, pixel, 1u);
+                    uint oldImageSwap =
+                        imageAtomicCompSwap(image, pixel, oldImage, 2u);
+                    counters.Store(
+                        next,
+                        oldCounter
+                            + oldBuffer
+                            + oldSwap
+                            + oldRaw
+                            + oldImage
+                            + oldImageSwap
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        constant_values = spirv_uint_constant_values(spv_code)
+        atomic_lines = [line for line in spv_code.splitlines() if " = OpAtomic" in line]
+        assert atomic_lines
+
+        covered_opcodes = set()
+        for line in atomic_lines:
+            operands = line.split()
+            opcode = operands[2]
+            covered_opcodes.add(opcode)
+            assert constant_values[operands[5]] == 1
+            assert constant_values[operands[6]] == 0
+            if opcode == "OpAtomicCompareExchange":
+                assert constant_values[operands[7]] == 0
+
+        assert {"OpAtomicIAdd", "OpAtomicISub", "OpAtomicCompareExchange"} <= (
+            covered_opcodes
+        )
+        assert spv_code.count("OpAtomicIAdd") >= 4
+        assert spv_code.count("OpAtomicCompareExchange") >= 3
+        assert spv_code.count("OpAtomicISub") >= 1
+        assert spv_code.count("OpImageTexelPointer") == 2
+        assert "atomicAdd" not in spv_code
+        assert "Interlocked" not in spv_code
+        assert "IncrementCounter" not in spv_code
+        assert "imageAtomic" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_vector_member_access_extracts_spirv_component(self):

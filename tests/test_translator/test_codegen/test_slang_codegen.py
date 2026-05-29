@@ -4026,6 +4026,46 @@ def test_dispatch_mesh_payload_argument_accepts_array_element_lvalue():
     assert "void MSMain(in payload MeshPayload payload)" in generated_code
 
 
+def test_dispatch_mesh_payload_argument_accepts_reference_and_pointer_lvalues():
+    code = """
+    shader SlangDispatchMeshPayloadReferenceLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.meshlet = 7u;
+                MeshPayload& payloadRef = payload;
+                MeshPayload* payloadPtr = &payload;
+                DispatchMesh(1, 1, 1, payloadRef);
+                DispatchMesh(1, 1, 1, *payloadPtr);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "groupshared MeshPayload payload;" in generated_code
+    assert "MeshPayload& payloadRef = payload;" in generated_code
+    assert "MeshPayload* payloadPtr = &payload;" in generated_code
+    assert "DispatchMesh(1, 1, 1, payloadRef);" in generated_code
+    assert "DispatchMesh(1, 1, 1, *payloadPtr);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
 def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
     code = """
     shader SlangDispatchMeshPayloadHelperLvalue {
@@ -4272,6 +4312,57 @@ def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions(
         ValueError,
         match="DispatchMesh payload argument must be an lvalue, got MeshPayload",
     ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "payload_expression", "message"),
+    [
+        (
+            "groupshared MeshPayload payloads[2];",
+            "payloads",
+            (
+                "DispatchMesh payload argument type MeshPayload\\[2\\] "
+                "must match mesh payload type MeshPayload"
+            ),
+        ),
+        (
+            "groupshared MeshPayload payload; MeshPayload* payloadPtr = &payload;",
+            "payloadPtr",
+            (
+                "DispatchMesh payload argument type MeshPayload\\* "
+                "must match mesh payload type MeshPayload"
+            ),
+        ),
+    ],
+)
+def test_dispatch_mesh_payload_argument_rejects_pointer_and_array_shapes(
+    setup_source, payload_expression, message
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadShape {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                {setup_source}
+                DispatchMesh(1, 1, 1, {payload_expression});
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
         generate_code(parse_code(tokenize_code(code)))
 
 

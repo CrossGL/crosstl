@@ -6346,7 +6346,8 @@ class SlangCodeGen:
                 node.operation, "is not recognized by the Slang backend"
             )
 
-        actual_arity = len(node.arguments)
+        arguments = self.normalized_slang_intrinsic_args(node.arguments)
+        actual_arity = len(arguments)
         rejection_reason = None
         if actual_arity not in expected_arities:
             expected = " or ".join(str(arity) for arity in sorted(expected_arities))
@@ -6354,18 +6355,16 @@ class SlangCodeGen:
         else:
             self.validate_slang_mesh_op_stage(node.operation)
             rejection_reason = self.slang_mesh_argument_rejection_reason(
-                node.operation, node.arguments
+                node.operation, arguments
             )
             if rejection_reason is None:
-                self.validate_slang_dispatch_mesh_payload_argument(node)
+                self.validate_slang_dispatch_mesh_payload_argument(node, arguments)
                 target_reason = self.slang_mesh_target_type_rejection_reason()
                 if target_reason is not None:
                     return self.unsupported_slang_mesh_op_expression(
                         node.operation, target_reason
                     )
-                args = ", ".join(
-                    self.generate_expression(arg) for arg in node.arguments
-                )
+                args = ", ".join(self.generate_expression(arg) for arg in arguments)
                 return f"{node.operation}({args})"
 
         if rejection_reason is not None:
@@ -6401,7 +6400,9 @@ class SlangCodeGen:
                 calls.append(
                     (
                         getattr(node, "operation", None),
-                        getattr(node, "arguments", []),
+                        self.normalized_slang_intrinsic_args(
+                            getattr(node, "arguments", [])
+                        ),
                     )
                 )
                 continue
@@ -6560,8 +6561,10 @@ class SlangCodeGen:
                 f"{expected_label}"
             )
 
-    def validate_slang_dispatch_mesh_payload_argument(self, node):
-        if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+    def validate_slang_dispatch_mesh_payload_argument(self, node, arguments=None):
+        if arguments is None:
+            arguments = self.normalized_slang_intrinsic_args(node.arguments)
+        if node.operation != "DispatchMesh" or len(arguments) != 4:
             return
 
         payload_types = sorted(self.slang_mesh_payload_parameter_types)
@@ -6571,7 +6574,7 @@ class SlangCodeGen:
                 "@mesh_payload parameter"
             )
 
-        payload_argument = node.arguments[3]
+        payload_argument = arguments[3]
         payload_type = self.slang_dispatch_mesh_payload_argument_type(payload_argument)
         if payload_type is None:
             return
@@ -6591,20 +6594,35 @@ class SlangCodeGen:
         )
 
     def slang_dispatch_mesh_payload_argument_type(self, expr):
-        type_name = self.type_name_string(self.expression_result_type(expr))
-        if not type_name:
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            expr
+        )
+        if base_type is None:
             return None
-
-        base_type, array_suffix = split_array_type_suffix(type_name)
-        mapped_type = self.convert_type(base_type)
         if array_suffix:
-            return f"{mapped_type}{array_suffix}"
-        return mapped_type
+            return f"{base_type}{array_suffix}"
+        return base_type
 
     def slang_dispatch_mesh_payload_type_label(self, payload_types):
         if len(payload_types) == 1:
             return payload_types[0]
         return " or ".join(payload_types)
+
+    def normalized_slang_intrinsic_args(self, args):
+        normalized = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if self.is_unary_deref_marker(arg) and index + 1 < len(args):
+                normalized.append(UnaryOpNode("*", args[index + 1]))
+                index += 2
+                continue
+            normalized.append(arg)
+            index += 1
+        return normalized
+
+    def is_unary_deref_marker(self, arg):
+        return isinstance(arg, IdentifierNode) and getattr(arg, "name", None) == "*"
 
     def slang_mesh_argument_rejection_reason(self, operation, args):
         if operation == "SetMeshOutputCounts":

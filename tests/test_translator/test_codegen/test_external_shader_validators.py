@@ -2617,6 +2617,121 @@ def test_generated_glsl_geometry_interface_blocks_validate_with_glslangvalidator
     _run_validator([glslang, "-S", "geom", str(shader_path)])
 
 
+def test_generated_glsl_geometry_interface_block_multidimensional_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "geometry_interface_block_multidimensional.geom"
+
+    shader = """
+    shader GLSLGeometryInterfaceBlockMultidimensionalArraysValidator {
+        @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
+        struct VertexIn {
+            flat ivec2 ids[2][2];
+            noperspective vec3 positions[2];
+        };
+
+        @glsl_interface_block(out) @glsl_interface_instance(fragmentOut)
+        struct FragmentOut {
+            noperspective vec4 colors[2][2];
+        };
+
+        geometry {
+            layout(points) in;
+            layout(points, max_vertices = 1) out;
+
+            void main() {
+                fragmentOut.colors[1][0] = vec4(vertexIn[0].positions[1], 1.0)
+                    + vec4(vertexIn[0].ids[0][1], 0.0, 0.0);
+                gl_Position = gl_in[0].gl_Position;
+                EmitVertex();
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "geometry")
+    assert "in VertexIn {" in code
+    assert "flat ivec2 ids[2][2];" in code
+    assert "noperspective vec3 positions[2];" in code
+    assert "} vertexIn[];" in code
+    assert "noperspective vec4 colors[2][2];" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "geom", str(shader_path)])
+
+
+def test_mixed_glsl_tessellation_multidimensional_patch_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    cases = [
+        (
+            "tesc",
+            "tessellation_control",
+            """
+            #version 450 core
+            layout(vertices = 4) out;
+
+            in vec3 vPosition[];
+            out vec3 tcGrid[][2];
+            patch out vec4 tcPatchColors[2][2];
+
+            void main() {
+                tcGrid[gl_InvocationID][0] = vPosition[gl_InvocationID];
+                tcGrid[gl_InvocationID][1] = vec3(1.0);
+                gl_out[gl_InvocationID].gl_Position =
+                    gl_in[gl_InvocationID].gl_Position;
+                tcPatchColors[0][1] = vec4(1.0);
+                gl_TessLevelOuter[0] = 2.0;
+                gl_TessLevelOuter[1] = 2.0;
+                gl_TessLevelOuter[2] = 2.0;
+                gl_TessLevelOuter[3] = 2.0;
+                gl_TessLevelInner[0] = 2.0;
+                gl_TessLevelInner[1] = 2.0;
+            }
+            """,
+            (
+                "out vec3 tcGrid[][2];",
+                "patch out vec4 tcPatchColors[2][2];",
+            ),
+        ),
+        (
+            "tese",
+            "tessellation_evaluation",
+            """
+            #version 450 core
+            layout(quads, equal_spacing, ccw) in;
+
+            in vec3 tcGrid[][2];
+            patch in vec4 tcPatchColors[2][2];
+            out vec4 teColor;
+
+            void main() {
+                vec3 p = mix(tcGrid[0][0], tcGrid[1][1], gl_TessCoord.x);
+                teColor = tcPatchColors[0][1];
+                gl_Position = vec4(p, 1.0);
+            }
+            """,
+            (
+                "in vec3 tcGrid[][2];",
+                "patch in vec4 tcPatchColors[2][2];",
+            ),
+        ),
+    ]
+
+    for stage_suffix, shader_type, source, expected_snippets in cases:
+        shader_path = tmp_path / f"tessellation_multidimensional_arrays.{stage_suffix}"
+        code = GLSLCodeGen().generate(_mixed_glsl_ast(source, shader_type))
+        for snippet in expected_snippets:
+            assert snippet in code
+        assert "vec3[] tcGrid" not in code
+        assert "vec4[2][2] tcPatchColors" not in code
+        shader_path.write_text(code, encoding="utf-8")
+
+        _run_validator([glslang, "-S", stage_suffix, str(shader_path)])
+
+
 def test_generated_glsl_stage_io_multidimensional_arrays_validate_with_glslangvalidator(
     tmp_path,
 ):

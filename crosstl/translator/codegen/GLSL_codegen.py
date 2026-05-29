@@ -2047,7 +2047,10 @@ class GLSLCodeGen:
                 )
             else:
                 code += self.generate_global_variable_declaration(
-                    node, declaration, vtype
+                    node,
+                    declaration,
+                    vtype,
+                    mapped_type_for_layout=f"{mapped_type}{array_suffix}",
                 )
 
         for node in stage_local_interface_vars:
@@ -5116,7 +5119,8 @@ class GLSLCodeGen:
                 return count
             size = array_suffix[index + 1 : close_index].strip()
             if not size:
-                return count
+                index = close_index + 1
+                continue
             try:
                 dimension = int(size, 10)
             except ValueError:
@@ -6236,7 +6240,48 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
-    def generate_global_variable_declaration(self, node, declaration, vtype):
+    def global_stage_io_layout_direction(self, qualifier):
+        parts = qualifier.split()
+        if "in" in parts:
+            return "input"
+        if "out" in parts:
+            return "output"
+        return None
+
+    def reserve_global_stage_io_layout(self, node, qualifier, layout, mapped_type):
+        direction = self.global_stage_io_layout_direction(qualifier)
+        if direction is None:
+            return
+        if self.stage_io_layout_has(layout, {"component", "index"}):
+            return
+
+        stage_name = self.current_target_stage or "global"
+        self.reserve_stage_io_layout(
+            self.stage_io_used_locations,
+            stage_name,
+            direction,
+            layout,
+            mapped_type,
+            self.resource_node_name(node, "<unnamed>"),
+        )
+
+    def stage_io_layout_has(self, layout, names):
+        if not layout.startswith("layout("):
+            return False
+        start = layout.find("(")
+        end = layout.rfind(")")
+        if start == -1 or end == -1 or end <= start:
+            return False
+
+        for item in layout[start + 1 : end].split(","):
+            key = item.partition("=")[0].strip()
+            if key in names:
+                return True
+        return False
+
+    def generate_global_variable_declaration(
+        self, node, declaration, vtype, mapped_type_for_layout=None
+    ):
         builtin_output = self.fragment_output_variable_builtin_target(node)
         if builtin_output is not None:
             self.current_identifier_aliases[self.resource_node_name(node, "")] = (
@@ -6252,14 +6297,23 @@ class GLSLCodeGen:
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
         layout = self.glsl_variable_layout_prefix(node)
+        self.reserve_global_stage_io_layout(
+            node,
+            qualifier,
+            layout,
+            mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+        )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
 
     def generate_stage_local_interface_variable_declaration(self, node):
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+        mapped_type = f"{self.map_type(vtype)}{array_suffix}"
         declaration = format_c_style_array_declaration(
-            f"{self.map_type(vtype)}{array_suffix}", self.resource_node_name(node, "")
+            mapped_type, self.resource_node_name(node, "")
         )
-        return self.generate_global_variable_declaration(node, declaration, vtype)
+        return self.generate_global_variable_declaration(
+            node, declaration, vtype, mapped_type_for_layout=mapped_type
+        )
 
     def fragment_output_variable_builtin_target(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}

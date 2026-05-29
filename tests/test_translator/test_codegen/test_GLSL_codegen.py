@@ -2427,6 +2427,34 @@ def test_glsl_stage_interface_extended_layout_qualifiers():
     assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
 
 
+def test_glsl_stage_interface_unsized_array_suffix_locations_are_reserved():
+    conflict = """
+    shader TessellationEvaluationInterfaceLocationConflict {
+        in vec3 tcGrid[][2] @location(0);
+        in vec3 other[] @location(1);
+
+        tessellation_evaluation {
+            void main() @domain(quad) @partitioning(equal) @ccw {
+                gl_Position = vec4(tcGrid[0][0] + other[0], 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="locations 0-1"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(conflict), "tessellation_evaluation"
+        )
+
+    non_conflicting = conflict.replace("@location(1)", "@location(2)")
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(non_conflicting), "tessellation_evaluation"
+    )
+
+    assert "layout(location = 0) in vec3 tcGrid[][2];" in generated_code
+    assert "layout(location = 2) in vec3 other[];" in generated_code
+
+
 def test_glsl_fragment_blend_support_layout_qualifiers():
     code = """
     shader AdvancedBlendOutput {

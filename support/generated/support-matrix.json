@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 871
+        "test_count": 872
       },
       "translator_codegen": {
         "exists": true,
@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 544
+        "test_count": 545
       },
       "translator_codegen": {
         "exists": true,
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 398
+        "test_count": 400
       },
       "translator_codegen": {
         "exists": true,

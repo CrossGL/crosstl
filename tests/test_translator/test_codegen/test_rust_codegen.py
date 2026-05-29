@@ -20718,7 +20718,9 @@ def test_match_path_constructor_struct_and_guarded_patterns_emit_rust_match():
     assert "MatchArmNode" not in generated_code
 
 
-def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preserved():
+def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preserved(
+    tmp_path,
+):
     code = """
     shader PatternWarnings {
         generic<T, E> struct Result {
@@ -20764,6 +20766,7 @@ def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preser
     )
     assert "Command::Draw { payload: _payload, amount } =>" in generated_code
     assert "amount: _amount" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mutated_match_pattern_bindings_emit_mut_and_smoke_compile(tmp_path):
@@ -20820,9 +20823,26 @@ def test_mutated_match_pattern_bindings_emit_mut_and_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_match_arm_block_tail_expression_emits_without_semicolon():
+def test_match_arm_block_tail_expression_emits_without_semicolon(tmp_path):
     code = """
     shader PatternCases {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            InvalidInput
+        }
+
+        enum VectorOp {
+            Cross,
+            Dot
+        }
+
         fn convert(op: VectorOp) -> Result<int, MathError> {
             match op {
                 VectorOp::Cross => {
@@ -20845,6 +20865,7 @@ def test_match_arm_block_tail_expression_emits_without_semicolon():
     )
     assert "Result::Ok(1);" not in generated_code
     assert "Result::Err(MathError::InvalidInput);" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_keyword_like_let_binding_inside_match_arm_preserves_function_body(
@@ -21185,7 +21206,7 @@ def test_inferred_generic_struct_literals_and_destructured_members_keep_generic_
     assert "let a: f32 = row0.x;" not in generated_code
 
 
-def test_match_guarded_literal_arm_emits_rust_guard():
+def test_match_guarded_literal_arm_emits_rust_guard(tmp_path):
     code = """
     shader main {
         compute {
@@ -21211,6 +21232,7 @@ def test_match_guarded_literal_arm_emits_rust_guard():
 
     assert "0 if (mode > 0) =>" in generated_code
     assert "value = 1;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_generic_vector_composite_types_emit_rust_names(tmp_path):
