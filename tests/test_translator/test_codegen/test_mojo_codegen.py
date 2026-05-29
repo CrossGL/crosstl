@@ -10649,6 +10649,75 @@ def test_aggregate_target_shape_preserves_explicit_vector_constructors():
     assert "acceptVec3(_crossgl_construct_f32_4_vf322_01_s" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badArrayAssignment() {
+                vec3 values[2];
+                values = {vec3(1.0, 2.0, 3.0), vec2(4.0, 5.0)};
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 2"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptGrid(vec3[2][2] grid) {
+            }
+
+            void badNestedArgument() {
+                acceptGrid({
+                    {vec3(1.0, 2.0, 3.0), vec2(4.0, 5.0)},
+                    {vec3(6.0, 7.0, 8.0), vec3(9.0, 10.0, 11.0)}
+                });
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptGrid array literal element 1"
+            r" array literal element 2.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badCompoundAssignment() {
+                vec3 value;
+                value += vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badArrayElementAssignment() {
+                vec3 values[2];
+                values[0] = vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_nested_arrays_and_compound(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_explicit_vector_compound_assignment():
+    source = """
+    void okCompoundAssignment() {
+        vec3 value;
+        value += vec3(vec2(1.0, 2.0), 3.0);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "value += _crossgl_construct_f32_4_vf322_01_s" in generated_code
+
+
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
     source = """
     generic<T, E> struct Result {

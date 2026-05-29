@@ -305,7 +305,7 @@ class TestCudaCodeGen:
         assert "[&] __device__ () { return true; }" in cuda_code
         assert "lambda(" not in cuda_code
 
-    def test_synchronization_functions_emit_cuda_intrinsics(self):
+    def test_synchronization_functions_emit_cuda_intrinsics(self, tmp_path):
         """Test CrossGL synchronization functions lower to CUDA intrinsics."""
         source_code = """
         shader TestShader {
@@ -341,6 +341,7 @@ class TestCudaCodeGen:
         assert "memoryBarrierBuffer();" not in cuda_code
         assert "memoryBarrierImage();" not in cuda_code
         assert "workgroupBarrier();" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_user_defined_synchronization_names_are_not_lowered(self):
         """Test CUDA does not remap user-defined synchronization names."""
@@ -441,7 +442,7 @@ class TestCudaCodeGen:
         ):
             CudaCodeGen().generate(ast)
 
-    def test_shared_memory_synchronization_helper_lowers_to_cuda(self):
+    def test_shared_memory_synchronization_helper_lowers_to_cuda(self, tmp_path):
         """Test shared memory and barriers lower through compute helpers."""
         source_code = """
         shader SharedSynchronizationHelper {
@@ -475,6 +476,7 @@ class TestCudaCodeGen:
         assert "synchronizeTile();" in cuda_code
         assert "__syncthreads(1)" not in cuda_code
         assert "memoryBarrierShared();" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_builtin_invocation_ids_emit_cuda_names(self):
         """Test CUDA maps CrossGL invocation built-ins in member access form."""

@@ -15769,7 +15769,7 @@ def test_colliding_static_symbol_names_are_suffixed_and_referenced(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():
+def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced(tmp_path):
     code = """
     vec3 direction;
 
@@ -15790,6 +15790,7 @@ def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():
     assert "let direction: Vec3<f32>" in generated_code
     assert "return direction;" in generated_code
     assert "return *direction;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_generated_rust_lazy_lock_statics_smoke_compile_with_rustc(tmp_path):
