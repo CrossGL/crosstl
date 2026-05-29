@@ -2593,6 +2593,90 @@ def test_codegen_append_consume_structured_buffers_roundtrip():
     assert "buffer_consume(" not in hlsl
 
 
+def test_codegen_append_consume_structured_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        AppendStructuredBuffer<int> appendValues[4] : register(u0, space5);
+        ConsumeStructuredBuffer<int> consumeValues[4] : register(u4, space5);
+
+        void main(uint queueIndex : TEXCOORD0, uint value : TEXCOORD1) {
+            uint slot = NonUniformResourceIndex(queueIndex);
+            appendValues[slot].Append(int(value));
+            int consumed = consumeValues[slot].Consume();
+            appendValues[slot].Append(consumed + 1);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space5)" in crossgl
+    assert "AppendStructuredBuffer<int> appendValues[4];" in crossgl
+    assert "@ register(u4, space5)" in crossgl
+    assert "ConsumeStructuredBuffer<int> consumeValues[4];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "buffer_append(appendValues[slot], int(value));" in crossgl
+    assert "int consumed = buffer_consume(consumeValues[slot]);" in crossgl
+    assert "buffer_append(appendValues[slot], consumed + 1);" in crossgl
+    assert ".Append(" not in crossgl
+    assert ".Consume(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "AppendStructuredBuffer<int> appendValues[4] : register(u0, space5);" in hlsl
+    assert (
+        "ConsumeStructuredBuffer<int> consumeValues[4] : register(u4, space5);" in hlsl
+    )
+    assert "uint slot = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "appendValues[slot].Append(int(value));" in hlsl
+    assert "int consumed = consumeValues[slot].Consume();" in hlsl
+    assert "appendValues[slot].Append((consumed + 1));" in hlsl
+    assert "float slot" not in hlsl
+    assert "buffer_append(" not in hlsl
+    assert "buffer_consume(" not in hlsl
+
+
+def test_codegen_append_consume_multidimensional_buffer_arrays_roundtrip():
+    code = textwrap.dedent("""
+        AppendStructuredBuffer<uint> appendQueues[][2] : register(u0, space6);
+        ConsumeStructuredBuffer<uint> consumeQueues[] : register(u8, space6);
+
+        uint main(uint queueIndex : TEXCOORD0, uint laneIndex : TEXCOORD1) : SV_Target0 {
+            uint queue = NonUniformResourceIndex(queueIndex);
+            uint lane = NonUniformResourceIndex(laneIndex);
+            uint consumed = consumeQueues[queue].Consume();
+            appendQueues[queue][lane].Append(consumed + lane);
+            return consumed;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "@ register(u0, space6)" in crossgl
+    assert "AppendStructuredBuffer<uint> appendQueues[][2];" in crossgl
+    assert "@ register(u8, space6)" in crossgl
+    assert "ConsumeStructuredBuffer<uint> consumeQueues[];" in crossgl
+    assert "uint queue = NonUniformResourceIndex(queueIndex);" in crossgl
+    assert "uint lane = NonUniformResourceIndex(laneIndex);" in crossgl
+    assert "uint consumed = buffer_consume(consumeQueues[queue]);" in crossgl
+    assert "buffer_append(appendQueues[queue][lane], consumed + lane);" in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert (
+        "AppendStructuredBuffer<uint> appendQueues[][2] : register(u0, space6);" in hlsl
+    )
+    assert "ConsumeStructuredBuffer<uint> consumeQueues[] : register(u8, space6);" in (
+        hlsl
+    )
+    assert "uint queue = NonUniformResourceIndex(queueIndex);" in hlsl
+    assert "uint lane = NonUniformResourceIndex(laneIndex);" in hlsl
+    assert "uint consumed = consumeQueues[queue].Consume();" in hlsl
+    assert "appendQueues[queue][lane].Append((consumed + lane));" in hlsl
+    assert "float queue" not in hlsl
+    assert "float lane" not in hlsl
+    assert "buffer_append(" not in hlsl
+    assert "buffer_consume(" not in hlsl
+
+
 def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
     code = textwrap.dedent("""
         Texture2D<float> shadowMap : register(t0);

@@ -13203,6 +13203,24 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
             return imageAtomicAdd(pack.counters[index], pixel, value);
         }
 
+        vec2 readPairAlias(ImagePack pack, int index, ivec2 pixel) {
+            let pairsAlias = pack.pairs;
+            let chainedPairsAlias = pairsAlias;
+            return imageLoad(chainedPairsAlias[index], pixel);
+        }
+
+        void writePairAlias(ImagePack pack, int index, ivec2 pixel, vec2 value) {
+            let targetsAlias = pack.targets;
+            let chainedTargetsAlias = targetsAlias;
+            imageStore(chainedTargetsAlias[index], pixel, value);
+        }
+
+        uint addCounterAlias(ImagePack pack, int index, ivec2 pixel, uint value) {
+            let countersAlias = pack.counters;
+            let counterAlias = countersAlias[index];
+            return imageAtomicAdd(counterAlias, pixel, value);
+        }
+
         compute {
             void main() {
                 ImagePack pack;
@@ -13210,6 +13228,9 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
                 vec2 pair = readPair(pack, 0, pixel);
                 writePair(pack, 1, pixel, pair);
                 uint oldValue = addCounter(pack, 0, pixel, 1u);
+                vec2 aliasPair = readPairAlias(pack, 1, pixel);
+                writePairAlias(pack, 0, pixel, aliasPair);
+                uint aliasOldValue = addCounterAlias(pack, 1, pixel, oldValue);
             }
         }
     }
@@ -13233,6 +13254,44 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
     assert (
         "return pack.counters[index].atomic_fetch_add(uint2(pixel), value).x;"
         in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::read>, 2> pairsAlias = pack.pairs;"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::read>, 2> chainedPairsAlias = pairsAlias;"
+        in generated_code
+    )
+    assert "return chainedPairsAlias[index].read(uint2(pixel)).xy;" in generated_code
+    assert (
+        "array<texture2d<float, access::write>, 2> targetsAlias = pack.targets;"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<float, access::write>, 2> chainedTargetsAlias = targetsAlias;"
+        in generated_code
+    )
+    assert (
+        "chainedTargetsAlias[index].write(float4(value, 0.0, 0.0), uint2(pixel));"
+        in generated_code
+    )
+    assert (
+        "array<texture2d<uint, access::read_write>, 2> countersAlias = pack.counters;"
+        in generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> counterAlias = countersAlias[index];"
+        in generated_code
+    )
+    assert "return counterAlias.atomic_fetch_add(uint2(pixel), value).x;" in (
+        generated_code
+    )
+    assert "texture2d<float, access::read> pairsAlias = pack.pairs;" not in (
+        generated_code
+    )
+    assert "texture2d<float, access::write> targetsAlias = pack.targets;" not in (
+        generated_code
     )
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code

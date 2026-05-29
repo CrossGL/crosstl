@@ -6011,7 +6011,6 @@ class VulkanSPIRVCodeGen:
             "GLCompute",
             "MeshEXT",
             "TaskEXT",
-            "TessellationControl",
         }
         return bool(execution_models) and execution_models.issubset(
             workgroup_execution_models
@@ -13456,6 +13455,8 @@ class VulkanSPIRVCodeGen:
         )
         if execution_model == "Fragment":
             self.emit(f"OpExecutionMode %{function_id.id} OriginUpperLeft")
+        elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
+            self.require_capability("Tessellation")
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
             x, y, z = self.compute_local_size(stage)
             if self.requires_compute_derivatives:

@@ -4261,6 +4261,63 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_stage_synchronization_builtins_warn_and_validate(
+        self, tmp_path
+    ):
+        source_code = """
+        shader TessellationSynchronization {
+            tessellation_control {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    memoryBarrier();
+                }
+            }
+
+            tessellation_evaluation {
+                void main() {
+                    barrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "OpCapability Tessellation" in spv_code
+        assert "OpEntryPoint TessellationControl" in spv_code
+        assert "OpEntryPoint TessellationEvaluation" in spv_code
+
+        for function_name in [
+            "barrier",
+            "workgroupBarrier",
+            "groupMemoryBarrier",
+            "memoryBarrierShared",
+        ]:
+            assert (
+                spv_code.count(
+                    f"; WARNING: synchronization builtin '{function_name}' "
+                    "requires a workgroup-capable execution model"
+                )
+                == 2
+            )
+
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpMemoryBarrier") == 6
+        assert "OpFunctionCall" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shared_helper_synchronization_rejects_non_workgroup_callgraph(
         self, tmp_path
     ):
