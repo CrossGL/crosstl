@@ -4149,6 +4149,87 @@ def test_match_expression_allows_final_struct_destructuring_without_wildcard():
     assert "match expressions must include a final wildcard arm" not in generated_code
 
 
+def test_match_expression_rejects_nonfinal_irrefutable_struct_pattern():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } => x,
+            _ => y
+        };
+    }
+    """
+
+    with pytest.raises(ValueError, match="irrefutable pattern must be final"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_match_expression_guarded_struct_destructuring_is_refutable():
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } if x > 0 => x,
+            _ => point.y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if (point.x > 0):" in generated_code
+    assert "__cgl_match_value_0 = point.x" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = point.y" in generated_code
+    assert "(True) and" not in generated_code
+    assert "Point {" not in generated_code
+
+
+def test_match_expression_guarded_struct_destructuring_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct Point {
+        x: int;
+        y: int;
+    };
+
+    int pick(Point point) {
+        return match point {
+            Point { x, y } if x > 0 => x,
+            _ => point.y
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += (
+        "\nfn main():\n"
+        "    print(pick(Point(x=4, y=9)))\n"
+        "    print(pick(Point(x=0, y=9)))\n"
+    )
+
+    source_path = tmp_path / "guarded_struct_destructuring.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["4", "9"]
+
+
 def test_match_expression_struct_destructuring_patterns_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
