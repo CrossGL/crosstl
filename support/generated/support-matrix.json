@@ -669,7 +669,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 422
+        "test_count": 423
       },
       "translator_codegen": {
         "exists": true,
@@ -693,11 +693,15 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 86,
+        "unsupported_marker_count": 87,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = {"
+          },
+          {
+            "path": "crosstl/translator/codegen/mojo_codegen.py",
+            "text": "| MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES"
           },
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -770,10 +774,6 @@
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
             "text": "\"Unsupported GetDimensions overload for Mojo codegen; \""
-          },
-          {
-            "path": "crosstl/translator/codegen/mojo_codegen.py",
-            "text": "\"Unsupported GetDimensions overload for Mojo codegen; \""
           }
         ]
       },
@@ -783,7 +783,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 482
+        "test_count": 484
       },
       "translator_codegen": {
         "exists": true,

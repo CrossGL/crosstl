@@ -3273,7 +3273,14 @@ def test_mesh_intrinsics_validate_value_contexts():
             }
 
             void main() {
+                bool choose = true;
+                vec3 dispatchAssign = vec3(0.0);
+                DispatchMesh(2, 3, 4);
                 vec3 dispatchVector = DispatchMesh(1, 2, 3);
+                dispatchAssign = DispatchMesh(1, 2, 3);
+                vec3 binaryDispatch = DispatchMesh(1, 2, 3) + vec3(1.0);
+                vec3 ternaryDispatch =
+                    choose ? DispatchMesh(1, 2, 3) : vec3(0.0);
                 acceptVector(DispatchMesh(1, 2, 3));
             }
         }
@@ -3291,12 +3298,30 @@ def test_mesh_intrinsics_validate_value_contexts():
         "float3 dispatchVector = /* unsupported Slang mesh intrinsic: DispatchMesh "
         "returns void but target expects float3 */ float3(0.0);" in dispatch_generated
     )
+    assert "DispatchMesh(2, 3, 4);" in dispatch_generated
+    assert (
+        "dispatchAssign = /* unsupported Slang mesh intrinsic: DispatchMesh returns "
+        "void but target expects float3 */ float3(0.0);" in dispatch_generated
+    )
+    assert (
+        "float3 binaryDispatch = /* unsupported Slang mesh intrinsic: DispatchMesh "
+        "returns void but target expects float3 */ float3(0.0) + float3(1.0);"
+        in dispatch_generated
+    )
+    assert (
+        "float3 ternaryDispatch = (choose ? /* unsupported Slang mesh intrinsic: "
+        "DispatchMesh returns void but target expects float3 */ float3(0.0) : "
+        "float3(0.0));" in dispatch_generated
+    )
     assert (
         "acceptVector(/* unsupported Slang mesh intrinsic: DispatchMesh returns void "
         "but target expects float3 */ float3(0.0));" in dispatch_generated
     )
     assert "return DispatchMesh(1, 2, 3);" not in dispatch_generated
     assert "float3 dispatchVector = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "dispatchAssign = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "float3 binaryDispatch = DispatchMesh(1, 2, 3)" not in dispatch_generated
+    assert "choose ? DispatchMesh(1, 2, 3)" not in dispatch_generated
     assert "acceptVector(DispatchMesh(1, 2, 3));" not in dispatch_generated
 
     counts_code = """

@@ -9660,6 +9660,87 @@ def test_image_prefixed_struct_array_return_aliases_remain_field_specific():
     assert ".Store(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "reserved_name"),
+    [
+        (
+            """
+            struct Texture2D {
+                int value;
+            };
+            Texture2D globalTexture;
+            int read(Texture2D tex) {
+                return tex.value + globalTexture.value;
+            }
+            """,
+            "Texture2D",
+        ),
+        (
+            """
+            struct Sampler {
+                float gain;
+            };
+            Sampler globalSampler;
+            float read(Sampler state) {
+                return state.gain + globalSampler.gain;
+            }
+            """,
+            "Sampler",
+        ),
+        (
+            """
+            generic<T> struct RWBuffer {
+                T value;
+                int tag;
+            };
+            RWBuffer<int> globalBuffer;
+            int read(RWBuffer<int> buf) {
+                return buf.value + globalBuffer.value;
+            }
+            """,
+            "RWBuffer",
+        ),
+        (
+            """
+            struct Image2DFloat2 {
+                float2 value;
+            };
+            Image2DFloat2 globalImage;
+            float2 read(Image2DFloat2 image) {
+                return image.value;
+            }
+            """,
+            "Image2DFloat2",
+        ),
+    ],
+)
+def test_reserved_mojo_resource_struct_names_are_diagnostic(source, reserved_name):
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Mojo struct name '{reserved_name}'.*"
+            f"reserved resource type '{reserved_name}'"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_reserved_mojo_resource_enum_names_are_diagnostic():
+    source = """
+    enum Texture2D {
+        Linear,
+        Nearest
+    };
+    Texture2D mode;
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Mojo enum name 'Texture2D'.*reserved resource type 'Texture2D'",
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_resource_prefixed_generic_user_types_do_not_become_resources():
     source = """
     generic<T> struct TextureBox {

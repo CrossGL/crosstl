@@ -636,6 +636,15 @@ MOJO_BUFFER_RESOURCE_TYPES = (
     MOJO_TYPED_BUFFER_RESOURCE_TYPES | MOJO_BYTE_ADDRESS_BUFFER_TYPES
 )
 
+MOJO_RESERVED_RESOURCE_TYPE_NAMES = frozenset(
+    set(MOJO_RESOURCE_TYPE_MAPPING)
+    | set(MOJO_RESOURCE_TYPE_MAPPING.values())
+    | set(MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING)
+    | MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES
+    | set(MOJO_HLSL_BUFFER_TYPE_ALIASES)
+    | MOJO_BUFFER_RESOURCE_TYPES
+)
+
 MOJO_BUFFER_STORE_RESOURCE_TYPES = {
     "RWBuffer",
     "RWStructuredBuffer",
@@ -2034,6 +2043,8 @@ class MojoCodeGen:
             structs
         )
         for node in structs:
+            if isinstance(node, StructNode):
+                self.validate_user_defined_type_name(node.name, "struct")
             if (
                 isinstance(node, StructNode)
                 and node.name not in self.generic_enum_struct_definitions
@@ -2612,6 +2623,24 @@ class MojoCodeGen:
     def is_user_defined_type_name(self, type_name):
         base_type = self.user_defined_type_base(type_name)
         return base_type in self.struct_types or base_type in self.enum_types
+
+    def reserved_resource_type_name(self, type_name):
+        base_type = self.user_defined_type_base(type_name)
+        if (
+            base_type in MOJO_RESERVED_RESOURCE_TYPE_NAMES
+            or self.typed_image_resource_info(base_type) is not None
+        ):
+            return base_type
+        return None
+
+    def validate_user_defined_type_name(self, type_name, declaration_kind):
+        reserved_name = self.reserved_resource_type_name(type_name)
+        if reserved_name is None:
+            return
+        raise ValueError(
+            f"Mojo {declaration_kind} name '{type_name}' conflicts with "
+            f"reserved resource type '{reserved_name}'"
+        )
 
     def is_glsl_buffer_block_node(self, node):
         attributes = {
@@ -3667,6 +3696,7 @@ class MojoCodeGen:
 
     def generate_enum(self, node):
         """Lower a CrossGL enum to Mojo aliases or a tagged payload struct."""
+        self.validate_user_defined_type_name(node.name, "enum")
         self.enum_variant_names[node.name] = [
             variant.name for variant in getattr(node, "variants", []) or []
         ]
@@ -3991,6 +4021,7 @@ class MojoCodeGen:
         struct_name = getattr(node, "name", None)
         if not struct_name:
             return
+        self.validate_user_defined_type_name(struct_name, "struct")
         self.struct_types[struct_name] = {}
         self.struct_member_semantics[struct_name] = {}
 

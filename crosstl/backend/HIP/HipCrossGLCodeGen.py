@@ -1902,7 +1902,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetDeviceProperties":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_property_source(output_name, args[1])
@@ -1919,13 +1919,14 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetName":
             if len(args) >= 3:
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
-                    f"// HIP get device name: output: {args[0]}, "
+                    f"// HIP get device name: output: {output}, "
                     f"length: {args[1]}, device: {args[2]}"
                 ]
         elif name == "hipDeviceGetUuid":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [f"// HIP get device UUID: output: {output}, device: {args[1]}"]
         elif name == "hipDeviceTotalMem":
             if len(args) >= 2:
@@ -1990,8 +1991,9 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetPCIBusId":
             if len(args) >= 3:
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
-                    f"// HIP get device PCI bus id: output: {args[0]}, "
+                    f"// HIP get device PCI bus id: output: {output}, "
                     f"length: {args[1]}, device: {args[2]}"
                 ]
         elif name == "hipDeviceGetByPCIBusId":

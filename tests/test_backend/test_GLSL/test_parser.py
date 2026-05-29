@@ -103,6 +103,10 @@ def test_parse_const_array_initializers():
                 ivec2(-1, 1),
                 ivec2(1, 1)
             );
+            const ivec2 nested[2][2] = {
+                { ivec2(-1, 0), ivec2(1, 0) },
+                { ivec2(0, -1), ivec2(0, 1) },
+            };
         }
         """)
 
@@ -110,11 +114,12 @@ def test_parse_const_array_initializers():
     main = next(function for function in ast.functions if function.name == "main")
     declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
 
-    offsets, ctor_offsets = declarations
+    offsets, ctor_offsets, nested = declarations
     assert offsets.name == "offsets"
     assert offsets.is_const is True
     assert offsets.is_array is True
     assert offsets.array_size.value == "4"
+    assert [size.value for size in offsets.array_sizes] == ["4"]
     assert isinstance(offsets.value, InitializerListNode)
     assert len(offsets.value.elements) == 4
 
@@ -122,8 +127,20 @@ def test_parse_const_array_initializers():
     assert ctor_offsets.is_const is True
     assert ctor_offsets.is_array is True
     assert ctor_offsets.array_size.value == "4"
+    assert [size.value for size in ctor_offsets.array_sizes] == ["4"]
     assert isinstance(ctor_offsets.value, InitializerListNode)
     assert len(ctor_offsets.value.elements) == 4
+
+    assert nested.name == "nested"
+    assert nested.is_const is True
+    assert nested.is_array is True
+    assert nested.array_size.value == "2"
+    assert [size.value for size in nested.array_sizes] == ["2", "2"]
+    assert isinstance(nested.value, InitializerListNode)
+    assert len(nested.value.elements) == 2
+    assert all(
+        isinstance(element, InitializerListNode) for element in nested.value.elements
+    )
 
 
 def test_parse_control_flow_constructs():

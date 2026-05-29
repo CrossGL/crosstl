@@ -5854,6 +5854,66 @@ class TestHipCodeGen:
         assert "var warp: i32 = props.warpSize;" not in result
         assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
 
+    def test_hip_device_property_string_array_outputs_clear_stale_metadata(self):
+        """Test device property/string array outputs clear prior query metadata."""
+        code = """
+        void queryDeviceInfoArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipDeviceProp_t* props,
+            hipUUID* uuids,
+            char* names,
+            char* pciIds,
+            int device,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&props, &staleSize, devicePtr);
+            hipGetDeviceProperties(&props[0], device);
+            out[0] = props[0].multiProcessorCount;
+
+            hipMemGetAddressRange((void**)&uuids, &staleSize, devicePtr);
+            hipDeviceGetUuid(&uuids[0], device);
+            hipUUID uuidCopy = uuids[0];
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipDeviceGetName(names, 64, device);
+            int firstNameChar = names[0];
+
+            hipMemGetAddressRange((void**)&pciIds, &staleSize, devicePtr);
+            hipDeviceGetPCIBusId(pciIds, 32, device);
+            int firstPciChar = pciIds[0];
+
+            out[1] = firstNameChar;
+            out[2] = firstPciChar;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device properties: props[0], device: device" in result
+        assert "out[0] = props[0].multiProcessorCount;" in result
+        assert "// HIP get device UUID: output: uuids[0], device: device" in result
+        assert "var uuidCopy: hipUUID = uuids[0];" in result
+        assert (
+            "// HIP get device name: output: names, length: 64, device: device"
+            in result
+        )
+        assert "var firstNameChar: i32 = names[0];" in result
+        assert (
+            "// HIP get device PCI bus id: output: pciIds, "
+            "length: 32, device: device"
+        ) in result
+        assert "var firstPciChar: i32 = pciIds[0];" in result
+        assert "out[1] = firstNameChar;" in result
+        assert "out[2] = firstPciChar;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_device_attribute_reads_emit_metadata_expressions(self):
         """Test hipDeviceGetAttribute output reads lower to explicit metadata."""
         code = """

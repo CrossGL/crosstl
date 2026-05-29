@@ -451,14 +451,9 @@ class GLSLParser:
             name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            array_size = None
-            is_array = False
-            if self.current_token[0] == "LBRACKET":
-                is_array = True
-                self.eat("LBRACKET")
-                if self.current_token[0] != "RBRACKET":
-                    array_size = self.parse_expression()
-                self.eat("RBRACKET")
+            array_sizes = self.parse_array_suffixes()
+            is_array = bool(array_sizes)
+            array_size = array_sizes[0] if array_sizes else None
 
             value = None
             if self.current_token[0] == "EQUALS":
@@ -473,6 +468,7 @@ class GLSLParser:
                 array_size=array_size,
                 layout=layout,
                 is_array=is_array,
+                array_sizes=array_sizes,
             )
 
             lowered = {q.lower() for q in qualifiers or []}
@@ -500,6 +496,17 @@ class GLSLParser:
             self.eat("SEMICOLON")
         return variables
 
+    def parse_array_suffixes(self):
+        sizes = []
+        while self.current_token[0] == "LBRACKET":
+            self.eat("LBRACKET")
+            size = None
+            if self.current_token[0] != "RBRACKET":
+                size = self.parse_expression()
+            self.eat("RBRACKET")
+            sizes.append(size)
+        return sizes
+
     def parse_struct(self):
         self.eat("STRUCT")
         name = self.current_token[1]
@@ -525,12 +532,8 @@ class GLSLParser:
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            array_size = None
-            if self.current_token[0] == "LBRACKET":
-                self.eat("LBRACKET")
-                if self.current_token[0] != "RBRACKET":
-                    array_size = self.parse_expression()
-                self.eat("RBRACKET")
+            array_sizes = self.parse_array_suffixes()
+            array_size = array_sizes[0] if array_sizes else None
 
             self.eat("SEMICOLON")
             members.append(
@@ -539,6 +542,8 @@ class GLSLParser:
                     member_name,
                     qualifiers=qualifiers,
                     array_size=array_size,
+                    array_sizes=array_sizes,
+                    is_array=bool(array_sizes),
                 )
             )
 
@@ -572,14 +577,9 @@ class GLSLParser:
             member_name = self.current_token[1]
             self.eat("IDENTIFIER")
 
-            array_size = None
-            is_array = False
-            if self.current_token[0] == "LBRACKET":
-                is_array = True
-                self.eat("LBRACKET")
-                if self.current_token[0] != "RBRACKET":
-                    array_size = self.parse_expression()
-                self.eat("RBRACKET")
+            array_sizes = self.parse_array_suffixes()
+            array_size = array_sizes[0] if array_sizes else None
+            is_array = bool(array_sizes)
 
             self.eat("SEMICOLON")
             member_node = VariableNode(
@@ -587,6 +587,7 @@ class GLSLParser:
                 member_name,
                 qualifiers=member_qualifiers,
                 array_size=array_size,
+                array_sizes=array_sizes,
             )
             member_node.is_array = is_array
             member_node.interface_block = block_name
@@ -600,12 +601,11 @@ class GLSLParser:
         if self.current_token[0] == "IDENTIFIER":
             instance_name = self.current_token[1]
             self.eat("IDENTIFIER")
-            if self.current_token[0] == "LBRACKET":
-                instance_is_array = True
-                self.eat("LBRACKET")
-                if self.current_token[0] != "RBRACKET":
-                    array_size = self.parse_expression()
-                self.eat("RBRACKET")
+            array_sizes = self.parse_array_suffixes()
+            instance_is_array = bool(array_sizes)
+            array_size = array_sizes[0] if array_sizes else None
+        else:
+            array_sizes = []
 
         self.eat("SEMICOLON")
 
@@ -616,6 +616,7 @@ class GLSLParser:
         struct_node.interface_instance_name = instance_name
         struct_node.interface_instance_is_array = instance_is_array
         struct_node.interface_array_size = array_size
+        struct_node.interface_array_sizes = array_sizes
         block_vars = []
 
         if instance_name:
@@ -625,6 +626,7 @@ class GLSLParser:
                 qualifiers=qualifiers,
                 array_size=array_size,
                 layout=layout,
+                array_sizes=array_sizes,
             )
             block_var.interface_block = block_name
             block_var.is_array = instance_is_array
@@ -668,12 +670,8 @@ class GLSLParser:
                 param_name = self.current_token[1]
                 self.eat("IDENTIFIER")
 
-                array_size = None
-                if self.current_token[0] == "LBRACKET":
-                    self.eat("LBRACKET")
-                    if self.current_token[0] != "RBRACKET":
-                        array_size = self.parse_expression()
-                    self.eat("RBRACKET")
+                array_sizes = self.parse_array_suffixes()
+                array_size = array_sizes[0] if array_sizes else None
 
                 params.append(
                     VariableNode(
@@ -681,6 +679,8 @@ class GLSLParser:
                         param_name,
                         qualifiers=qualifiers,
                         array_size=array_size,
+                        array_sizes=array_sizes,
+                        is_array=bool(array_sizes),
                     )
                 )
                 if self.current_token[0] == "COMMA":

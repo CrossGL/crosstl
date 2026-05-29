@@ -1074,9 +1074,7 @@ class GLSLToCrossGLConverter:
                 var_type = self.convert_type(uniform.vtype)
                 var_name = uniform.name
                 attributes = self.image_resource_attribute_suffix(uniform)
-                array_suffix = ""
-                if getattr(uniform, "array_size", None) is not None:
-                    array_suffix = f"[{self.generate_expression(uniform.array_size)}]"
+                array_suffix = self.array_suffix(uniform)
                 result += (
                     self.indent_str
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
@@ -1088,11 +1086,7 @@ class GLSLToCrossGLConverter:
                 for uniform in data_uniforms:
                     var_type = self.convert_type(uniform.vtype)
                     var_name = uniform.name
-                    array_suffix = ""
-                    if getattr(uniform, "array_size", None) is not None:
-                        array_suffix = (
-                            f"[{self.generate_expression(uniform.array_size)}]"
-                        )
+                    array_suffix = self.array_suffix(uniform)
                     result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
                 self.decrease_indent()
                 result += self.indent_str + "};\n"
@@ -1293,6 +1287,12 @@ class GLSLToCrossGLConverter:
         return result
 
     def array_suffix(self, node):
+        array_sizes = getattr(node, "array_sizes", None)
+        if array_sizes:
+            return "".join(
+                f"[{self.generate_expression(size)}]" if size is not None else "[]"
+                for size in array_sizes
+            )
         if getattr(node, "array_size", None) is not None:
             return f"[{self.generate_expression(node.array_size)}]"
         if getattr(node, "is_array", False):
