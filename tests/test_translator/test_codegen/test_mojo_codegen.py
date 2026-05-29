@@ -4790,6 +4790,14 @@ def _generic_payload_enum_direct_resource_payload_source():
         return Result::Ok(values);
     }
 
+    Result<ByteAddressBuffer, int> makeReadRaw(ByteAddressBuffer raw) {
+        return Result::Ok(raw);
+    }
+
+    Result<RWByteAddressBuffer, int> makeRaw(RWByteAddressBuffer raw) {
+        return Result::Ok(raw);
+    }
+
     Result<sampler2D[2], int> makeTextureArray(sampler2D textures[2]) {
         return Result::Ok(textures);
     }
@@ -4800,6 +4808,12 @@ def _generic_payload_enum_direct_resource_payload_source():
 
     Result<RWStructuredBuffer<int>[2], int> makeBufferArray(
         RWStructuredBuffer<int> values[2]
+    ) {
+        return Result::Ok(values);
+    }
+
+    Result<RWByteAddressBuffer[2], int> makeRawArray(
+        RWByteAddressBuffer values[2]
     ) {
         return Result::Ok(values);
     }
@@ -4875,6 +4889,30 @@ def _generic_payload_enum_direct_resource_payload_source():
         }
     }
 
+    uint4 loadReadRawPayload(
+        Result<ByteAddressBuffer, int> value,
+        uint offset
+    ) {
+        return match value {
+            Result::Ok(raw) => raw.Load4(offset),
+            Result::Err(_) => uint4(0)
+        };
+    }
+
+    void storeRawPayload(
+        Result<RWByteAddressBuffer, int> value,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(raw) => {
+                raw.Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
     vec4 sampleTextureArrayPayload(
         Result<sampler2D[2], int> value,
         sampler state,
@@ -4939,6 +4977,32 @@ def _generic_payload_enum_direct_resource_payload_source():
         }
     }
 
+    uint4 loadRawArrayPayload(
+        Result<RWByteAddressBuffer[2], int> value,
+        int slot,
+        uint offset
+    ) {
+        return match value {
+            Result::Ok(values) => values[slot].Load4(offset),
+            Result::Err(_) => uint4(0)
+        };
+    }
+
+    void storeRawArrayPayload(
+        Result<RWByteAddressBuffer[2], int> value,
+        int slot,
+        uint offset,
+        uint4 data
+    ) {
+        match value {
+            Result::Ok(values) => {
+                values[slot].Store4(offset, data);
+            }
+            Result::Err(_) => {
+            }
+        }
+    }
+
     void reassignDirectPayloadWrapper() {
         Result<image2D, int> value = Result::Ok(readonlyImages[0]);
         value = Result::Err(0);
@@ -4977,8 +5041,14 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "var Ok_0: InlineArray[Image2D, 2]" in generated_code
     assert "struct Result_RWStructuredBuffer_int_int:" in generated_code
     assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
+    assert "struct Result_ByteAddressBuffer_int:" in generated_code
+    assert "var Ok_0: ByteAddressBuffer" in generated_code
+    assert "struct Result_RWByteAddressBuffer_int:" in generated_code
+    assert "var Ok_0: RWByteAddressBuffer" in generated_code
     assert "struct Result_RWStructuredBuffer_int_2_int:" in generated_code
     assert "var Ok_0: InlineArray[RWStructuredBuffer[Int32], 2]" in generated_code
+    assert "struct Result_RWByteAddressBuffer_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[RWByteAddressBuffer, 2]" in generated_code
     assert "texture_size(value.Ok_0, 0)" in generated_code
     assert "image_size(value.Ok_0)" in generated_code
     assert "sample(value.Ok_0, uv)" in generated_code
@@ -4986,11 +5056,15 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "image_store(value.Ok_0, pixel, color)" in generated_code
     assert "buffer_load(value.Ok_0, index)" in generated_code
     assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
+    assert "buffer_load4(value.Ok_0, offset)" in generated_code
+    assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
     assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
     assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
     assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
     assert "buffer_load(value.Ok_0[int(slot)], index)" in generated_code
     assert "buffer_store(value.Ok_0[int(slot)], index, scalar)" in generated_code
+    assert "buffer_load4(value.Ok_0[int(slot)], offset)" in generated_code
+    assert "buffer_store4(value.Ok_0[int(slot)], offset, data)" in generated_code
     assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
     assert "image_load(value.Ok_0.image, pixel)" in generated_code
     assert "fn reassignDirectPayloadWrapper() -> None:" in generated_code
@@ -4999,6 +5073,8 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "fn image_size(image: Image2D)" in generated_code
     assert "fn image_store(image: Image2D, " in generated_code
     assert "fn buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
+    assert "fn buffer_load4(buffer: ByteAddressBuffer, " in generated_code
+    assert "fn buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
     assert "Result<" not in generated_code
     assert ".Load(" not in generated_code
     assert ".Store(" not in generated_code
@@ -5185,6 +5261,71 @@ def test_generic_payload_enum_local_direct_resource_payload_access_diagnostics(
     ],
 )
 def test_generic_payload_enum_helper_returned_direct_resource_payload_access_diagnostics(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            readonly RWByteAddressBuffer readRaw[2];
+            RWByteAddressBuffer rawBuffers[2];
+            Result<RWByteAddressBuffer[2], int> pickRaw(bool choose) {
+                return Result::Ok(choose ? readRaw : rawBuffers);
+            }
+            void invalidHelperGlobalRawStore(
+                bool choose,
+                int slot,
+                uint offset,
+                uint4 data
+            ) {
+                Result<RWByteAddressBuffer[2], int> value = pickRaw(choose);
+                match value {
+                    Result::Ok(raws) => {
+                        raws[slot].Store4(offset, data);
+                    }
+                    Result::Err(_) => {
+                    }
+                }
+            }
+            """,
+            r"Store4.*readRaw.*readonly",
+        ),
+        (
+            """
+            generic<T, E> struct Result {
+                enum ResultType { Ok(T), Err(E) }
+                ResultType variant;
+            }
+            writeonly RWByteAddressBuffer writeRaw;
+            RWByteAddressBuffer rawBuffer;
+            Result<RWByteAddressBuffer, int> pickRaw(int mode) {
+                return match mode {
+                    0 => Result::Ok(writeRaw),
+                    _ => Result::Ok(rawBuffer)
+                };
+            }
+            uint4 invalidHelperGlobalRawRead(int mode, uint offset) {
+                Result<RWByteAddressBuffer, int> value = pickRaw(mode);
+                return match value {
+                    Result::Ok(raw) => raw.Load4(offset),
+                    Result::Err(_) => uint4(0)
+                };
+            }
+            """,
+            r"Load4.*writeRaw.*writeonly",
+        ),
+    ],
+)
+def test_generic_payload_enum_helper_returned_global_byte_address_payload_access_diagnostics(
     source, pattern
 ):
     with pytest.raises(ValueError, match=pattern):
