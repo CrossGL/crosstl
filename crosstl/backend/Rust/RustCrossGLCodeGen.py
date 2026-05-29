@@ -476,6 +476,7 @@ class RustToCrossGLConverter:
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
         self.local_function_item_names = set()
+        self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
@@ -546,6 +547,7 @@ class RustToCrossGLConverter:
         self.closure_helper_names = set()
         self.local_function_item_counter = 0
         self.local_function_item_names = set()
+        self.local_function_item_helper_names = {}
         self.current_closure_helpers = None
         self.closure_helper_generation_depth = 0
         self.name_alias_scopes = []
@@ -654,6 +656,22 @@ class RustToCrossGLConverter:
             if callable_name is not None:
                 return callable_name
         return None
+
+    def get_local_function_item_helper_name(self, func):
+        key = id(func)
+        helper_name = self.local_function_item_helper_names.get(key)
+        if helper_name is None:
+            helper_name = self.next_local_function_item_name(func.name)
+            self.local_function_item_helper_names[key] = helper_name
+        return helper_name
+
+    def predeclare_local_function_items(self, body):
+        for stmt in body or []:
+            if isinstance(stmt, FunctionNode):
+                self.add_local_callable(
+                    stmt.name,
+                    self.get_local_function_item_helper_name(stmt),
+                )
 
     def generate_scoped_function_body(self, body, indent=1, loop_contexts=None):
         self.push_local_callable_scope()
@@ -1831,8 +1849,13 @@ class RustToCrossGLConverter:
         scoped_aliases = self.local_aliasing_enabled()
         if scoped_aliases:
             self.push_name_alias_scope()
+        pushed_callable_scope = False
+        if not self.local_callable_scopes:
+            self.push_local_callable_scope()
+            pushed_callable_scope = True
 
         try:
+            self.predeclare_local_function_items(body)
             for stmt in body:
                 if isinstance(stmt, ConstNode):
                     code += self.generate_const_statement(stmt, indent)
@@ -1946,11 +1969,13 @@ class RustToCrossGLConverter:
         finally:
             if scoped_aliases:
                 self.pop_name_alias_scope()
+            if pushed_callable_scope:
+                self.pop_local_callable_scope()
 
         return code
 
     def generate_local_function_item(self, func):
-        helper_name = self.next_local_function_item_name(func.name)
+        helper_name = self.get_local_function_item_helper_name(func)
         self.add_local_callable(func.name, helper_name)
         helper_func = FunctionNode(
             func.return_type,
