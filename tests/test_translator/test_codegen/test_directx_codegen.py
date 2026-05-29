@@ -180,6 +180,158 @@ def test_directx_synchronization_builtins_reject_arguments():
         generate_code(parse_code(tokenize_code(shader)))
 
 
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        "barrier",
+        "workgroupBarrier",
+        "groupMemoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrier",
+        "allMemoryBarrier",
+    ],
+)
+def test_directx_synchronization_builtins_reject_unsupported_fragment_stages(builtin):
+    shader = f"""
+    shader BadSynchronizationStage {{
+        fragment {{
+            void main() {{
+                {builtin}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX fragment stage cannot call {re.escape(builtin)}; "
+            r".*only valid in compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_device_memory_synchronization_builtins_allow_fragment_stage():
+    shader = """
+    shader FragmentDeviceMemorySynchronization {
+        fragment {
+            void main() {
+                deviceMemoryBarrier();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert generated_code.count("DeviceMemoryBarrier();") == 3
+    assert "deviceMemoryBarrier();" not in generated_code
+    assert "memoryBarrierBuffer();" not in generated_code
+    assert "memoryBarrierImage();" not in generated_code
+
+
+@pytest.mark.parametrize(
+    "builtin",
+    [
+        "deviceMemoryBarrier",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+    ],
+)
+def test_directx_device_memory_synchronization_rejects_vertex_stage(builtin):
+    shader = f"""
+    shader BadDeviceMemorySynchronizationStage {{
+        vertex {{
+            void main() {{
+                {builtin}();
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            rf"DirectX vertex stage cannot call {re.escape(builtin)}; "
+            r".*valid in fragment/pixel, compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_synchronization_builtins_reject_transitive_non_compute_calls():
+    shader = """
+    shader TransitiveSynchronizationStage {
+        void synchronize_workgroup() {
+            workgroupBarrier();
+        }
+
+        fragment {
+            void main() {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"DirectX fragment stage cannot call synchronize_workgroup; "
+            r"'synchronize_workgroup' reaches 'workgroupBarrier'.*"
+            r"compute, mesh, or amplification/task stages"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_directx_synchronization_helper_calls_remain_compute_compatible():
+    shader = """
+    shader ComputeSynchronizationHelper {
+        void synchronize_workgroup() {
+            workgroupBarrier();
+        }
+
+        compute {
+            void main() {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "void synchronize_workgroup()" in generated_code
+    assert "GroupMemoryBarrierWithGroupSync();" in generated_code
+    assert "synchronize_workgroup();" in generated_code
+
+
+def test_directx_synchronization_helper_calls_remain_mesh_compatible():
+    shader = """
+    shader MeshSynchronizationHelper {
+        void synchronize_workgroup() {
+            groupMemoryBarrier();
+        }
+
+        mesh {
+            void main() @numthreads(32, 1, 1) @outputtopology(triangle) {
+                synchronize_workgroup();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert '[shader("mesh")]' in generated_code
+    assert "GroupMemoryBarrier();" in generated_code
+    assert "synchronize_workgroup();" in generated_code
+
+
 def test_directx_interpolation_builtins_lower_to_hlsl_intrinsics():
     shader = """
     shader InterpolationBuiltins {

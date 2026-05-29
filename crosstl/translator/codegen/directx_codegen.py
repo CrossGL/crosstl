@@ -312,6 +312,17 @@ class HLSLCodeGen:
         "write_sampler_feedback": "WriteSamplerFeedback",
         "write_sampler_feedback_bias": "WriteSamplerFeedbackBias",
     }
+    HLSL_SYNCHRONIZATION_INTRINSICS = {
+        "barrier": "GroupMemoryBarrierWithGroupSync",
+        "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
+        "groupMemoryBarrier": "GroupMemoryBarrier",
+        "memoryBarrierShared": "GroupMemoryBarrier",
+        "deviceMemoryBarrier": "DeviceMemoryBarrier",
+        "memoryBarrierBuffer": "DeviceMemoryBarrier",
+        "memoryBarrierImage": "DeviceMemoryBarrier",
+        "memoryBarrier": "AllMemoryBarrier",
+        "allMemoryBarrier": "AllMemoryBarrier",
+    }
     HLSL_RAY_FLAG_VALUES = {
         "RAY_FLAG_NONE": 0x00,
         "RAY_FLAG_FORCE_OPAQUE": 0x01,
@@ -490,6 +501,7 @@ class HLSLCodeGen:
         self.function_return_types = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_synchronization_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.resource_array_size_hints = {}
@@ -779,6 +791,7 @@ class HLSLCodeGen:
         self.function_parameter_types = {}
         self.function_image_access_requirements = {}
         self.hlsl_pixel_only_feedback_function_names = {}
+        self.hlsl_synchronization_function_names = {}
         self.unsupported_glsl_buffer_block_functions = {}
         self.unsupported_glsl_buffer_block_struct_names = set()
         self.current_function_return_type = None
@@ -965,6 +978,9 @@ class HLSLCodeGen:
         )
         self.hlsl_pixel_only_feedback_function_names = (
             self.collect_hlsl_pixel_only_feedback_function_names(functions)
+        )
+        self.hlsl_synchronization_function_names = (
+            self.collect_hlsl_synchronization_function_names(functions)
         )
         (
             self.resource_array_size_hints,
@@ -2177,6 +2193,7 @@ class HLSLCodeGen:
                 func, effective_shader_type, return_semantic
             )
             self.validate_hlsl_feedback_texture_stage_calls(func, effective_shader_type)
+            self.validate_hlsl_synchronization_stage_calls(func, effective_shader_type)
         waveops_helper_lanes_attribute = (
             self.generate_hlsl_waveops_include_helper_lanes_attribute(
                 func, effective_shader_type
@@ -3666,17 +3683,7 @@ class HLSLCodeGen:
         return f"{intrinsic}()"
 
     def synchronization_intrinsic_name(self, func_name):
-        return {
-            "barrier": "GroupMemoryBarrierWithGroupSync",
-            "workgroupBarrier": "GroupMemoryBarrierWithGroupSync",
-            "groupMemoryBarrier": "GroupMemoryBarrier",
-            "memoryBarrierShared": "GroupMemoryBarrier",
-            "deviceMemoryBarrier": "DeviceMemoryBarrier",
-            "memoryBarrierBuffer": "DeviceMemoryBarrier",
-            "memoryBarrierImage": "DeviceMemoryBarrier",
-            "memoryBarrier": "AllMemoryBarrier",
-            "allMemoryBarrier": "AllMemoryBarrier",
-        }.get(func_name)
+        return self.HLSL_SYNCHRONIZATION_INTRINSICS.get(func_name)
 
     def interpolation_function_call(self, func_name, args):
         if not func_name or func_name in getattr(self, "function_return_types", {}):
@@ -14550,6 +14557,113 @@ class HLSLCodeGen:
             "RasterizerOrderedStructuredBuffer",
             "RasterizerOrderedByteAddressBuffer",
         }
+
+    def is_hlsl_synchronization_builtin_call_name(self, callee, shadowed_names=None):
+        if callee not in self.HLSL_SYNCHRONIZATION_INTRINSICS:
+            return False
+        if shadowed_names is None:
+            shadowed_names = getattr(self, "function_return_types", {})
+        return callee not in shadowed_names
+
+    def collect_hlsl_synchronization_function_names(self, functions):
+        named_functions = {
+            func.name: func
+            for func in functions or []
+            if getattr(func, "name", None) is not None
+        }
+        requirements = {}
+        calls_by_function = {}
+
+        for func_name, func in named_functions.items():
+            callees = set()
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                callee = self.function_call_name(node)
+                if self.is_hlsl_synchronization_builtin_call_name(
+                    callee, named_functions
+                ):
+                    requirements[func_name] = callee
+                elif callee in named_functions:
+                    callees.add(callee)
+            if callees:
+                calls_by_function[func_name] = callees
+
+        changed = True
+        while changed:
+            changed = False
+            for func_name, callees in calls_by_function.items():
+                if func_name in requirements:
+                    continue
+                for callee in callees:
+                    required_builtin = requirements.get(callee)
+                    if required_builtin is not None:
+                        requirements[func_name] = required_builtin
+                        changed = True
+                        break
+
+        return requirements
+
+    def hlsl_synchronization_calls(self, func):
+        calls = []
+        for node in self.walk_ast(getattr(func, "body", [])):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            if self.is_hlsl_synchronization_builtin_call_name(callee):
+                calls.append((callee, callee))
+            elif callee in self.hlsl_synchronization_function_names:
+                calls.append((callee, self.hlsl_synchronization_function_names[callee]))
+        return calls
+
+    def hlsl_synchronization_supported_stages(self, builtin_name):
+        intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS.get(builtin_name)
+        compute_like_stages = {"compute", "mesh", "task", "amplification", "object"}
+        if intrinsic == "DeviceMemoryBarrier":
+            return compute_like_stages | {"fragment"}
+        return compute_like_stages
+
+    def hlsl_synchronization_stage_description(self, stages):
+        if stages == {"compute", "mesh", "task", "amplification", "object"}:
+            return "compute, mesh, or amplification/task stages"
+        if stages == {
+            "compute",
+            "mesh",
+            "task",
+            "amplification",
+            "object",
+            "fragment",
+        }:
+            return "fragment/pixel, compute, mesh, or amplification/task stages"
+        return ", ".join(sorted(stages))
+
+    def validate_hlsl_synchronization_stage_calls(self, func, shader_type):
+        if shader_type is None:
+            return
+
+        calls = self.hlsl_synchronization_calls(func)
+        for callee, builtin_name in calls:
+            supported_stages = self.hlsl_synchronization_supported_stages(builtin_name)
+            if shader_type in supported_stages:
+                continue
+
+            intrinsic = self.HLSL_SYNCHRONIZATION_INTRINSICS[builtin_name]
+            stage_description = self.hlsl_synchronization_stage_description(
+                supported_stages
+            )
+            if callee == builtin_name:
+                detail = (
+                    f"'{builtin_name}' lowers to {intrinsic}, which is only "
+                    f"valid in {stage_description}"
+                )
+            else:
+                detail = (
+                    f"'{callee}' reaches '{builtin_name}', which lowers to "
+                    f"{intrinsic} and is only valid in {stage_description}"
+                )
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot call {callee}; {detail}"
+            )
 
     def collect_hlsl_pixel_only_feedback_function_names(self, functions):
         named_functions = {
