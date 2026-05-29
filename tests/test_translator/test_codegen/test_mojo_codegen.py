@@ -9543,6 +9543,123 @@ def test_nested_generic_resource_array_aliases_remain_field_specific():
     assert ".Store(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            struct ImageBox {
+                RWTexture2D<float2> image;
+                int tag;
+            };
+            readonly RWTexture2D<float2> inputImage;
+            writeonly RWTexture2D<float2> outputImage;
+
+            ImageBox[2] forwardBoxes(ImageBox boxes[2]) {
+                return boxes;
+            }
+
+            void invalidStore(int slot, int2 pixel, float2 value) {
+                ImageBox boxes[2] = {
+                    ImageBox(inputImage, 0),
+                    ImageBox(outputImage, 1)
+                };
+                ImageBox selected[2] = forwardBoxes(boxes);
+                selected[slot].image.Store(pixel, value);
+            }
+            """,
+            r"imageStore.*inputImage.*readonly",
+        ),
+        (
+            """
+            struct ImageBox {
+                RWTexture2D<float2> image;
+                int tag;
+            };
+            readonly RWTexture2D<float2> inputImage;
+            writeonly RWTexture2D<float2> outputImage;
+
+            ImageBox[2] chooseBoxes(
+                int mode,
+                ImageBox readBoxes[2],
+                ImageBox writeBoxes[2]
+            ) {
+                return match mode {
+                    0 => readBoxes,
+                    _ => writeBoxes
+                };
+            }
+
+            float2 invalidLoad(int mode, int slot, int2 pixel) {
+                ImageBox readBoxes[2] = {
+                    ImageBox(inputImage, 0),
+                    ImageBox(inputImage, 1)
+                };
+                ImageBox writeBoxes[2] = {
+                    ImageBox(outputImage, 0),
+                    ImageBox(outputImage, 1)
+                };
+                ImageBox selected[2] = chooseBoxes(
+                    mode,
+                    readBoxes,
+                    writeBoxes
+                );
+                return selected[slot].image.Load(pixel);
+            }
+            """,
+            r"imageLoad.*outputImage.*writeonly",
+        ),
+    ],
+)
+def test_image_prefixed_struct_array_return_aliases_for_mojo_codegen(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_image_prefixed_struct_array_return_aliases_remain_field_specific():
+    source = """
+    struct ImageBox {
+        RWTexture2D<float2> readable;
+        RWTexture2D<float2> writable;
+    };
+    readonly RWTexture2D<float2> inputImage;
+    writeonly RWTexture2D<float2> outputImage;
+
+    ImageBox[2] forwardBoxes(ImageBox boxes[2]) {
+        return boxes;
+    }
+
+    float2 readSelected(int slot, int2 pixel) {
+        ImageBox boxes[2] = {
+            ImageBox(inputImage, outputImage),
+            ImageBox(inputImage, outputImage)
+        };
+        ImageBox selected[2] = forwardBoxes(boxes);
+        return selected[slot].readable.Load(pixel);
+    }
+
+    void writeSelected(int slot, int2 pixel, float2 value) {
+        ImageBox boxes[2] = {
+            ImageBox(inputImage, outputImage),
+            ImageBox(inputImage, outputImage)
+        };
+        ImageBox selected[2] = forwardBoxes(boxes);
+        selected[slot].writable.Store(pixel, value);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "struct ImageBox:" in generated_code
+    assert "var readable: Image2DFloat2" in generated_code
+    assert "var writable: Image2DFloat2" in generated_code
+    assert "image_load(selected[int(slot)].readable, pixel)" in generated_code
+    assert "image_store(selected[int(slot)].writable, pixel, value)" in generated_code
+    assert "ImageBox kind=image" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+
+
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
     invalid_byte_address_atomic = """
     RWByteAddressBuffer rawBuffer;

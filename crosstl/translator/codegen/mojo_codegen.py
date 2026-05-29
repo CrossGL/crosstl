@@ -2634,6 +2634,8 @@ class MojoCodeGen:
         if node is not None and self.is_glsl_buffer_block_node(node):
             return "glsl_buffer_block"
         base_type, _ = self.resource_base_type_and_count(type_name)
+        if base_type in self.struct_types or base_type in self.enum_types:
+            return None
         if self.buffer_resource_info(base_type) is not None:
             return "buffer"
         mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(

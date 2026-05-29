@@ -1880,14 +1880,14 @@ class HipToCrossGLConverter:
             return ["// HIP peek at last error"]
         elif name == "hipGetDevice":
             if args:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "currentDevice")
                 return [f"// HIP get current device: output: {output}"]
         elif name == "hipGetDeviceCount":
             if args:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "deviceCount")
@@ -1909,7 +1909,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP get device properties: {output}, device: {args[1]}"]
         elif name == "hipDeviceGetAttribute":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_attribute_source(output_name, args[1], args[2])
@@ -1929,7 +1929,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP get device UUID: output: {output}, device: {args[1]}"]
         elif name == "hipDeviceTotalMem":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "totalMem", args[1])
@@ -1939,8 +1939,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceComputeCapability":
             if len(args) >= 3:
-                major_output = self.format_runtime_pointer_target(node.args[0])
-                minor_output = self.format_runtime_pointer_target(node.args[1])
+                major_output = self.format_runtime_raw_output_target(node.args[0])
+                minor_output = self.format_runtime_raw_output_target(node.args[1])
                 major_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 minor_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if major_output_name is not None:
@@ -1958,7 +1958,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipChooseDevice":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "selectedDevice")
@@ -1967,8 +1967,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipExtGetLinkTypeAndHopCount":
             if len(args) >= 4:
-                link_type_output = self.format_runtime_pointer_target(node.args[2])
-                hop_count_output = self.format_runtime_pointer_target(node.args[3])
+                link_type_output = self.format_runtime_raw_output_target(node.args[2])
+                hop_count_output = self.format_runtime_raw_output_target(node.args[3])
                 link_type_output_name = self.get_runtime_pointer_target_name(
                     node.args[2]
                 )
@@ -1996,7 +1996,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetByPCIBusId":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2008,7 +2008,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetCacheConfig":
             if args:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "cacheConfig")
@@ -2018,7 +2018,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP set device cache config: {args[0]}"]
         elif name == "hipDeviceGetSharedMemConfig":
             if args:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "sharedMemConfig")
@@ -2028,7 +2028,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP set device shared memory config: {args[0]}"]
         elif name == "hipDeviceGetLimit":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, f"limit.{args[1]}")
@@ -2040,7 +2040,7 @@ class HipToCrossGLConverter:
             return ["// HIP device reset"]
         elif name == "hipGetDeviceFlags":
             if args:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "deviceFlags")
@@ -3172,7 +3172,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP get {version_kind} version: output: {output}"]
         if name == "hipDeviceGet":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -3183,7 +3183,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDeviceCanAccessPeer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -3195,7 +3195,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDeviceGetP2PAttribute":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -3243,14 +3243,14 @@ class HipToCrossGLConverter:
                 return [f"// HIP context get current: output: {output}"]
         if name == "hipCtxGetDevice":
             if args:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "context.device")
                 return [f"// HIP context get device: output: {output}"]
         if name == "hipCtxGetApiVersion":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -3262,7 +3262,7 @@ class HipToCrossGLConverter:
                 ]
         if name in {"hipCtxGetCacheConfig", "hipCtxGetSharedMemConfig"}:
             if args:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 config_kind = "cache" if "Cache" in name else "shared memory"
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
@@ -3279,7 +3279,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context set {config_kind} config: {args[0]}"]
         if name == "hipCtxGetFlags":
             if args:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 if output_name is not None:
                     self.register_device_query_source(output_name, "context.flags")
@@ -3306,8 +3306,8 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipDevicePrimaryCtxGetState":
             if len(args) >= 3:
-                flags_output = self.format_runtime_pointer_target(raw_args[1])
-                active_output = self.format_runtime_pointer_target(raw_args[2])
+                flags_output = self.format_runtime_raw_output_target(raw_args[1])
+                active_output = self.format_runtime_raw_output_target(raw_args[2])
                 flags_output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 active_output_name = self.get_runtime_pointer_target_name(raw_args[2])
                 if flags_output_name is not None:
