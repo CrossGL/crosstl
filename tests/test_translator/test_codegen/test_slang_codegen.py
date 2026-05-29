@@ -8909,6 +8909,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec3 badUv = vec3(0.25, 0.5, 0.75);
                 vec2 ddx = vec2(0.1, 0.0);
                 vec2 ddy = vec2(0.0, 0.1);
+                ivec2 intDdx = ivec2(1, 0);
+                bvec2 boolDdy = bvec2(true, false);
                 ivec2 pixel = ivec2(2, 3);
                 ivec3 badPixel = ivec3(2, 3, 4);
                 float floatFetchLod = 1.0;
@@ -8946,6 +8948,8 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
                 vec4 badLodRank = textureLod(colorMap, uv, badLod);
                 vec4 badGradCoordRank = textureGrad(colorMap, scalarCoord, ddx, ddy);
                 vec4 badGradRank = textureGrad(colorMap, uv, badUv, ddy);
+                vec4 intGradType = textureGrad(colorMap, uv, intDdx, ddy);
+                vec4 boolGradType = textureGrad(colorMap, uv, ddx, boolDdy);
                 vec4 missingFetchLevel = texelFetch(colorMap, pixel);
                 vec4 extraFetchLevel = texelFetch(
                     colorMap,
@@ -9063,6 +9067,16 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "float4(0.0);" in generated_code
     )
     assert (
+        "float4 intGradType = /* unsupported Slang sampled texture: "
+        "textureGrad gradient must be scalar or vector float or double, got int2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 boolGradType = /* unsupported Slang sampled texture: "
+        "textureGrad gradient must be scalar or vector float or double, got bool2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
         "float4 missingFetchLevel = /* unsupported Slang sampled texture: "
         "texelFetch requires one lod/sample argument */ float4(0.0);" in generated_code
     )
@@ -9110,7 +9124,7 @@ def test_malformed_sampled_texture_ops_emit_slang_diagnostics():
         "texelFetch fetch index argument must be scalar int or uint, got bool */ "
         "float4(0.0);" in generated_code
     )
-    assert generated_code.count("unsupported Slang sampled texture") == 29
+    assert generated_code.count("unsupported Slang sampled texture") == 31
     assert "texture(" not in generated_code
     assert "textureLod(" not in generated_code
     assert "textureGrad(" not in generated_code
@@ -10084,6 +10098,8 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                 vec2 ddx = vec2(0.1, 0.0);
                 vec3 badDdx = vec3(0.1, 0.0, 0.0);
                 vec2 badDepth = vec2(0.5, 0.25);
+                ivec2 intDdx = ivec2(1, 0);
+                bvec2 boolDdy = bvec2(true, false);
                 bool boolLod = true;
                 vec2 badLod = vec2(0.0, 1.0);
                 int intDepth = 1;
@@ -10137,6 +10153,20 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
                     0.5,
                     badDdx,
                     ddx
+                );
+                float intGradCompare = textureCompareGrad(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    intDdx,
+                    ddx
+                );
+                float boolGradCompare = textureCompareGrad(
+                    shadowMap,
+                    uv,
+                    0.5,
+                    ddx,
+                    boolDdy
                 );
                 vec4 badGatherCoordRank = textureGatherCompare(
                     shadowMap,
@@ -10252,6 +10282,16 @@ def test_shadow_compare_invalid_slang_calls_emit_diagnostic_stubs():
         "float badGradRank = /* unsupported Slang shadow compare: "
         "textureCompareGrad requires a 2-component gradient for sampler2DShadow */ "
         "0.0;" in generated_code
+    )
+    assert (
+        "float intGradCompare = /* unsupported Slang shadow compare: "
+        "textureCompareGrad gradient must be scalar or vector float or double, "
+        "got int2 */ 0.0;" in generated_code
+    )
+    assert (
+        "float boolGradCompare = /* unsupported Slang shadow compare: "
+        "textureCompareGrad gradient must be scalar or vector float or double, "
+        "got bool2 */ 0.0;" in generated_code
     )
     assert (
         "float4 badGatherCoordRank = /* unsupported Slang shadow gather compare: "

@@ -10415,6 +10415,69 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_returned_resource_array_actual_indices_are_side_effect_safe(
+        self,
+    ):
+        """Test CUDA sidecars avoid duplicating unsafe caller index actuals."""
+        source_code = """
+        shader ReturnedResourceArrayActualIndexSafety {
+            sampler2d textures[8];
+
+            sampler2d chooseParamOffsetTex(sampler2d texs[8], int slot, int offset) {
+                return texs[slot + offset];
+            }
+
+            int nextSlot() {
+                return 1;
+            }
+
+            void consume(sampler2d tex) {
+                ivec2 texSize = textureSize(tex, 0);
+            }
+
+            compute {
+                void main(int slot, int offset) {
+                    ivec2 safeActualSize =
+                        textureSize(
+                            chooseParamOffsetTex(textures, slot + 1, offset * 2),
+                            0
+                        );
+                    ivec2 unsafeCallSize =
+                        textureSize(
+                            chooseParamOffsetTex(textures, nextSlot(), offset),
+                            0
+                        );
+                    consume(chooseParamOffsetTex(textures, slot++, offset));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo textures_metadata[8] = {};" in cuda_code
+        assert (
+            "int2 safeActualSize = cgl_textureSize_sampler2D"
+            "(textures_metadata[((slot + 1) + (offset * 2))], 0);" in cuda_code
+        )
+        assert (
+            "int2 unsafeCallSize = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert (
+            "consume(chooseParamOffsetTex(textures, slot++, offset), "
+            "/* unsupported CUDA resource query: metadata unavailable for "
+            "sampler2D argument tex */ CglResourceQueryInfo{});" in cuda_code
+        )
+        assert "textures_metadata[(nextSlot() + offset)]" not in cuda_code
+        assert "textures_metadata[(slot++ + offset)]" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
     def test_dynamic_and_nested_resource_query_arrays_emit_cuda_metadata(self):
         """Test CUDA metadata sidecars cover dynamic and nested resource arrays."""
         source_code = """

@@ -2714,6 +2714,62 @@ def test_codegen_rwstructured_buffer_counter_methods_roundtrip():
     assert "buffer_decrement_counter(" not in hlsl
 
 
+def test_codegen_buffer_get_dimensions_array_receivers_roundtrip():
+    code = textwrap.dedent("""
+        StructuredBuffer<float4> sourceBuffers[3] : register(t0, space8);
+        RWStructuredBuffer<uint> outputBuffers[3] : register(u0, space8);
+        ByteAddressBuffer rawInputs[3] : register(t3, space8);
+        RWByteAddressBuffer rawOutputs[3] : register(u3, space8);
+
+        uint main(uint bufferIndex : TEXCOORD0) : SV_Target0 {
+            uint slot = NonUniformResourceIndex(bufferIndex);
+            uint sourceCount;
+            uint sourceStride;
+            uint outputCount;
+            uint outputStride;
+            uint rawInputBytes;
+            uint rawOutputBytes;
+            sourceBuffers[slot].GetDimensions(sourceCount, sourceStride);
+            outputBuffers[slot].GetDimensions(outputCount, outputStride);
+            rawInputs[slot].GetDimensions(rawInputBytes);
+            rawOutputs[slot].GetDimensions(rawOutputBytes);
+            return sourceCount + sourceStride + outputCount + outputStride
+                + rawInputBytes + rawOutputBytes;
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "StructuredBuffer<float4> sourceBuffers[3];" in crossgl
+    assert "RWStructuredBuffer<uint> outputBuffers[3];" in crossgl
+    assert "ByteAddressBuffer rawInputs[3];" in crossgl
+    assert "RWByteAddressBuffer rawOutputs[3];" in crossgl
+    assert "uint slot = NonUniformResourceIndex(bufferIndex);" in crossgl
+    assert (
+        "buffer_dimensions(sourceBuffers[slot], sourceCount, sourceStride);" in crossgl
+    )
+    assert (
+        "buffer_dimensions(outputBuffers[slot], outputCount, outputStride);" in crossgl
+    )
+    assert "buffer_dimensions(rawInputs[slot], rawInputBytes);" in crossgl
+    assert "buffer_dimensions(rawOutputs[slot], rawOutputBytes);" in crossgl
+    assert ".GetDimensions(" not in crossgl
+
+    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+
+    assert "StructuredBuffer<float4> sourceBuffers[3] : register(t0, space8);" in hlsl
+    assert "RWStructuredBuffer<uint> outputBuffers[3] : register(u0, space8);" in hlsl
+    assert "ByteAddressBuffer rawInputs[3] : register(t3, space8);" in hlsl
+    assert "RWByteAddressBuffer rawOutputs[3] : register(u3, space8);" in hlsl
+    assert "uint slot = NonUniformResourceIndex(bufferIndex);" in hlsl
+    assert "sourceBuffers[slot].GetDimensions(sourceCount, sourceStride);" in hlsl
+    assert "outputBuffers[slot].GetDimensions(outputCount, outputStride);" in hlsl
+    assert "rawInputs[slot].GetDimensions(rawInputBytes);" in hlsl
+    assert "rawOutputs[slot].GetDimensions(rawOutputBytes);" in hlsl
+    assert "float slot" not in hlsl
+    assert "buffer_dimensions(" not in hlsl
+
+
 def test_codegen_sample_cmp_infers_shadow_texture_for_translator_roundtrip():
     code = textwrap.dedent("""
         Texture2D<float> shadowMap : register(t0);

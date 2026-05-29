@@ -5491,6 +5491,114 @@ def test_resource_struct_array_function_boundaries_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ResourceSet {
+        sampler2D texture;
+        sampler state;
+        readonly image2D inputs[2];
+        writeonly image2D outputs[2];
+        sampler2D textures[2];
+        RWStructuredBuffer<int> values[2];
+        RWByteAddressBuffer rawBuffers[2];
+    };
+
+    ResourceSet[2] cloneSets(ResourceSet sets[2]) {
+        return sets;
+    }
+
+    vec4 sampleCopied(ResourceSet sets[2], int slot, vec2 uv) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return texture(copied[0].textures[slot], copied[0].state, uv);
+    }
+
+    vec4 readCopied(ResourceSet sets[2], int slot, ivec2 pixel) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return imageLoad(copied[0].inputs[slot], pixel);
+    }
+
+    void writeCopied(ResourceSet sets[2], int slot, ivec2 pixel, vec4 value) {
+        ResourceSet copied[2] = cloneSets(sets);
+        imageStore(copied[0].outputs[slot], pixel, value);
+    }
+
+    int loadBufferCopied(ResourceSet sets[2], int slot, uint index) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[0].values[slot].Load(index);
+    }
+
+    void storeBufferCopied(ResourceSet sets[2], int slot, uint index, int value) {
+        ResourceSet copied[2] = cloneSets(sets);
+        copied[0].values[slot].Store(index, value);
+    }
+
+    uint loadRawCopied(ResourceSet sets[2], int slot, uint offset) {
+        ResourceSet copied[2] = cloneSets(sets);
+        return copied[0].rawBuffers[slot].Load(offset);
+    }
+
+    void storeRawCopied(ResourceSet sets[2], int slot, uint offset, uint4 data) {
+        ResourceSet copied[2] = cloneSets(sets);
+        copied[0].rawBuffers[slot].Store4(offset, data);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
+        "InlineArray[ResourceSet, 2]:" in generated_code
+    )
+    assert "return sample(copied[0].textures[int(slot)], uv)" in generated_code
+    assert "return image_load(copied[0].inputs[int(slot)], pixel)" in generated_code
+    assert "image_store(copied[0].outputs[int(slot)], pixel, value)" in (generated_code)
+    assert "return buffer_load(copied[0].values[int(slot)], index)" in generated_code
+    assert "buffer_store(copied[0].values[int(slot)], index, value)" in generated_code
+    assert "return buffer_load(copied[0].rawBuffers[int(slot)], offset)" in (
+        generated_code
+    )
+    assert "buffer_store4(copied[0].rawBuffers[int(slot)], offset, data)" in (
+        generated_code
+    )
+    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
+        generated_code
+    )
+    assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
+        generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn buffer_store4(buffer: RWByteAddressBuffer, "
+        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
+    )
+    assert "unsafe_uninitialized=True" not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
+    assert ".Store4(" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "resource_struct_array_member_operations.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholders():
     code = """
     struct SampleSet {

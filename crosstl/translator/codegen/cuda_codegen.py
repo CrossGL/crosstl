@@ -3334,7 +3334,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             param_index = param_indices[index_name]
             if param_index >= len(raw_args):
                 return None
-            return self.visit(raw_args[param_index])
+            actual_expr = raw_args[param_index]
+            if not self.is_safe_query_return_actual_index(actual_expr):
+                return None
+            return self.visit(actual_expr)
         if isinstance(index_expr, LiteralNode):
             return self.visit(index_expr)
         if isinstance(index_expr, int):
@@ -3342,6 +3345,61 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if isinstance(index_expr, str) and index_expr.lstrip("-").isdigit():
             return index_expr
         return None
+
+    def is_safe_query_return_actual_index(self, actual_expr):
+        """Return whether a caller argument can be reused as a metadata index."""
+        if isinstance(actual_expr, LiteralNode) or isinstance(actual_expr, int):
+            return True
+        if isinstance(actual_expr, (IdentifierNode, VariableNode)):
+            return True
+        if isinstance(actual_expr, str):
+            actual_expr = actual_expr.strip()
+            return actual_expr.lstrip("-").isdigit() or actual_expr.isidentifier()
+        if isinstance(actual_expr, BinaryOpNode):
+            operator = getattr(
+                actual_expr, "operator", getattr(actual_expr, "op", None)
+            )
+            return (
+                operator in self.query_return_index_binary_ops
+                and self.is_safe_query_return_actual_index(actual_expr.left)
+                and self.is_safe_query_return_actual_index(actual_expr.right)
+            )
+        if isinstance(actual_expr, UnaryOpNode):
+            operator = getattr(
+                actual_expr, "operator", getattr(actual_expr, "op", None)
+            )
+            return (
+                not getattr(actual_expr, "is_postfix", False)
+                and operator in {"+", "-", "~"}
+                and self.is_safe_query_return_actual_index(actual_expr.operand)
+            )
+        if isinstance(actual_expr, ArrayAccessNode):
+            array_node = getattr(
+                actual_expr,
+                "array_expr",
+                getattr(actual_expr, "array", None),
+            )
+            index_node = getattr(
+                actual_expr,
+                "index_expr",
+                getattr(actual_expr, "index", None),
+            )
+            return (
+                array_node is not None
+                and index_node is not None
+                and self.is_safe_query_return_actual_index(array_node)
+                and self.is_safe_query_return_actual_index(index_node)
+            )
+        if isinstance(actual_expr, MemberAccessNode):
+            object_expr = getattr(
+                actual_expr,
+                "object_expr",
+                getattr(actual_expr, "object", None),
+            )
+            return object_expr is not None and self.is_safe_query_return_actual_index(
+                object_expr
+            )
+        return False
 
     def convert_builtin_function(self, func_name):
         """Convert CrossGL built-in functions to CUDA equivalents"""

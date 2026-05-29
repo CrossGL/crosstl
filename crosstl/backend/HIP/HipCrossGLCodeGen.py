@@ -736,6 +736,12 @@ class HipToCrossGLConverter:
                 descriptor_output = self.format_runtime_pointer_target(node.args[0])
                 extent_output = self.format_runtime_pointer_target(node.args[1])
                 flags_output = self.format_runtime_pointer_target(node.args[2])
+                flags_output_name = self.get_runtime_pointer_target_name(node.args[2])
+                if flags_output_name is not None:
+                    self.register_device_query_source(
+                        flags_output_name,
+                        f"array.info.flags({args[3]})",
+                    )
                 return [
                     f"// HIP array get info: desc output: {descriptor_output}, "
                     f"extent output: {extent_output}, flags output: {flags_output}, "
@@ -871,6 +877,12 @@ class HipToCrossGLConverter:
         elif name == "hipMemRangeGetAttribute":
             if len(args) >= 5:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"memory.rangeAttribute({args[2]}, {args[3]}, {args[4]})",
+                    )
                 return [
                     f"// HIP memory range get attribute: output: {output}, "
                     f"output bytes: {args[1]}, attribute: {args[2]}, "
@@ -1161,6 +1173,12 @@ class HipToCrossGLConverter:
         elif name == "hipGetSymbolSize":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"symbol.size({args[1]})",
+                    )
                 return [f"// HIP get symbol size: output: {output}, symbol: {args[1]}"]
         elif name in {"hipMemcpyToSymbol", "hipMemcpyToSymbolAsync"}:
             if len(args) >= 3:
@@ -2024,6 +2042,12 @@ class HipToCrossGLConverter:
         elif name == "hipFuncGetAttribute":
             if len(args) >= 3:
                 output = self.format_runtime_pointer_target(node.args[0])
+                output_name = self.get_runtime_pointer_target_name(node.args[0])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name,
+                        f"function.attribute({args[1]}, {args[2]})",
+                    )
                 return [
                     f"// HIP function get attribute: output: {output}, "
                     f"attribute: {args[1]}, function: {args[2]}"

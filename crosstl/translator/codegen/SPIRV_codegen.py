@@ -4536,7 +4536,9 @@ class VulkanSPIRVCodeGen:
             )
             return self.register_constant(0, uint_type)
         if not self.validate_mesh_count_operands(
-            "SetMeshOutputCounts", [vertex_count, primitive_count]
+            "SetMeshOutputCounts",
+            [vertex_count, primitive_count],
+            argument_exprs=arguments,
         ):
             return self.register_constant(0, uint_type)
 
@@ -4563,12 +4565,26 @@ class VulkanSPIRVCodeGen:
         return self.register_constant(0, uint_type)
 
     def validate_mesh_count_operands(
-        self, operation: str, operands: List[SpirvId], count_label: str = "count"
+        self,
+        operation: str,
+        operands: List[SpirvId],
+        count_label: str = "count",
+        argument_exprs: Optional[List] = None,
     ) -> bool:
         """Require SPIR-V mesh/task count operands to be scalar integer values."""
         if all(
             self.integer_value_component_count(operand) == 1 for operand in operands
         ):
+            if argument_exprs is not None and any(
+                (literal := self.literal_int_argument(argument)) is not None
+                and literal < 0
+                for argument in argument_exprs
+            ):
+                self.emit(
+                    f"; WARNING: SPIR-V mesh {operation} {count_label} operands "
+                    "must be non-negative integer values"
+                )
+                return False
             return True
 
         self.emit(
@@ -5719,7 +5735,10 @@ class VulkanSPIRVCodeGen:
                 )
                 return self.register_constant(0, uint_type)
             if not self.validate_mesh_count_operands(
-                "DispatchMesh", [group_count], "group-count"
+                "DispatchMesh",
+                [group_count],
+                "group-count",
+                argument_exprs=[argument],
             ):
                 return self.register_constant(0, uint_type)
             group_counts.append(self.convert_value_to_type(group_count, uint_type))

@@ -9037,9 +9037,12 @@ class SlangCodeGen:
     def texture_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         expected_rank = self.texture_gradient_rank(resource_type)
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             gradient, expected_rank, resource_type, "gradient"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_gradient_type_unsupported_reason(gradient)
 
     def gather_offset_rank_unsupported_reason(self, texture_node, offset):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
@@ -9098,9 +9101,12 @@ class SlangCodeGen:
     def shadow_compare_gradient_rank_unsupported_reason(self, texture_node, gradient):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         expected_rank = self.shadow_compare_gradient_rank(resource_type)
-        return self.texture_rank_unsupported_reason(
+        rank_reason = self.texture_rank_unsupported_reason(
             gradient, expected_rank, resource_type, "gradient"
         )
+        if rank_reason:
+            return rank_reason
+        return self.texture_gradient_type_unsupported_reason(gradient)
 
     def compare_reference_unsupported_reason(self, compare):
         type_name = self.type_name_string(self.expression_result_type(compare))
@@ -9112,6 +9118,21 @@ class SlangCodeGen:
             return None
 
         return f"compare reference must be scalar float or double, got {mapped_type}"
+
+    def texture_gradient_type_unsupported_reason(self, gradient):
+        type_name = self.type_name_string(self.expression_result_type(gradient))
+        if type_name is None:
+            return None
+
+        mapped_type = self.convert_type(type_name)
+        if mapped_type in {"float", "double"}:
+            return None
+
+        info = self.vector_value_info(type_name)
+        if info is not None and info["component_type"] in {"float", "double"}:
+            return None
+
+        return f"gradient must be scalar or vector float or double, got {mapped_type}"
 
     def scalar_texture_argument_rank_unsupported_reason(self, node, role):
         actual_rank = self.expression_value_rank(node)

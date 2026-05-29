@@ -6655,6 +6655,142 @@ class TestHipCodeGen:
         assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
+    def test_hip_symbol_range_function_output_reads_emit_metadata_expressions(self):
+        """Test HIP symbol, range, function, and array scalar outputs."""
+        code = """
+        void host(
+            void* symbol,
+            void* devicePtr,
+            hipFunction_t function,
+            hipArray_t array,
+            size_t* sizes,
+            int* values,
+            unsigned int* flagsOut
+        ) {
+            size_t symbolSize = 0;
+            size_t statusSymbolSize = 0;
+            int rangeValue = 0;
+            int statusRangeValue = 0;
+            int functionAttribute = 0;
+            int statusFunctionAttribute = 0;
+            unsigned int arrayFlags = 0;
+            HIP_ARRAY_DESCRIPTOR descriptor;
+            hipExtent extent;
+            hipGetSymbolSize(&symbolSize, symbol);
+            sizes[0] = symbolSize;
+            symbolSize = 1;
+            size_t manualSymbolSize = symbolSize;
+            hipMemRangeGetAttribute(
+                &rangeValue,
+                sizeof(int),
+                hipMemRangeAttributePreferredLocation,
+                devicePtr,
+                256
+            );
+            values[0] = rangeValue;
+            rangeValue = 2;
+            int manualRangeValue = rangeValue;
+            hipFuncGetAttribute(
+                &functionAttribute,
+                hipFuncAttributeMaxThreadsPerBlock,
+                function
+            );
+            values[1] = functionAttribute;
+            functionAttribute = 3;
+            int manualFunctionAttribute = functionAttribute;
+            hipArrayGetInfo(&descriptor, &extent, &arrayFlags, array);
+            flagsOut[0] = arrayFlags;
+            arrayFlags = 4;
+            unsigned int manualArrayFlags = arrayFlags;
+            hipError_t errSymbol = hipGetSymbolSize(&statusSymbolSize, symbol);
+            sizes[1] = statusSymbolSize;
+            hipError_t errRange =
+                hipMemRangeGetAttribute(
+                    &statusRangeValue,
+                    sizeof(int),
+                    hipMemRangeAttributeLastPrefetchLocation,
+                    devicePtr,
+                    512
+                );
+            values[2] = statusRangeValue;
+            hipError_t errFunction =
+                hipFuncGetAttribute(
+                    &statusFunctionAttribute,
+                    hipFuncAttributeSharedSizeBytes,
+                    function
+                );
+            values[3] = statusFunctionAttribute;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get symbol size: output: symbolSize, symbol: symbol" in result
+        assert "sizes[0] = (/* HIP device query: symbol.size(symbol) */ 0);" in result
+        assert "symbolSize = 1;" in result
+        assert "var manualSymbolSize: u32 = symbolSize;" in result
+        assert (
+            "// HIP memory range get attribute: output: rangeValue, "
+            "output bytes: sizeof(int), "
+            "attribute: hipMemRangeAttributePreferredLocation, "
+            "pointer: devicePtr, range bytes: 256"
+        ) in result
+        assert (
+            "values[0] = (/* HIP device query: "
+            "memory.rangeAttribute("
+            "hipMemRangeAttributePreferredLocation, devicePtr, 256) */ 0);"
+        ) in result
+        assert "rangeValue = 2;" in result
+        assert "var manualRangeValue: i32 = rangeValue;" in result
+        assert (
+            "// HIP function get attribute: output: functionAttribute, "
+            "attribute: hipFuncAttributeMaxThreadsPerBlock, function: function"
+        ) in result
+        assert (
+            "values[1] = (/* HIP device query: "
+            "function.attribute(hipFuncAttributeMaxThreadsPerBlock, function) */ 0);"
+        ) in result
+        assert "functionAttribute = 3;" in result
+        assert "var manualFunctionAttribute: i32 = functionAttribute;" in result
+        assert (
+            "// HIP array get info: desc output: descriptor, "
+            "extent output: extent, flags output: arrayFlags, array: array"
+        ) in result
+        assert (
+            "flagsOut[0] = (/* HIP device query: array.info.flags(array) */ 0);"
+            in result
+        )
+        assert "arrayFlags = 4;" in result
+        assert "var manualArrayFlags: u32 = arrayFlags;" in result
+        assert "var errSymbol: hipError_t = hipSuccess;" in result
+        assert "sizes[1] = (/* HIP device query: symbol.size(symbol) */ 0);" in result
+        assert "var errRange: hipError_t = hipSuccess;" in result
+        assert (
+            "values[2] = (/* HIP device query: "
+            "memory.rangeAttribute("
+            "hipMemRangeAttributeLastPrefetchLocation, devicePtr, 512) */ 0);"
+        ) in result
+        assert "var errFunction: hipError_t = hipSuccess;" in result
+        assert (
+            "values[3] = (/* HIP device query: "
+            "function.attribute(hipFuncAttributeSharedSizeBytes, function) */ 0);"
+        ) in result
+        assert "sizes[0] = symbolSize;" not in result
+        assert "values[0] = rangeValue;" not in result
+        assert "values[1] = functionAttribute;" not in result
+        assert "flagsOut[0] = arrayFlags;" not in result
+        assert "sizes[1] = statusSymbolSize;" not in result
+        assert "values[2] = statusRangeValue;" not in result
+        assert "values[3] = statusFunctionAttribute;" not in result
+        assert "var manualSymbolSize: u32 = (/* HIP device query:" not in result
+        assert "var manualRangeValue: i32 = (/* HIP device query:" not in result
+        assert "var manualFunctionAttribute: i32 = (/* HIP device query:" not in result
+        assert "var manualArrayFlags: u32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
