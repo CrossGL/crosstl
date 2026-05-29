@@ -6762,8 +6762,8 @@ class TestCudaCodeGen:
             "imageAtomicCompSwap on uimage2D */ 0u;" in cuda_code
         )
         assert (
-            "int2 dims = /* unsupported CUDA resource query: imageSize "
-            "metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 dims = cgl_imageSize_image2D(bundle->readImage_metadata);"
+            in cuda_code
         )
         assert "surf2Dread<float4>(chooseWrite(bundle)" not in cuda_code
         assert "surf2Dwrite(blockedRead, chooseRead(bundle)" not in cuda_code
@@ -6850,9 +6850,17 @@ class TestCudaCodeGen:
                             chooseOuterChainReadCounter(outer, slot),
                             pixel,
                             1
-                        );
+                    );
                     vec4 allowed = imageLoad(chooseNestedRead(bundle), pixel);
                     imageStore(chooseNestedWrite(bundle), pixel, allowed);
+                    ivec2 readDims = imageSize(chooseNestedRead(bundle));
+                    ivec2 writeDims = imageSize(chooseNestedWrite(bundle));
+                    ivec2 counterDims =
+                        imageSize(chooseNestedReadCounter(bundle, slot));
+                    ivec2 outerDims =
+                        imageSize(chooseOuterReadCounter(outer, slot));
+                    ivec2 outerChainDims =
+                        imageSize(chooseOuterChainReadCounter(outer, slot));
                 }
             }
         }
@@ -6880,6 +6888,26 @@ class TestCudaCodeGen:
         assert (
             "surf2Dwrite(allowed, chooseNestedWrite(bundle), "
             "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "int2 readDims = cgl_imageSize_image2D"
+            "(chooseBundle(bundle)->readImage_metadata);" in cuda_code
+        )
+        assert (
+            "int2 writeDims = cgl_imageSize_image2D"
+            "(chooseBundle(bundle)->writeImage_metadata);" in cuda_code
+        )
+        assert (
+            "int2 counterDims = cgl_imageSize_uimage2D"
+            "(chooseBundle(bundle)->readCounters_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 outerDims = cgl_imageSize_uimage2D"
+            "(outer->bundlePtr->readCounters_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 outerChainDims = cgl_imageSize_uimage2D"
+            "(chooseOuterBundle(outer)->readCounters_metadata[slot]);" in cuda_code
         )
         assert "surf2Dread<float4>(chooseNestedWrite(bundle)" not in cuda_code
         assert "surf2Dwrite(returnedBlocked, chooseNestedRead(bundle)" not in cuda_code
@@ -7943,9 +7971,8 @@ class TestCudaCodeGen:
             "0u;" in cuda_code
         )
         assert (
-            "int2 readMemberDims = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on uimage2D */ make_int2(0, 0);"
-            in cuda_code
+            "int2 readMemberDims = cgl_imageSize_uimage2D"
+            "(bundle.readCounters_metadata[slot]);" in cuda_code
         )
         assert "imageAtomicAdd(" not in cuda_code
         assert "imageAtomicCompSwap(" not in cuda_code
@@ -8083,10 +8110,10 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
-    def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
+    def test_sampled_resource_struct_members_emit_cuda_calls_and_queries(
         self,
     ):
-        """Test CUDA handles sampled/image resource calls through struct members."""
+        """Test CUDA handles resource calls and queries through struct members."""
         source_code = """
         struct TextureBundle {
             sampler2d tex;
@@ -8132,21 +8159,20 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "int2 dims = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            "int2 dims = cgl_textureSize_sampler2D(bundle.tex_metadata, 0);"
             in cuda_code
         )
         assert (
-            "int samples = /* unsupported CUDA resource query: "
-            "textureSamples metadata unavailable on sampler2DMS */ 0;" in cuda_code
+            "int samples = cgl_textureSamples_sampler2DMS(bundle.msTex_metadata);"
+            in cuda_code
         )
         assert (
-            "int levels = /* unsupported CUDA resource query: "
-            "textureQueryLevels metadata unavailable on sampler2D */ 0;" in cuda_code
+            "int levels = cgl_textureQueryLevels_sampler2D(bundle.tex_metadata);"
+            in cuda_code
         )
         assert (
-            "int2 imageDims = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 imageDims = cgl_imageSize_image2D"
+            "(bundle.images_metadata[slot]);" in cuda_code
         )
         assert "texture(" not in cuda_code
         assert "textureLod(" not in cuda_code
@@ -13038,25 +13064,23 @@ class TestCudaCodeGen:
             "int2 directImageSize = cgl_imageSize_image2D"
             "(imageMap_metadata);" in cuda_code
         )
+        assert "bundle.tex_metadata = colorMap_metadata;" in cuda_code
+        assert "bundle.img_metadata = imageMap_metadata;" in cuda_code
         assert (
-            "int2 bundleTexSize = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
-            in cuda_code
+            "int2 bundleTexSize = cgl_textureSize_sampler2D"
+            "(bundle.tex_metadata, 0);" in cuda_code
         )
         assert (
-            "int2 bundleImageSize = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 bundleImageSize = cgl_imageSize_image2D(bundle.img_metadata);"
+            in cuda_code
         )
         assert (
             "consume(chooseTex(), colorMap_metadata, chooseImage(), "
             "imageMap_metadata);" in cuda_code
         )
         assert (
-            "consume(bundle.tex, /* unsupported CUDA resource query: "
-            "metadata unavailable for sampler2D argument tex */ "
-            "CglResourceQueryInfo{}, bundle.img, /* unsupported CUDA resource "
-            "query: metadata unavailable for image2D argument img */ "
-            "CglResourceQueryInfo{});" in cuda_code
+            "consume(bundle.tex, bundle.tex_metadata, bundle.img, "
+            "bundle.img_metadata);" in cuda_code
         )
         assert (
             "consume(chooseBundle().tex, /* unsupported CUDA resource query: "
@@ -13070,6 +13094,89 @@ class TestCudaCodeGen:
         assert "consume(chooseBundle().tex, chooseBundle().img);" not in cuda_code
         assert "textureSize(" not in cuda_code
         assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_struct_member_call_objects_keep_cuda_metadata_type(
+        self,
+    ):
+        """Test unsupported call-object member queries still declare sidecar type."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+        };
+
+        shader ReturnedResourceQueryCallObjects {
+            ResourceBundle chooseBundle() {
+                ResourceBundle bundle;
+                return bundle;
+            }
+
+            compute {
+                void main() {
+                    ivec2 directCallMember = textureSize(chooseBundle().tex, 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "CglResourceQueryInfo tex_metadata;" in cuda_code
+        assert (
+            "int2 directCallMember = /* unsupported CUDA resource query: "
+            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            in cuda_code
+        )
+        assert "chooseBundle().tex_metadata" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
+    def test_resource_query_struct_constructors_forward_cuda_member_metadata(self):
+        """Test resource struct constructors carry embedded metadata sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+            image2D img;
+        };
+
+        shader ResourceQueryStructConstructors {
+            sampler2d colorMap;
+            image2D imageMap;
+
+            compute {
+                void main() {
+                    ResourceBundle bundle = ResourceBundle(colorMap, imageMap);
+                    ivec2 texDims = textureSize(bundle.tex, 0);
+                    ivec2 imageDims = imageSize(bundle.img);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "ResourceBundle bundle = ResourceBundle("
+            "colorMap, colorMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 texDims = cgl_textureSize_sampler2D"
+            "(bundle.tex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 imageDims = cgl_imageSize_image2D(bundle.img_metadata);" in cuda_code
+        )
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "metadata unavailable for image2D argument img" not in cuda_code
+        assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_reference_parameters_emit_cuda_metadata(self):

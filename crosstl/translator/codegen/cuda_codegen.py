@@ -89,6 +89,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_return_sources = {}
         self.query_local_resource_names_by_function = {}
         self.query_metadata_snapshot_locals_by_function = {}
+        self.struct_query_metadata_members = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
@@ -128,6 +129,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
         self.query_metadata_snapshot_locals_by_function = {}
+        self.struct_query_metadata_members = self.collect_struct_query_metadata_members(
+            ast_node
+        )
         self.resource_query_info_required = False
         (
             self.query_resource_names,
@@ -234,6 +238,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             member_types_by_struct[struct_name] = member_types
             member_accesses_by_struct[struct_name] = member_accesses
         return member_types_by_struct, member_accesses_by_struct
+
+    def collect_struct_query_metadata_members(self, root):
+        """Collect struct resource members that need embedded query sidecars."""
+        has_resource_query = False
+        for node in self.query_walk_nodes(root):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            if self.raw_function_call_name(node) in self.query_function_names:
+                has_resource_query = True
+                break
+        if not has_resource_query:
+            return {}
+
+        metadata_members = {}
+        for struct_name, member_types in self.struct_member_types.items():
+            for member_name, member_type in member_types.items():
+                if not self.is_queryable_resource_type(member_type):
+                    continue
+                metadata_members.setdefault(struct_name, set()).add(member_name)
+        return metadata_members
 
     def statement_body_terminates(self, body):
         """Return true when the body already exits the active control flow."""
@@ -401,6 +425,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         members = getattr(node, "members", [])
         member_types = {}
         member_image_accesses = {}
+        query_metadata_members = self.struct_query_metadata_members.get(
+            node.name, set()
+        )
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -415,6 +442,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if member_access is not None and self.is_storage_image_type(member_type):
                 member_image_accesses[member.name] = member_access
             self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
+            if member.name in query_metadata_members:
+                self.resource_query_info_required = True
+                metadata_declarator = self.format_typed_declarator(
+                    self.query_metadata_type(member_type),
+                    self.query_metadata_name(member.name),
+                    dynamic_array_as_pointer=False,
+                )
+                self.emit(f"{metadata_declarator};")
 
         self.struct_member_types[node.name] = member_types
         self.struct_member_image_accesses[node.name] = member_image_accesses
@@ -884,6 +919,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
+        if func_name in self.struct_member_types:
+            args = self.struct_constructor_arguments(func_name, raw_args, args)
+
         scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
         if scalar_math_call is not None:
             return scalar_math_call
@@ -893,6 +931,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def struct_constructor_arguments(self, struct_name, raw_args, args):
+        """Expand struct constructors with resource-member metadata sidecars."""
+        metadata_members = self.struct_query_metadata_members.get(struct_name, set())
+        if not metadata_members:
+            return args
+
+        expanded_args = []
+        member_types = list(self.struct_member_types.get(struct_name, {}).items())
+        for index, arg in enumerate(args):
+            expanded_args.append(arg)
+            if index >= len(raw_args) or index >= len(member_types):
+                continue
+            member_name, member_type = member_types[index]
+            if member_name not in metadata_members:
+                continue
+            metadata_arg = self.query_metadata_expression(raw_args[index])
+            if metadata_arg is None:
+                metadata_arg = self.unavailable_query_metadata_argument(
+                    member_name,
+                    member_type,
+                )
+            expanded_args.append(metadata_arg)
+        return expanded_args
 
     def generate_buffer_call(self, function_expr, func_name, raw_args, args):
         """Lower structured-buffer loads and stores to CUDA pointer indexing."""
@@ -3800,6 +3862,127 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             }
         return None
 
+    def substitute_query_return_local_aliases(
+        self,
+        expr,
+        local_alias_sources,
+        local_visited=None,
+    ):
+        """Replace helper-local aliases in a return-source expression."""
+        if local_visited is None:
+            local_visited = set()
+
+        expr_name = self.get_expression_name(expr)
+        if isinstance(expr, (IdentifierNode, VariableNode, str)):
+            if expr_name in local_alias_sources:
+                if expr_name in local_visited:
+                    return None
+                return self.substitute_query_return_local_aliases(
+                    local_alias_sources[expr_name],
+                    local_alias_sources,
+                    local_visited | {expr_name},
+                )
+            return expr
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.substitute_query_return_local_aliases(
+                expr.left,
+                local_alias_sources,
+                local_visited,
+            )
+            right = self.substitute_query_return_local_aliases(
+                expr.right,
+                local_alias_sources,
+                local_visited,
+            )
+            if left is None or right is None:
+                return None
+            return BinaryOpNode(left, expr.operator, right)
+
+        if isinstance(expr, UnaryOpNode):
+            operand = self.substitute_query_return_local_aliases(
+                expr.operand,
+                local_alias_sources,
+                local_visited,
+            )
+            if operand is None:
+                return None
+            return UnaryOpNode(expr.operator, operand, expr.is_postfix)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.substitute_query_return_local_aliases(
+                expr.condition,
+                local_alias_sources,
+                local_visited,
+            )
+            true_expr = self.substitute_query_return_local_aliases(
+                expr.true_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            false_expr = self.substitute_query_return_local_aliases(
+                expr.false_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return TernaryOpNode(condition, true_expr, false_expr)
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "array_expr", getattr(expr, "array", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            index_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "index_expr", getattr(expr, "index", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return ArrayAccessNode(array_expr, index_expr)
+
+        if isinstance(expr, MemberAccessNode):
+            object_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "object_expr", getattr(expr, "object", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            if object_expr is None:
+                return None
+            return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = self.substitute_query_return_local_aliases(
+                expr.pointer_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            if pointer_expr is None:
+                return None
+            return PointerAccessNode(pointer_expr, expr.member)
+
+        if isinstance(expr, FunctionCallNode):
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                substituted = self.substitute_query_return_local_aliases(
+                    argument,
+                    local_alias_sources,
+                    local_visited,
+                )
+                if substituted is None:
+                    return None
+                arguments.append(substituted)
+            return FunctionCallNode(
+                expr.function,
+                arguments,
+                getattr(expr, "generic_args", []),
+            )
+
+        return expr
+
     def query_return_member_source_descriptor(
         self,
         member_expr,
@@ -3838,13 +4021,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "member": member_name,
             "indices": return_indices,
             "param_indices": all_param_indices,
+            "object_access": (
+                "->" if isinstance(member_expr, PointerAccessNode) else "."
+            ),
         }
         if object_name in local_alias_sources:
             if object_name in local_visited:
                 return None
             object_kind = "expression"
+            object_node = local_alias_sources[object_name]
             object_type = self.query_return_expression_type(
-                local_alias_sources[object_name],
+                object_node,
                 param_types,
                 global_variable_types,
                 local_alias_sources,
@@ -3885,6 +4072,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         descriptor["object_kind"] = object_kind
         descriptor["object_type"] = object_type
+        object_expr = self.substitute_query_return_local_aliases(
+            object_node,
+            local_alias_sources,
+        )
+        if object_expr is not None:
+            descriptor["object_expr"] = object_expr
         return descriptor
 
     def query_return_expression_type(
@@ -4450,6 +4643,61 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return true_changed or false_changed
             return False
 
+        struct_metadata_member_names = {
+            member
+            for members in self.struct_query_metadata_members.values()
+            for member in members
+        }
+
+        def mark_struct_constructor_resources(func_name, call):
+            struct_name = self.raw_function_call_name(call)
+            metadata_members = self.struct_query_metadata_members.get(struct_name)
+            if not metadata_members:
+                return False
+            raw_args = getattr(call, "arguments", getattr(call, "args", []))
+            changed = False
+            member_types = list(self.struct_member_types.get(struct_name, {}).items())
+            for index, (member_name, _) in enumerate(member_types):
+                if member_name not in metadata_members or index >= len(raw_args):
+                    continue
+                changed = (
+                    mark_resolved_resource(
+                        func_name,
+                        raw_args[index],
+                    )
+                    or changed
+                )
+            return changed
+
+        def metadata_assignment_member_name(target):
+            while isinstance(target, ArrayAccessNode):
+                target = getattr(
+                    target,
+                    "array_expr",
+                    getattr(target, "array", None),
+                )
+            if isinstance(target, (MemberAccessNode, PointerAccessNode)):
+                member = getattr(target, "member", None)
+                return getattr(member, "name", member)
+            return None
+
+        for func_name, func in functions_by_name.items():
+            for node in self.query_walk_nodes(getattr(func, "body", [])):
+                if isinstance(node, FunctionCallNode):
+                    changed = mark_struct_constructor_resources(func_name, node)
+                    if changed:
+                        continue
+                if not isinstance(node, AssignmentNode):
+                    continue
+                member_name = metadata_assignment_member_name(
+                    getattr(node, "target", None)
+                )
+                if member_name not in struct_metadata_member_names:
+                    continue
+                value = getattr(node, "value", None)
+                if value is not None:
+                    mark_resolved_resource(func_name, value)
+
         for func_name, func in functions_by_name.items():
             for call in self.query_walk_nodes(getattr(func, "body", [])):
                 if not isinstance(call, FunctionCallNode):
@@ -4553,19 +4801,122 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             metadata_expr = "{}"
         return f"{declarator} = {metadata_expr}"
 
+    def struct_member_has_query_metadata(self, struct_type, member_name):
+        """Return whether a struct member has an embedded metadata sidecar."""
+        struct_type = self.struct_member_lookup_type(struct_type)
+        return member_name in self.struct_query_metadata_members.get(struct_type, set())
+
+    def can_reuse_struct_metadata_object_expression(self, object_node):
+        """Return whether a direct member sidecar read avoids duplicating calls."""
+        if object_node is None:
+            return False
+        if isinstance(object_node, FunctionCallNode):
+            return False
+        if isinstance(object_node, ArrayAccessNode):
+            array_node = getattr(
+                object_node,
+                "array_expr",
+                getattr(object_node, "array", None),
+            )
+            index_node = getattr(
+                object_node,
+                "index_expr",
+                getattr(object_node, "index", None),
+            )
+            return self.can_reuse_struct_metadata_object_expression(
+                array_node
+            ) and self.is_safe_query_return_actual_index(index_node)
+        if isinstance(object_node, MemberAccessNode):
+            return self.can_reuse_struct_metadata_object_expression(
+                getattr(
+                    object_node,
+                    "object_expr",
+                    getattr(object_node, "object", None),
+                )
+            )
+        if isinstance(object_node, PointerAccessNode):
+            return self.can_reuse_struct_metadata_object_expression(
+                getattr(object_node, "pointer_expr", None)
+            )
+        return True
+
+    def query_struct_member_metadata_expression(self, resource_expr):
+        """Return metadata paired with a struct resource-member expression."""
+        if isinstance(resource_expr, PointerAccessNode):
+            object_node = getattr(resource_expr, "pointer_expr", None)
+            member_name = getattr(resource_expr, "member", None)
+            object_type = self.resource_expression_type(object_node)
+            pointer_info = self.cuda_indirect_type_info(object_type)
+            if pointer_info is None:
+                return None
+            struct_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+            object_access = "->"
+        elif isinstance(resource_expr, MemberAccessNode):
+            object_node = getattr(
+                resource_expr,
+                "object_expr",
+                getattr(resource_expr, "object", None),
+            )
+            member_name = getattr(resource_expr, "member", None)
+            struct_type = self.struct_member_lookup_type(
+                self.resource_expression_type(object_node)
+            )
+            object_access = "."
+        else:
+            return None
+
+        if object_node is None or not isinstance(member_name, str):
+            return None
+        if not self.can_reuse_struct_metadata_object_expression(object_node):
+            return None
+        if not self.struct_member_has_query_metadata(struct_type, member_name):
+            return None
+
+        object_expr = self.visit(object_node)
+        if not object_expr:
+            return None
+        return f"{object_expr}{object_access}{self.query_metadata_name(member_name)}"
+
+    def is_struct_member_metadata_assignment_target(self, target_node):
+        """Return whether an assignment target is a struct resource member."""
+        if isinstance(target_node, ArrayAccessNode):
+            target_node = getattr(
+                target_node,
+                "array_expr",
+                getattr(target_node, "array", None),
+            )
+        return isinstance(target_node, (MemberAccessNode, PointerAccessNode))
+
     def format_query_metadata_assignment(self, node):
         """Return a metadata sidecar update for a reassigned local resource."""
         if getattr(node, "operator", "=") != "=":
             return None
 
         target_node = getattr(node, "target", None)
-        if not isinstance(target_node, (IdentifierNode, VariableNode, str)):
-            return None
-        target_name = self.get_expression_name(target_node)
-        target_type = self.variable_types.get(target_name)
-        if not self.is_query_metadata_snapshot_local(target_name, target_type):
-            return None
+        if isinstance(target_node, (IdentifierNode, VariableNode, str)):
+            target_name = self.get_expression_name(target_node)
+            target_type = self.variable_types.get(target_name)
+            if not self.is_query_metadata_snapshot_local(target_name, target_type):
+                return None
 
+            metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
+            if metadata_expr is None:
+                resource_type = self.resource_base_type(target_type) or target_type
+                resource_type = resource_type or "resource"
+                metadata_expr = (
+                    "/* unsupported CUDA resource query: metadata unavailable for "
+                    f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+                )
+            return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
+
+        if not self.is_struct_member_metadata_assignment_target(target_node):
+            return None
+        target_metadata = self.query_metadata_expression(target_node)
+        if target_metadata is None:
+            return None
+        target_type = self.resource_expression_type(target_node)
+        if not self.is_queryable_resource_type(target_type):
+            return None
         metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
         if metadata_expr is None:
             resource_type = self.resource_base_type(target_type) or target_type
@@ -4574,7 +4925,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "/* unsupported CUDA resource query: metadata unavailable for "
                 f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
             )
-        return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
+        return f"{target_metadata} = {metadata_expr}"
 
     def query_metadata_expression(self, resource_expr):
         """Return CUDA query metadata paired with a resource expression."""
@@ -4630,6 +4981,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if base_expr is None:
                 return None
             return f"{base_expr}[{self.visit(index_node)}]"
+
+        member_metadata = self.query_struct_member_metadata_expression(resource_expr)
+        if member_metadata is not None:
+            return member_metadata
 
         resource_name = self.get_expression_name(resource_expr)
         if not resource_name:
@@ -4688,6 +5043,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if index >= len(raw_args):
                 return None
             metadata_expr = self.query_metadata_expression(raw_args[index])
+        elif return_source["kind"] == "member":
+            member = return_source.get("member")
+            object_type = return_source.get("object_type")
+            if not self.struct_member_has_query_metadata(object_type, member):
+                return None
+            object_expr = return_source.get("object_expr")
+            if object_expr is None:
+                return None
+            metadata_object = self.format_query_return_metadata_object_expression(
+                object_expr,
+                return_source.get("param_indices", {}),
+                raw_args,
+            )
+            if metadata_object is None:
+                return None
+            metadata_expr = (
+                f"{metadata_object}"
+                f"{return_source.get('object_access', '.')}"
+                f"{self.query_metadata_name(member)}"
+            )
         else:
             return None
         if metadata_expr is None:
@@ -4704,6 +5079,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return None
             metadata_expr = f"{metadata_expr}[{rendered_index}]"
         return metadata_expr
+
+    def format_query_return_metadata_object_expression(
+        self,
+        expr,
+        param_indices,
+        raw_args,
+    ):
+        """Render a returned struct object expression for member sidecar access."""
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.raw_function_call_name(expr)
+            if not func_name:
+                return None
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                argument_expr = self.format_query_return_safe_expression(
+                    argument,
+                    param_indices,
+                    raw_args,
+                    allow_free_identifiers=True,
+                )
+                if argument_expr is None:
+                    return None
+                arguments.append(argument_expr)
+            return f"{func_name}({', '.join(arguments)})"
+
+        return self.format_query_return_safe_expression(
+            expr,
+            param_indices,
+            raw_args,
+            allow_free_identifiers=True,
+        )
 
     def format_query_return_safe_expression(
         self,
@@ -4826,6 +5232,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if object_expr is None:
                 return None
             return f"{object_expr}.{member_name}"
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_node = getattr(expr, "pointer_expr", None)
+            member = getattr(expr, "member", None)
+            member_name = getattr(member, "name", member)
+            if pointer_node is None or not isinstance(member_name, str):
+                return None
+            pointer_expr = self.format_query_return_safe_expression(
+                pointer_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if pointer_expr is None:
+                return None
+            return f"{pointer_expr}->{member_name}"
 
         expr_name = self.get_expression_name(expr)
         if expr_name in param_indices:
@@ -5333,7 +5755,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.convert_crossgl_type_to_cuda(type_name)
 
     def insert_helper_functions(self):
-        if not self.helper_functions:
+        if not self.helper_functions and not self.resource_query_info_required:
             return
 
         helper_lines = []

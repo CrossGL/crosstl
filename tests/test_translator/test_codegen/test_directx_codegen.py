@@ -6596,6 +6596,34 @@ def test_directx_mesh_output_writes_track_literal_branch_dominance():
     )
     assert "SetMeshOutputCounts(3, 1);" in generated
 
+    const_true_branch_code = """
+    shader MeshOutputCountDominatesAfterConstTrueBranch {
+        const bool ENABLE_OUTPUTS = true;
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (ENABLE_OUTPUTS) {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(const_true_branch_code), "mesh"
+    )
+    assert "static const bool ENABLE_OUTPUTS = true;" in generated
+    assert "if (ENABLE_OUTPUTS)" in generated
+
     false_branch_code = """
     shader MeshOutputCountSkippedByFalseBranch {
         struct MeshVertex {
@@ -6618,6 +6646,32 @@ def test_directx_mesh_output_writes_track_literal_branch_dominance():
     with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(false_branch_code), "mesh"
+        )
+
+    const_false_branch_code = """
+    shader MeshOutputCountSkippedByConstFalseBranch {
+        const bool ENABLE_OUTPUTS = false;
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                if (ENABLE_OUTPUTS) {
+                    SetMeshOutputCounts(3, 1);
+                }
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="verts.*after SetMeshOutputCounts"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(const_false_branch_code), "mesh"
         )
 
     else_branch_code = """

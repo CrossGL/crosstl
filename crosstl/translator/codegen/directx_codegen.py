@@ -509,6 +509,7 @@ class HLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
+        self.literal_bool_constants = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
@@ -819,6 +820,9 @@ class HLSLCodeGen:
         self.current_glsl_buffer_block_parameter_failures = {}
         self.current_glsl_buffer_block_parameter_struct_failures = {}
         self.literal_int_constants = collect_literal_int_constants(
+            getattr(ast, "constants", [])
+        )
+        self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
             getattr(ast, "constants", [])
         )
         structs = deduplicate_named_declarations(
@@ -7842,21 +7846,58 @@ class HLSLCodeGen:
             return None
         return self.hlsl_constant_int_value(expr)
 
-    def hlsl_bool_constant_value(self, expr):
+    def hlsl_literal_bool_value(self, expr, constants=None):
+        constants = constants or {}
         if expr is None:
             return None
         if isinstance(expr, bool):
             return expr
+        if isinstance(expr, str):
+            return constants.get(expr)
         if hasattr(expr, "value") and isinstance(expr.value, bool):
             return expr.value
+        name = getattr(expr, "name", None)
+        if isinstance(name, str) and name in constants:
+            return constants[name]
         if isinstance(expr, UnaryOpNode):
             operator = getattr(expr, "operator", getattr(expr, "op", None))
-            value = self.hlsl_bool_constant_value(getattr(expr, "operand", None))
+            value = self.hlsl_literal_bool_value(
+                getattr(expr, "operand", None), constants
+            )
             if value is None:
                 return None
             if operator == "!":
                 return not value
         return None
+
+    def collect_hlsl_literal_bool_constants(self, constants):
+        resolved = {}
+        pending = list(constants or [])
+
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for const in pending:
+                name = getattr(const, "name", None)
+                if not name or name in resolved:
+                    continue
+
+                value = self.hlsl_literal_bool_value(
+                    getattr(const, "value", None), resolved
+                )
+                if value is None:
+                    remaining.append(const)
+                    continue
+
+                resolved[name] = value
+                changed = True
+            pending = remaining
+
+        return resolved
+
+    def hlsl_bool_constant_value(self, expr):
+        return self.hlsl_literal_bool_value(expr, self.literal_bool_constants)
 
     def validate_hlsl_scalar_int_uint_expression(self, argument, context):
         argument_type = self.expression_result_type(argument)

@@ -16169,7 +16169,7 @@ def test_if_statement(tmp_path):
         pytest.fail("If statement codegen not implemented.")
 
 
-def test_sampler3d_maps_to_texture3d_in_rust():
+def test_sampler3d_maps_to_texture3d_in_rust(tmp_path):
     code = """
     shader Sampler3DProbe {
         sampler3D volumeMap;
@@ -16194,6 +16194,7 @@ def test_sampler3d_maps_to_texture3d_in_rust():
     )
     assert "static VOLUME_MAP: sampler3D" not in generated_code
     assert "return sample(*VOLUME_MAP, uv);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_path):

@@ -5404,6 +5404,49 @@ class TestVulkanSPIRVCodeGen:
         assert spv_code.count("OpMemoryBarrier") == 1
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_nested_helper_synchronization_rejects_mixed_callgraph(self, tmp_path):
+        source_code = """
+        shader NestedMixedSynchronization {
+            void innerSync() {
+                barrier();
+                groupMemoryBarrier();
+            }
+
+            void outerSync() {
+                innerSync();
+            }
+
+            compute {
+                void main() {
+                    outerSync();
+                }
+            }
+
+            fragment {
+                void main() {
+                    outerSync();
+                    memoryBarrierImage();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        for function_name in ["barrier", "groupMemoryBarrier"]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model"
+            ) in spv_code
+        assert "current execution model: Fragment, GLCompute" in spv_code
+        assert "OpEntryPoint GLCompute" in spv_code
+        assert "OpEntryPoint Fragment" in spv_code
+        assert "OpControlBarrier" not in spv_code
+        assert spv_code.count("OpMemoryBarrier") == 1
+        assert spv_code.count("OpFunctionCall") == 3
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_shared_helper_synchronization_allows_workgroup_callgraph(self, tmp_path):
         source_code = """
         shader SharedWorkgroupSynchronization {
@@ -5437,6 +5480,148 @@ class TestVulkanSPIRVCodeGen:
         assert "OpControlBarrier" in spv_code
         assert "OpMemoryBarrier" in spv_code
         assert re.search(r"OpEmitMeshTasksEXT %\d+ %\d+ %\d+", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_nested_helper_synchronization_allows_compute_mesh_task_callgraph(
+        self, tmp_path
+    ):
+        source_code = """
+        shader NestedWorkgroupSynchronization {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            void nestedSync() {
+                barrier();
+                memoryBarrierShared();
+            }
+
+            void syncHelper() {
+                nestedSync();
+                groupMemoryBarrier();
+            }
+
+            compute {
+                void main() {
+                    syncHelper();
+                }
+            }
+
+            mesh {
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    syncHelper();
+                    SetMeshOutputCounts(3, 1);
+                }
+            }
+
+            task {
+                void main() {
+                    syncHelper();
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "requires a workgroup-capable execution model" not in spv_code
+        assert "OpEntryPoint GLCompute" in spv_code
+        assert "OpEntryPoint MeshEXT" in spv_code
+        assert "OpEntryPoint TaskEXT" in spv_code
+        assert "OpCapability MeshShadingEXT" in spv_code
+        assert spv_code.count("OpControlBarrier") == 1
+        assert spv_code.count("OpMemoryBarrier") == 2
+        assert spv_code.count("OpFunctionCall") == 4
+        assert re.search(r"OpEmitMeshTasksEXT %\d+ %\d+ %\d+", spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_stage_local_synchronization_helpers_keep_stage_diagnostics_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalSynchronization {
+            compute {
+                void syncHelper() {
+                    barrier();
+                    groupMemoryBarrier();
+                }
+
+                void main() {
+                    syncHelper();
+                }
+            }
+
+            fragment {
+                void syncHelper() {
+                    barrier();
+                    groupMemoryBarrier();
+                    memoryBarrierBuffer();
+                }
+
+                void main() {
+                    syncHelper();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        compute_entry = re.search(r'OpEntryPoint GLCompute (%\d+) "main"', spv_code)
+        fragment_entry = re.search(r'OpEntryPoint Fragment (%\d+) "main"', spv_code)
+        assert compute_entry is not None
+        assert fragment_entry is not None
+        for function_name in ["barrier", "groupMemoryBarrier"]:
+            assert (
+                f"; WARNING: synchronization builtin '{function_name}' requires "
+                "a workgroup-capable execution model; current execution model: Fragment"
+            ) in spv_code
+        assert "current execution model: Fragment, GLCompute" not in spv_code
+        assert spv_code.count("OpControlBarrier") == 1
+        assert spv_code.count("OpMemoryBarrier") == 2
+        assert spv_code.count("OpFunctionCall") == 2
+
+        function_bodies = {
+            match.group(1): match.group(0)
+            for match in re.finditer(
+                r"(%\d+) = OpFunction\b.*?OpFunctionEnd", spv_code, re.DOTALL
+            )
+        }
+        workgroup_helper = next(
+            function_id
+            for function_id, body in function_bodies.items()
+            if "OpControlBarrier" in body
+        )
+        fragment_helper = next(
+            function_id
+            for function_id, body in function_bodies.items()
+            if "current execution model: Fragment" in body
+        )
+        compute_body = function_bodies[compute_entry.group(1)]
+        fragment_body = function_bodies[fragment_entry.group(1)]
+        assert re.search(
+            rf"OpFunctionCall %\d+ {re.escape(workgroup_helper)}\b", compute_body
+        )
+        assert re.search(
+            rf"OpFunctionCall %\d+ {re.escape(fragment_helper)}\b", fragment_body
+        )
+        assert not re.search(
+            rf"OpFunctionCall %\d+ {re.escape(fragment_helper)}\b", compute_body
+        )
         assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_compute_user_defined_synchronization_names_are_not_lowered(self):

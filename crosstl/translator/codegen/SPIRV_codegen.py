@@ -154,6 +154,8 @@ class VulkanSPIRVCodeGen:
         self.functions = {}
         self.function_nodes = {}
         self.function_signatures = {}
+        self.stage_local_functions = {}
+        self.stage_local_function_signatures = {}
         self.function_parameter_names = {}
         self.function_image_access_requirements = {}
         self.function_storage_buffer_access_requirements = {}
@@ -1199,6 +1201,49 @@ class VulkanSPIRVCodeGen:
 
         return spirv_id
 
+    def stage_local_function_key(self, stage, name: str):
+        if stage is None:
+            return None
+        return (id(stage), name)
+
+    def register_stage_local_function(
+        self,
+        stage,
+        name: str,
+        function_id: SpirvId,
+        return_type: SpirvId,
+        param_types: List[SpirvId],
+    ):
+        key = self.stage_local_function_key(stage, name)
+        if key is None:
+            return
+        self.stage_local_functions[key] = function_id
+        self.stage_local_function_signatures[key] = (return_type, param_types)
+
+    def resolve_function_reference(self, function_name: str):
+        if self.current_stage is not None:
+            key = self.stage_local_function_key(self.current_stage, function_name)
+            if key in self.stage_local_functions:
+                return (
+                    self.stage_local_functions[key],
+                    self.stage_local_function_signatures[key],
+                )
+        if function_name in self.functions:
+            return (
+                self.functions[function_name],
+                self.function_signatures[function_name],
+            )
+        return None
+
+    def resolve_function_signature(self, function_name: str):
+        function_reference = self.resolve_function_reference(function_name)
+        if function_reference is None:
+            return None
+        return function_reference[1]
+
+    def has_function_reference(self, function_name: str) -> bool:
+        return self.resolve_function_reference(function_name) is not None
+
     def create_function_parameter(
         self, param_type: SpirvId, name: Optional[str] = None
     ) -> SpirvId:
@@ -1588,14 +1633,15 @@ class VulkanSPIRVCodeGen:
         self, function_name: str, args: List[SpirvId]
     ) -> Optional[SpirvId]:
         """Call a function with arguments."""
-        if function_name not in self.functions:
+        function_reference = self.resolve_function_reference(function_name)
+        if function_reference is None:
             # Handle built-in function
             return self.call_builtin_function(function_name, args)
 
-        self.merge_function_interface_variables_from_callee(function_name)
-
-        function_id = self.functions[function_name]
-        return_type, param_types = self.function_signatures[function_name]
+        function_id, (return_type, param_types) = function_reference
+        self.merge_function_interface_variables_from_callee(
+            function_name, function_id.id
+        )
         args = [
             (
                 self.convert_value_to_type(arg, param_types[index])
@@ -6154,8 +6200,9 @@ class VulkanSPIRVCodeGen:
 
         if isinstance(expr, FunctionCallNode):
             callee_name = self.function_call_name(expr)
-            if callee_name in self.function_signatures:
-                return_type = self.function_signatures[callee_name][0]
+            function_signature = self.resolve_function_signature(callee_name)
+            if function_signature is not None:
+                return_type = function_signature[0]
                 if return_type.type.base_type != "void":
                     return return_type
             if callee_name in self.struct_types:
@@ -10343,7 +10390,20 @@ class VulkanSPIRVCodeGen:
             param_types.append(param_type)
             runtime_parameters.append((param, param_type, param_value_types[-1]))
 
+        had_global_function = function_node.name in self.functions
+        previous_global_function = self.functions.get(function_node.name)
+        previous_global_signature = self.function_signatures.get(function_node.name)
         function_id = self.create_function(function_node.name, return_type, param_types)
+        if stage is not None:
+            self.register_stage_local_function(
+                stage, function_node.name, function_id, return_type, param_types
+            )
+            if had_global_function:
+                self.functions[function_node.name] = previous_global_function
+                self.function_signatures[function_node.name] = previous_global_signature
+            else:
+                self.functions.pop(function_node.name, None)
+                self.function_signatures.pop(function_node.name, None)
         self.function_resource_array_params[function_node.name] = (
             resource_array_param_indices
         )
@@ -11320,14 +11380,15 @@ class VulkanSPIRVCodeGen:
         function_name = self.tessellation_patch_constant_function_name(function_node)
         if function_name is None:
             return
-        if function_name not in self.functions:
+        function_signature = self.resolve_function_signature(function_name)
+        if function_signature is None:
             self.emit(
                 "; WARNING: SPIR-V tessellation_control patchconstantfunc "
                 f"'{function_name}' does not reference a generated function"
             )
             return
 
-        return_type, _param_types = self.function_signatures[function_name]
+        return_type, _param_types = function_signature
         if return_type.type.base_type == "void":
             self.emit(
                 "; WARNING: SPIR-V tessellation_control patchconstantfunc "
@@ -15993,8 +16054,9 @@ class VulkanSPIRVCodeGen:
 
             if any(self.contains_lambda_expression(arg) for arg in expr.args):
                 result_type = None
-                if callee_name in self.function_signatures:
-                    result_type = self.function_signatures[callee_name][0]
+                function_signature = self.resolve_function_signature(callee_name)
+                if function_signature is not None:
+                    result_type = function_signature[0]
                 return self.unsupported_lambda_default_value(
                     f"call to {callee_name or 'unknown callee'}",
                     result_type,
@@ -16054,15 +16116,16 @@ class VulkanSPIRVCodeGen:
                 callee_name, expr.args
             ):
                 result_type = None
-                if callee_name in self.function_signatures:
-                    result_type = self.function_signatures[callee_name][0]
+                function_signature = self.resolve_function_signature(callee_name)
+                if function_signature is not None:
+                    result_type = function_signature[0]
                 if result_type is None or result_type.type.base_type == "void":
                     return None
                 return self.default_value_for_type(result_type)
 
             if (
                 callee_name in self.resource_function_names()
-                and callee_name not in self.functions
+                and not self.has_function_reference(callee_name)
             ):
                 return self.call_resource_function(callee_name, args)
 
@@ -16286,7 +16349,15 @@ class VulkanSPIRVCodeGen:
             if all(existing.id != variable.id for existing in named_variables):
                 named_variables.append(variable)
 
-    def merge_function_interface_variables_from_callee(self, function_name: str):
+    def merge_function_interface_variables_from_callee(
+        self, function_name: str, function_id: Optional[int] = None
+    ):
+        if function_id is not None:
+            for variable in self.function_interface_variables.get(function_id, []):
+                self.mark_function_interface_variable(variable)
+            if function_id in self.function_interface_variables:
+                return
+
         for variable in self.function_interface_variables_by_name.get(
             function_name, []
         ):
