@@ -849,7 +849,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipArrayGetDescriptor", "hipArray3DGetDescriptor"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 dimension = "3D " if name == "hipArray3DGetDescriptor" else ""
                 if output_name is not None:
@@ -872,9 +872,9 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipArrayGetInfo":
             if len(args) >= 4:
-                descriptor_output = self.format_runtime_pointer_target(node.args[0])
-                extent_output = self.format_runtime_pointer_target(node.args[1])
-                flags_output = self.format_runtime_pointer_target(node.args[2])
+                descriptor_output = self.format_runtime_raw_output_target(node.args[0])
+                extent_output = self.format_runtime_raw_output_target(node.args[1])
+                flags_output = self.format_runtime_raw_output_target(node.args[2])
                 descriptor_output_name = self.get_runtime_pointer_target_name(
                     node.args[0]
                 )
@@ -2836,7 +2836,7 @@ class HipToCrossGLConverter:
             "hipTexObjectGetResourceDesc",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2855,7 +2855,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipGetTextureObjectTextureDesc", "hipTexObjectGetTextureDesc"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2877,7 +2877,7 @@ class HipToCrossGLConverter:
             "hipTexObjectGetResourceViewDesc",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2895,7 +2895,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetChannelDesc":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(

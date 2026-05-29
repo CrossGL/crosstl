@@ -7217,6 +7217,134 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_image_access_returned_struct_pointer_if_else_aliases_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks returned image metadata through if/else pointer locals."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        shader ImageAccessReturnedStructPointerIfElseAliases {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            image2D chooseIfWrite(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->writeImage;
+            }
+
+            image2D chooseIfRead(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readImage;
+            }
+
+            uimage2D chooseIfCounter(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft,
+                int slot
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* left,
+                    ImageBundle* right,
+                    ivec2 pixel,
+                    bool useLeft,
+                    int slot
+                ) {
+                    vec4 blockedRead =
+                        imageLoad(
+                            chooseIfWrite(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseIfRead(left, right, useLeft),
+                        pixel,
+                        blockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseIfCounter(left, right, useLeft, slot),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed =
+                        imageLoad(
+                            chooseIfRead(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseIfWrite(left, right, useLeft),
+                        pixel,
+                        allowed
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 1
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 1
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseIfRead(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, chooseIfWrite(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseIfWrite(left" not in cuda_code
+        assert "surf2Dwrite(blockedRead, chooseIfRead(left" not in cuda_code
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
     def test_image_access_returned_local_aliases_emit_cuda_diagnostics(self):
         """Test CUDA preserves storage-image access metadata through returns."""
         source_code = """

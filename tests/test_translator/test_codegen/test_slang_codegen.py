@@ -3967,6 +3967,109 @@ def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
     assert "void MSMain(in payload MeshPayload payload)" in generated_code
 
 
+def test_dispatch_mesh_payload_nested_helper_tracks_member_lvalues():
+    code = """
+    shader SlangDispatchMeshNestedPayloadHelperLvalues {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct PayloadHolder {
+            MeshPayload current;
+            MeshPayload options[2];
+        };
+
+        groupshared PayloadHolder holder;
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void relayHolder(inout PayloadHolder holderRef, uint slot) {
+                launchMesh(holderRef.current);
+                launchMesh(holderRef.options[slot]);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                holder.current.meshlet = 7u;
+                holder.options[1].meshlet = 9u;
+                DispatchMesh(1, 1, 1, holder.current);
+                relayHolder(holder, 1u);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct PayloadHolder" in generated_code
+    assert "groupshared PayloadHolder holder;" in generated_code
+    assert (
+        "void relayHolder(inout PayloadHolder holderRef, uint slot)" in generated_code
+    )
+    assert "launchMesh(holderRef.current);" in generated_code
+    assert "launchMesh(holderRef.options[slot]);" in generated_code
+    assert "DispatchMesh(1, 1, 1, holder.current);" in generated_code
+    assert "relayHolder(holder, 1u);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+    invalid_code = """
+    shader InvalidSlangDispatchMeshNestedPayloadHelperLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct PayloadHolder {
+            MeshPayload current;
+        };
+
+        PayloadHolder makeHolder() {
+            PayloadHolder holder;
+            holder.current.meshlet = 7u;
+            return holder;
+        }
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void relayHolder(inout PayloadHolder holderRef) {
+                launchMesh(holderRef.current);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                relayHolder(makeHolder());
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="relayHolder payload argument must be an lvalue, got PayloadHolder",
+    ):
+        generate_code(parse_code(tokenize_code(invalid_code)))
+
+
 @pytest.mark.parametrize(
     ("setup_source", "call_source", "message"),
     [

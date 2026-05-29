@@ -4436,6 +4436,104 @@ class TestHipCodeGen:
         assert "var manualWidth: u32 = (/* HIP device query:" not in result
         assert "var manualDepth: u32 = (/* HIP device query:" not in result
 
+    def test_hip_descriptor_array_outputs_clear_stale_metadata(self):
+        """Test descriptor array outputs clear prior query metadata."""
+        code = """
+        void queryDescriptorArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipArray_t array,
+            hipTextureObject_t texObj,
+            hipChannelFormatDesc* channelDescs,
+            HIP_ARRAY_DESCRIPTOR* arrayDescs,
+            HIP_ARRAY3D_DESCRIPTOR* array3DDescs,
+            hipExtent* extents,
+            unsigned int* flags,
+            hipResourceDesc* resourceDescs,
+            hipTextureDesc* textureDescs,
+            hipResourceViewDesc* viewDescs,
+            int* out,
+            size_t* dims
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&channelDescs, &staleSize, devicePtr);
+            hipGetChannelDesc(&channelDescs[0], array);
+            out[0] = channelDescs[0].x;
+
+            hipMemGetAddressRange((void**)&arrayDescs, &staleSize, devicePtr);
+            hipArrayGetDescriptor(&arrayDescs[0], array);
+            out[1] = arrayDescs[0].NumChannels;
+
+            hipMemGetAddressRange((void**)&array3DDescs, &staleSize, devicePtr);
+            hipArray3DGetDescriptor(&array3DDescs[0], array);
+            out[2] = array3DDescs[0].Flags;
+
+            hipMemGetAddressRange((void**)&channelDescs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&extents, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&flags, &staleSize, devicePtr);
+            hipArrayGetInfo(&channelDescs[1], &extents[0], &flags[0], array);
+            out[3] = channelDescs[1].y;
+            dims[0] = extents[0].width;
+            out[4] = flags[0];
+
+            hipMemGetAddressRange((void**)&resourceDescs, &staleSize, devicePtr);
+            hipGetTextureObjectResourceDesc(&resourceDescs[0], texObj);
+            out[5] = resourceDescs[0].resType;
+
+            hipMemGetAddressRange((void**)&textureDescs, &staleSize, devicePtr);
+            hipGetTextureObjectTextureDesc(&textureDescs[0], texObj);
+            out[6] = textureDescs[0].addressMode[0];
+
+            hipMemGetAddressRange((void**)&viewDescs, &staleSize, devicePtr);
+            hipGetTextureObjectResourceViewDesc(&viewDescs[0], texObj);
+            dims[1] = viewDescs[0].width;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get channel desc: output: channelDescs[0], array: array" in result
+        )
+        assert "out[0] = channelDescs[0].x;" in result
+        assert (
+            "// HIP array get descriptor: output: arrayDescs[0], array: array" in result
+        )
+        assert "out[1] = arrayDescs[0].NumChannels;" in result
+        assert (
+            "// HIP array get 3D descriptor: output: array3DDescs[0], array: array"
+            in result
+        )
+        assert "out[2] = array3DDescs[0].Flags;" in result
+        assert (
+            "// HIP array get info: desc output: channelDescs[1], "
+            "extent output: extents[0], flags output: flags[0], array: array"
+        ) in result
+        assert "out[3] = channelDescs[1].y;" in result
+        assert "dims[0] = extents[0].width;" in result
+        assert "out[4] = flags[0];" in result
+        assert (
+            "// HIP texture object get resource desc: output: resourceDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "out[5] = resourceDescs[0].resType;" in result
+        assert (
+            "// HIP texture object get texture desc: output: textureDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "out[6] = textureDescs[0].addressMode[0];" in result
+        assert (
+            "// HIP texture object get resource view desc: output: viewDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "dims[1] = viewDescs[0].width;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_object_lifecycle_expression_contexts_emit_status(self):
         """Test object lifecycle calls in expressions stay explicit."""
         code = """

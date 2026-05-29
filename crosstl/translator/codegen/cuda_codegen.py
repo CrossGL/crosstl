@@ -3411,28 +3411,102 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     assigned_names.add(name)
                 continue
 
-            assignment = statement
-            if isinstance(statement, ExpressionStatementNode):
-                assignment = getattr(statement, "expression", None)
-            if not isinstance(assignment, AssignmentNode):
-                return None
-            if getattr(assignment, "operator", "=") != "=":
-                return None
+            if isinstance(statement, IfNode):
+                branch_alias = self.query_return_if_alias_source(
+                    statement,
+                    local_alias_types,
+                    assigned_names,
+                )
+                if branch_alias is None:
+                    return None
+                target_name, value = branch_alias
+                local_alias_sources[target_name] = value
+                assigned_names.add(target_name)
+                continue
 
-            target = getattr(assignment, "target", None)
-            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+            assignment = self.query_return_simple_assignment(statement)
+            if assignment is None:
                 return None
-            target_name = self.get_expression_name(target)
+            target_name, value = assignment
             if target_name not in local_alias_types or target_name in assigned_names:
                 return None
 
-            value = getattr(assignment, "value", None)
-            if value is None:
-                return None
             local_alias_sources[target_name] = value
             assigned_names.add(target_name)
 
         return local_alias_sources
+
+    def query_return_simple_assignment(self, statement):
+        """Return simple assignment target/source for query-return aliases."""
+        assignment = statement
+        if isinstance(statement, ExpressionStatementNode):
+            assignment = getattr(statement, "expression", None)
+        if not isinstance(assignment, AssignmentNode):
+            return None
+        if getattr(assignment, "operator", "=") != "=":
+            return None
+
+        target = getattr(assignment, "target", None)
+        if not isinstance(target, (IdentifierNode, VariableNode, str)):
+            return None
+        target_name = self.get_expression_name(target)
+        value = getattr(assignment, "value", None)
+        if not target_name or value is None:
+            return None
+        return target_name, value
+
+    def query_return_if_alias_source(
+        self,
+        statement,
+        local_alias_types,
+        assigned_names,
+    ):
+        """Collect a single deterministic if/else alias assignment."""
+        if getattr(statement, "else_if_conditions", None) or getattr(
+            statement,
+            "else_if_bodies",
+            None,
+        ):
+            return None
+
+        condition = getattr(
+            statement,
+            "condition",
+            getattr(statement, "if_condition", None),
+        )
+        then_body = getattr(
+            statement,
+            "then_branch",
+            getattr(statement, "if_body", None),
+        )
+        else_body = getattr(
+            statement,
+            "else_branch",
+            getattr(statement, "else_body", None),
+        )
+        if condition is None or then_body is None or else_body is None:
+            return None
+
+        then_statements = self.statement_list(then_body)
+        else_statements = self.statement_list(else_body)
+        if len(then_statements) != 1 or len(else_statements) != 1:
+            return None
+
+        then_assignment = self.query_return_simple_assignment(then_statements[0])
+        else_assignment = self.query_return_simple_assignment(else_statements[0])
+        if then_assignment is None or else_assignment is None:
+            return None
+
+        then_name, then_value = then_assignment
+        else_name, else_value = else_assignment
+        if (
+            then_name != else_name
+            or then_name not in local_alias_types
+            or then_name in assigned_names
+        ):
+            return None
+
+        return then_name, TernaryOpNode(condition, then_value, else_value)
 
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
@@ -3803,6 +3877,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return param_types[expr_name]
         if expr_name in global_variable_types:
             return global_variable_types[expr_name]
+
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.query_return_expression_type(
+                expr.true_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited.copy(),
+            )
+            false_type = self.query_return_expression_type(
+                expr.false_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited.copy(),
+            )
+            if self.type_name_string(true_type) == self.type_name_string(false_type):
+                return true_type
+            return None
 
         if isinstance(expr, PointerAccessNode):
             pointer_expr = getattr(expr, "pointer_expr", None)
