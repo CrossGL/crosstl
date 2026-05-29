@@ -24380,14 +24380,23 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         vec4 touch(image2DMS image @rgba16f, uimage2DMS counterImage @r32ui, ivec2 pixel, int sampleIndex, vec4 value, uint count) {
             vec4 oldColor = imageLoad(image, pixel, sampleIndex);
             uint oldCount = imageLoad(counterImage, pixel, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            let counterAlias = counterImage;
+            vec4 aliasedColor = imageLoad(chainedImageAlias, pixel, sampleIndex);
+            uint aliasedCount = imageLoad(counterAlias, pixel, sampleIndex);
             imageStore(image, pixel, sampleIndex, oldColor + value);
             imageStore(counterImage, pixel, sampleIndex, oldCount + count);
             uint atomicOld = imageAtomicAdd(counterImage, pixel, sampleIndex, count);
-            return oldColor + vec4(float(oldCount + atomicOld));
+            imageStore(chainedImageAlias, pixel, sampleIndex, aliasedColor + value);
+            uint aliasAtomicOld = imageAtomicAdd(counterAlias, pixel, sampleIndex, count);
+            return oldColor + aliasedColor + vec4(float(oldCount + atomicOld + aliasedCount + aliasAtomicOld));
         }
 
         vec4 touchLayer(image2DMSArray image @rgba16f, ivec3 pixelLayer, int sampleIndex) {
-            return imageLoad(image, pixelLayer, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            return imageLoad(chainedImageAlias, pixelLayer, sampleIndex);
         }
 
         fragment {
@@ -24422,8 +24431,36 @@ def test_metal_multisample_storage_images_emit_read_textures_and_diagnostics():
         "uint oldCount = counterImage.read(uint2(pixel), uint(sampleIndex)).x;"
         in generated_code
     )
+    assert "texture2d_ms<float, access::read> imageAlias = image;" in generated_code
     assert (
-        "return image.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        "texture2d_ms<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms<uint, access::read> counterAlias = counterImage;"
+        in generated_code
+    )
+    assert (
+        "float4 aliasedColor = chainedImageAlias.read(uint2(pixel), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint aliasedCount = counterAlias.read(uint2(pixel), uint(sampleIndex)).x;"
+        in generated_code
+    )
+    assert (
+        "uint aliasAtomicOld = /* unsupported Metal multisample image atomic: imageAtomicAdd on texture2d_ms<uint, access::read> */ 0u;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> imageAlias = image;" in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "return chainedImageAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
         in generated_code
     )
     assert (
@@ -24460,10 +24497,17 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         ) {
             vec4 oldColor = imageLoad(image, pixelLayer, sampleIndex);
             uint oldCount = imageLoad(counterImage, pixelLayer, sampleIndex);
+            let imageAlias = image;
+            let chainedImageAlias = imageAlias;
+            let counterAlias = counterImage;
+            vec4 aliasedColor = imageLoad(chainedImageAlias, pixelLayer, sampleIndex);
+            uint aliasedCount = imageLoad(counterAlias, pixelLayer, sampleIndex);
             imageStore(image, pixelLayer, sampleIndex, oldColor + value);
             imageStore(counterImage, pixelLayer, sampleIndex, oldCount + count);
             uint atomicOld = imageAtomicAdd(counterImage, pixelLayer, sampleIndex, count);
-            return oldColor + vec4(float(oldCount + atomicOld));
+            imageStore(chainedImageAlias, pixelLayer, sampleIndex, aliasedColor + value);
+            uint aliasAtomicOld = imageAtomicAdd(counterAlias, pixelLayer, sampleIndex, count);
+            return oldColor + aliasedColor + vec4(float(oldCount + atomicOld + aliasedCount + aliasAtomicOld));
         }
 
         fragment {
@@ -24498,6 +24542,25 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
         "uint oldCount = counterImage.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
         in generated_code
     )
+    assert (
+        "texture2d_ms_array<float, access::read> imageAlias = image;" in generated_code
+    )
+    assert (
+        "texture2d_ms_array<float, access::read> chainedImageAlias = imageAlias;"
+        in generated_code
+    )
+    assert (
+        "texture2d_ms_array<uint, access::read> counterAlias = counterImage;"
+        in generated_code
+    )
+    assert (
+        "float4 aliasedColor = chainedImageAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex));"
+        in generated_code
+    )
+    assert (
+        "uint aliasedCount = counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x;"
+        in generated_code
+    )
     diagnostic_prefix = "un" + "supported Metal multisample image"
     assert (
         f"{diagnostic_prefix} store: imageStore on texture2d_ms_array<float, access::read>"
@@ -24509,6 +24572,11 @@ def test_metal_multisample_storage_image_arrays_emit_read_textures_and_diagnosti
     )
     assert (
         "uint atomicOld = /* "
+        f"{diagnostic_prefix} atomic: imageAtomicAdd on "
+        "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
+    )
+    assert (
+        "uint aliasAtomicOld = /* "
         f"{diagnostic_prefix} atomic: imageAtomicAdd on "
         "texture2d_ms_array<uint, access::read> */ 0u;" in generated_code
     )

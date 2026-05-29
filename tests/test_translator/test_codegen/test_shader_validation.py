@@ -4766,6 +4766,63 @@ shader MetalStructHeldStorageImageArraysValidation {
 """
 
 
+METAL_MULTISAMPLE_STORAGE_IMAGE_ALIASES_COMPUTE_SHADER = """
+shader MetalMultisampleStorageImageAliasesValidation {
+    image2DMS colorImage @rgba16f;
+    uimage2DMS counterImage @r32ui;
+    image2DMS images @rgba16f[2];
+    uimage2DMSArray layerCounters @r32ui[2];
+
+    vec4 directAliases(
+        image2DMS color @rgba16f,
+        uimage2DMS counter @r32ui,
+        ivec2 pixel,
+        int sampleIndex
+    ) {
+        let colorAlias = color;
+        let chainedColorAlias = colorAlias;
+        let counterAlias = counter;
+        vec4 colorValue = imageLoad(chainedColorAlias, pixel, sampleIndex);
+        uint counterValue = imageLoad(counterAlias, pixel, sampleIndex);
+        imageStore(chainedColorAlias, pixel, sampleIndex, colorValue);
+        uint oldCounter = imageAtomicAdd(counterAlias, pixel, sampleIndex, counterValue);
+        return colorValue + vec4(float(counterValue + oldCounter));
+    }
+
+    vec4 arrayAliases(
+        image2DMS imageArray[2] @rgba16f,
+        uimage2DMSArray counterArray[2] @r32ui,
+        int index,
+        ivec2 pixel,
+        int layer,
+        int sampleIndex
+    ) {
+        let imagesAlias = imageArray;
+        let imageAlias = imagesAlias[index];
+        let countersAlias = counterArray;
+        let counterAlias = countersAlias[index];
+        ivec3 pixelLayer = ivec3(pixel, layer);
+        vec4 imageValue = imageLoad(imageAlias, pixel, sampleIndex);
+        uint counterValue = imageLoad(counterAlias, pixelLayer, sampleIndex);
+        imageStore(imageAlias, pixel, sampleIndex, imageValue);
+        uint oldCounter = imageAtomicAdd(counterAlias, pixelLayer, sampleIndex, counterValue);
+        return imageValue + vec4(float(counterValue + oldCounter));
+    }
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(0, 1);
+            vec4 directValue = directAliases(colorImage, counterImage, pixel, 0);
+            vec4 arrayValue = arrayAliases(images, layerCounters, 1, pixel, 2, 0);
+            if ((directValue.x + arrayValue.x) < -1.0) {
+                return;
+            }
+        }
+    }
+}
+"""
+
+
 METAL_STORAGE_IMAGE_QUERY_DIAGNOSTICS_COMPUTE_SHADER = """
 shader MetalStorageImageQueryDiagnosticsValidation {
     image2D colorImage @rgba32f;
@@ -8585,6 +8642,52 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
     )
     assert "counterAlias.atomic_fetch_add(uint2(pixel), value).x" in code
     assert "thread texture2d" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_multisample_storage_image_aliases_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_multisample_storage_image_aliases.metal"
+    output = tmp_path / "compute_multisample_storage_image_aliases.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            METAL_MULTISAMPLE_STORAGE_IMAGE_ALIASES_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "texture2d_ms<float, access::read> colorAlias = color;" in code
+    assert "texture2d_ms<float, access::read> chainedColorAlias = colorAlias" in code
+    assert "texture2d_ms<uint, access::read> counterAlias = counter;" in code
+    assert "chainedColorAlias.read(uint2(pixel), uint(sampleIndex))" in code
+    assert (
+        "array<texture2d_ms<float, access::read>, 2> imagesAlias = imageArray" in code
+    )
+    assert "texture2d_ms<float, access::read> imageAlias = imagesAlias[index]" in code
+    assert (
+        "array<texture2d_ms_array<uint, access::read>, 2> countersAlias = counterArray"
+        in code
+    )
+    assert (
+        "texture2d_ms_array<uint, access::read> counterAlias = countersAlias[index]"
+        in code
+    )
+    assert (
+        "counterAlias.read(uint2(pixelLayer.xy), uint(pixelLayer.z), uint(sampleIndex)).x"
+        in code
+    )
+    assert "unsupported Metal multisample image store: imageStore" in code
+    assert "unsupported Metal multisample image atomic: imageAtomicAdd" in code
+    assert ".write(" not in code
+    assert "atomic_fetch_add" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(
