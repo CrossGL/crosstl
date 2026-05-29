@@ -183,6 +183,26 @@ class HipToCrossGLConverter:
     }
     HIP_EXTENT_MEMBERS = {"depth", "height", "width"}
     HIP_RESOURCE_DESCRIPTOR_MEMBERS = {"resType"}
+    HIP_RESOURCE_DESCRIPTOR_NESTED_MEMBERS = {
+        "res.array.array",
+        "res.linear.desc.f",
+        "res.linear.desc.w",
+        "res.linear.desc.x",
+        "res.linear.desc.y",
+        "res.linear.desc.z",
+        "res.linear.devPtr",
+        "res.linear.sizeInBytes",
+        "res.mipmap.mipmap",
+        "res.pitch2D.desc.f",
+        "res.pitch2D.desc.w",
+        "res.pitch2D.desc.x",
+        "res.pitch2D.desc.y",
+        "res.pitch2D.desc.z",
+        "res.pitch2D.devPtr",
+        "res.pitch2D.height",
+        "res.pitch2D.pitchInBytes",
+        "res.pitch2D.width",
+    }
     HIP_TEXTURE_DESCRIPTOR_MEMBERS = {
         "disableTrilinearOptimization",
         "filterMode",
@@ -194,6 +214,11 @@ class HipToCrossGLConverter:
         "normalizedCoords",
         "readMode",
         "sRGB",
+    }
+    HIP_TEXTURE_DESCRIPTOR_INDEXED_MEMBERS = {
+        "addressMode[0]",
+        "addressMode[1]",
+        "addressMode[2]",
     }
     HIP_RESOURCE_VIEW_DESCRIPTOR_MEMBERS = {
         "depth",
@@ -625,8 +650,22 @@ class HipToCrossGLConverter:
 
     def clear_lvalue_metadata_source(self, node):
         self.clear_device_metadata_source(self.get_runtime_pointer_target_name(node))
-        if isinstance(node, MemberAccessNode) and isinstance(node.object, str):
-            self.clear_member_query_source(node.object)
+        root_name = self.get_lvalue_metadata_root_name(node)
+        if root_name is not None:
+            self.clear_device_metadata_source(root_name)
+
+    def get_lvalue_metadata_root_name(self, node):
+        if isinstance(node, CastNode):
+            return self.get_lvalue_metadata_root_name(node.expression)
+        if isinstance(node, UnaryOpNode):
+            return self.get_lvalue_metadata_root_name(node.operand)
+        if isinstance(node, MemberAccessNode):
+            return self.get_lvalue_metadata_root_name(node.object)
+        if isinstance(node, ArrayAccessNode):
+            return self.get_lvalue_metadata_root_name(node.array)
+        if isinstance(node, str):
+            return node
+        return None
 
     def visit_lvalue_expression(self, node):
         self.suppress_device_property_member_access += 1
@@ -2722,7 +2761,10 @@ class HipToCrossGLConverter:
                         output_name,
                         {
                             member: f"textureObject.resourceDesc.{member}({args[1]})"
-                            for member in self.HIP_RESOURCE_DESCRIPTOR_MEMBERS
+                            for member in (
+                                self.HIP_RESOURCE_DESCRIPTOR_MEMBERS
+                                | self.HIP_RESOURCE_DESCRIPTOR_NESTED_MEMBERS
+                            )
                         },
                     )
                 return [
@@ -2738,7 +2780,10 @@ class HipToCrossGLConverter:
                         output_name,
                         {
                             member: f"textureObject.textureDesc.{member}({args[1]})"
-                            for member in self.HIP_TEXTURE_DESCRIPTOR_MEMBERS
+                            for member in (
+                                self.HIP_TEXTURE_DESCRIPTOR_MEMBERS
+                                | self.HIP_TEXTURE_DESCRIPTOR_INDEXED_MEMBERS
+                            )
                         },
                     )
                 return [
@@ -4850,20 +4895,57 @@ class HipToCrossGLConverter:
         return object_type == "hipDeviceProp_t"
 
     def format_hip_member_query_read(self, node):
-        if getattr(node, "is_pointer", False):
-            return None
-        if not isinstance(getattr(node, "object", None), str):
+        path = self.get_member_query_path(node)
+        if path is None:
             return None
 
-        source = self.lookup_member_query_source(node.object)
+        object_name, member_path = path
+        source = self.lookup_member_query_source(object_name)
         if not source:
             return None
 
-        query_name = source.get(node.member)
+        query_name = source.get(member_path)
         if query_name is None:
             return None
 
         return f"(/* HIP device query: {query_name} */ 0)"
+
+    def get_member_query_path(self, node):
+        path = []
+
+        def collect(current):
+            if isinstance(current, str):
+                return current
+            if isinstance(current, MemberAccessNode):
+                if getattr(current, "is_pointer", False):
+                    return None
+                root = collect(current.object)
+                if root is None:
+                    return None
+                path.append(current.member)
+                return root
+            if isinstance(current, ArrayAccessNode):
+                root = collect(current.array)
+                if root is None or not path:
+                    return None
+                index = self.format_member_query_index(current.index)
+                if index is None:
+                    return None
+                path[-1] = f"{path[-1]}[{index}]"
+                return root
+            return None
+
+        root_name = collect(node)
+        if root_name is None or not path:
+            return None
+        return root_name, ".".join(path)
+
+    def format_member_query_index(self, index):
+        if isinstance(index, int):
+            return str(index)
+        if isinstance(index, str) and index.isdigit():
+            return index
+        return None
 
     def format_hip_device_attribute_read(self, name):
         if self.suppress_device_attribute_value_access != 0:
@@ -4892,6 +4974,11 @@ class HipToCrossGLConverter:
         return f"(/* HIP device query: {query_name}, device: {device_id} */ 0)"
 
     def visit_ArrayAccessNode(self, node):
+        if self.suppress_device_query_value_access == 0:
+            member_query_expression = self.format_hip_member_query_read(node)
+            if member_query_expression is not None:
+                return member_query_expression
+
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"

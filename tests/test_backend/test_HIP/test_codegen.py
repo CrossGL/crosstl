@@ -4000,6 +4000,107 @@ class TestHipCodeGen:
         assert "var manualWidth: u32 = (/* HIP device query:" not in result
         assert "var manualLayer: u32 = (/* HIP device query:" not in result
 
+    def test_hip_texture_object_nested_descriptor_member_reads_emit_metadata_expressions(
+        self,
+    ):
+        """Test nested texture object descriptor output members lower to metadata."""
+        code = """
+        void host(hipTextureObject_t texObj, int* ints, size_t* dims) {
+            hipResourceDesc resourceDesc;
+            hipResourceDesc aliasResourceDesc;
+            hipTextureDesc textureDesc;
+            hipTextureDesc aliasTextureDesc;
+            hipGetTextureObjectResourceDesc(&resourceDesc, texObj);
+            dims[0] = resourceDesc.res.pitch2D.width;
+            dims[1] = resourceDesc.res.pitch2D.height;
+            dims[2] = resourceDesc.res.pitch2D.pitchInBytes;
+            dims[3] = resourceDesc.res.linear.sizeInBytes;
+            ints[0] = resourceDesc.res.pitch2D.desc.x;
+            ints[1] = resourceDesc.res.linear.desc.f;
+            hipGetTextureObjectTextureDesc(&textureDesc, texObj);
+            ints[2] = textureDesc.addressMode[0];
+            ints[3] = textureDesc.addressMode[1];
+            textureDesc.addressMode[0] = hipAddressModeClamp;
+            int manualAddress = textureDesc.addressMode[0];
+            resourceDesc.res.pitch2D.width = 32;
+            size_t manualPitchWidth = resourceDesc.res.pitch2D.width;
+            hipError_t resErr = hipTexObjectGetResourceDesc(
+                &aliasResourceDesc,
+                texObj
+            );
+            dims[4] = aliasResourceDesc.res.mipmap.mipmap;
+            ints[4] = aliasResourceDesc.res.array.array;
+            ints[5] = aliasResourceDesc.res.pitch2D.desc.y;
+            hipError_t texErr = hipTexObjectGetTextureDesc(
+                &aliasTextureDesc,
+                texObj
+            );
+            ints[6] = aliasTextureDesc.addressMode[2];
+            aliasTextureDesc.addressMode[1]++;
+            int manualAliasAddress = aliasTextureDesc.addressMode[1];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        for index, member in [
+            (0, "res.pitch2D.width"),
+            (1, "res.pitch2D.height"),
+            (2, "res.pitch2D.pitchInBytes"),
+            (3, "res.linear.sizeInBytes"),
+        ]:
+            assert (
+                f"dims[{index}] = (/* HIP device query: "
+                f"textureObject.resourceDesc.{member}(texObj) */ 0);"
+            ) in result
+        for index, member in [
+            (0, "res.pitch2D.desc.x"),
+            (1, "res.linear.desc.f"),
+        ]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"textureObject.resourceDesc.{member}(texObj) */ 0);"
+            ) in result
+        for index, member in [(2, "addressMode[0]"), (3, "addressMode[1]")]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"textureObject.textureDesc.{member}(texObj) */ 0);"
+            ) in result
+        assert "textureDesc.addressMode[0] = hipAddressModeClamp;" in result
+        assert "var manualAddress: i32 = textureDesc.addressMode[0];" in result
+        assert "resourceDesc.res.pitch2D.width = 32;" in result
+        assert "var manualPitchWidth: u32 = resourceDesc.res.pitch2D.width;" in result
+        assert "var resErr: hipError_t = hipSuccess;" in result
+        assert (
+            "dims[4] = (/* HIP device query: "
+            "textureObject.resourceDesc.res.mipmap.mipmap(texObj) */ 0);"
+        ) in result
+        for index, member in [(4, "res.array.array"), (5, "res.pitch2D.desc.y")]:
+            assert (
+                f"ints[{index}] = (/* HIP device query: "
+                f"textureObject.resourceDesc.{member}(texObj) */ 0);"
+            ) in result
+        assert "var texErr: hipError_t = hipSuccess;" in result
+        assert (
+            "ints[6] = (/* HIP device query: "
+            "textureObject.textureDesc.addressMode[2](texObj) */ 0);"
+        ) in result
+        assert "(aliasTextureDesc.addressMode[1]++);" in result
+        assert (
+            "var manualAliasAddress: i32 = aliasTextureDesc.addressMode[1];" in result
+        )
+        assert "dims[0] = resourceDesc.res.pitch2D.width;" not in result
+        assert "ints[2] = textureDesc.addressMode[0];" not in result
+        assert "dims[4] = aliasResourceDesc.res.mipmap.mipmap;" not in result
+        assert "ints[6] = aliasTextureDesc.addressMode[2];" not in result
+        assert "var manualAddress: i32 = (/* HIP device query:" not in result
+        assert "var manualPitchWidth: u32 = (/* HIP device query:" not in result
+        assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
+
     def test_hip_channel_descriptor_expression_contexts_emit_status(self):
         """Test channel and array descriptor queries in expressions stay explicit."""
         code = """
