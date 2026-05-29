@@ -12941,6 +12941,56 @@ class TestVulkanSPIRVCodeGen:
         assert "OpIAdd" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_match_nested_struct_pattern_guard_validates(self, tmp_path):
+        source_code = """
+        shader MatchNestedStructSmoke {
+            struct Inner {
+                int x;
+                int y;
+            };
+
+            struct Outer {
+                Inner inner;
+                int tag;
+            };
+
+            int read(Outer value) {
+                int result = 0;
+                match value {
+                    Outer { inner: Inner { x: 1, y }, tag } if tag > 0 => {
+                        result = y + tag;
+                    }
+                    _ => {
+                        result = -1;
+                    }
+                }
+                return result;
+            }
+
+            compute {
+                void main() {
+                    Inner inner = Inner(1, 3);
+                    Outer value = Outer(inner, 2);
+                    int selected = read(value);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spirv_named_ids(spv_code, "y")
+        assert spirv_named_ids(spv_code, "tag")
+        assert spv_code.count("OpCompositeExtract") >= 4
+        assert "OpIEqual" in spv_code
+        assert "OpSGreaterThan" in spv_code
+        assert spv_code.count("OpLogicalAnd") >= 2
+        assert "SPIR-V match pattern unsupported" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_match_enum_path_pattern_lowers_to_spirv_integer_discriminants(self):
         source_code = """
         shader MatchEnumSmoke {
