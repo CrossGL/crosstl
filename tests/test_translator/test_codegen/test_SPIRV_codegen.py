@@ -6435,6 +6435,82 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_stage_local_mesh_output_helpers_keep_parameter_metadata_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalMeshOutputIsolation {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+            };
+
+            struct MeshPrimitive {
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                void writeOut(@vertices out MeshVertex verts[3]) {
+                    verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                }
+
+                void main(
+                    @vertices out MeshVertex verts[3],
+                    @indices out uvec3 tris[1],
+                    @primitives out MeshPrimitive prims[1]
+                ) @numthreads(1, 1, 1)
+                  @outputtopology(triangle)
+                  @max_vertices(3)
+                  @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                    writeOut(verts);
+                }
+            }
+
+            fragment {
+                vec4 writeOut(vec4 color) {
+                    return color;
+                }
+
+                void main() {
+                    vec4 color = writeOut(vec4(1.0));
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        mesh_entry = re.search(r'OpEntryPoint MeshEXT (%\d+) "main"', spv_code)
+        fragment_entry = re.search(r'OpEntryPoint Fragment (%\d+) "main"', spv_code)
+        assert mesh_entry is not None
+        assert fragment_entry is not None
+        function_bodies = {
+            match.group(1): match.group(0)
+            for match in re.finditer(
+                r"(%\d+) = OpFunction\b.*?OpFunctionEnd", spv_code, re.DOTALL
+            )
+        }
+        mesh_body = function_bodies[mesh_entry.group(1)]
+        fragment_body = function_bodies[fragment_entry.group(1)]
+        mesh_calls = re.findall(r"OpFunctionCall %\d+ (%\d+)([^\n]*)", mesh_body)
+        fragment_calls = re.findall(
+            r"OpFunctionCall %\d+ (%\d+)([^\n]*)", fragment_body
+        )
+
+        assert len(mesh_calls) == 1
+        assert mesh_calls[0][1].strip() == ""
+        assert len(fragment_calls) == 1
+        assert len(fragment_calls[0][1].split()) == 1
+        assert mesh_calls[0][0] != fragment_calls[0][0]
+        assert spv_code.count("OpFunctionCall") == 2
+        assert not spirv_named_parameters(spv_code, "verts")
+        assert "Unknown variable verts" not in spv_code
+        assert "OpSetMeshOutputsEXT" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_mesh_stage_output_parameter_component_assignments(self, tmp_path):
         source_code = """
         shader MeshOutputComponentSPIRV {
@@ -12916,6 +12992,70 @@ class TestVulkanSPIRVCodeGen:
         assert "OpFunctionCall" not in spv_code
         assert "imageLoad(" not in spv_code
         assert "imageStore(" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_stage_local_resource_array_helpers_keep_parameter_metadata_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalResourceArrayIsolation {
+            uimage2D imageArray @r32ui[2];
+
+            compute {
+                uint sampleStage(uimage2D images[2] @r32ui, ivec2 pixel) {
+                    return imageLoad(images[1], pixel);
+                }
+
+                void main() {
+                    uint value = sampleStage(imageArray, ivec2(0, 1));
+                }
+            }
+
+            fragment {
+                vec4 sampleStage(vec4 color) {
+                    return color;
+                }
+
+                void main() {
+                    vec4 color = sampleStage(vec4(1.0));
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        compute_entry = re.search(r'OpEntryPoint GLCompute (%\d+) "main"', spv_code)
+        fragment_entry = re.search(r'OpEntryPoint Fragment (%\d+) "main"', spv_code)
+        assert compute_entry is not None
+        assert fragment_entry is not None
+        function_bodies = {
+            match.group(1): match.group(0)
+            for match in re.finditer(
+                r"(%\d+) = OpFunction\b.*?OpFunctionEnd", spv_code, re.DOTALL
+            )
+        }
+        compute_body = function_bodies[compute_entry.group(1)]
+        fragment_body = function_bodies[fragment_entry.group(1)]
+        compute_calls = re.findall(r"OpFunctionCall %\d+ (%\d+)([^\n]*)", compute_body)
+        fragment_calls = re.findall(
+            r"OpFunctionCall %\d+ (%\d+)([^\n]*)", fragment_body
+        )
+
+        assert len(compute_calls) == 1
+        assert len(compute_calls[0][1].split()) == 2
+        assert len(fragment_calls) == 1
+        assert len(fragment_calls[0][1].split()) == 1
+        assert compute_calls[0][0] != fragment_calls[0][0]
+        assert function_bodies[compute_calls[0][0]].count("OpFunctionParameter") == 2
+        assert function_bodies[fragment_calls[0][0]].count("OpFunctionParameter") == 1
+        assert "OpImageRead" in function_bodies[compute_calls[0][0]]
+        assert spv_code.count("OpFunctionCall") == 2
+        assert "imageLoad(" not in spv_code
+        assert "WARNING" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 

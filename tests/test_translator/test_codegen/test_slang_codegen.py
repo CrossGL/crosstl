@@ -6335,6 +6335,11 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
                 holderPtr->query.CommitNonOpaqueTriangleHit();
                 RayQuery<RAY_FLAG_NONE>& indexedRef = holder.queries[0];
                 let indexedRefBarycentrics = indexedRef.CandidateTriangleBarycentrics();
+                RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;
+                rqPtr->TraceRayInline(scene, 0, 0xFF, ray);
+                let pointerAdvanced = rqPtr->Proceed();
+                let pointerCandidateType = rqPtr->CandidateType();
+                rqPtr->CommitNonOpaqueTriangleHit();
             }
         }
     }
@@ -6360,6 +6365,11 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
         "float2 indexedRefBarycentrics = "
         "indexedRef.CandidateTriangleBarycentrics();" in generated_code
     )
+    assert "RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;" in generated_code
+    assert "rqPtr->TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool pointerAdvanced = rqPtr->Proceed();" in generated_code
+    assert "uint pointerCandidateType = rqPtr->CandidateType();" in generated_code
+    assert "rqPtr->CommitNonOpaqueTriangleHit();" in generated_code
     assert "RayQueryOpNode" not in generated_code
 
 
@@ -8162,8 +8172,8 @@ def test_invalid_slang_ray_tracing_pointer_reference_interface_types_raise(
             """
             compute {
                 void main() {
-                    RayQuery<RAY_FLAG_NONE> rq;
-                    RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;
+                    uint rq;
+                    uint* rqPtr = &rq;
                     rqPtr->Proceed();
                 }
             }

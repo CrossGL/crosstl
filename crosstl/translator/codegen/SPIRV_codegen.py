@@ -161,6 +161,7 @@ class VulkanSPIRVCodeGen:
         self.function_storage_buffer_access_requirements = {}
         self.inline_storage_buffer_functions = {}
         self.function_resource_array_params = {}
+        self.stage_local_function_resource_array_params = {}
         self.function_resource_array_type_hints = {}
         self.function_storage_image_pointer_params = {}
         self.function_execution_models = {}
@@ -177,6 +178,7 @@ class VulkanSPIRVCodeGen:
         self.mesh_primitive_index_outputs = {}
         self.current_mesh_output_parameters = {}
         self.function_mesh_output_parameter_indices = {}
+        self.stage_local_function_mesh_output_parameter_indices = {}
         self.function_interface_variables = {}
         self.function_interface_variables_by_name = {}
         self.builtin_interface_variable_ids = set()
@@ -1243,6 +1245,28 @@ class VulkanSPIRVCodeGen:
 
     def has_function_reference(self, function_name: str) -> bool:
         return self.resolve_function_reference(function_name) is not None
+
+    def stage_local_metadata(self, mapping, function_name: str):
+        if self.current_stage is None:
+            return None
+        key = self.stage_local_function_key(self.current_stage, function_name)
+        return mapping.get(key)
+
+    def resolve_function_resource_array_params(self, function_name: str):
+        params = self.stage_local_metadata(
+            self.stage_local_function_resource_array_params, function_name
+        )
+        if params is not None:
+            return params
+        return self.function_resource_array_params.get(function_name, set())
+
+    def resolve_function_mesh_output_parameter_indices(self, function_name: str):
+        indices = self.stage_local_metadata(
+            self.stage_local_function_mesh_output_parameter_indices, function_name
+        )
+        if indices is not None:
+            return indices
+        return self.function_mesh_output_parameter_indices.get(function_name, set())
 
     def create_function_parameter(
         self, param_type: SpirvId, name: Optional[str] = None
@@ -3914,8 +3938,8 @@ class VulkanSPIRVCodeGen:
             if pointer_arg is not None:
                 return pointer_arg
 
-        resource_array_params = self.function_resource_array_params.get(
-            function_name, set()
+        resource_array_params = self.resolve_function_resource_array_params(
+            function_name
         )
         if arg_index in resource_array_params:
             pointer_arg = self.variable_pointer_from_expression(arg)
@@ -10410,6 +10434,14 @@ class VulkanSPIRVCodeGen:
         self.function_mesh_output_parameter_indices[function_node.name] = (
             mesh_output_parameter_indices
         )
+        if stage is not None:
+            key = self.stage_local_function_key(stage, function_node.name)
+            self.stage_local_function_resource_array_params[key] = (
+                resource_array_param_indices
+            )
+            self.stage_local_function_mesh_output_parameter_indices[key] = (
+                mesh_output_parameter_indices
+            )
 
         for i, (param, param_type, param_value_type) in enumerate(runtime_parameters):
             if hasattr(param, "name"):
@@ -16073,8 +16105,8 @@ class VulkanSPIRVCodeGen:
             # Evaluate arguments
             args = []
             has_errors = False
-            mesh_output_arg_indices = self.function_mesh_output_parameter_indices.get(
-                callee_name, set()
+            mesh_output_arg_indices = (
+                self.resolve_function_mesh_output_parameter_indices(callee_name)
             )
             for arg_index, arg in enumerate(expr.args):
                 if arg_index in mesh_output_arg_indices:

@@ -2515,6 +2515,134 @@ def test_glsl_fragment_component_packed_output_layouts():
     assert "fragColor" not in fragment_code
 
 
+def test_glsl_fragment_component_packed_output_overlap_raises():
+    code = """
+    shader ComponentPackedOutputOverlap {
+        out float luminance @location(0) @component(0);
+        out vec2 velocity @location(0) @component(0);
+
+        fragment {
+            void main() {
+                luminance = 1.0;
+                velocity = vec2(0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting OpenGL fragment output location for 'velocity': "
+            "location 0 components 0-1 overlaps 'luminance' "
+            "location 0 component 0"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_glsl_fragment_component_packed_outputs_reserve_auto_locations():
+    code = """
+    shader ComponentPackedOutputAutoLocation {
+        struct PSOutput {
+            float luminance @location(0) @component(0);
+            vec2 velocity @location(0) @component(1);
+            vec4 color;
+        };
+
+        fragment {
+            PSOutput main() {
+                PSOutput output;
+                output.luminance = 1.0;
+                output.velocity = vec2(0.5);
+                output.color = vec4(0.25);
+                return output;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, component = 0) out float luminance;" in fragment_code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in fragment_code
+    assert "layout(location = 1) out vec4 color;" in fragment_code
+
+
+def test_glsl_fragment_indexed_outputs_reject_same_index_location_overlap():
+    code = """
+    shader IndexedOutputOverlap {
+        out vec4 accum @location(0) @index(1);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting OpenGL fragment output location for 'revealage': "
+            "location 0 components 0-3 overlaps 'accum' "
+            "location 0 components 0-3"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_glsl_fragment_indexed_outputs_allow_different_indices():
+    code = """
+    shader IndexedOutputValid {
+        out vec4 accum @location(0) @index(0);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, index = 0) out vec4 accum;" in fragment_code
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in fragment_code
+
+
+def test_glsl_fragment_indexed_outputs_allow_default_and_secondary_index():
+    code = """
+    shader IndexedOutputDefaultValid {
+        out vec4 accum @location(0);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0) out vec4 accum;" in fragment_code
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in fragment_code
+
+
 def test_glsl_fragment_sample_mask_output_aliases_to_builtin():
     code = """
     shader SampleMaskOutput {

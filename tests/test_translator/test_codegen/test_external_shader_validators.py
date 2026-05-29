@@ -902,6 +902,23 @@ void main() {
 """
 
 
+MIXED_GLSL_FRAGMENT_COMPONENT_PACKING_SHADER = """
+#version 450 core
+layout(location = 0) in vec2 uv;
+layout(location = 0, component = 0) out float luminance;
+layout(location = 0, component = 1) out vec2 velocity;
+layout(location = 0, component = 3) out float coverage;
+layout(location = 1) out vec4 color;
+
+void main() {
+    luminance = uv.x;
+    velocity = uv;
+    coverage = uv.y;
+    color = vec4(uv, 0.0, 1.0);
+}
+"""
+
+
 MIXED_GLSL_FRAGMENT_BLEND_SUPPORT_SHADER = """
 #version 460 core
 #extension GL_KHR_blend_equation_advanced : enable
@@ -2305,6 +2322,28 @@ def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     assert "fragColor" not in code
     assert "return accum" not in code
     assert "\n    vec4 accum;" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
+def test_mixed_glsl_fragment_component_packing_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_fragment_component_packing.frag"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_COMPONENT_PACKING_SHADER, "fragment")
+    )
+    assert "layout(location = 0) in vec2 uv;" in code
+    assert "layout(location = 0, component = 0) out float luminance;" in code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in code
+    assert "layout(location = 0, component = 3) out float coverage;" in code
+    assert "layout(location = 1) out vec4 color;" in code
+    assert "luminance = uv.x;" in code
+    assert "velocity = uv;" in code
+    assert "coverage = uv.y;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "frag", str(shader_path)])

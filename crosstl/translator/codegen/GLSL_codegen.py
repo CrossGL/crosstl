@@ -785,6 +785,7 @@ class GLSLCodeGen:
         self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.stage_io_used_locations = {}
+        self.stage_io_used_components = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.structs_by_name = {}
@@ -1525,6 +1526,7 @@ class GLSLCodeGen:
         self.current_target_stage = target_stage
         self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
+        self.stage_io_used_components = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.fragment_output_member_layout_maps = {}
@@ -5073,6 +5075,10 @@ class GLSLCodeGen:
         return "\n".join(declarations) + ("\n" if declarations else "")
 
     def stage_io_layout_location(self, layout):
+        value = self.stage_io_layout_value(layout, "location")
+        return int(value) if value is not None and value.isdigit() else None
+
+    def stage_io_layout_value(self, layout, name):
         if not layout.startswith("layout("):
             return None
         start = layout.find("(")
@@ -5082,10 +5088,22 @@ class GLSLCodeGen:
 
         for item in layout[start + 1 : end].split(","):
             key, separator, value = item.partition("=")
-            if separator and key.strip() == "location":
-                value = value.strip()
-                return int(value) if value.isdigit() else None
+            if separator and key.strip() == name:
+                return value.strip()
         return None
+
+    def stage_io_layout_int_value(self, layout, name):
+        value = self.stage_io_layout_value(layout, name)
+        if value is None:
+            return None
+        return int(value) if value.isdigit() else None
+
+    def stage_io_layout_component(self, layout):
+        return self.stage_io_layout_int_value(layout, "component")
+
+    def stage_io_layout_index(self, layout):
+        index = self.stage_io_layout_int_value(layout, "index")
+        return 0 if index is None else index
 
     def stage_io_location_count(self, mapped_type):
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
@@ -5104,6 +5122,36 @@ class GLSLCodeGen:
                 matrix_count = int(columns)
 
         return max(matrix_count * array_count, 1)
+
+    def stage_io_component_count(self, mapped_type):
+        base_type, _ = split_array_type_suffix(str(mapped_type))
+        normalized = str(base_type)
+        if normalized in {
+            "float",
+            "int",
+            "uint",
+            "bool",
+            "half",
+            "short",
+            "ushort",
+        }:
+            return 1
+        if normalized == "double":
+            return 2
+
+        vector_prefix_widths = {
+            "vec": 1,
+            "ivec": 1,
+            "uvec": 1,
+            "bvec": 1,
+            "dvec": 2,
+        }
+        for prefix, component_width in vector_prefix_widths.items():
+            if normalized.startswith(prefix):
+                size = normalized[len(prefix) :]
+                if size.isdigit():
+                    return int(size) * component_width
+        return 4
 
     def stage_io_array_location_count(self, array_suffix):
         if not array_suffix:
@@ -5140,6 +5188,22 @@ class GLSLCodeGen:
 
         count = self.stage_io_location_count(mapped_type)
         end = start + count - 1
+        component = self.stage_io_layout_component(layout)
+        index = self.stage_io_layout_index(layout)
+        if component is not None or self.stage_io_layout_has(layout, {"index"}):
+            self.reserve_stage_io_component_layout(
+                used_locations,
+                stage_name,
+                direction,
+                start,
+                end,
+                component,
+                index,
+                mapped_type,
+                name,
+            )
+            return
+
         ranges = used_locations.setdefault((stage_name, direction), [])
         for used_start, used_end, used_name in ranges:
             if start <= used_end and used_start <= end:
@@ -5151,7 +5215,87 @@ class GLSLCodeGen:
                     f"overlaps '{used_name}' "
                     f"{self.stage_io_location_label(used_start, used_end)}"
                 )
+        for (
+            used_start,
+            used_end,
+            used_component_start,
+            used_component_end,
+            used_index,
+            used_name,
+        ) in self.stage_io_used_components.get((stage_name, direction), []):
+            if used_index != 0:
+                continue
+            if start <= used_end and used_start <= end:
+                raise ValueError(
+                    f"Conflicting OpenGL {stage_name} {direction} location "
+                    f"for '{name}': {self.stage_io_location_label(start, end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                )
         ranges.append((start, end, name))
+
+    def reserve_stage_io_component_layout(
+        self,
+        used_locations,
+        stage_name,
+        direction,
+        start,
+        end,
+        component,
+        index,
+        mapped_type,
+        name,
+    ):
+        component_start = 0 if component is None else component
+        component_count = (
+            4 if component is None else self.stage_io_component_count(mapped_type)
+        )
+        component_end = component_start + component_count - 1
+
+        for used_start, used_end, used_name in used_locations.get(
+            (stage_name, direction), []
+        ):
+            if start <= used_end and used_start <= end:
+                if index != 0:
+                    continue
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting OpenGL {stage_name} {direction} location "
+                    f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.stage_io_location_label(used_start, used_end)}"
+                )
+
+        entries = self.stage_io_used_components.setdefault((stage_name, direction), [])
+        for (
+            used_start,
+            used_end,
+            used_component_start,
+            used_component_end,
+            used_index,
+            used_name,
+        ) in entries:
+            if start <= used_end and used_start <= end and index == used_index:
+                if (
+                    used_start == start
+                    and used_end == end
+                    and used_component_start == component_start
+                    and used_component_end == component_end
+                    and used_name == name
+                ):
+                    return
+                if (
+                    component_start <= used_component_end
+                    and used_component_start <= component_end
+                ):
+                    raise ValueError(
+                        f"Conflicting OpenGL {stage_name} {direction} location "
+                        f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
+                        f"overlaps '{used_name}' "
+                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                    )
+        entries.append((start, end, component_start, component_end, index, name))
 
     def reserve_stage_io_declaration(self, stage_name, direction, name, declaration):
         key = (stage_name, direction, name)
@@ -5177,6 +5321,19 @@ class GLSLCodeGen:
         if start == end:
             return f"location {start}"
         return f"locations {start}-{end}"
+
+    def stage_io_component_label(self, start, end):
+        if start == end:
+            return f"component {start}"
+        return f"components {start}-{end}"
+
+    def stage_io_component_location_label(
+        self, start, end, component_start, component_end
+    ):
+        return (
+            f"{self.stage_io_location_label(start, end)} "
+            f"{self.stage_io_component_label(component_start, component_end)}"
+        )
 
     def struct_member_names(self, struct_names):
         names = set()
@@ -5252,6 +5409,14 @@ class GLSLCodeGen:
     def next_available_stage_io_layout(self, stage_name, direction, mapped_type):
         count = self.stage_io_location_count(mapped_type)
         ranges = sorted(self.stage_io_used_locations.get((stage_name, direction), []))
+        ranges.extend(
+            sorted(
+                (start, end, name)
+                for start, end, _, _, _, name in self.stage_io_used_components.get(
+                    (stage_name, direction), []
+                )
+            )
+        )
         location = 0
 
         while True:
@@ -6251,8 +6416,6 @@ class GLSLCodeGen:
     def reserve_global_stage_io_layout(self, node, qualifier, layout, mapped_type):
         direction = self.global_stage_io_layout_direction(qualifier)
         if direction is None:
-            return
-        if self.stage_io_layout_has(layout, {"component", "index"}):
             return
 
         stage_name = self.current_target_stage or "global"

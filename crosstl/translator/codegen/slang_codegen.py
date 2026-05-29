@@ -4605,7 +4605,12 @@ class SlangCodeGen:
 
         query = self.generate_expression(query_expr)
         arg_list = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"{query}.{operation}({arg_list})"
+        access = (
+            "->"
+            if self.slang_ray_query_pointer_pointee_type(query_expr) is not None
+            else "."
+        )
+        return f"{query}{access}{operation}({arg_list})"
 
     def slang_ray_query_target_type_rejection_reason(self, result_type):
         expected_type = self.slang_ray_query_expected_target_type()
@@ -4687,16 +4692,38 @@ class SlangCodeGen:
                 calls.append(call)
         return calls
 
+    def slang_ray_query_pointer_pointee_type(self, query_expr):
+        pointer_type = self.expression_result_type(query_expr)
+        pointee_type = self.pointer_pointee_type_name(pointer_type)
+        if pointee_type is None:
+            return None
+        return self.reference_referent_type_name(pointee_type) or pointee_type
+
+    def is_slang_ray_query_receiver_type(self, base_type, array_suffix):
+        return not array_suffix and (
+            base_type == "RayQuery"
+            or (base_type.startswith("RayQuery<") and base_type.endswith(">"))
+        )
+
     def validate_slang_ray_query_receiver(self, query_expr, shader_type, operation):
+        pointee_type = self.slang_ray_query_pointer_pointee_type(query_expr)
+        if pointee_type is not None:
+            mapped_pointee = self.convert_type(pointee_type)
+            base_type, array_suffix = split_array_type_suffix(mapped_pointee)
+            if self.is_slang_ray_query_receiver_type(base_type, array_suffix):
+                return
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} RayQuery.{operation} receiver must be "
+                f"RayQuery, got {actual_type}"
+            )
+
         base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
             query_expr
         )
         if base_type is None:
             return
-        is_ray_query_type = base_type == "RayQuery" or (
-            base_type.startswith("RayQuery<") and base_type.endswith(">")
-        )
-        if not (not array_suffix and is_ray_query_type):
+        if not self.is_slang_ray_query_receiver_type(base_type, array_suffix):
             actual_type = f"{base_type}{array_suffix}"
             raise ValueError(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
