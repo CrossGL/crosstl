@@ -2341,6 +2341,29 @@ class RustCodeGen:
                 expr.true_expr
             ) | self.mutable_reference_borrow_root_names(expr.false_expr)
 
+        if isinstance(expr, MatchNode):
+            names = set()
+            subject_type = self.expression_result_type(
+                getattr(expr, "expression", None)
+            )
+            for arm in getattr(expr, "arms", []) or []:
+                saved_variable_types = self.variable_types.copy()
+                saved_local_variable_names = self.local_variable_names.copy()
+                try:
+                    self.register_match_pattern_bindings(
+                        getattr(arm, "pattern", None),
+                        subject_type,
+                    )
+                    names.update(
+                        self.mutable_reference_borrow_root_names(
+                            self.match_arm_tail_expression(getattr(arm, "body", None))
+                        )
+                    )
+                finally:
+                    self.variable_types = saved_variable_types
+                    self.local_variable_names = saved_local_variable_names
+            return names
+
         if isinstance(expr, BlockNode):
             explicit_tail = getattr(expr, "expression", None)
             if explicit_tail is not None:
@@ -2355,6 +2378,12 @@ class RustCodeGen:
 
         root_name = self.assignment_target_root_name(expr)
         return {root_name} if root_name else set()
+
+    def match_arm_tail_expression(self, body):
+        statements = self.statement_list(body)
+        if not statements:
+            return None
+        return self.block_tail_expression(statements[-1])
 
     def generate_borrow_operand_expression(self, expr):
         """Render a borrow operand without value-context clones."""
@@ -5456,6 +5485,8 @@ class RustCodeGen:
         target_reference = self.reference_type_parts_for_type(target_type)
         if target_reference is None:
             return None
+        if isinstance(expr, (MatchNode, BlockNode)):
+            return generated_expr
 
         generated_text = str(generated_expr).strip()
         if not generated_text:

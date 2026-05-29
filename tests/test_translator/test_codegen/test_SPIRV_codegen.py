@@ -4051,6 +4051,41 @@ class TestVulkanSPIRVCodeGen:
         assert re.search(r"%\d+ = OpCompositeExtract %\d+ %\d+ 2\b", spv_code)
         assert "WARNING" not in spv_code
 
+    def test_compute_local_size_invalid_dimensions_warn_and_validate(self, tmp_path):
+        source_code = """
+        shader ComputeBuiltins {
+            compute {
+                void main() {
+                    uint sizeX = gl_WorkGroupSize.x;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        ast.stages[ShaderStage.COMPUTE].execution_config = {
+            "local_size": (0, -2, "wide")
+        }
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        entry_match = re.search(r'OpEntryPoint GLCompute %(\d+) "main"', spv_code)
+        assert entry_match is not None
+        assert f"OpExecutionMode %{entry_match.group(1)} LocalSize 1 1 1" in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize x dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize y dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert (
+            "; WARNING: SPIR-V LocalSize z dimension from local_size must be a "
+            "positive integer literal; using 1"
+        ) in spv_code
+        assert spv_code.count("SPIR-V LocalSize") == 3
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_compute_synchronization_builtins_emit_spirv_barriers(self, tmp_path):
         source_code = """
         shader ComputeSynchronization {

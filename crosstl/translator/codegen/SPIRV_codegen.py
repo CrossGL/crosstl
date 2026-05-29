@@ -151,6 +151,7 @@ class VulkanSPIRVCodeGen:
         self.task_payload_shared_variables = {}
         self.task_payload_interface_by_function = {}
         self.entry_point_private_variables = []
+        self.local_size_warning_keys = set()
 
         self.glsl_std450_id = None
         self.main_fn_id = None
@@ -13179,13 +13180,50 @@ class VulkanSPIRVCodeGen:
         for key in ("local_size", "workgroup_size", "numthreads"):
             value = config.get(key)
             if isinstance(value, (list, tuple)) and len(value) >= 3:
-                return int(value[0]), int(value[1]), int(value[2])
+                return tuple(
+                    self.positive_local_size_dimension(
+                        value[index], key, "xyz"[index], stage
+                    )
+                    for index in range(3)
+                )
 
         return (
-            int(config.get("local_size_x", 1)),
-            int(config.get("local_size_y", 1)),
-            int(config.get("local_size_z", 1)),
+            self.positive_local_size_dimension(
+                config.get("local_size_x", 1), "local_size_x", "x", stage
+            ),
+            self.positive_local_size_dimension(
+                config.get("local_size_y", 1), "local_size_y", "y", stage
+            ),
+            self.positive_local_size_dimension(
+                config.get("local_size_z", 1), "local_size_z", "z", stage
+            ),
         )
+
+    def positive_local_size_dimension(
+        self, value, source: str, axis: str, stage
+    ) -> int:
+        """Coerce a LocalSize dimension to a valid positive SPIR-V literal."""
+        invalid = isinstance(value, bool)
+        if invalid:
+            dimension = None
+        else:
+            try:
+                dimension = int(value)
+            except (TypeError, ValueError):
+                dimension = None
+
+        if dimension is not None and dimension > 0:
+            return dimension
+
+        warning_key = (id(stage), source, axis)
+        if warning_key not in self.local_size_warning_keys:
+            self.local_size_warning_keys.add(warning_key)
+            self.emit(
+                "; WARNING: SPIR-V LocalSize "
+                f"{axis} dimension from {source} must be a positive integer "
+                "literal; using 1"
+            )
+        return 1
 
     def stage_attribute_value(self, stage, attribute_name: str):
         """Return the first argument for a stage entry-point attribute."""

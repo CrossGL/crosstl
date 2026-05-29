@@ -4016,6 +4016,193 @@ def test_reference_branches_and_mutable_places_borrow_without_clones_compile(
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_reference_match_and_block_tails_borrow_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    int_type = PrimitiveType("int")
+    bool_type = PrimitiveType("bool")
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    def bool_match(true_expr, false_expr):
+        return MatchNode(
+            IdentifierNode("flag"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(True, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            true_expr,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+                MatchArmNode(
+                    LiteralPatternNode(LiteralNode(False, bool_type)),
+                    None,
+                    [
+                        ExpressionStatementNode(
+                            false_expr,
+                            is_tail_expression=True,
+                        )
+                    ],
+                ),
+            ],
+        )
+
+    def block_tail(expr):
+        return BlockNode(
+            [
+                VariableNode(
+                    "marker",
+                    int_type,
+                    LiteralNode(1, int_type),
+                ),
+                ExpressionStatementNode(expr, is_tail_expression=True),
+            ]
+        )
+
+    ast = ShaderNode(
+        "RustReferenceMatchSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            )
+        ],
+        functions=[
+            FunctionNode(
+                "return_match_ref",
+                ReferenceType(payload_type),
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", ReferenceType(payload_type)),
+                    ParameterNode("right", ReferenceType(payload_type)),
+                ],
+                [
+                    ReturnNode(
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        )
+                    )
+                ],
+            ),
+            FunctionNode(
+                "match_local_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type),
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "match_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        bool_match(
+                            IdentifierNode("left"),
+                            IdentifierNode("right"),
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(7, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+            FunctionNode(
+                "block_match_local_mut_ref",
+                int_type,
+                [
+                    ParameterNode("flag", bool_type),
+                    ParameterNode("left", payload_type),
+                    ParameterNode("right", payload_type),
+                ],
+                [
+                    VariableNode(
+                        "selected",
+                        ReferenceType(payload_type, is_mutable=True),
+                        block_tail(
+                            bool_match(
+                                IdentifierNode("left"),
+                                IdentifierNode("right"),
+                            )
+                        ),
+                    ),
+                    AssignmentNode(
+                        count_of(IdentifierNode("selected")),
+                        LiteralNode(11, int_type),
+                    ),
+                    ReturnNode(count_of(IdentifierNode("selected"))),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert (
+        "pub fn return_match_ref<'a>("
+        "flag: bool, left: &'a Payload, right: &'a Payload"
+        ") -> &'a Payload"
+    ) in generated_code
+    assert "pub fn match_local_ref(flag: bool, left: Payload, right: Payload)" in (
+        generated_code
+    )
+    assert (
+        "pub fn match_local_mut_ref(flag: bool, mut left: Payload, mut right: Payload)"
+        in generated_code
+    )
+    assert (
+        "pub fn block_match_local_mut_ref("
+        "flag: bool, mut left: Payload, mut right: Payload"
+        ")"
+    ) in generated_code
+    assert "let selected: &Payload = match flag {" in generated_code
+    assert "let mut selected: &mut Payload = match flag {" in generated_code
+    assert generated_code.count("let mut selected: &mut Payload =") == 2
+    assert "let marker: i32 = 1;" in generated_code
+    assert "&left" in generated_code
+    assert "&right" in generated_code
+    assert generated_code.count("&mut left") == 2
+    assert generated_code.count("&mut right") == 2
+    assert "return match flag {" in generated_code
+    assert "&match flag" not in generated_code
+    assert "&mut match flag" not in generated_code
+    assert ".clone()" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 
