@@ -10331,6 +10331,53 @@ class TestVulkanSPIRVCodeGen:
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
 
+    def test_multisample_storage_image_load_store_emit_sample_operands(self, tmp_path):
+        source_code = """
+        shader MultisampleStorageImages {
+            image2DMS colorSamples @rgba16f;
+            uimage2DMS counters @r32ui;
+
+            compute {
+                void main() {
+                    ivec2 pixel = ivec2(1, 2);
+                    uint sample = 0u;
+                    vec4 color = imageLoad(colorSamples, pixel, sample);
+                    imageStore(colorSamples, pixel, sample, color);
+                    uint count = imageLoad(counters, pixel, sample);
+                    imageStore(counters, pixel, sample, count);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        uint_type = re.search(r"(%\d+) = OpTypeInt 32 0", spv_code)
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+
+        assert uint_type is not None
+        assert vec4_type is not None
+        assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 Rgba16f", spv_code)
+        assert re.search(r"OpTypeImage %\d+ 2D 0 0 1 2 R32ui", spv_code)
+        assert spv_code.count("OpImageRead") == 2
+        assert spv_code.count("OpImageWrite") == 2
+        assert re.search(
+            rf"OpImageRead {uint_type.group(1)} %\d+ %\d+ Sample %\d+",
+            spv_code,
+        )
+        assert re.search(
+            rf"OpImageRead {vec4_type.group(1)} %\d+ %\d+ Sample %\d+",
+            spv_code,
+        )
+        assert re.search(r"OpImageWrite %\d+ %\d+ %\d+ Sample %\d+", spv_code)
+        assert "imageLoad" not in spv_code
+        assert "imageStore" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_user_defined_texture_function_shadows_resource_builtin(self):
         source_code = """
         shader ShadowResourceName {

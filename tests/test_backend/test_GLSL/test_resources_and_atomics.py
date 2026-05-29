@@ -17404,7 +17404,14 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
 
     hlsl = HLSLCodeGen().generate(shader_ast)
     metal = MetalCodeGen().generate(shader_ast)
-    glsl = GLSLCodeGen().generate(shader_ast)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "OpenGL buffer block member access for readAtomicBlock.value requires "
+            "read-write buffer block access: got readonly"
+        ),
+    ):
+        GLSLCodeGen().generate(shader_ast)
 
     assert (
         "uint readonlyOld = /* unsupported HLSL GLSL buffer block atomic: "
@@ -17443,11 +17450,6 @@ def test_codegen_mixed_ssbo_invalid_atomics_emit_target_diagnostics():
     )
     assert "atomic_fetch_" not in metal
     assert "__crossgl_buffer_atomic" not in metal
-
-    assert "uint readonlyOld = atomicAdd(readAtomicBlock.value, 1u);" in glsl
-    assert "float floatOld = atomicAdd(floatAtomicBlock.value, 1.0);" in glsl
-    assert "uint vectorOld = atomicAdd(vectorAtomicBlock.value, 1u);" in glsl
-    assert "float matrixOld = atomicAdd(matrixAtomicBlock.value, 1.0);" in glsl
 
 
 def test_codegen_mixed_glsl_preprocessors_are_filtered_for_non_glsl_targets():

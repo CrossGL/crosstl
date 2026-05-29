@@ -3070,18 +3070,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 continue
 
             return_expr = getattr(statements[0], "value", None)
-            return_base_expr = return_expr
-            return_indices = []
-            if isinstance(return_expr, ArrayAccessNode):
-                return_base_expr, return_indices = self.query_array_access_parts(
-                    return_expr
-                )
-            elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
-                continue
-            return_name = self.get_expression_name(return_base_expr)
-            if not return_name:
-                continue
-
             params = getattr(func, "parameters", getattr(func, "params", []))
             resource_param_indices = {
                 getattr(param, "name", None): index
@@ -3098,27 +3086,80 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             all_param_indices = {
                 name: index for name, index in all_param_indices.items() if name
             }
-            if any(
-                not self.is_safe_query_return_index(index, all_param_indices)
-                for index in return_indices
-            ):
-                continue
-            if return_name in resource_param_indices:
-                return_sources[func_name] = {
-                    "kind": "parameter",
-                    "index": resource_param_indices[return_name],
-                    "indices": return_indices,
-                    "param_indices": all_param_indices,
-                }
-            elif return_name in global_resource_names:
-                return_sources[func_name] = {
-                    "kind": "global",
-                    "name": return_name,
-                    "indices": return_indices,
-                    "param_indices": all_param_indices,
-                }
+            return_source = self.query_return_source_descriptor(
+                return_expr,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+            )
+            if return_source is not None:
+                return_sources[func_name] = return_source
 
         return return_sources
+
+    def query_return_source_descriptor(
+        self,
+        return_expr,
+        resource_param_indices,
+        global_resource_names,
+        all_param_indices,
+    ):
+        """Describe a traceable resource-return expression for caller metadata."""
+        if isinstance(return_expr, TernaryOpNode):
+            true_source = self.query_return_source_descriptor(
+                return_expr.true_expr,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+            )
+            false_source = self.query_return_source_descriptor(
+                return_expr.false_expr,
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+            )
+            if true_source is None or false_source is None:
+                return None
+            return {
+                "kind": "ternary",
+                "condition": return_expr.condition,
+                "true_source": true_source,
+                "false_source": false_source,
+                "param_indices": all_param_indices,
+            }
+
+        return_base_expr = return_expr
+        return_indices = []
+        if isinstance(return_expr, ArrayAccessNode):
+            return_base_expr, return_indices = self.query_array_access_parts(
+                return_expr
+            )
+        elif not isinstance(return_expr, (IdentifierNode, VariableNode, str)):
+            return None
+
+        return_name = self.get_expression_name(return_base_expr)
+        if not return_name:
+            return None
+        if any(
+            not self.is_safe_query_return_index(index, all_param_indices)
+            for index in return_indices
+        ):
+            return None
+        if return_name in resource_param_indices:
+            return {
+                "kind": "parameter",
+                "index": resource_param_indices[return_name],
+                "indices": return_indices,
+                "param_indices": all_param_indices,
+            }
+        if return_name in global_resource_names:
+            return {
+                "kind": "global",
+                "name": return_name,
+                "indices": return_indices,
+                "param_indices": all_param_indices,
+            }
+        return None
 
     def query_array_access_parts(self, expr):
         """Return the base expression and ordered indices for nested array access."""
@@ -3224,19 +3265,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return_source = self.query_return_sources.get(callee_name)
                 if return_source is None:
                     return False
-                if return_source["kind"] == "global":
-                    before = len(global_names)
-                    global_names.add(return_source["name"])
-                    return len(global_names) != before
                 raw_args = getattr(
                     resource_expr,
                     "arguments",
                     getattr(resource_expr, "args", []),
                 )
-                index = return_source["index"]
-                if index >= len(raw_args):
-                    return False
-                return mark_resolved_resource(func_name, raw_args[index], visited)
+                return mark_return_source_resources(
+                    func_name,
+                    return_source,
+                    raw_args,
+                    visited,
+                )
 
             resource_name = self.get_expression_name(resource_expr)
             if not resource_name:
@@ -3286,6 +3325,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             before = len(global_names)
             global_names.add(resource_name)
             return len(global_names) != before
+
+        def mark_return_source_resources(func_name, return_source, raw_args, visited):
+            kind = return_source["kind"]
+            if kind == "global":
+                before = len(global_names)
+                global_names.add(return_source["name"])
+                return len(global_names) != before
+            if kind == "parameter":
+                index = return_source["index"]
+                if index >= len(raw_args):
+                    return False
+                return mark_resolved_resource(func_name, raw_args[index], visited)
+            if kind == "ternary":
+                true_changed = mark_return_source_resources(
+                    func_name,
+                    return_source["true_source"],
+                    raw_args,
+                    visited.copy(),
+                )
+                false_changed = mark_return_source_resources(
+                    func_name,
+                    return_source["false_source"],
+                    raw_args,
+                    visited.copy(),
+                )
+                return true_changed or false_changed
+            return False
 
         for func_name, func in functions_by_name.items():
             for call in self.query_walk_nodes(getattr(func, "body", [])):
@@ -3498,6 +3564,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def query_return_source_metadata_expression(self, return_source, raw_args):
         """Render query metadata for a resource returned by a user function."""
+        if return_source["kind"] == "ternary":
+            condition = self.format_query_return_safe_expression(
+                return_source["condition"],
+                return_source.get("param_indices", {}),
+                raw_args,
+            )
+            if condition is None:
+                return None
+            true_metadata = self.query_return_source_metadata_expression(
+                return_source["true_source"],
+                raw_args,
+            )
+            false_metadata = self.query_return_source_metadata_expression(
+                return_source["false_source"],
+                raw_args,
+            )
+            if true_metadata is None or false_metadata is None:
+                return None
+            return f"({condition} ? {true_metadata} : {false_metadata})"
+
         if return_source["kind"] == "global":
             metadata_expr = self.query_metadata_name(return_source["name"])
         else:
@@ -3519,6 +3605,155 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return None
             metadata_expr = f"{metadata_expr}[{rendered_index}]"
         return metadata_expr
+
+    def format_query_return_safe_expression(
+        self,
+        expr,
+        param_indices,
+        raw_args,
+        allow_free_identifiers=False,
+    ):
+        """Render a side-effect-safe returned-resource selector expression."""
+        if isinstance(expr, BinaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if operator not in (
+                self.query_return_index_binary_ops
+                | {"&&", "||", "==", "!=", "<", "<=", ">", ">="}
+            ):
+                return None
+            left = self.format_query_return_safe_expression(
+                expr.left,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            right = self.format_query_return_safe_expression(
+                expr.right,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if left is None or right is None:
+                return None
+            return f"({left} {operator} {right})"
+
+        if isinstance(expr, UnaryOpNode):
+            operator = getattr(expr, "operator", getattr(expr, "op", None))
+            if getattr(expr, "is_postfix", False) or operator not in {
+                "!",
+                "+",
+                "-",
+                "~",
+            }:
+                return None
+            operand = self.format_query_return_safe_expression(
+                expr.operand,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if operand is None:
+                return None
+            return f"{operator}{operand}"
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.format_query_return_safe_expression(
+                expr.condition,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            true_expr = self.format_query_return_safe_expression(
+                expr.true_expr,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            false_expr = self.format_query_return_safe_expression(
+                expr.false_expr,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return f"({condition} ? {true_expr} : {false_expr})"
+
+        if isinstance(expr, ArrayAccessNode):
+            array_node = getattr(
+                expr,
+                "array_expr",
+                getattr(expr, "array", None),
+            )
+            index_node = getattr(
+                expr,
+                "index_expr",
+                getattr(expr, "index", None),
+            )
+            if array_node is None or index_node is None:
+                return None
+            array_expr = self.format_query_return_safe_expression(
+                array_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            index_expr = self.format_query_return_safe_expression(
+                index_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return f"{array_expr}[{index_expr}]"
+
+        if isinstance(expr, MemberAccessNode):
+            object_node = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", None),
+            )
+            member = getattr(expr, "member", None)
+            member_name = getattr(member, "name", member)
+            if object_node is None or not isinstance(member_name, str):
+                return None
+            object_expr = self.format_query_return_safe_expression(
+                object_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if object_expr is None:
+                return None
+            return f"{object_expr}.{member_name}"
+
+        expr_name = self.get_expression_name(expr)
+        if expr_name in param_indices:
+            param_index = param_indices[expr_name]
+            if param_index >= len(raw_args):
+                return None
+            return self.format_query_return_safe_expression(
+                raw_args[param_index],
+                {},
+                [],
+                allow_free_identifiers=True,
+            )
+        if allow_free_identifiers and expr_name:
+            return self.visit(expr)
+        if isinstance(expr, LiteralNode):
+            return self.visit(expr)
+        if isinstance(expr, bool):
+            return "true" if expr else "false"
+        if isinstance(expr, (int, float)):
+            return str(expr)
+        if isinstance(expr, str):
+            stripped = expr.strip()
+            if stripped in {"true", "false"} or stripped.lstrip("-").isdigit():
+                return stripped
+            if allow_free_identifiers and stripped.isidentifier():
+                return stripped
+        return None
 
     def format_query_return_index(self, index_expr, param_indices, raw_args):
         """Render a returned-array index in the caller's argument context."""

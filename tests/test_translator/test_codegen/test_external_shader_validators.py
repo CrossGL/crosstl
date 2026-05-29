@@ -366,6 +366,34 @@ shader GLSLStorageImageAccessValidator {
 """
 
 
+GLSL_BUFFER_BLOCK_ACCESS_COMPUTE_SHADER = """
+shader GLSLBufferBlockAccessValidator {
+    struct ReadonlyData {
+        uint value;
+    };
+    struct WriteonlyData {
+        uint value;
+    };
+    struct ReadwriteData {
+        uint value;
+    };
+
+    ReadonlyData readonlyData @glsl_buffer_block(std430) @readonly;
+    WriteonlyData writeonlyData @glsl_buffer_block(std430) @writeonly;
+    ReadwriteData readwriteData @glsl_buffer_block(std430) @access(readwrite);
+
+    compute {
+        void main() {
+            uint value = readonlyData.value;
+            writeonlyData.value = value;
+            uint oldValue = atomicAdd(readwriteData.value, 1u);
+            readwriteData.value += oldValue;
+        }
+    }
+}
+"""
+
+
 GLSL_GEOMETRY_TESSELLATION_LAYOUT_SHADER = """
 shader GLSLGeometryTessellationLayoutValidator {
     geometry {
@@ -2382,6 +2410,29 @@ def test_generated_glsl_storage_image_access_qualifiers_validate_with_glslangval
     assert "void writePixel(writeonly image2D image, ivec2 pixel, vec4 value)" in code
     assert "uint bump(uimage2D image, ivec2 pixel, uint value)" in code
     assert "uint oldValue = imageAtomicAdd(counters, pixel, value);" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "comp", str(shader_path)])
+
+
+def test_generated_glsl_buffer_block_access_qualifiers_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "buffer_block_access.comp"
+
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_BUFFER_BLOCK_ACCESS_COMPUTE_SHADER),
+        "compute",
+    )
+    assert "layout(std430, binding = 0) readonly buffer ReadonlyData" in code
+    assert "layout(std430, binding = 1) writeonly buffer WriteonlyData" in code
+    assert "layout(std430, binding = 2) buffer ReadwriteData" in code
+    assert "readwrite buffer" not in code
+    assert "uint value = readonlyData.value;" in code
+    assert "writeonlyData.value = value;" in code
+    assert "uint oldValue = atomicAdd(readwriteData.value, 1u);" in code
+    assert "readwriteData.value += oldValue;" in code
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "comp", str(shader_path)])

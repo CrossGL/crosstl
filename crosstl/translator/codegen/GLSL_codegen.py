@@ -714,6 +714,16 @@ class GLSLCodeGen:
         "lines": "uvec2",
         "triangles": "uvec3",
     }
+    GLSL_MEMORY_ATOMIC_FUNCTIONS = {
+        "atomicAdd",
+        "atomicMin",
+        "atomicMax",
+        "atomicAnd",
+        "atomicOr",
+        "atomicXor",
+        "atomicExchange",
+        "atomicCompSwap",
+    }
 
     def __init__(self):
         """Initialize GLSL type maps and per-generation stage/resource state."""
@@ -728,6 +738,7 @@ class GLSLCodeGen:
         self.current_image_access_parameters = {}
         self.structured_buffer_variable_accesses = {}
         self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = {}
         self.function_parameter_names = {}
         self.function_parameter_types = {}
@@ -789,6 +800,7 @@ class GLSLCodeGen:
         self.structured_buffer_counter_members = {}
         self.structured_buffer_counter_instances = {}
         self.glsl_buffer_block_struct_names = set()
+        self.glsl_buffer_block_read_validation_suppression = 0
         self.semantic_map = {
             "gl_VertexID": "gl_VertexID",
             "gl_InstanceID": "gl_InstanceID",
@@ -1428,6 +1440,7 @@ class GLSLCodeGen:
         self.current_image_access_parameters = {}
         self.structured_buffer_variable_accesses = {}
         self.current_structured_buffer_access_parameters = {}
+        self.glsl_buffer_block_variable_accesses = {}
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -1828,6 +1841,7 @@ class GLSLCodeGen:
                 var_name = f"var{index}"
 
             if self.is_glsl_buffer_block_variable(node, vtype):
+                self.record_glsl_buffer_block_access_metadata(var_name, node)
                 if self.is_shader_record_buffer_block(node):
                     if self.explicit_resource_binding_index(node) is not None:
                         raise ValueError(
@@ -6669,6 +6683,8 @@ class GLSLCodeGen:
     def generate_assignment(self, node, is_main=False):
         left_node = getattr(node, "target", getattr(node, "left", None))
         right_node = getattr(node, "value", getattr(node, "right", None))
+        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
+        self.validate_glsl_buffer_block_assignment_target(left_node, op)
         expected_type = self.glsl_tessellation_factor_assignment_expected_type(
             left_node
         )
@@ -6678,9 +6694,8 @@ class GLSLCodeGen:
             )
         else:
             expected_type = self.expression_result_type(left_node)
-        left = self.generate_expression(left_node)
+        left = self.generate_glsl_buffer_block_mutation_target(left_node)
         right = self.generate_expression_with_expected(right_node, expected_type)
-        op = self.map_operator(getattr(node, "operator", getattr(node, "op", "=")))
         return f"{left} {op} {right}"
 
     def generate_if(self, node, indent, is_main=False):
@@ -6958,8 +6973,19 @@ class GLSLCodeGen:
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return self.generate_assignment(expr)
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
-            operand = self.generate_expression(expr.operand)
             op = self.map_operator(expr.op)
+            if op in {"++", "--"} or expr.op in {
+                "PRE_INCREMENT",
+                "PRE_DECREMENT",
+                "POST_INCREMENT",
+                "POST_DECREMENT",
+            }:
+                self.validate_glsl_buffer_block_member_access(
+                    expr.operand, "read_write"
+                )
+                operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
+            else:
+                operand = self.generate_expression(expr.operand)
             return f"({op}{operand})"
         elif isinstance(expr, WaveOpNode):
             return self.generate_glsl_wave_op_expression(expr)
@@ -7051,6 +7077,8 @@ class GLSLCodeGen:
             if original_func_name in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 return self.generate_glsl_wave_operation(original_func_name, expr.args)
 
+            self.validate_glsl_buffer_block_atomic_call(original_func_name, expr.args)
+
             func_name = self.function_map.get(func_name, func_name)
             self.validate_fragment_only_helper_call(original_func_name)
 
@@ -7128,6 +7156,8 @@ class GLSLCodeGen:
             flattened_member = self.flattened_stage_member_name(expr)
             if flattened_member is not None:
                 return flattened_member
+            if not self.glsl_buffer_block_read_validation_suppression:
+                self.validate_glsl_buffer_block_member_access(expr, "read")
             obj = self.generate_expression_with_expected(expr.object, None)
             return f"{obj}.{expr.member}"
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
@@ -7850,6 +7880,70 @@ class GLSLCodeGen:
             f"OpenGL buffer operation '{func_name}' requires {required_label} "
             f"SSBO access for {buffer_name}: got {actual_label}"
         )
+
+    def glsl_buffer_block_access_metadata(self, node):
+        choices = self.resource_access_metadata_choices(node)
+        self.validate_resource_access_metadata_consistency(node, choices)
+        if not choices:
+            return None
+        return choices[0][1]
+
+    def record_glsl_buffer_block_access_metadata(self, name, node):
+        if not name:
+            return
+        access = self.glsl_buffer_block_access_metadata(node)
+        if access is None or access == "read_write":
+            return
+        self.glsl_buffer_block_variable_accesses[name] = access
+
+    def glsl_buffer_block_member_base_name(self, expr):
+        if isinstance(expr, MemberAccessNode):
+            return self.glsl_buffer_block_member_base_name(expr.object)
+        if isinstance(expr, ArrayAccessNode) or (
+            hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__)
+        ):
+            return self.glsl_buffer_block_member_base_name(
+                getattr(expr, "array", getattr(expr, "array_expr", None))
+            )
+        return self.expression_name(expr)
+
+    def glsl_buffer_block_member_access(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        base_name = self.glsl_buffer_block_member_base_name(expr)
+        if not base_name:
+            return None
+        return self.glsl_buffer_block_variable_accesses.get(base_name)
+
+    def validate_glsl_buffer_block_member_access(self, expr, required_access):
+        access = self.glsl_buffer_block_member_access(expr)
+        if image_access_satisfies_requirement(required_access, access):
+            return
+        member_name = expression_debug_name(expr)
+        required_label = image_access_requirement_label(required_access)
+        actual_label = image_access_diagnostic_name(access)
+        raise ValueError(
+            f"OpenGL buffer block member access for {member_name} requires "
+            f"{required_label} buffer block access: got {actual_label}"
+        )
+
+    def validate_glsl_buffer_block_assignment_target(self, target, operator):
+        if operator == "=":
+            self.validate_glsl_buffer_block_member_access(target, "write")
+            return
+        self.validate_glsl_buffer_block_member_access(target, "read_write")
+
+    def validate_glsl_buffer_block_atomic_call(self, func_name, args):
+        if func_name not in self.GLSL_MEMORY_ATOMIC_FUNCTIONS or not args:
+            return
+        self.validate_glsl_buffer_block_member_access(args[0], "read_write")
+
+    def generate_glsl_buffer_block_mutation_target(self, expr):
+        self.glsl_buffer_block_read_validation_suppression += 1
+        try:
+            return self.generate_expression(expr)
+        finally:
+            self.glsl_buffer_block_read_validation_suppression -= 1
 
     def image_atomic_value_arguments(self, func_name, args):
         image_type = self.texture_argument_resource_type(args[0])

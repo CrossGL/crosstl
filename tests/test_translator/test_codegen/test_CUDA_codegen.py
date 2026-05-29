@@ -10553,6 +10553,123 @@ class TestCudaCodeGen:
         assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
+    def test_resource_query_ternary_returned_aliases_update_cuda_metadata(self):
+        """Test CUDA snapshots track ternary-selected returned resources."""
+        source_code = """
+        shader ResourceQueryTernaryReturnedAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            sampler2d textureGrid[4];
+            bool flags[4];
+
+            sampler2d chooseBranchParam(
+                bool usePrimary,
+                sampler2d firstTex,
+                sampler2d secondTex
+            ) {
+                return usePrimary ? firstTex : secondTex;
+            }
+
+            sampler2d chooseBranchGrid(
+                bool usePrimary,
+                sampler2d texs[4],
+                int slot
+            ) {
+                return usePrimary ? texs[slot] : texs[slot + 1];
+            }
+
+            sampler2d chooseGlobalBranch(bool usePrimary) {
+                return usePrimary ? colorMap : fallbackMap;
+            }
+
+            int nextFlag() {
+                return 1;
+            }
+
+            void consume(sampler2d tex) {
+                ivec2 texSize = textureSize(tex, 0);
+            }
+
+            compute {
+                void main(bool usePrimary, bool useAlt, int slot) {
+                    sampler2d selected = colorMap;
+                    if (usePrimary) {
+                        selected =
+                            chooseBranchGrid(useAlt, textureGrid, slot);
+                    } else {
+                        selected = chooseGlobalBranch(useAlt);
+                    }
+                    ivec2 selectedSize = textureSize(selected, 0);
+                    consume(selected);
+
+                    int i = 0;
+                    for (
+                        ;
+                        i < 1;
+                        selected =
+                            chooseBranchParam(useAlt, fallbackMap, colorMap)
+                    ) {
+                        i = i + 1;
+                    }
+                    ivec2 updateSize = textureSize(selected, 0);
+
+                    selected =
+                        chooseBranchParam(flags[nextFlag()], fallbackMap, colorMap);
+                    ivec2 unsafeSelectorSize = textureSize(selected, 0);
+                    consume(selected);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textureGrid_metadata[4] = {};" in cuda_code
+        assert (
+            "CglResourceQueryInfo selected_metadata = colorMap_metadata;" in cuda_code
+        )
+        assert (
+            "selected_metadata = (useAlt ? textureGrid_metadata[slot] : "
+            "textureGrid_metadata[(slot + 1)]);" in cuda_code
+        )
+        assert (
+            "selected_metadata = (useAlt ? colorMap_metadata : "
+            "fallbackMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 selectedSize = cgl_textureSize_sampler2D"
+            "(selected_metadata, 0);" in cuda_code
+        )
+        assert "consume(selected, selected_metadata);" in cuda_code
+        assert (
+            "for (; (i < 1); selected = chooseBranchParam"
+            "(useAlt, fallbackMap, colorMap), selected_metadata = "
+            "(useAlt ? fallbackMap_metadata : colorMap_metadata)) {" in cuda_code
+        )
+        assert (
+            "int2 updateSize = cgl_textureSize_sampler2D"
+            "(selected_metadata, 0);" in cuda_code
+        )
+        assert (
+            "selected_metadata = /* unsupported CUDA resource query: metadata "
+            "unavailable for sampler2D assignment */ CglResourceQueryInfo{};"
+            in cuda_code
+        )
+        assert (
+            "int2 unsafeSelectorSize = cgl_textureSize_sampler2D"
+            "(selected_metadata, 0);" in cuda_code
+        )
+        assert "flags[nextFlag()] ? fallbackMap_metadata" not in cuda_code
+        assert "flags[nextFlag()] ? colorMap_metadata" not in cuda_code
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """

@@ -449,6 +449,166 @@ def test_glsl_resource_access_rejects_invalid_metadata_operands(shader, match):
         GLSLCodeGen().generate(ast)
 
 
+def test_glsl_buffer_block_access_allows_compatible_operations():
+    shader = """
+    shader BufferBlockAccessCompatible {
+        struct ReadonlyData {
+            uint value;
+        };
+        struct WriteonlyData {
+            uint value;
+        };
+        struct ReadwriteData {
+            uint value;
+        };
+
+        ReadonlyData readonlyData @glsl_buffer_block(std430) @readonly;
+        WriteonlyData writeonlyData @glsl_buffer_block(std430) @writeonly;
+        ReadwriteData readwriteData @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint value = readonlyData.value;
+                writeonlyData.value = value;
+                uint old = atomicAdd(readwriteData.value, 1u);
+                readwriteData.value += old;
+            }
+        }
+    }
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "layout(std430, binding = 0) readonly buffer ReadonlyData" in generated
+    assert "layout(std430, binding = 1) writeonly buffer WriteonlyData" in generated
+    assert "layout(std430, binding = 2) buffer ReadwriteData" in generated
+    assert "readwrite buffer" not in generated
+    assert "uint value = readonlyData.value;" in generated
+    assert "writeonlyData.value = value;" in generated
+    assert "uint old = atomicAdd(readwriteData.value, 1u);" in generated
+    assert "readwriteData.value += old;" in generated
+
+
+@pytest.mark.parametrize(
+    ("shader", "match"),
+    [
+        (
+            """
+            shader BufferBlockReadFromWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        uint value = data.value;
+                    }
+                }
+            }
+            """,
+            "requires read-capable buffer block access.*got writeonly",
+        ),
+        (
+            """
+            shader BufferBlockWriteToReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        data.value = 1u;
+                    }
+                }
+            }
+            """,
+            "requires write-capable buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockCompoundReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        data.value += 1u;
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockCompoundWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        data.value += 1u;
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got writeonly",
+        ),
+        (
+            """
+            shader BufferBlockAtomicReadonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @readonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.value, 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got readonly",
+        ),
+        (
+            """
+            shader BufferBlockAtomicWriteonly {
+                struct Data {
+                    uint value;
+                };
+
+                Data data @glsl_buffer_block(std430) @writeonly;
+
+                compute {
+                    void main() {
+                        uint old = atomicAdd(data.value, 1u);
+                    }
+                }
+            }
+            """,
+            "requires read-write buffer block access.*got writeonly",
+        ),
+    ],
+)
+def test_glsl_buffer_block_access_rejects_invalid_operations(shader, match):
+    ast = crosstl.translator.parse(shader)
+
+    with pytest.raises(ValueError, match=match):
+        GLSLCodeGen().generate(ast)
+
+
 def test_glsl_structured_buffer_access_rejects_incompatible_helper_calls():
     shader = """
     shader StructuredBufferAccessInvalidHelper {

@@ -231,7 +231,7 @@
           "tests/test_translator/test_codegen/test_GLSL_codegen.py",
           "tests/test_backend/test_GLSL"
         ],
-        "test_count": 837
+        "test_count": 839
       },
       "translator_codegen": {
         "exists": true,
@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 503
+        "test_count": 504
       },
       "translator_codegen": {
         "exists": true,
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 371
+        "test_count": 372
       },
       "translator_codegen": {
         "exists": true,
