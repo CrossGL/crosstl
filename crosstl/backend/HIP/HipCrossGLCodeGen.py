@@ -1480,6 +1480,18 @@ class HipToCrossGLConverter:
             if len(args) >= 2:
                 least_output = self.format_runtime_pointer_target(node.args[0])
                 greatest_output = self.format_runtime_pointer_target(node.args[1])
+                least_output_name = self.get_runtime_pointer_target_name(node.args[0])
+                greatest_output_name = self.get_runtime_pointer_target_name(
+                    node.args[1]
+                )
+                if least_output_name is not None:
+                    self.register_device_query_source(
+                        least_output_name, "streamPriorityRange.least"
+                    )
+                if greatest_output_name is not None:
+                    self.register_device_query_source(
+                        greatest_output_name, "streamPriorityRange.greatest"
+                    )
                 return [
                     f"// HIP get stream priority range: "
                     f"least output: {least_output}, greatest output: {greatest_output}"
@@ -1487,10 +1499,20 @@ class HipToCrossGLConverter:
         elif name == "hipStreamGetFlags":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[1])
+                output_name = self.get_runtime_pointer_target_name(node.args[1])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"stream.flags({args[0]})"
+                    )
                 return [f"// HIP get stream flags: stream: {args[0]}, output: {output}"]
         elif name == "hipStreamGetPriority":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[1])
+                output_name = self.get_runtime_pointer_target_name(node.args[1])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"stream.priority({args[0]})"
+                    )
                 return [
                     f"// HIP get stream priority: stream: {args[0]}, output: {output}"
                 ]
@@ -1508,6 +1530,11 @@ class HipToCrossGLConverter:
         elif name == "hipStreamIsCapturing":
             if len(args) >= 2:
                 output = self.format_runtime_pointer_target(node.args[1])
+                output_name = self.get_runtime_pointer_target_name(node.args[1])
+                if output_name is not None:
+                    self.register_device_query_source(
+                        output_name, f"stream.captureStatus({args[0]})"
+                    )
                 return [
                     f"// HIP stream is capturing: stream: {args[0]}, output: {output}"
                 ]
@@ -1515,6 +1542,16 @@ class HipToCrossGLConverter:
             if len(args) >= 3:
                 status_output = self.format_runtime_pointer_target(node.args[1])
                 id_output = self.format_runtime_pointer_target(node.args[2])
+                status_output_name = self.get_runtime_pointer_target_name(node.args[1])
+                id_output_name = self.get_runtime_pointer_target_name(node.args[2])
+                if status_output_name is not None:
+                    self.register_device_query_source(
+                        status_output_name, f"stream.captureStatus({args[0]})"
+                    )
+                if id_output_name is not None:
+                    self.register_device_query_source(
+                        id_output_name, f"stream.captureId({args[0]})"
+                    )
                 comment = (
                     f"// HIP stream capture info: stream: {args[0]}, "
                     f"status output: {status_output}, id output: {id_output}"
@@ -1525,6 +1562,14 @@ class HipToCrossGLConverter:
                         node.args[4]
                     )
                     count_output = self.format_runtime_pointer_target(node.args[5])
+                    count_output_name = self.get_runtime_pointer_target_name(
+                        node.args[5]
+                    )
+                    if count_output_name is not None:
+                        self.register_device_query_source(
+                            count_output_name,
+                            f"stream.captureDependencyCount({args[0]})",
+                        )
                     comment += (
                         f", graph output: {graph_output}, "
                         f"dependencies output: {dependencies_output}, "

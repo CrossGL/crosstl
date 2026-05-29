@@ -4926,6 +4926,166 @@ def test_non_copy_match_terminal_block_arms_move_without_clones_compile(tmp_path
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_non_copy_match_terminal_loop_arms_move_without_clones_compile(tmp_path):
+    payload_type = NamedType("Payload")
+    choice_type = NamedType("Choice")
+    int_type = PrimitiveType("int")
+
+    choice_enum = EnumNode(
+        "Choice",
+        [
+            EnumVariantNode("One", fields=[payload_type]),
+            EnumVariantNode("Pair", fields=[payload_type]),
+        ],
+    )
+
+    def count_of(expr):
+        return MemberAccessNode(expr, "count")
+
+    terminal_loop_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [LoopNode([ReturnNode(count_of(IdentifierNode("payload")))])],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    LoopNode(
+                        [
+                            ReturnNode(
+                                BinaryOpNode(
+                                    count_of(IdentifierNode("payload")),
+                                    "+",
+                                    LiteralNode(1, int_type),
+                                )
+                            )
+                        ]
+                    )
+                ],
+            ),
+        ],
+    )
+
+    break_loop_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [LoopNode([BreakNode()])],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [ReturnNode(count_of(IdentifierNode("payload")))],
+            ),
+        ],
+    )
+
+    return_match = MatchNode(
+        IdentifierNode("choice"),
+        [
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::One",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+            MatchArmNode(
+                ConstructorPatternNode(
+                    "Choice::Pair",
+                    [IdentifierPatternNode("payload")],
+                ),
+                None,
+                [
+                    ExpressionStatementNode(
+                        count_of(IdentifierNode("payload")),
+                        is_tail_expression=True,
+                    )
+                ],
+            ),
+        ],
+    )
+
+    ast = ShaderNode(
+        "RustTerminalLoopMatchScrutineeSmoke",
+        ExecutionModel.GENERAL_PURPOSE,
+        structs=[
+            StructNode(
+                "Payload",
+                [
+                    StructMemberNode(
+                        "weights",
+                        ArrayType(PrimitiveType("float"), size=None),
+                    ),
+                    StructMemberNode("count", int_type),
+                ],
+            ),
+            choice_enum,
+        ],
+        functions=[
+            FunctionNode(
+                "terminal_loop_match",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [terminal_loop_match],
+            ),
+            FunctionNode(
+                "break_loop_match_then_read",
+                int_type,
+                [ParameterNode("choice", choice_type)],
+                [
+                    break_loop_match,
+                    ReturnNode(return_match),
+                ],
+            ),
+        ],
+    )
+
+    generated_code = generate_code(ast)
+
+    terminal_function = generated_code[
+        generated_code.index("pub fn terminal_loop_match") : generated_code.index(
+            "pub fn break_loop_match_then_read"
+        )
+    ]
+    break_function = generated_code[
+        generated_code.index("pub fn break_loop_match_then_read") :
+    ]
+
+    assert "match choice {" in terminal_function
+    assert ".clone()" not in terminal_function
+    assert "loop {" in terminal_function
+    assert "return payload.count;" in terminal_function
+    assert "match choice.clone() {" in break_function
+    assert "break;" in break_function
+    assert "return match choice {" in break_function
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_direct_callable_trait_parameters_emit_impl_trait_and_compile(tmp_path):
     int_type = PrimitiveType("int")
 

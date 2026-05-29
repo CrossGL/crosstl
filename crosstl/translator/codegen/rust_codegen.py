@@ -3122,10 +3122,44 @@ class RustCodeGen:
             return True
         if isinstance(tail, BlockNode):
             return self.statement_body_terminates(tail)
+        if isinstance(tail, LoopNode):
+            return self.loop_statement_terminates(tail)
         if isinstance(tail, MatchNode):
             return self.match_statement_terminates_all_arms(tail)
         if isinstance(tail, IfNode):
             return self.if_statement_terminates_all_paths(tail)
+        return False
+
+    def loop_statement_terminates(self, node):
+        body = getattr(node, "body", None)
+        if self.loop_body_contains_control_flow(body):
+            return False
+        return self.statement_body_terminates(body)
+
+    def loop_body_contains_control_flow(self, body):
+        for statement in self.statement_list(body):
+            if isinstance(statement, (BreakNode, ContinueNode)):
+                return True
+            if isinstance(statement, IfNode):
+                if self.loop_body_contains_control_flow(
+                    getattr(
+                        statement, "then_branch", getattr(statement, "if_body", None)
+                    )
+                ):
+                    return True
+                if self.loop_body_contains_control_flow(
+                    getattr(
+                        statement, "else_branch", getattr(statement, "else_body", None)
+                    )
+                ):
+                    return True
+            elif isinstance(statement, MatchNode):
+                for arm in getattr(statement, "arms", []) or []:
+                    if self.loop_body_contains_control_flow(getattr(arm, "body", None)):
+                        return True
+            elif isinstance(statement, BlockNode):
+                if self.loop_body_contains_control_flow(statement):
+                    return True
         return False
 
     def if_statement_terminates_all_paths(self, node):

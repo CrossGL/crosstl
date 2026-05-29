@@ -6045,6 +6045,197 @@ class TestHipCodeGen:
         assert "var manualDriverVersion: i32 = (/* HIP device query:" not in result
         assert "var manualRuntimeVersion: i32 = (/* HIP device query:" not in result
 
+    def test_hip_stream_scalar_output_reads_emit_metadata_expressions(self):
+        """Test HIP stream scalar outputs lower to explicit metadata."""
+        code = """
+        void host(hipStream_t stream, int* out) {
+            int leastPriority = 0;
+            int greatestPriority = 0;
+            int statusLeastPriority = 0;
+            int statusGreatestPriority = 0;
+            unsigned int flags = 0;
+            unsigned int statusFlags = 0;
+            int priority = 0;
+            int statusPriority = 0;
+            hipStreamCaptureStatus captureStatus;
+            hipStreamCaptureStatus statusCaptureStatus;
+            unsigned long long captureId = 0;
+            unsigned long long statusCaptureId = 0;
+            size_t numDeps = 0;
+            size_t statusNumDeps = 0;
+            hipGraph_t graph;
+            hipGraphNode_t* deps;
+            hipDeviceGetStreamPriorityRange(&leastPriority, &greatestPriority);
+            out[0] = leastPriority;
+            out[1] = greatestPriority;
+            leastPriority = 1;
+            greatestPriority = 2;
+            int manualLeastPriority = leastPriority;
+            int manualGreatestPriority = greatestPriority;
+            hipStreamGetFlags(stream, &flags);
+            out[2] = flags;
+            hipStreamUpdateCaptureDependencies(stream, deps, numDeps, flags);
+            flags = 0;
+            unsigned int manualFlags = flags;
+            hipStreamGetPriority(stream, &priority);
+            out[3] = priority;
+            priority = 3;
+            int manualPriority = priority;
+            hipStreamIsCapturing(stream, &captureStatus);
+            out[4] = captureStatus;
+            hipStreamGetCaptureInfo(stream, &captureStatus, &captureId);
+            out[5] = captureStatus;
+            out[6] = captureId;
+            hipStreamGetCaptureInfo_v2(
+                stream,
+                &captureStatus,
+                &captureId,
+                &graph,
+                &deps,
+                &numDeps
+            );
+            out[7] = captureStatus;
+            out[8] = captureId;
+            out[9] = numDeps;
+            numDeps = 4;
+            size_t manualNumDeps = numDeps;
+            hipError_t errRange =
+                hipDeviceGetStreamPriorityRange(
+                    &statusLeastPriority,
+                    &statusGreatestPriority
+                );
+            out[10] = statusLeastPriority;
+            out[11] = statusGreatestPriority;
+            hipError_t errFlags = hipStreamGetFlags(stream, &statusFlags);
+            out[12] = statusFlags;
+            hipError_t errPriority =
+                hipStreamGetPriority(stream, &statusPriority);
+            out[13] = statusPriority;
+            hipError_t errCapture =
+                hipStreamGetCaptureInfo_v2(
+                    stream,
+                    &statusCaptureStatus,
+                    &statusCaptureId,
+                    &graph,
+                    &deps,
+                    &statusNumDeps
+                );
+            out[14] = statusCaptureStatus;
+            out[15] = statusCaptureId;
+            out[16] = statusNumDeps;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get stream priority range: least output: leastPriority, "
+            "greatest output: greatestPriority"
+        ) in result
+        assert (
+            "out[0] = (/* HIP device query: streamPriorityRange.least */ 0);" in result
+        )
+        assert (
+            "out[1] = (/* HIP device query: streamPriorityRange.greatest */ 0);"
+            in result
+        )
+        assert "leastPriority = 1;" in result
+        assert "greatestPriority = 2;" in result
+        assert "var manualLeastPriority: i32 = leastPriority;" in result
+        assert "var manualGreatestPriority: i32 = greatestPriority;" in result
+        assert "// HIP get stream flags: stream: stream, output: flags" in result
+        assert "out[2] = (/* HIP device query: stream.flags(stream) */ 0);" in result
+        assert (
+            "// HIP stream update capture dependencies: stream: stream, "
+            "dependencies: deps, count: numDeps, flags: flags"
+        ) in result
+        assert "flags = 0;" in result
+        assert "var manualFlags: u32 = flags;" in result
+        assert "// HIP get stream priority: stream: stream, output: priority" in result
+        assert "out[3] = (/* HIP device query: stream.priority(stream) */ 0);" in result
+        assert "priority = 3;" in result
+        assert "var manualPriority: i32 = priority;" in result
+        assert (
+            "// HIP stream is capturing: stream: stream, output: captureStatus"
+            in result
+        )
+        assert (
+            "out[4] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId"
+        ) in result
+        assert (
+            "out[5] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[6] = (/* HIP device query: stream.captureId(stream) */ 0);" in result
+        )
+        assert (
+            "// HIP stream capture info: stream: stream, "
+            "status output: captureStatus, id output: captureId, "
+            "graph output: graph, dependencies output: deps, "
+            "dependency count output: numDeps"
+        ) in result
+        assert (
+            "out[7] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[8] = (/* HIP device query: stream.captureId(stream) */ 0);" in result
+        )
+        assert (
+            "out[9] = (/* HIP device query: "
+            "stream.captureDependencyCount(stream) */ 0);"
+        ) in result
+        assert "numDeps = 4;" in result
+        assert "var manualNumDeps: u32 = numDeps;" in result
+        assert "var errRange: hipError_t = hipSuccess;" in result
+        assert (
+            "out[10] = (/* HIP device query: streamPriorityRange.least */ 0);" in result
+        )
+        assert (
+            "out[11] = (/* HIP device query: streamPriorityRange.greatest */ 0);"
+            in result
+        )
+        assert "var errFlags: hipError_t = hipSuccess;" in result
+        assert "out[12] = (/* HIP device query: stream.flags(stream) */ 0);" in result
+        assert "var errPriority: hipError_t = hipSuccess;" in result
+        assert (
+            "out[13] = (/* HIP device query: stream.priority(stream) */ 0);" in result
+        )
+        assert "var errCapture: hipError_t = hipSuccess;" in result
+        assert (
+            "out[14] = (/* HIP device query: stream.captureStatus(stream) */ 0);"
+            in result
+        )
+        assert (
+            "out[15] = (/* HIP device query: stream.captureId(stream) */ 0);" in result
+        )
+        assert (
+            "out[16] = (/* HIP device query: "
+            "stream.captureDependencyCount(stream) */ 0);"
+        ) in result
+        assert "out[0] = leastPriority;" not in result
+        assert "out[1] = greatestPriority;" not in result
+        assert "out[2] = flags;" not in result
+        assert "out[3] = priority;" not in result
+        assert "out[4] = captureStatus;" not in result
+        assert "out[6] = captureId;" not in result
+        assert "out[9] = numDeps;" not in result
+        assert "var manualLeastPriority: i32 = (/* HIP device query:" not in result
+        assert "var manualGreatestPriority: i32 = (/* HIP device query:" not in result
+        assert "var manualFlags: u32 = (/* HIP device query:" not in result
+        assert "var manualPriority: i32 = (/* HIP device query:" not in result
+        assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
+
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
         """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
