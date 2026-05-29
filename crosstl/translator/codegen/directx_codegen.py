@@ -5802,8 +5802,33 @@ class HLSLCodeGen:
         except ValueError:
             return None
 
+    def hlsl_float_literal_value(self, value):
+        if value is None:
+            return None
+        if hasattr(value, "value"):
+            value = value.value
+        elif hasattr(value, "name"):
+            value = value.name
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+
+        text = str(value).strip().strip('"').replace("_", "")
+        if not text:
+            return None
+        while text and text[-1] in {"f", "F"}:
+            text = text[:-1]
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
     def hlsl_stage_attribute_int_argument(self, func, expected_name):
         return self.hlsl_int_literal_value(
+            self.hlsl_stage_attribute_argument(func, expected_name)
+        )
+
+    def hlsl_stage_attribute_float_argument(self, func, expected_name):
+        return self.hlsl_float_literal_value(
             self.hlsl_stage_attribute_argument(func, expected_name)
         )
 
@@ -6028,6 +6053,31 @@ class HLSLCodeGen:
                 "DirectX tessellation_control stage outputcontrolpoints "
                 f"({output_control_points}) must be at most "
                 f"{self.HLSL_PATCH_CONTROL_POINT_LIMIT}"
+            )
+
+    def validate_hlsl_max_tess_factor_value(self, func, shader_type):
+        if "maxtessfactor" not in self.hlsl_stage_attribute_names(func):
+            return
+
+        if shader_type != "tessellation_control":
+            raise ValueError(
+                f"DirectX {shader_type or 'helper'} stage maxtessfactor "
+                "attribute is only valid on tessellation_control stages"
+            )
+
+        max_tess_factor = self.hlsl_stage_attribute_float_argument(
+            func, "maxtessfactor"
+        )
+        max_tess_factor_text = self.hlsl_stage_attribute_argument(func, "maxtessfactor")
+        if max_tess_factor is None:
+            raise ValueError(
+                "DirectX tessellation_control stage maxtessfactor "
+                f"'{max_tess_factor_text}' must be a numeric literal"
+            )
+        if not (1.0 <= max_tess_factor <= 64.0):
+            raise ValueError(
+                "DirectX tessellation_control stage maxtessfactor "
+                f"({max_tess_factor_text}) must be in the range 1.0..64.0"
             )
 
     def validate_hlsl_max_vertex_count_value(self, func, shader_type):
@@ -8910,6 +8960,7 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_stage_requirements(self, func, shader_type):
+        self.validate_hlsl_max_tess_factor_value(func, shader_type)
         self.validate_hlsl_mesh_output_topology(func, shader_type)
 
         required_attributes = {

@@ -8613,6 +8613,73 @@ def test_directx_tessellation_control_validates_outputcontrolpoints_inputpatch_c
         )
 
 
+@pytest.mark.parametrize(
+    ("maxtessfactor", "message"),
+    [
+        ("0.0", r"maxtessfactor.*range 1.0..64.0"),
+        ("65.0", r"maxtessfactor.*range 1.0..64.0"),
+        ("MAX_TESS", r"maxtessfactor.*numeric literal"),
+    ],
+)
+def test_directx_tessellation_control_validates_maxtessfactor_value(
+    maxtessfactor, message
+):
+    code = f"""
+    shader bad_max_tess_factor {{
+        tessellation_control {{
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @maxtessfactor({maxtessfactor})
+                @patchconstantfunc(HSConst) {{ }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=message):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_control"
+        )
+
+
+def test_directx_tessellation_control_accepts_maximum_maxtessfactor_value():
+    valid_code = """
+    shader valid_max_tess_factor {
+        tessellation_control {
+            void main()
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @maxtessfactor(64.0)
+                @patchconstantfunc(HSConst) { }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_code), "tessellation_control"
+    )
+    assert "[maxtessfactor(64.0)]" in generated
+
+
+def test_directx_tessellation_rejects_maxtessfactor_outside_hull_stage():
+    code = """
+    shader bad_domain_max_tess_factor {
+        tessellation_evaluation {
+            void main(
+                OutputPatch<float4, 3> patch,
+                vec3 bary @ SV_DomainLocation
+            ) @domain(tri) @maxtessfactor(8.0) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="maxtessfactor.*tessellation_control"):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(code), "tessellation_evaluation"
+        )
+
+
 def test_directx_tessellation_control_validates_output_control_point_id_type():
     float_id_code = """
     shader bad_output_control_point_float_id {
