@@ -2029,6 +2029,38 @@ shader MetalThreadgroupAtomicTernaryAliasValidation {
 """
 
 
+METAL_POINTER_ASSIGNMENT_ADDRESS_SPACE_SHADER = """
+shader MetalPointerAssignmentAddressSpaceValidation {
+    int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+        return atomic_fetch_add_explicit(
+            counters,
+            delta,
+            memory_order_relaxed
+        );
+    }
+
+    compute {
+        void main(
+            device atomic_int* counters @buffer(0),
+            uint index @gl_LocalInvocationIndex
+        ) {
+            shared atomic_int scratchA[64];
+            shared atomic_int scratchB[64];
+            bool useA = index == 0u;
+            atomic_int* alias = scratchA + index;
+            alias = useA ? scratchA + index : scratchB + index;
+            int first = bumpThreadgroup(alias, 1);
+            bool useShared = first == 0;
+            alias = useShared ? scratchA + index : counters + index;
+            alias = counters + index;
+            int second = bumpThreadgroup(alias, first);
+            atomic_store_explicit(alias, second, memory_order_relaxed);
+        }
+    }
+}
+"""
+
+
 METAL_THREADGROUP_REFERENCE_TERNARY_ALIAS_SHADER = """
 shader MetalThreadgroupReferenceTernaryAliasValidation {
     struct Payload {
@@ -7959,6 +7991,40 @@ def test_generated_metal_threadgroup_atomic_ternary_alias_compile_with_metal(
         "requires threadgroup */;"
     ) in code
     assert "bumpThreadgroup(useShared ? scratchA" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_pointer_assignment_address_spaces_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "pointer_assignment_address_spaces.metal"
+    output = tmp_path / "pointer_assignment_address_spaces.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_POINTER_ASSIGNMENT_ADDRESS_SPACE_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_int* alias = scratchA + index;" in code
+    assert "alias = useA ? scratchA + index : scratchB + index;" in code
+    assert (
+        "/* unsupported Metal address-space assignment: value branches "
+        "'scratchA' (threadgroup) and 'counters' (device) use different "
+        "address spaces; assignment to 'alias' requires threadgroup */"
+    ) in code
+    assert (
+        "/* unsupported Metal address-space assignment: value 'counters' uses "
+        "device address space but target 'alias' uses threadgroup */"
+    ) in code
+    assert "alias = useShared ? scratchA + index : counters + index;" not in code
+    assert "alias = counters + index;" not in code
+    assert "int second = bumpThreadgroup(alias, first);" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

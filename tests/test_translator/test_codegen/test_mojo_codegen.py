@@ -4380,6 +4380,94 @@ def test_generic_payload_enum_variants_compile_with_mojo(tmp_path):
     assert result.stdout.splitlines() == ["7", "13"]
 
 
+def _generic_payload_enum_struct_array_payload_source():
+    return """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    struct Payload {
+        int x;
+        int values[2];
+    };
+
+    Payload makePayload(int x, int first, int second) {
+        return Payload { x: x, values: {first, second} };
+    }
+
+    Result<Payload, int> makePayloadResult(int x, int first, int second) {
+        return Result::Ok(makePayload(x, first, second));
+    }
+
+    int inspectPayload(Result<Payload, int> value, int index) {
+        return match value {
+            Result::Ok(payload) => payload.x + payload.values[index],
+            Result::Err(err) => err
+        };
+    }
+
+    Result<int[2], int> makeArray(int first, int second) {
+        return Result::Ok({first, second});
+    }
+
+    int inspectArray(Result<int[2], int> value, int index) {
+        return match value {
+            Result::Ok(values) => values[index],
+            Result::Err(err) => err
+        };
+    }
+    """
+
+
+def test_generic_payload_enum_struct_and_array_payload_bindings_for_mojo_codegen():
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
+    )
+
+    assert "struct Result_Payload_int:" in generated_code
+    assert "var Ok_0: Payload" in generated_code
+    assert "struct Result_int_2_int:" in generated_code
+    assert "var Ok_0: InlineArray[Int32, 2]" in generated_code
+    assert (
+        "Ok_0=Payload(0, InlineArray[Int32, 2](0, 0)), Err_0=payload0)"
+        in generated_code
+    )
+    assert "value.Ok_0.x + value.Ok_0.values[int(index)]" in generated_code
+    assert "value.Ok_0[int(index)]" in generated_code
+    assert "Ok_0=Payload()" not in generated_code
+    assert "value.Ok_0[0]" not in generated_code
+    assert "value.Ok_0.values[index]" not in generated_code
+
+
+def test_generic_payload_enum_struct_and_array_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    generated_code = generate_code(
+        parse_code(tokenize_code(_generic_payload_enum_struct_array_payload_source()))
+    )
+    generated_code += (
+        "\nfn main():\n"
+        "    print(inspectPayload(makePayloadResult(4, 5, 6), 1))\n"
+        "    print(inspectArray(makeArray(7, 8), 1))\n"
+    )
+
+    source_path = tmp_path / "generic_payload_struct_array_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["10", "8"]
+
+
 def test_generic_payload_enum_parameterized_specializations_are_rejected_for_mojo_codegen():
     code = """
     generic<T, E> struct Result {

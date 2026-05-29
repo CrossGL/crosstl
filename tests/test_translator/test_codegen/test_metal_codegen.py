@@ -8489,6 +8489,57 @@ def test_metal_mixed_address_space_ternary_pointer_alias_emits_diagnostic():
     assert "bumpThreadgroup(useShared ? scratch" not in generated
 
 
+def test_metal_mixed_address_space_pointer_assignment_emits_diagnostic():
+    code = """
+    shader MetalPointerAssignmentAddressSpaceValidation {
+        int bumpThreadgroup(threadgroup atomic_int* counters, int delta) {
+            return atomic_fetch_add_explicit(
+                counters,
+                delta,
+                memory_order_relaxed
+            );
+        }
+
+        compute {
+            void main(
+                device atomic_int* counters @buffer(0),
+                uint index @gl_LocalInvocationIndex
+            ) {
+                shared atomic_int scratchA[64];
+                shared atomic_int scratchB[64];
+                bool useA = index == 0u;
+                atomic_int* alias = scratchA + index;
+                alias = useA ? scratchA + index : scratchB + index;
+                int first = bumpThreadgroup(alias, 1);
+                bool useShared = first == 0;
+                alias = useShared ? scratchA + index : counters + index;
+                alias = counters + index;
+                int second = bumpThreadgroup(alias, first);
+                atomic_store_explicit(alias, second, memory_order_relaxed);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_int* alias = scratchA + index;" in generated
+    assert "alias = useA ? scratchA + index : scratchB + index;" in generated
+    assert "int first = bumpThreadgroup(alias, 1);" in generated
+    assert (
+        "/* unsupported Metal address-space assignment: value branches "
+        "'scratchA' (threadgroup) and 'counters' (device) use different "
+        "address spaces; assignment to 'alias' requires threadgroup */"
+    ) in generated
+    assert (
+        "/* unsupported Metal address-space assignment: value 'counters' uses "
+        "device address space but target 'alias' uses threadgroup */"
+    ) in generated
+    assert "alias = useShared ? scratchA + index : counters + index;" not in generated
+    assert "alias = counters + index;" not in generated
+    assert "int second = bumpThreadgroup(alias, first);" in generated
+    assert "atomic_store_explicit(alias, second, memory_order_relaxed);" in generated
+
+
 def test_metal_mixed_address_space_ternary_reference_alias_emits_diagnostic():
     code = """
     shader MetalMixedAddressSpaceTernaryReferenceAliasValidation {

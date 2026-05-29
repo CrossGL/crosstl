@@ -3412,6 +3412,39 @@ class MetalCodeGen:
             return False
         return self.assignment_target_root_name(value) is not None
 
+    def address_space_assignment_diagnostic(self, target, value):
+        target_type = self.expression_result_type(target)
+        if self.pointer_pointee_type_name(target_type) is None:
+            return None
+
+        expected_address_space = self.argument_address_space(target)
+        if expected_address_space is None:
+            return None
+
+        target_name = self.assignment_target_display_name(target) or "<target>"
+        conflict = self.argument_address_space_conflict(value)
+        if conflict is not None:
+            return (
+                "/* unsupported Metal address-space assignment: value "
+                f"{self.address_space_conflict_description(conflict)} use "
+                f"different address spaces; assignment to '{target_name}' "
+                f"requires {expected_address_space} */"
+            )
+
+        actual_address_space = self.argument_address_space(value)
+        if (
+            actual_address_space is None
+            or actual_address_space == expected_address_space
+        ):
+            return None
+
+        value_name = self.assignment_target_display_name(value) or "<expr>"
+        return (
+            "/* unsupported Metal address-space assignment: value "
+            f"'{value_name}' uses {actual_address_space} address space but "
+            f"target '{target_name}' uses {expected_address_space} */"
+        )
+
     def local_reference_assignment_target(self, target):
         if not isinstance(target, BinaryOpNode):
             return None
@@ -4119,6 +4152,11 @@ class MetalCodeGen:
         )
         if readonly_mesh_payload_alias is not None:
             return readonly_mesh_payload_alias
+        address_space_assignment = self.address_space_assignment_diagnostic(
+            target, value
+        )
+        if address_space_assignment is not None:
+            return address_space_assignment
 
         lhs = self.generate_expression(target)
         if self.pointer_assignment_needs_address(target, value):

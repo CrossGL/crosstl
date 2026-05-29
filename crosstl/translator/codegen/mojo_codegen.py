@@ -1407,6 +1407,12 @@ class MojoCodeGen:
         self.generic_enum_struct_definitions = collect_generic_enum_struct_definitions(
             structs
         )
+        for node in structs:
+            if (
+                isinstance(node, StructNode)
+                and node.name not in self.generic_enum_struct_definitions
+            ):
+                self.register_struct_type_metadata(node)
         self.reject_parameterized_generic_enum_specializations(ast)
         self.generic_enum_specializations = collect_generic_enum_specializations(
             ast,
@@ -2890,58 +2896,65 @@ class MojoCodeGen:
             variant_name,
         )
 
+    def struct_member_declared_type(self, member):
+        if isinstance(member, ArrayNode):
+            element_type = getattr(
+                member, "element_type", getattr(member, "vtype", "float")
+            )
+            return self.array_type_name(element_type, get_array_size_from_node(member))
+        if hasattr(member, "member_type"):
+            return self.convert_type_node_to_string(member.member_type)
+        if hasattr(member, "vtype"):
+            return member.vtype
+        return "float"
+
+    def register_struct_type_metadata(self, node):
+        struct_name = getattr(node, "name", None)
+        if not struct_name:
+            return
+        self.struct_types[struct_name] = {}
+        self.struct_member_semantics[struct_name] = {}
+
+        for member in getattr(node, "members", []) or []:
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_member_declared_type(member)
+            self.struct_types[struct_name][member_name] = member_type
+            self.register_struct_resource_access_metadata(
+                struct_name, member_name, member, member_type
+            )
+            semantic = self.node_semantic(member)
+            if semantic:
+                self.struct_member_semantics[struct_name][member_name] = semantic
+                self.validate_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+
     def generate_struct(self, node):
         code = f"@value\nstruct {node.name}:\n"
-        self.struct_types[node.name] = {}
-        self.struct_member_semantics[node.name] = {}
+        self.register_struct_type_metadata(node)
 
         members = getattr(node, "members", [])
         for member in members:
-            if isinstance(member, ArrayNode):
-                element_type = getattr(
-                    member, "element_type", getattr(member, "vtype", "float")
-                )
-                size = get_array_size_from_node(member)
-                member_type = self.array_type_name(element_type, size)
-                self.struct_types[node.name][member.name] = member_type
-                self.register_struct_resource_access_metadata(
-                    node.name, member.name, member, member_type
-                )
-                semantic = self.node_semantic(member)
-                semantic_comment = ""
-                if semantic:
-                    self.struct_member_semantics[node.name][member.name] = semantic
-                    self.validate_builtin_semantic_type(
-                        semantic, member_type, "struct member semantic"
-                    )
-                    semantic_comment = f"  # {self.map_semantic(semantic)}"
+            member_name = getattr(member, "name", None)
+            if not member_name:
+                continue
+            member_type = self.struct_types[node.name][member_name]
+            semantic = self.struct_member_semantics.get(node.name, {}).get(member_name)
+            semantic_comment = f"  # {self.map_semantic(semantic)}" if semantic else ""
+            if self.is_array_type_name(member_type):
+                element_type, size = self.parse_array_type_name(member_type)
                 code += (
-                    f"    var {member.name}: "
+                    f"    var {member_name}: "
                     f"{self.array_storage_type(element_type, size)}"
                     f"{semantic_comment}\n"
                 )
             else:
-                if hasattr(member, "member_type"):
-                    member_type = self.convert_type_node_to_string(member.member_type)
-                elif hasattr(member, "vtype"):
-                    member_type = member.vtype
-                else:
-                    member_type = "float"
-
-                self.struct_types[node.name][member.name] = member_type
-                self.register_struct_resource_access_metadata(
-                    node.name, member.name, member, member_type
+                code += (
+                    f"    var {member_name}: "
+                    f"{self.map_type(member_type)}{semantic_comment}\n"
                 )
-
-                semantic = self.node_semantic(member)
-                semantic_comment = ""
-                if semantic:
-                    self.struct_member_semantics[node.name][member.name] = semantic
-                    self.validate_builtin_semantic_type(
-                        semantic, member_type, "struct member semantic"
-                    )
-                    semantic_comment = f"  # {self.map_semantic(semantic)}"
-                code += f"    var {member.name}: {self.map_type(member_type)}{semantic_comment}\n"
 
         code += "\n"
         return code
@@ -5316,9 +5329,10 @@ class MojoCodeGen:
             if enum_variant != f"{obj}.{expr.member}":
                 return enum_variant
             obj_type = self.expression_result_type(expr.object)
+            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
             if (
-                obj_type in self.struct_types
-                and expr.member in self.struct_types[obj_type]
+                obj_struct_type in self.struct_types
+                and expr.member in self.struct_types[obj_struct_type]
             ):
                 return f"{obj}.{expr.member}"
             swizzle_indices = self.get_swizzle_indices(expr.member)
@@ -9036,6 +9050,28 @@ class MojoCodeGen:
             return None
         return self.type_name(type_value)
 
+    def identifier_replacement_result_type(self, name):
+        replacement = self.expression_identifier_replacements.get(name)
+        if replacement is None:
+            return None
+        return self.expression_path_result_type(replacement)
+
+    def expression_path_result_type(self, expression):
+        if not isinstance(expression, str) or not re.fullmatch(
+            r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*", expression
+        ):
+            return None
+
+        parts = expression.split(".")
+        result_type = self.variable_types.get(parts[0])
+        for member in parts[1:]:
+            struct_type = self.generic_enum_mapped_type(result_type) or result_type
+            fields = self.struct_types.get(struct_type)
+            if fields is None or member not in fields:
+                return None
+            result_type = fields[member]
+        return result_type
+
     def normalize_generic_vector_type_name(self, type_name):
         if not isinstance(type_name, str):
             return type_name
@@ -9284,9 +9320,13 @@ class MojoCodeGen:
 
     def expression_result_type(self, expr):
         if isinstance(expr, str):
-            return self.variable_types.get(expr)
+            return self.identifier_replacement_result_type(
+                expr
+            ) or self.variable_types.get(expr)
         if isinstance(expr, VariableNode) and hasattr(expr, "name"):
-            return self.variable_types.get(expr.name)
+            return self.identifier_replacement_result_type(
+                expr.name
+            ) or self.variable_types.get(expr.name)
         if isinstance(expr, ArrayLiteralNode):
             element_type = self.infer_array_literal_element_type(expr)
             return self.array_type_name(element_type, len(expr.elements))
@@ -9505,20 +9545,23 @@ class MojoCodeGen:
             return self.buffer_op_result_type(expr)
         if isinstance(expr, MemberAccessNode):
             obj_type = self.expression_result_type(expr.object)
+            obj_struct_type = self.generic_enum_mapped_type(obj_type) or obj_type
             if (
-                obj_type in self.struct_types
-                and expr.member in self.struct_types[obj_type]
+                obj_struct_type in self.struct_types
+                and expr.member in self.struct_types[obj_struct_type]
             ):
-                return self.struct_types[obj_type].get(expr.member)
-            if obj_type in self.struct_types:
+                return self.struct_types[obj_struct_type].get(expr.member)
+            if obj_struct_type in self.struct_types:
                 return None
             swizzle_indices = self.get_swizzle_indices(expr.member)
             if swizzle_indices is not None:
                 return self.swizzle_result_type(obj_type, len(swizzle_indices))
         if hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             name = getattr(expr, "name", "")
-            return self.enum_variant_result_types.get(name) or self.variable_types.get(
-                name
+            return (
+                self.identifier_replacement_result_type(name)
+                or self.enum_variant_result_types.get(name)
+                or self.variable_types.get(name)
             )
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
