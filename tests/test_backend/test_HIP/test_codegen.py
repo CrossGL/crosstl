@@ -8866,6 +8866,98 @@ class TestHipCodeGen:
         assert "symbol.size(kernelName)" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hip_link_complete_outputs_replace_stale_metadata(self):
+        """Test link-complete outputs clear handles and retain size metadata."""
+        code = """
+        void queryLinkOutputs(
+            hipLibrary_t library,
+            hipLinkState_t runtimeLinkState,
+            hiprtcLinkState rtcLinkState,
+            hipDeviceptr_t devicePtr,
+            unsigned int maxKernels,
+            void** ptrs,
+            size_t* sizes
+        ) {
+            hipKernel_t* rawKernelBuffer = 0;
+            void* linkedImage = 0;
+            void* linkedRtcImage = 0;
+            size_t runtimeSize = 0;
+            size_t rtcSize = 0;
+
+            hipMemGetAddressRange((void**)&rawKernelBuffer, &runtimeSize, devicePtr);
+            hipLibraryEnumerateKernels(
+                rawKernelBuffer,
+                maxKernels,
+                library
+            );
+            ptrs[0] = rawKernelBuffer;
+
+            hipMemGetAddressRange(&linkedImage, &runtimeSize, devicePtr);
+            hipLinkComplete(runtimeLinkState, &linkedImage, &runtimeSize);
+            ptrs[1] = linkedImage;
+            sizes[0] = runtimeSize;
+
+            hipMemGetAddressRange(&linkedRtcImage, &rtcSize, devicePtr);
+            hiprtcLinkComplete(rtcLinkState, &linkedRtcImage, &rtcSize);
+            ptrs[2] = linkedRtcImage;
+            sizes[1] = rtcSize;
+
+            if (hipLinkComplete(runtimeLinkState, &linkedImage, &runtimeSize) == hipSuccess) {
+                ptrs[3] = linkedImage;
+                sizes[2] = runtimeSize;
+            }
+            if (hiprtcLinkComplete(rtcLinkState, &linkedRtcImage, &rtcSize) == HIPRTC_SUCCESS) {
+                ptrs[4] = linkedRtcImage;
+                sizes[3] = rtcSize;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP library enumerate kernels: output: rawKernelBuffer, "
+            "max kernels: maxKernels, library: library"
+        ) in result
+        assert (
+            "// HIP link complete: state: runtimeLinkState, "
+            "binary output: linkedImage, size output: runtimeSize"
+        ) in result
+        assert (
+            "// HIPRTC link complete: state: rtcLinkState, "
+            "binary output: linkedRtcImage, size output: rtcSize"
+        ) in result
+        assert "ptrs[0] = rawKernelBuffer;" in result
+        assert "ptrs[1] = linkedImage;" in result
+        assert "ptrs[2] = linkedRtcImage;" in result
+        assert "ptrs[3] = linkedImage;" in result
+        assert "ptrs[4] = linkedRtcImage;" in result
+        assert (
+            "sizes[0] = (/* HIP device query: "
+            "link.complete.size(runtimeLinkState) */ 0);"
+        ) in result
+        assert (
+            "sizes[1] = (/* HIP device query: "
+            "rtc.link.complete.size(rtcLinkState) */ 0);"
+        ) in result
+        assert (
+            "sizes[2] = (/* HIP device query: "
+            "link.complete.size(runtimeLinkState) */ 0);"
+        ) in result
+        assert (
+            "sizes[3] = (/* HIP device query: "
+            "rtc.link.complete.size(rtcLinkState) */ 0);"
+        ) in result
+        assert "ptrs[0] = (/* HIP device query:" not in result
+        assert "ptrs[1] = (/* HIP device query:" not in result
+        assert "ptrs[2] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
         """Test module global size outputs replace stale symbol-size metadata."""
         code = """

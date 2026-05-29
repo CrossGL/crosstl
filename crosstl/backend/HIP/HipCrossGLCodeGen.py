@@ -2628,6 +2628,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipLibraryEnumerateKernels":
             if len(args) >= 3:
+                self.clear_lvalue_metadata_source(node.args[0])
                 output = self.format_runtime_pointer_target(node.args[0])
                 return [
                     f"// HIP library enumerate kernels: output: {output}, "
@@ -2725,8 +2726,16 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipLinkComplete":
             if len(args) >= 3:
+                self.clear_lvalue_metadata_source(node.args[1])
                 binary_output = self.format_runtime_pointer_target(node.args[1])
+                self.clear_lvalue_metadata_source(node.args[2])
                 size_output = self.format_runtime_pointer_target(node.args[2])
+                size_output_name = self.get_runtime_pointer_target_name(node.args[2])
+                if size_output_name is not None:
+                    self.register_device_query_source(
+                        size_output_name,
+                        f"link.complete.size({args[0]})",
+                    )
                 return [
                     f"// HIP link complete: state: {args[0]}, "
                     f"binary output: {binary_output}, size output: {size_output}"
@@ -3097,8 +3106,16 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcLinkComplete":
             if len(args) >= 3:
+                self.clear_lvalue_metadata_source(raw_args[1])
                 binary_output = self.format_runtime_pointer_target(raw_args[1])
+                self.clear_lvalue_metadata_source(raw_args[2])
                 size_output = self.format_runtime_pointer_target(raw_args[2])
+                size_output_name = self.get_runtime_pointer_target_name(raw_args[2])
+                if size_output_name is not None:
+                    self.register_device_query_source(
+                        size_output_name,
+                        f"rtc.link.complete.size({args[0]})",
+                    )
                 return [
                     f"// HIPRTC link complete: state: {args[0]}, "
                     f"binary output: {binary_output}, size output: {size_output}"
