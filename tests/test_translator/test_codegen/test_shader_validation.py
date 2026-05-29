@@ -2035,6 +2035,36 @@ shader MetalAtomicArrayInitializerValidation {
 """
 
 
+METAL_SYMBOLIC_ATOMIC_ARRAY_INITIALIZER_SHADER = """
+shader MetalSymbolicAtomicArrayInitializerValidation {
+    const int COUNT = 4;
+    const int EXTRA = COUNT + 1;
+
+    compute {
+        void main() {
+            uint index = gl_LocalInvocationIndex;
+            shared atomic_uint counters[COUNT] = {0u, 1u};
+            shared atomic_uint expressionCounters[COUNT + 1] = {2u};
+            atomic_int signedCounters[EXTRA] = {-1, 2};
+            uint oldValue = atomic_fetch_add_explicit(
+                counters[index],
+                1u,
+                memory_order_relaxed
+            );
+            int signedValue = atomic_load_explicit(
+                signedCounters[index % uint(EXTRA)],
+                memory_order_relaxed
+            );
+            uint expressionValue = atomic_load_explicit(
+                expressionCounters[index % uint(COUNT + 1)],
+                memory_order_relaxed
+            );
+        }
+    }
+}
+"""
+
+
 METAL_SCOPED_ATOMIC_SHADER = """
 shader MetalScopedAtomicValidation {
     bool claim(
@@ -8383,6 +8413,37 @@ def test_generated_metal_atomic_array_initializers_compile_with_metal(tmp_path):
         "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);" in code
     )
     assert "atomic_store_explicit(&counters, {" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_symbolic_atomic_array_initializers_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "symbolic_atomic_array_initializers.metal"
+    output = tmp_path / "symbolic_atomic_array_initializers.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(METAL_SYMBOLIC_ATOMIC_ARRAY_INITIALIZER_SHADER),
+        "compute",
+    )
+    assert "threadgroup atomic_uint counters[COUNT];" in code
+    assert "threadgroup atomic_uint expressionCounters[COUNT + 1];" in code
+    assert "threadgroup atomic_int signedCounters[EXTRA];" in code
+    assert "atomic_store_explicit(&counters[3], 0u, memory_order_relaxed);" in code
+    assert (
+        "atomic_store_explicit(&expressionCounters[4], 0u, memory_order_relaxed);"
+        in code
+    )
+    assert "atomic_store_explicit(&signedCounters[4], 0, memory_order_relaxed);" in code
+    assert "atomic_store_explicit(&counters, {" not in code
+    assert "atomic_store_explicit(&expressionCounters, {" not in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

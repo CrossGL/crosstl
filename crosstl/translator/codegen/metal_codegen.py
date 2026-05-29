@@ -4344,7 +4344,23 @@ class MetalCodeGen:
             )
         if size is None:
             _base_type, size = parse_array_type(type_name)
+        if size is None:
+            size = self.literal_int_array_size_from_type_name(type_name)
         return atomic_type, size
+
+    def literal_int_array_size_from_type_name(self, type_name):
+        if not isinstance(type_name, str) or "[" not in type_name:
+            return None
+
+        _base_type, array_suffix = split_array_type_suffix(type_name)
+        close_bracket = array_suffix.find("]")
+        if close_bracket == -1:
+            return None
+
+        size_expr = array_suffix[1:close_bracket].strip()
+        if not size_expr:
+            return None
+        return self.literal_int_resource_array_size(size_expr)
 
     def metal_atomic_value_type(self, atomic_type):
         return {

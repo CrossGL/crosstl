@@ -9173,6 +9173,77 @@ def test_metal_atomic_array_initializers_use_element_stores():
     assert "threadgroup atomic_uint counters[4] = {" not in generated
 
 
+def test_metal_symbolic_atomic_array_initializers_zero_fill_declared_size():
+    code = """
+    shader MetalSymbolicAtomicArrayInitializerValidation {
+        const int COUNT = 4;
+        const int EXTRA = COUNT + 1;
+
+        compute {
+            void main() {
+                uint index = gl_LocalInvocationIndex;
+                shared atomic_uint counters[COUNT] = {0u, 1u};
+                shared atomic_uint expressionCounters[COUNT + 1] = {2u};
+                atomic_int signedCounters[EXTRA] = {-1, 2};
+                uint oldValue = atomic_fetch_add_explicit(
+                    counters[index],
+                    1u,
+                    memory_order_relaxed
+                );
+                int signedValue = atomic_load_explicit(
+                    signedCounters[index % uint(EXTRA)],
+                    memory_order_relaxed
+                );
+                uint expressionValue = atomic_load_explicit(
+                    expressionCounters[index % uint(COUNT + 1)],
+                    memory_order_relaxed
+                );
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "threadgroup atomic_uint counters[COUNT];" in generated
+    assert "threadgroup atomic_uint expressionCounters[COUNT + 1];" in generated
+    assert "threadgroup atomic_int signedCounters[EXTRA];" in generated
+    assert "atomic_store_explicit(&counters[0], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[1], 1u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[2], 0u, memory_order_relaxed);" in generated
+    assert "atomic_store_explicit(&counters[3], 0u, memory_order_relaxed);" in generated
+    assert (
+        "atomic_store_explicit(&expressionCounters[0], 2u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&expressionCounters[4], 0u, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[0], -1, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[1], 2, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[2], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[3], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert (
+        "atomic_store_explicit(&signedCounters[4], 0, memory_order_relaxed);"
+        in generated
+    )
+    assert "atomic_store_explicit(&counters, {" not in generated
+    assert "atomic_store_explicit(&expressionCounters, {" not in generated
+    assert "atomic_store_explicit(&signedCounters, {" not in generated
+
+
 def test_metal_threadgroup_atomic_array_elements_use_address_arguments():
     code = """
     shader main {
