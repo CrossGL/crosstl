@@ -6066,8 +6066,19 @@ class SlangCodeGen:
     def unsupported_slang_wave_op_expression(self, operation, reason):
         return (
             f"/* unsupported Slang wave intrinsic: {operation} {reason} */ "
-            f"{self.slang_wave_default_value(operation)}"
+            f"{self.slang_wave_fallback_value(operation)}"
         )
+
+    def slang_wave_fallback_value(self, operation):
+        default_value = self.slang_wave_default_value(operation)
+        expected_type = self.type_name_string(self.current_expression_expected_type)
+        if expected_type:
+            expected_type = self.convert_type(expected_type)
+            if self.is_vector_value_type(
+                expected_type
+            ) and not default_value.startswith(f"{expected_type}("):
+                return self.zero_value_for_type(expected_type)
+        return default_value
 
     def slang_wave_default_value(self, operation):
         if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
@@ -7222,6 +7233,8 @@ class SlangCodeGen:
         return size if size in {2, 3, 4} else None
 
     def vector_zero_value(self, type_name):
+        if isinstance(type_name, str) and type_name.startswith("bool"):
+            return "false"
         if isinstance(type_name, str) and type_name.startswith("uint"):
             return "0u"
         if isinstance(type_name, str) and type_name.startswith("int"):

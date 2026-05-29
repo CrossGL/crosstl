@@ -17109,7 +17109,7 @@ def test_loop_statement_lowers_to_rust_loop_and_scopes_loop_contexts():
     assert "LoopNode" not in generated_code
 
 
-def test_increment_and_decrement_emit_rust_assignment_updates():
+def test_increment_and_decrement_emit_rust_assignment_updates(tmp_path):
     code = """
     shader main {
         compute {
@@ -17138,6 +17138,7 @@ def test_increment_and_decrement_emit_rust_assignment_updates():
     assert "--i" not in generated_code
     assert "i--" not in generated_code
     assert "++j" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_increment_and_decrement_initializers_preserve_rust_value_order(tmp_path):

@@ -2889,6 +2889,49 @@ def test_wave_intrinsic_invalid_argument_types_emit_slang_diagnostics():
     assert "WaveOpNode" not in generated_code
 
 
+def test_wave_intrinsic_diagnostics_use_vector_target_fallbacks():
+    code = """
+    shader InvalidSlangWaveVectorFallbacks {
+        compute {
+            void main() {
+                vec2 badBitVector = WaveActiveBitAnd(vec2(1.0, 2.0));
+                bvec2 badVoteVector = WaveActiveAllTrue(bvec2(true, false));
+                uvec2 badMissingVector = WaveActiveSum();
+                vec4 badBallotShape = WaveActiveBallot();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "float2 badBitVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBitAnd value must be scalar or vector int or uint, "
+        "got float2 */ float2(0.0);" in generated_code
+    )
+    assert (
+        "bool2 badVoteVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveAllTrue predicate must be scalar bool, got bool2 */ "
+        "bool2(false);" in generated_code
+    )
+    assert (
+        "uint2 badMissingVector = /* unsupported Slang wave intrinsic: "
+        "WaveActiveSum expects 1 arguments, got 0 */ uint2(0u);" in generated_code
+    )
+    assert (
+        "float4 badBallotShape = /* unsupported Slang wave intrinsic: "
+        "WaveActiveBallot expects 1 arguments, got 0 */ float4(0.0);" in generated_code
+    )
+    assert "*/ 0;" not in generated_code
+    assert "*/ false;" not in generated_code
+    assert "WaveActiveBitAnd(float2(1.0, 2.0))" not in generated_code
+    assert "WaveActiveAllTrue(bool2(true, false))" not in generated_code
+    assert "WaveActiveSum()" not in generated_code
+    assert "WaveActiveBallot()" not in generated_code
+    assert "WaveOpNode" not in generated_code
+
+
 def test_floating_binary_modulo_lowers_to_slang_fmod():
     code = """
     shader BinaryModuloGap {
