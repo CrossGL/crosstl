@@ -5640,26 +5640,6 @@ class MetalCodeGen:
             )
         return None
 
-    def metal_wave_validate_scalar_value_argument(
-        self, operation, argument, allowed_components, description
-    ):
-        mapped_type, component_type, array_suffix = (
-            self.metal_wave_argument_mapped_type(argument)
-        )
-        if mapped_type is None:
-            return None
-        if (
-            array_suffix
-            or mapped_type != component_type
-            or component_type not in allowed_components
-        ):
-            return self.metal_wave_diagnostic_expression(
-                operation,
-                [argument],
-                f"value argument must be {description}, got {mapped_type}",
-            )
-        return None
-
     def metal_wave_validate_multi_prefix_mask_argument(
         self, operation, argument, value_argument=None
     ):
@@ -5701,11 +5681,11 @@ class MetalCodeGen:
                 operation, arguments[1], arguments[0]
             )
         if operation in self.METAL_WAVE_MULTI_PREFIX_NUMERIC_INTRINSICS:
-            diagnostic = self.metal_wave_validate_scalar_value_argument(
+            diagnostic = self.metal_wave_validate_value_argument(
                 operation,
                 arguments[0],
                 self.METAL_WAVE_NUMERIC_COMPONENT_TYPES,
-                "numeric scalar",
+                "numeric scalar or vector",
             )
             if diagnostic is not None:
                 return diagnostic
@@ -5713,11 +5693,11 @@ class MetalCodeGen:
                 operation, arguments[1], arguments[0]
             )
         if operation in self.METAL_WAVE_MULTI_PREFIX_INTEGER_INTRINSICS:
-            diagnostic = self.metal_wave_validate_scalar_value_argument(
+            diagnostic = self.metal_wave_validate_value_argument(
                 operation,
                 arguments[0],
                 self.METAL_WAVE_INTEGER_COMPONENT_TYPES,
-                "integer scalar",
+                "integer scalar or vector",
             )
             if diagnostic is not None:
                 return diagnostic
