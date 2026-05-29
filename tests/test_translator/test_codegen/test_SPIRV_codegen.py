@@ -9220,6 +9220,168 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_append_consume_structured_buffers_emit_counter_sidecars(self, tmp_path):
+        source_code = """
+        shader AppendConsumeStorageBuffers {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appended @set(2) @binding(0);
+            ConsumeStructuredBuffer<Particle> consumed @set(2) @binding(2);
+            AppendStructuredBuffer<Particle> appendQueues[2] @set(2) @binding(4);
+
+            void helper(
+                AppendStructuredBuffer<Particle> outParticles,
+                ConsumeStructuredBuffer<Particle> inParticles,
+                Particle p
+            ) {
+                outParticles.Append(p);
+                Particle q = inParticles.Consume();
+                buffer_append(outParticles, q);
+            }
+
+            compute {
+                void main() {
+                    Particle p;
+                    p.weight = 1.0;
+                    appended.Append(p);
+                    buffer_append(appendQueues[1], p);
+                    Particle q = consumed.Consume();
+                    Particle r = buffer_consume(consumed);
+                    helper(appended, consumed, r);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        appended_var = spirv_named_variable(
+            spv_code, "appended", storage_class="Uniform"
+        )
+        appended_counter = spirv_named_variable(
+            spv_code, "appendedCounter", storage_class="Uniform"
+        )
+        consumed_var = spirv_named_variable(
+            spv_code, "consumed", storage_class="Uniform"
+        )
+        consumed_counter = spirv_named_variable(
+            spv_code, "consumedCounter", storage_class="Uniform"
+        )
+        append_queues_var = spirv_named_variable(
+            spv_code, "appendQueues", storage_class="Uniform"
+        )
+        append_queues_counter = spirv_named_variable(
+            spv_code, "appendQueuesCounter", storage_class="Uniform"
+        )
+
+        appended_block = spirv_named_id(spv_code, "appendedBuffer")
+        consumed_block = spirv_named_id(spv_code, "consumedBuffer")
+        append_queues_block = spirv_named_id(spv_code, "appendQueuesBuffer")
+        for block_name in (
+            "appendedCounterBuffer",
+            "consumedCounterBuffer",
+            "appendQueuesCounterBuffer",
+        ):
+            block = spirv_named_id(spv_code, block_name)
+            assert f"OpDecorate {block} BufferBlock" in spv_code
+            assert f"OpMemberDecorate {block} 0 Offset 0" in spv_code
+
+        assert f"OpMemberDecorate {appended_block} 0 NonReadable" in spv_code
+        assert f"OpMemberDecorate {consumed_block} 0 NonWritable" in spv_code
+        assert f"OpMemberDecorate {append_queues_block} 0 NonReadable" in spv_code
+        assert f"OpDecorate {appended_var} DescriptorSet 2" in spv_code
+        assert f"OpDecorate {appended_var} Binding 0" in spv_code
+        assert f"OpDecorate {appended_counter} Binding 1" in spv_code
+        assert f"OpDecorate {consumed_var} Binding 2" in spv_code
+        assert f"OpDecorate {consumed_counter} Binding 3" in spv_code
+        assert f"OpDecorate {append_queues_var} Binding 4" in spv_code
+        assert f"OpDecorate {append_queues_counter} Binding 5" in spv_code
+        assert re.search(
+            rf"OpAccessChain %\d+ {re.escape(append_queues_counter)} %\d+",
+            spv_code,
+        )
+        assert spv_code.count("OpAtomicIAdd") >= 3
+        assert spv_code.count("OpAtomicISub") >= 2
+        assert spv_code.count("OpISub") >= 2
+        assert "AppendStructuredBuffer" not in spv_code
+        assert "ConsumeStructuredBuffer" not in spv_code
+        assert "buffer_append" not in spv_code
+        assert "buffer_consume" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_append_consume_structured_buffers_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidAppendConsumeStorageBuffers {
+            AppendStructuredBuffer<float> appended @readonly;
+            AppendStructuredBuffer<float> writableAppend;
+            ConsumeStructuredBuffer<float> consumed @writeonly;
+            ConsumeStructuredBuffer<float> readableConsumed;
+            RWStructuredBuffer<float> values;
+
+            compute {
+                void main() {
+                    appended.Append();
+                    appended.Append(1.0, 2.0);
+                    consumed.Consume(1u);
+                    buffer_append(values, 1.0);
+                    float a = buffer_consume(values);
+                    appended.Append(1.0);
+                    float b = consumed.Consume();
+                    float c = readableConsumed.Load(0u);
+                    buffer_store(writableAppend, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert (
+            "WARNING: AppendStructuredBuffer.Append requires a value operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: AppendStructuredBuffer.Append accepts only a value operand"
+            in spv_code
+        )
+        assert (
+            "WARNING: ConsumeStructuredBuffer.Consume accepts no operands" in spv_code
+        )
+        assert "WARNING: buffer_append requires an AppendStructuredBuffer" in spv_code
+        assert "WARNING: buffer_consume requires a ConsumeStructuredBuffer" in spv_code
+        assert (
+            "WARNING: AppendStructuredBuffer.Append requires a writable buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: ConsumeStructuredBuffer.Consume requires a readable buffer"
+            in spv_code
+        )
+        assert (
+            "WARNING: StructuredBuffer.Load requires a StructuredBuffer element"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_store requires an RWStructuredBuffer operand" in spv_code
+        )
+        assert "Unknown type AppendStructuredBuffer" not in spv_code
+        assert "Unknown type ConsumeStructuredBuffer" not in spv_code
+        assert "Unsupported callee expression" not in spv_code
+        assert "OpAtomicIAdd" not in spv_code
+        assert "OpAtomicISub" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_glsl_buffer_blocks_emit_spirv_buffer_block_layout(self):
         source_code = """
         shader StorageBuffers {

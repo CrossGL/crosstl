@@ -1613,6 +1613,8 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_append",
+            "buffer_consume",
             "texture",
             "texture2D",
             "textureCube",
@@ -1688,6 +1690,8 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_append",
+            "buffer_consume",
         }
 
     def resource_query_size_result_type(self, metadata) -> SpirvId:
@@ -2790,6 +2794,48 @@ class VulkanSPIRVCodeGen:
                 function_name, args, byte_address_store_width
             )
 
+        if function_name == "buffer_append":
+            if len(args) < 2:
+                self.emit("; WARNING: buffer_append requires buffer and value operands")
+                return None
+            if len(args) > 2:
+                self.emit(
+                    "; WARNING: buffer_append accepts only buffer and value operands"
+                )
+                return None
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_append requires an AppendStructuredBuffer "
+                    "operand"
+                )
+                return None
+            return self.process_structured_buffer_append_call(
+                args[0], metadata, [args[1]], "buffer_append"
+            )[1]
+
+        if function_name == "buffer_consume":
+            if not args:
+                self.emit("; WARNING: buffer_consume requires a buffer operand")
+                return self.register_constant(
+                    0.0, self.register_primitive_type("float")
+                )
+            if len(args) > 1:
+                self.emit("; WARNING: buffer_consume accepts only a buffer operand")
+                return self.default_value_for_buffer_load_failure(args)
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_consume requires a ConsumeStructuredBuffer "
+                    "operand"
+                )
+                return self.default_value_for_buffer_load_failure(args)
+            return self.process_structured_buffer_consume_call(
+                args[0], metadata, [], "buffer_consume"
+            )[1]
+
         if function_name == "buffer_load":
             if len(args) < 2:
                 self.emit("; WARNING: buffer_load requires buffer and index operands")
@@ -2804,6 +2850,17 @@ class VulkanSPIRVCodeGen:
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is not None and metadata.get("writeonly"):
                 self.emit("; WARNING: buffer_load requires a readable buffer")
+                return self.default_value_for_buffer_load_failure(args)
+            if (
+                metadata is not None
+                and not metadata.get("byte_address")
+                and metadata.get("buffer_kind")
+                not in {
+                    "StructuredBuffer",
+                    "RWStructuredBuffer",
+                }
+            ):
+                self.emit("; WARNING: buffer_load requires a StructuredBuffer operand")
                 return self.default_value_for_buffer_load_failure(args)
 
             element_pointer = self.structured_buffer_element_pointer(args[0], args[1])
@@ -2830,6 +2887,14 @@ class VulkanSPIRVCodeGen:
 
             metadata = self.structured_buffer_metadata_for_pointer(args[0])
             if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_store requires an RWStructuredBuffer operand"
+                )
+                return None
+            if (
+                not metadata.get("byte_address")
+                and metadata.get("buffer_kind") != "RWStructuredBuffer"
+            ):
                 self.emit(
                     "; WARNING: buffer_store requires an RWStructuredBuffer operand"
                 )
@@ -8124,7 +8189,11 @@ class VulkanSPIRVCodeGen:
                 "byte_address": True,
             }
 
-        match = re.fullmatch(r"(StructuredBuffer|RWStructuredBuffer)<(.+)>", type_str)
+        match = re.fullmatch(
+            r"(StructuredBuffer|RWStructuredBuffer|AppendStructuredBuffer|"
+            r"ConsumeStructuredBuffer)<(.+)>",
+            type_str,
+        )
         if not match:
             return None
 
@@ -8133,7 +8202,11 @@ class VulkanSPIRVCodeGen:
             "kind": "structured_buffer",
             "buffer_kind": buffer_kind,
             "element_type_name": element_type_name,
-            "readonly": buffer_kind == "StructuredBuffer",
+            "readonly": buffer_kind in {"StructuredBuffer", "ConsumeStructuredBuffer"},
+            "default_writeonly": buffer_kind == "AppendStructuredBuffer",
+            "append_consume": (
+                buffer_kind in {"AppendStructuredBuffer", "ConsumeStructuredBuffer"}
+            ),
         }
 
     def is_structured_buffer_type_name(self, type_str: str) -> bool:
@@ -9147,6 +9220,12 @@ class VulkanSPIRVCodeGen:
         memory_flags = self.storage_buffer_memory_flags(
             node, default_readonly=metadata.get("readonly", False)
         )
+        if (
+            metadata.get("default_writeonly")
+            and not memory_flags.get("readonly")
+            and not memory_flags.get("readwrite")
+        ):
+            memory_flags["writeonly"] = True
 
         element_type = self.map_crossgl_type(metadata["element_type_name"])
         self.decorate_storage_buffer_nested_type(element_type)
@@ -9186,10 +9265,61 @@ class VulkanSPIRVCodeGen:
         if is_descriptor_array:
             buffer_metadata["descriptor_array"] = True
             buffer_metadata["descriptor_array_type"] = variable_type
+        if metadata.get("append_consume"):
+            counter_metadata = self.process_structured_buffer_counter_declaration(
+                node, type_name
+            )
+            buffer_metadata.update(counter_metadata)
         self.global_variables[node.name] = var_id
         self.structured_buffer_metadata[var_id.id] = buffer_metadata
         self.structured_buffer_metadata[block_type.id] = buffer_metadata
         return var_id
+
+    def process_structured_buffer_counter_declaration(
+        self, node: VariableNode, type_name: str
+    ) -> dict:
+        """Emit the sidecar counter SSBO used for append/consume buffers."""
+        uint_type = self.register_primitive_type("uint")
+        block_name = f"{node.name}CounterBuffer"
+        block_type = self.register_struct_type(block_name, [(uint_type, "counter")])
+        self.decorations.append(f"OpDecorate %{block_type.id} BufferBlock")
+        self.decorations.append(f"OpMemberDecorate %{block_type.id} 0 Offset 0")
+
+        variable_type, is_descriptor_array = (
+            self.structured_buffer_descriptor_variable_type(type_name, block_type)
+        )
+        counter_name = f"{node.name}Counter"
+        var_id = self.create_variable(variable_type, "Uniform", counter_name)
+        descriptor_set = self.resource_descriptor_set(node)
+        binding = self.next_available_resource_binding(descriptor_set)
+        self.used_resource_bindings.add((descriptor_set, binding))
+        self.decorations.append(
+            f"OpDecorate %{var_id.id} DescriptorSet {descriptor_set}"
+        )
+        self.decorations.append(f"OpDecorate %{var_id.id} Binding {binding}")
+
+        counter_access_metadata = {
+            "kind": "structured_buffer_counter",
+            "block_type": block_type,
+            "member_index": 0,
+            "element_type": uint_type,
+            "readonly": False,
+            "writeonly": False,
+        }
+        self.storage_buffer_access_metadata[var_id.id] = counter_access_metadata
+        self.storage_buffer_access_metadata[block_type.id] = counter_access_metadata
+        if is_descriptor_array:
+            self.storage_buffer_access_metadata[variable_type.id] = (
+                counter_access_metadata
+            )
+
+        return {
+            "counter_variable": var_id,
+            "counter_block_type": block_type,
+            "counter_variable_type": variable_type,
+            "counter_descriptor_array": is_descriptor_array,
+            "counter_member_index": 0,
+        }
 
     def structured_buffer_descriptor_variable_type(
         self, type_name: str, block_type: SpirvId
@@ -10332,7 +10462,7 @@ class VulkanSPIRVCodeGen:
             seen.add(node_id)
             type_source = getattr(node, "var_type", getattr(node, "vtype", "float"))
             type_name = self.type_name_from_value(type_source)
-            if self.is_structured_buffer_type_name(
+            if self.is_structured_buffer_declared_type_name(
                 type_name
             ) or self.is_glsl_buffer_block_node(node):
                 yield node
@@ -10869,6 +10999,10 @@ class VulkanSPIRVCodeGen:
             or self.byte_address_helper_store_width(func_name) is not None
         ):
             return "write"
+        if func_name == "buffer_append":
+            return "write"
+        if func_name == "buffer_consume":
+            return "read_write"
         if func_name in self.buffer_atomic_function_names():
             return "read_write"
         return None
@@ -10880,6 +11014,10 @@ class VulkanSPIRVCodeGen:
             method_name
         ):
             return "write"
+        if method_name == "Append":
+            return "write"
+        if method_name == "Consume":
+            return "read_write"
         if self.byte_address_method_interlocked_info(method_name) is not None:
             return "read_write"
         return None
@@ -11453,6 +11591,8 @@ class VulkanSPIRVCodeGen:
         )
         if metadata is None:
             return None
+        if metadata.get("append_consume"):
+            return "read_write"
         if metadata.get("readonly"):
             return "read"
         if metadata.get("writeonly"):
@@ -11939,6 +12079,24 @@ class VulkanSPIRVCodeGen:
         if metadata is not None:
             self.storage_buffer_access_metadata[target_pointer.id] = metadata
 
+    def propagate_structured_buffer_descriptor_access_metadata(
+        self, source_pointer: SpirvId, target_pointer: SpirvId, index: SpirvId
+    ):
+        metadata = self.structured_buffer_metadata_for_pointer(source_pointer)
+        if metadata is None or not metadata.get("descriptor_array"):
+            return
+
+        source_type = self.variable_value_types.get(source_pointer.id)
+        block_type = metadata.get("block_type")
+        if not self.array_type_contains_element_type(source_type, block_type):
+            return
+
+        descriptor_indices = list(metadata.get("_descriptor_indices", []))
+        descriptor_indices.append(index)
+        access_metadata = {**metadata, "_descriptor_indices": descriptor_indices}
+        self.structured_buffer_metadata[target_pointer.id] = access_metadata
+        self.storage_buffer_access_metadata[target_pointer.id] = access_metadata
+
     def structured_buffer_element_pointer(
         self, buffer_pointer: SpirvId, index_id: SpirvId
     ) -> Optional[SpirvId]:
@@ -11974,6 +12132,155 @@ class VulkanSPIRVCodeGen:
             return self.default_value_for_type(element_type)
         return self.register_constant(0.0, self.register_primitive_type("float"))
 
+    def structured_buffer_counter_pointer(
+        self, buffer_pointer: SpirvId
+    ) -> Optional[SpirvId]:
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            return None
+
+        counter_pointer = metadata.get("counter_variable")
+        counter_block_type = metadata.get("counter_block_type")
+        if counter_pointer is None or counter_block_type is None:
+            return None
+
+        counter_value_type = self.variable_value_types.get(counter_pointer.id)
+        for index in metadata.get("_descriptor_indices", []):
+            counter_element_type = self.array_element_type_from_type(counter_value_type)
+            if counter_element_type is None:
+                return None
+
+            ptr_type = self.register_pointer_type(counter_element_type, "Uniform")
+            counter_pointer = self.access_chain(counter_pointer, [index], ptr_type)
+            self.variable_value_types[counter_pointer.id] = counter_element_type
+            counter_value_type = counter_element_type
+
+        if counter_value_type is None or counter_value_type.id != counter_block_type.id:
+            return None
+
+        uint_type = self.register_primitive_type("uint")
+        member_index = self.register_constant(
+            metadata.get("counter_member_index", 0), self.primitive_types["int"]
+        )
+        ptr_type = self.register_pointer_type(uint_type, "Uniform")
+        access = self.access_chain(counter_pointer, [member_index], ptr_type)
+        self.variable_value_types[access.id] = uint_type
+        self.storage_buffer_access_metadata[access.id] = {
+            "kind": "structured_buffer_counter",
+            "block_type": counter_block_type,
+            "readonly": False,
+            "writeonly": False,
+        }
+        return access
+
+    def emit_structured_buffer_counter_atomic(
+        self, opcode: str, counter_pointer: SpirvId, value: SpirvId
+    ) -> SpirvId:
+        uint_type = self.register_primitive_type("uint")
+        value = self.convert_value_to_type(value, uint_type)
+        scope = self.spirv_scope_constant("Device")
+        semantics = self.spirv_memory_semantics_constant()
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = {opcode} %{uint_type.id} %{counter_pointer.id} "
+            f"%{scope.id} %{semantics.id} %{value.id}"
+        )
+        self.value_types[id_value] = uint_type
+        return SpirvId(id_value, uint_type.type)
+
+    def process_structured_buffer_append_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        if len(args) < 1:
+            self.emit(f"; WARNING: {diagnostic_name} requires a value operand")
+            return True, None
+        if len(args) > 1:
+            self.emit(f"; WARNING: {diagnostic_name} accepts only a value operand")
+            return True, None
+        if metadata.get("buffer_kind") != "AppendStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer"
+            )
+            return True, None
+        if metadata.get("readonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+
+        value = (
+            args[0]
+            if isinstance(args[0], SpirvId)
+            else self.process_expression(args[0])
+        )
+        if value is None:
+            self.emit(f"; WARNING: {diagnostic_name} value could not be evaluated")
+            return True, None
+        value = self.convert_value_to_type(value, metadata["element_type"])
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, None
+
+        one = self.register_constant(1, self.register_primitive_type("uint"))
+        index = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicIAdd", counter_pointer, one
+        )
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an AppendStructuredBuffer "
+                "element"
+            )
+            return True, None
+
+        self.store_to_variable(element_pointer, value)
+        return True, None
+
+    def process_structured_buffer_consume_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> Tuple[bool, Optional[SpirvId]]:
+        if args:
+            self.emit(f"; WARNING: {diagnostic_name} accepts no operands")
+            return True, self.structured_buffer_default_value(metadata)
+        if metadata.get("buffer_kind") != "ConsumeStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer"
+            )
+            return True, self.structured_buffer_default_value(metadata)
+        if metadata.get("writeonly"):
+            self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+            return True, self.structured_buffer_default_value(metadata)
+
+        counter_pointer = self.structured_buffer_counter_pointer(buffer_pointer)
+        if counter_pointer is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a counter buffer")
+            return True, self.structured_buffer_default_value(metadata)
+
+        uint_type = self.register_primitive_type("uint")
+        one = self.register_constant(1, uint_type)
+        old_count = self.emit_structured_buffer_counter_atomic(
+            "OpAtomicISub", counter_pointer, one
+        )
+        index = self.binary_operation("-", uint_type, old_count, one)
+        element_pointer = self.structured_buffer_element_pointer(buffer_pointer, index)
+        if element_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires a ConsumeStructuredBuffer "
+                "element"
+            )
+            return True, self.structured_buffer_default_value(metadata)
+
+        element_type = self.variable_value_types[element_pointer.id]
+        return True, self.load_from_variable(element_pointer, element_type)
+
     def process_structured_buffer_method_call(
         self, expr: FunctionCallNode
     ) -> Tuple[bool, Optional[SpirvId]]:
@@ -11982,7 +12289,7 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         method_name = getattr(callee_expr, "member", None)
-        if method_name not in {"Load", "Store"}:
+        if method_name not in {"Load", "Store", "Append", "Consume"}:
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -11994,6 +12301,21 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if method_name == "Append":
+            return self.process_structured_buffer_append_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "AppendStructuredBuffer.Append",
+            )
+        if method_name == "Consume":
+            return self.process_structured_buffer_consume_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "ConsumeStructuredBuffer.Consume",
+            )
+
         if method_name == "Load":
             diagnostic_name = "StructuredBuffer.Load"
             if len(args) < 1:
@@ -12004,6 +12326,15 @@ class VulkanSPIRVCodeGen:
                 return True, self.structured_buffer_default_value(metadata)
             if metadata.get("writeonly"):
                 self.emit(f"; WARNING: {diagnostic_name} requires a readable buffer")
+                return True, self.structured_buffer_default_value(metadata)
+            if metadata.get("buffer_kind") not in {
+                "StructuredBuffer",
+                "RWStructuredBuffer",
+            }:
+                self.emit(
+                    f"; WARNING: {diagnostic_name} requires a StructuredBuffer "
+                    "element"
+                )
                 return True, self.structured_buffer_default_value(metadata)
 
             index = self.process_expression(args[0])
@@ -12034,6 +12365,11 @@ class VulkanSPIRVCodeGen:
             return True, None
         if metadata.get("readonly"):
             self.emit(f"; WARNING: {diagnostic_name} requires a writable buffer")
+            return True, None
+        if metadata.get("buffer_kind") != "RWStructuredBuffer":
+            self.emit(
+                f"; WARNING: {diagnostic_name} requires an RWStructuredBuffer element"
+            )
             return True, None
 
         index = self.process_expression(args[0])
@@ -12994,6 +13330,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
@@ -13036,6 +13375,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
@@ -13060,6 +13402,9 @@ class VulkanSPIRVCodeGen:
             access = self.access_chain(array_variable, [index], ptr_type)
             self.variable_value_types[access.id] = element_type
             self.propagate_storage_buffer_access_metadata(array_variable, access)
+            self.propagate_structured_buffer_descriptor_access_metadata(
+                array_variable, access, index
+            )
             self.propagate_resource_access_metadata(
                 array_variable, access, element_type
             )
@@ -13070,6 +13415,9 @@ class VulkanSPIRVCodeGen:
         access = self.access_chain(array, [index], ptr_type)
         self.variable_value_types[access.id] = element_type
         self.propagate_storage_buffer_access_metadata(array, access)
+        self.propagate_structured_buffer_descriptor_access_metadata(
+            array, access, index
+        )
         self.propagate_resource_access_metadata(array, access, element_type)
         return access, element_type
 

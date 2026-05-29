@@ -10484,6 +10484,83 @@ def test_directx_wave_match_rejects_non_primitive_arguments(body, match):
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_directx_wave_lane_reads_accept_numeric_scalar_vector_values():
+    code = """
+    shader WaveLaneReadNumericValues {
+        compute {
+            uint main(float value, int bits, uvec2 pair, uint lane) {
+                float laneValue = WaveReadLaneAt(value, lane);
+                let firstPair = WaveReadLaneFirst(pair);
+                let quadBits = QuadReadAcrossY(bits);
+                let quadPair = QuadReadLaneAt(pair, 1u);
+                return uint(laneValue) + firstPair.x + uint(quadBits) + quadPair.y;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    for declaration in [
+        "float laneValue = WaveReadLaneAt(value, lane);",
+        "uint2 firstPair = WaveReadLaneFirst(pair);",
+        "int quadBits = QuadReadAcrossY(bits);",
+        "uint2 quadPair = QuadReadLaneAt(pair, 1u);",
+    ]:
+        assert declaration in generated
+
+
+@pytest.mark.parametrize(
+    ("body", "match"),
+    [
+        (
+            "let wrong = WaveReadLaneAt(values, lane);",
+            "DirectX wave intrinsic 'WaveReadLaneAt' value argument must be "
+            "numeric scalar or vector, got float[2]",
+        ),
+        (
+            "let wrong = WaveReadLaneFirst(raw);",
+            "DirectX wave intrinsic 'WaveReadLaneFirst' value argument must be "
+            "numeric scalar or vector, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = QuadReadAcrossX(matrix);",
+            "DirectX wave intrinsic 'QuadReadAcrossX' value argument must be "
+            "numeric scalar or vector, got float2x2",
+        ),
+        (
+            "let wrong = QuadReadAcrossY(flags);",
+            "DirectX wave intrinsic 'QuadReadAcrossY' value argument must be "
+            "numeric scalar or vector, got bool2",
+        ),
+        (
+            "let wrong = QuadReadAcrossDiagonal(raw);",
+            "DirectX wave intrinsic 'QuadReadAcrossDiagonal' value argument must be "
+            "numeric scalar or vector, got RWByteAddressBuffer",
+        ),
+        (
+            "let wrong = QuadReadLaneAt(values, 1u);",
+            "DirectX wave intrinsic 'QuadReadLaneAt' value argument must be "
+            "numeric scalar or vector, got float[2]",
+        ),
+    ],
+)
+def test_directx_wave_lane_reads_reject_non_numeric_values(body, match):
+    code = f"""
+    shader BadWaveLaneReadValue {{
+        RWByteAddressBuffer raw @register(u0);
+        compute {{
+            uint main(uint lane, bvec2 flags, mat2 matrix) {{
+                float values[2];
+                {body}
+                return 0u;
+            }}
+        }}
+    }}
+    """
+    with pytest.raises(ValueError, match=re.escape(match)):
+        generate_code(parse_code(tokenize_code(code)))
+
+
 @pytest.mark.parametrize(
     ("body", "match"),
     [

@@ -436,17 +436,18 @@ class HLSLCodeGen:
         "WaveActiveBallot",
         "WaveMatch",
     }
+    HLSL_WAVE_LANE_READ_VALUE_INTRINSICS = {
+        "WaveReadLaneAt",
+        "WaveReadLaneFirst",
+        "QuadReadAcrossX",
+        "QuadReadAcrossY",
+        "QuadReadAcrossDiagonal",
+        "QuadReadLaneAt",
+    }
     HLSL_WAVE_VALUE_RESULT_INTRINSICS = (
         HLSL_WAVE_NUMERIC_VALUE_INTRINSICS
         | HLSL_WAVE_INTEGER_VALUE_INTRINSICS
-        | {
-            "WaveReadLaneAt",
-            "WaveReadLaneFirst",
-            "QuadReadAcrossX",
-            "QuadReadAcrossY",
-            "QuadReadAcrossDiagonal",
-            "QuadReadLaneAt",
-        }
+        | HLSL_WAVE_LANE_READ_VALUE_INTRINSICS
     )
     HLSL_WAVE_NUMERIC_COMPONENT_TYPES = {
         "float",
@@ -3982,6 +3983,14 @@ class HLSLCodeGen:
                 self.HLSL_WAVE_BASIC_COMPONENT_TYPES,
                 "primitive scalar, vector, or matrix",
                 include_matrices=True,
+            )
+        elif operation in self.HLSL_WAVE_LANE_READ_VALUE_INTRINSICS:
+            self.validate_hlsl_wave_value_argument(
+                operation,
+                args[0],
+                "value",
+                self.HLSL_WAVE_NUMERIC_COMPONENT_TYPES,
+                "numeric scalar or vector",
             )
 
         if operation == "WaveReadLaneAt":
