@@ -3067,10 +3067,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 continue
 
             statements = self.statement_list(getattr(func, "body", []))
-            if len(statements) != 1 or not isinstance(statements[0], ReturnNode):
+            if not statements or not isinstance(statements[-1], ReturnNode):
                 continue
 
-            return_expr = getattr(statements[0], "value", None)
+            local_alias_sources = {}
+            supported_return_body = True
+            for statement in statements[:-1]:
+                if not isinstance(statement, VariableNode):
+                    supported_return_body = False
+                    break
+                var_type = self.get_variable_node_type(statement)
+                if not self.is_queryable_resource_type(var_type):
+                    continue
+                name = getattr(statement, "name", None)
+                initial_value = getattr(
+                    statement,
+                    "initial_value",
+                    getattr(statement, "value", None),
+                )
+                if not name or initial_value is None:
+                    supported_return_body = False
+                    break
+                local_alias_sources[name] = initial_value
+            if not supported_return_body:
+                continue
+
+            return_expr = getattr(statements[-1], "value", None)
             params = getattr(func, "parameters", getattr(func, "params", []))
             resource_param_indices = {
                 getattr(param, "name", None): index
@@ -3093,6 +3115,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     return_expr,
                     resource_param_indices,
                     all_param_indices,
+                    local_alias_sources,
                 )
             )
 
@@ -3104,6 +3127,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return_expr,
                 resource_param_indices,
                 all_param_indices,
+                local_alias_sources,
             ) in function_infos:
                 if func_name in return_sources:
                     continue
@@ -3113,6 +3137,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     global_resource_names,
                     all_param_indices,
                     return_sources,
+                    local_alias_sources,
                 )
                 if return_source is not None:
                     return_sources[func_name] = return_source
@@ -3127,10 +3152,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         global_resource_names,
         all_param_indices,
         known_return_sources=None,
+        local_alias_sources=None,
+        local_visited=None,
     ):
         """Describe a traceable resource-return expression for caller metadata."""
         if known_return_sources is None:
             known_return_sources = {}
+        if local_alias_sources is None:
+            local_alias_sources = {}
+        if local_visited is None:
+            local_visited = set()
 
         if isinstance(return_expr, TernaryOpNode):
             true_source = self.query_return_source_descriptor(
@@ -3139,6 +3170,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
+                local_visited.copy(),
             )
             false_source = self.query_return_source_descriptor(
                 return_expr.false_expr,
@@ -3146,6 +3179,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
+                local_visited.copy(),
             )
             if true_source is None or false_source is None:
                 return None
@@ -3174,6 +3209,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
             )
 
         return_base_expr = return_expr
@@ -3193,6 +3229,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for index in return_indices
         ):
             return None
+        if return_name in local_alias_sources:
+            if return_name in local_visited:
+                return None
+            source_descriptor = self.query_return_source_descriptor(
+                local_alias_sources[return_name],
+                resource_param_indices,
+                global_resource_names,
+                all_param_indices,
+                known_return_sources,
+                local_alias_sources,
+                local_visited | {return_name},
+            )
+            if source_descriptor is None:
+                return None
+            return self.append_query_return_indices(
+                source_descriptor,
+                return_indices,
+                all_param_indices,
+            )
         if return_name in resource_param_indices:
             return {
                 "kind": "parameter",
@@ -3217,8 +3272,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         global_resource_names,
         all_param_indices,
         known_return_sources,
+        local_alias_sources=None,
     ):
         """Inline a traceable callee resource return into the caller context."""
+        if local_alias_sources is None:
+            local_alias_sources = {}
         source_param_indices = return_source.get("param_indices", {})
         kind = return_source["kind"]
 
@@ -3248,6 +3306,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
             )
             if base_source is None:
                 return None
@@ -3280,6 +3339,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
             )
             false_source = self.inline_query_return_source_descriptor(
                 return_source["false_source"],
@@ -3288,6 +3348,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 global_resource_names,
                 all_param_indices,
                 known_return_sources,
+                local_alias_sources,
             )
             if true_source is None or false_source is None:
                 return None

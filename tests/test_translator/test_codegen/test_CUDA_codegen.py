@@ -10747,6 +10747,79 @@ class TestCudaCodeGen:
         assert "metadata unavailable for sampler2D argument tex" not in cuda_code
         assert "textureSize(" not in cuda_code
 
+    def test_resource_query_local_returned_aliases_update_cuda_metadata(self):
+        """Test CUDA sidecars follow returned local resource aliases."""
+        source_code = """
+        shader ResourceQueryLocalReturnedAliases {
+            sampler2d colorMap;
+            sampler2d fallbackMap;
+            sampler2d textures[4];
+
+            sampler2d chooseLocalGlobal() {
+                sampler2d alias = colorMap;
+                return alias;
+            }
+
+            sampler2d chooseLocalSlot(sampler2d texs[4], int slot) {
+                sampler2d alias = texs[slot];
+                return alias;
+            }
+
+            sampler2d chooseLocalTernary(
+                bool useGlobal,
+                sampler2d texs[4],
+                int slot
+            ) {
+                sampler2d alias =
+                    useGlobal ? chooseLocalGlobal() : chooseLocalSlot(texs, slot);
+                return alias;
+            }
+
+            void consume(sampler2d tex) {
+                ivec2 dims = textureSize(tex, 0);
+            }
+
+            compute {
+                void main(bool useGlobal, int slot) {
+                    sampler2d selected = fallbackMap;
+                    selected = chooseLocalTernary(useGlobal, textures, slot);
+                    ivec2 selectedSize = textureSize(selected, 0);
+                    consume(chooseLocalTernary(useGlobal, textures, slot + 1));
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "CglResourceQueryInfo colorMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo fallbackMap_metadata = {};" in cuda_code
+        assert "CglResourceQueryInfo textures_metadata[4] = {};" in cuda_code
+        assert (
+            "CglResourceQueryInfo selected_metadata = fallbackMap_metadata;"
+            in cuda_code
+        )
+        assert (
+            "selected_metadata = (useGlobal ? colorMap_metadata : "
+            "textures_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 selectedSize = cgl_textureSize_sampler2D"
+            "(selected_metadata, 0);" in cuda_code
+        )
+        assert (
+            "consume(chooseLocalTernary(useGlobal, textures, (slot + 1)), "
+            "(useGlobal ? colorMap_metadata : textures_metadata[(slot + 1)]));"
+            in cuda_code
+        )
+        assert "metadata unavailable for sampler2D assignment" not in cuda_code
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "textureSize(" not in cuda_code
+
     def test_resource_query_returned_resources_emit_cuda_metadata_diagnostics(self):
         """Test CUDA query sidecars remain well-formed for returned resources."""
         source_code = """
