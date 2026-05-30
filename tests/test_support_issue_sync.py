@@ -386,6 +386,44 @@ def test_build_desired_issues_renders_pytest_failure_signals():
     assert "generated HLSL assertion failed" in issue.body
 
 
+def test_build_desired_issues_ignores_signal_issues_for_backends_missing_from_matrix():
+    module = load_sync_module()
+    signals = sample_signals()
+    foreign_signal_keys = [
+        "extracted:cuda:source.lexing:supported_without_detected_tests",
+        "extracted:hip:source.lexing:supported_without_detected_tests",
+        "extracted:slang:source.lexing:supported_without_detected_tests",
+    ]
+    for key in foreign_signal_keys:
+        backend_id = key.split(":", maxsplit=2)[1]
+        signals["issues"].append(
+            {
+                "key": key,
+                "kind": "supported_without_detected_tests",
+                "title": "Extractor did not find tests for supported row",
+                "backend_id": backend_id,
+                "backend": backend_id.upper(),
+                "feature_id": "source.lexing",
+                "feature": "Lexing",
+                "category": "source",
+                "status": "supported",
+                "state": "not_detected",
+            }
+        )
+
+    desired = module.build_desired_issues(sample_matrix(), signals)
+    errors = module.validate_desired_issues(
+        sample_matrix(),
+        signals,
+        desired,
+        min_desired_issues=5,
+    )
+
+    for key in foreign_signal_keys:
+        assert key not in desired
+    assert errors == []
+
+
 def test_pytest_failure_issues_are_preserved_without_failure_summary_input():
     module = load_sync_module()
     desired = module.build_desired_issues(sample_matrix(), sample_signals())

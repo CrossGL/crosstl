@@ -544,6 +544,8 @@ def build_desired_issues(
     lookup = feature_lookup(matrix)
     signals_by_row = signal_lookup(signals)
     rows_by_backend = backlog_by_backend(matrix)
+    parent_backend_ids = {backend["id"] for backend in matrix.get("backends", [])}
+    parent_backend_ids.add(FRONTEND_ID)
 
     for backend in matrix.get("backends", []):
         backend_id = backend["id"]
@@ -595,6 +597,8 @@ def build_desired_issues(
         )
 
     for issue in (signals or {}).get("issues", []):
+        if issue["backend_id"] not in parent_backend_ids:
+            continue
         key = issue["key"]
         if key in desired:
             continue
@@ -661,7 +665,13 @@ def validate_desired_issues(
         if key not in desired:
             errors.append("missing desired backlog issue: {}".format(key))
 
+    expected_signal_backends = {
+        backend["id"] for backend in matrix.get("backends", [])
+    }
+    expected_signal_backends.add(FRONTEND_ID)
     for issue in (signals or {}).get("issues", []):
+        if issue["backend_id"] not in expected_signal_backends:
+            continue
         if issue["key"] not in desired:
             errors.append("missing desired extracted issue: {}".format(issue["key"]))
 
