@@ -6847,9 +6847,9 @@ class HLSLCodeGen:
                 f"{expected}, got {actual}"
             )
 
-    def hlsl_ray_tracing_calls(self, func):
+    def hlsl_ray_tracing_calls_in_node(self, root):
         calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
+        for node in self.walk_ast(root):
             if isinstance(node, RayTracingOpNode):
                 calls.append(
                     (getattr(node, "operation", None), getattr(node, "arguments", []))
@@ -6867,6 +6867,9 @@ class HLSLCodeGen:
                         (name, getattr(node, "arguments", getattr(node, "args", [])))
                     )
         return calls
+
+    def hlsl_ray_tracing_calls(self, func):
+        return self.hlsl_ray_tracing_calls_in_node(getattr(func, "body", []))
 
     def hlsl_ray_query_method_return_type(self, operation):
         return {
@@ -6964,13 +6967,16 @@ class HLSLCodeGen:
             getattr(node, "arguments", getattr(node, "args", [])),
         )
 
-    def hlsl_ray_query_calls(self, func):
+    def hlsl_ray_query_calls_in_node(self, root):
         calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
+        for node in self.walk_ast(root):
             call = self.hlsl_ray_query_call_parts(node)
             if call is not None:
                 calls.append(call)
         return calls
+
+    def hlsl_ray_query_calls(self, func):
+        return self.hlsl_ray_query_calls_in_node(getattr(func, "body", []))
 
     def validate_hlsl_ray_struct_argument(self, argument, shader_type, operation, role):
         argument_type = self.expression_result_type(argument)
@@ -7063,7 +7069,9 @@ class HLSLCodeGen:
             argument,
             f"DirectX {shader_type} {operation} instance inclusion mask argument",
         )
-        mask_value = self.literal_int_value(argument, self.literal_int_constants)
+        mask_value = self.literal_int_value(
+            argument, self.hlsl_current_visible_int_constants()
+        )
         if mask_value is None or 0 <= mask_value <= 0xFF:
             return
         raise ValueError(
@@ -7073,7 +7081,7 @@ class HLSLCodeGen:
 
     def hlsl_ray_flag_literal_constants(self):
         constants = dict(self.HLSL_RAY_FLAG_VALUES)
-        constants.update(self.literal_int_constants)
+        constants.update(self.hlsl_current_visible_int_constants())
         return constants
 
     def hlsl_ray_flag_literal_int_value(self, expr):
@@ -7255,12 +7263,8 @@ class HLSLCodeGen:
         elif operation == "ReportHit":
             self.validate_hlsl_report_hit_arguments(args, shader_type)
 
-    def validate_hlsl_ray_tracing_calls(self, func, shader_type):
-        calls = self.hlsl_ray_tracing_calls(func)
-        if not calls:
-            return
-
-        allowed_stages = {
+    def hlsl_ray_tracing_allowed_stages(self):
+        return {
             "TraceRay": {
                 "ray_generation",
                 "ray_closest_hit",
@@ -7281,45 +7285,207 @@ class HLSLCodeGen:
             "AcceptHitAndEndSearch": {"ray_any_hit", "anyhit"},
             "IgnoreHit": {"ray_any_hit", "anyhit"},
         }
-        expected_arg_counts = {
+
+    def hlsl_ray_tracing_expected_arg_counts(self):
+        return {
             "TraceRay": {8, 11},
             "CallShader": {2},
             "ReportHit": {2, 3},
             "AcceptHitAndEndSearch": {0},
             "IgnoreHit": {0},
         }
+
+    def validate_hlsl_ray_tracing_call(
+        self, operation, args, shader_type, allowed_stages, expected_arg_counts
+    ):
+        if operation not in allowed_stages:
+            return
+        if shader_type is not None and shader_type not in allowed_stages[operation]:
+            valid_stages = ", ".join(sorted(allowed_stages[operation]))
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot call {operation}; "
+                f"{operation} is only valid in: {valid_stages}"
+            )
+        expected_counts = expected_arg_counts[operation]
+        if len(args) not in expected_counts:
+            expected = " or ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"DirectX {shader_type} {operation} requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+        self.validate_hlsl_ray_tracing_call_arguments(operation, args, shader_type)
+
+    def validate_hlsl_ray_tracing_call_sequence(
+        self,
+        statements,
+        shader_type,
+        allowed_stages,
+        expected_arg_counts,
+        visible_int_constants,
+    ):
+        previous_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = visible_int_constants
+        try:
+            for stmt in self.hlsl_statement_body_items(statements):
+                if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(stmt),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                if isinstance(stmt, IfNode):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(
+                            getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                        ),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    else_branch = getattr(
+                        stmt, "else_branch", getattr(stmt, "else_body", None)
+                    )
+                    if else_branch is not None:
+                        self.validate_hlsl_ray_tracing_call_sequence(
+                            self.hlsl_statement_body_items(else_branch),
+                            shader_type,
+                            allowed_stages,
+                            expected_arg_counts,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(stmt, SwitchNode):
+                    case_entries = self.hlsl_switch_case_entries(stmt)
+                    for start_index in range(len(case_entries)):
+                        self.validate_hlsl_ray_tracing_call_sequence(
+                            self.hlsl_switch_fallthrough_path_body(
+                                case_entries, start_index
+                            ),
+                            shader_type,
+                            allowed_stages,
+                            expected_arg_counts,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(
+                    stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+                ):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                for operation, args in self.hlsl_ray_tracing_calls_in_node(stmt):
+                    self.validate_hlsl_ray_tracing_call(
+                        operation,
+                        args,
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                    )
+                self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
+        finally:
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
+
+    def validate_hlsl_ray_tracing_calls(self, func, shader_type):
+        calls = self.hlsl_ray_tracing_calls(func)
+        if not calls:
+            return
+
+        allowed_stages = self.hlsl_ray_tracing_allowed_stages()
+        expected_arg_counts = self.hlsl_ray_tracing_expected_arg_counts()
         previous_local_variable_types = self.local_variable_types
         self.local_variable_types = {
             **previous_local_variable_types,
             **self.function_scope_variable_types(func),
         }
         try:
-            for operation, args in calls:
-                if operation not in allowed_stages:
-                    continue
-                if (
-                    shader_type is not None
-                    and shader_type not in allowed_stages[operation]
-                ):
-                    valid_stages = ", ".join(sorted(allowed_stages[operation]))
-                    raise ValueError(
-                        f"DirectX {shader_type} stage cannot call {operation}; "
-                        f"{operation} is only valid in: {valid_stages}"
-                    )
-                expected_counts = expected_arg_counts[operation]
-                if len(args) not in expected_counts:
-                    expected = " or ".join(
-                        str(count) for count in sorted(expected_counts)
-                    )
-                    raise ValueError(
-                        f"DirectX {shader_type} {operation} requires {expected} "
-                        f"argument(s), got {len(args)}"
-                    )
-                self.validate_hlsl_ray_tracing_call_arguments(
-                    operation, args, shader_type
-                )
+            self.validate_hlsl_ray_tracing_call_sequence(
+                self.hlsl_statement_body_items(getattr(func, "body", [])),
+                shader_type,
+                allowed_stages,
+                expected_arg_counts,
+                self.hlsl_initial_int_constants(func),
+            )
         finally:
             self.local_variable_types = previous_local_variable_types
+
+    def validate_hlsl_ray_query_call_sequence(
+        self, statements, shader_type, visible_int_constants
+    ):
+        previous_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = visible_int_constants
+        try:
+            for stmt in self.hlsl_statement_body_items(statements):
+                if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(stmt),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                if isinstance(stmt, IfNode):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(
+                            getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                        ),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    else_branch = getattr(
+                        stmt, "else_branch", getattr(stmt, "else_body", None)
+                    )
+                    if else_branch is not None:
+                        self.validate_hlsl_ray_query_call_sequence(
+                            self.hlsl_statement_body_items(else_branch),
+                            shader_type,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(stmt, SwitchNode):
+                    case_entries = self.hlsl_switch_case_entries(stmt)
+                    for start_index in range(len(case_entries)):
+                        self.validate_hlsl_ray_query_call_sequence(
+                            self.hlsl_switch_fallthrough_path_body(
+                                case_entries, start_index
+                            ),
+                            shader_type,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(
+                    stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+                ):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                for operation, query_expr, args in self.hlsl_ray_query_calls_in_node(
+                    stmt
+                ):
+                    self.validate_hlsl_ray_query_call_arguments(
+                        operation, query_expr, args, shader_type
+                    )
+                self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
+        finally:
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def validate_hlsl_ray_query_calls(self, func, shader_type):
         calls = self.hlsl_ray_query_calls(func)
@@ -7332,10 +7498,11 @@ class HLSLCodeGen:
             **self.function_scope_variable_types(func),
         }
         try:
-            for operation, query_expr, args in calls:
-                self.validate_hlsl_ray_query_call_arguments(
-                    operation, query_expr, args, shader_type
-                )
+            self.validate_hlsl_ray_query_call_sequence(
+                self.hlsl_statement_body_items(getattr(func, "body", [])),
+                shader_type,
+                self.hlsl_initial_int_constants(func),
+            )
         finally:
             self.local_variable_types = previous_local_variable_types
 

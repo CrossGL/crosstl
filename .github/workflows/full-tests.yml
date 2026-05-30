@@ -9,9 +9,13 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -30,11 +34,35 @@ jobs:
           python -m pip install pytest-xdist
 
       - name: Run complete test suite
-        run: python -m pytest tests --durations=25 -n auto
+        run: |
+          mkdir -p support/generated
+          python -m pytest tests --durations=25 -n auto --junitxml support/generated/full-tests-pytest.xml
+
+      - name: Write complete test failure summary
+        if: always()
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/full-tests-pytest.xml \
+            --json-output support/generated/full-tests-failure-summary.json \
+            --markdown-output support/generated/full-tests-failure-summary.md
+          cat support/generated/full-tests-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload complete test failure summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-test-failure-summary
+          path: |
+            support/generated/full-tests-pytest.xml
+            support/generated/full-tests-failure-summary.json
+            support/generated/full-tests-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30
 
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -138,10 +166,33 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run external shader validator tests
-        run: >
-          python -m pytest
-          tests/test_translator/test_codegen/test_external_shader_validators.py
-          -rs
+        run: |
+          mkdir -p support/generated
+          python -m pytest \
+            tests/test_translator/test_codegen/test_external_shader_validators.py \
+            --junitxml support/generated/shader-validators-pytest.xml \
+            -rs
+
+      - name: Write shader validator failure summary
+        if: always()
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/shader-validators-pytest.xml \
+            --json-output support/generated/shader-validators-failure-summary.json \
+            --markdown-output support/generated/shader-validators-failure-summary.md
+          cat support/generated/shader-validators-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload shader validator failure summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shader-validator-failure-summary-${{ matrix.os }}
+          path: |
+            support/generated/shader-validators-pytest.xml
+            support/generated/shader-validators-failure-summary.json
+            support/generated/shader-validators-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30
 
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
@@ -282,10 +333,33 @@ jobs:
           nvcc -std=c++17 -c "$tmp/smoke.cu" -o "$tmp/smoke_cuda.o"
 
       - name: Run external shader validator tests
-        run: >
-          python -m pytest -q -n auto
-          tests/test_translator/test_codegen/test_external_shader_validators.py
-          -rs
+        run: |
+          mkdir -p support/generated
+          python -m pytest -q -n auto \
+            tests/test_translator/test_codegen/test_external_shader_validators.py \
+            --junitxml support/generated/compiler-smoke-linux-pytest.xml \
+            -rs
+
+      - name: Write compiler smoke failure summary
+        if: always()
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/compiler-smoke-linux-pytest.xml \
+            --json-output support/generated/compiler-smoke-linux-failure-summary.json \
+            --markdown-output support/generated/compiler-smoke-linux-failure-summary.md
+          cat support/generated/compiler-smoke-linux-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload compiler smoke failure summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-smoke-linux-failure-summary
+          path: |
+            support/generated/compiler-smoke-linux-pytest.xml
+            support/generated/compiler-smoke-linux-failure-summary.json
+            support/generated/compiler-smoke-linux-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30
 
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
@@ -319,10 +393,33 @@ jobs:
           glslangValidator --version
 
       - name: Run Metal compiler smoke tests
-        run: >
-          python -m pytest -q -n auto
-          tests/test_translator/test_codegen/test_external_shader_validators.py
-          tests/test_translator/test_codegen/test_shader_validation.py
-          tests/test_translator/test_codegen/test_metal_codegen.py
-          -k "metal"
-          -rs
+        run: |
+          mkdir -p support/generated
+          python -m pytest -q -n auto \
+            tests/test_translator/test_codegen/test_external_shader_validators.py \
+            tests/test_translator/test_codegen/test_shader_validation.py \
+            tests/test_translator/test_codegen/test_metal_codegen.py \
+            -k "metal" \
+            --junitxml support/generated/compiler-smoke-macos-pytest.xml \
+            -rs
+
+      - name: Write Metal compiler smoke failure summary
+        if: always()
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/compiler-smoke-macos-pytest.xml \
+            --json-output support/generated/compiler-smoke-macos-failure-summary.json \
+            --markdown-output support/generated/compiler-smoke-macos-failure-summary.md
+          cat support/generated/compiler-smoke-macos-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Metal compiler smoke failure summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-smoke-macos-failure-summary
+          path: |
+            support/generated/compiler-smoke-macos-pytest.xml
+            support/generated/compiler-smoke-macos-failure-summary.json
+            support/generated/compiler-smoke-macos-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30

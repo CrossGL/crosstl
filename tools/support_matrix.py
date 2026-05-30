@@ -56,6 +56,7 @@ BACKLOG_STATUSES = {
 }
 
 GRAPHICS_BACKEND_IDS = ("directx", "opengl", "metal")
+GENERATED_DIFF_PREVIEW_LIMIT = 120
 
 TEST_PATTERN = re.compile(r"^\s*def\s+test_", re.MULTILINE)
 UNSUPPORTED_PATTERN = re.compile(
@@ -967,6 +968,21 @@ def write_generated(matrix):
     DOCS_RST_PATH.write_text(render_docs(matrix), encoding="utf-8")
 
 
+def generated_artifact_specs(matrix):
+    return (
+        (MATRIX_JSON_PATH, stable_json(matrix)),
+        (
+            GRAPHICS_ROADMAP_JSON_PATH,
+            stable_json(build_graphics_backend_roadmap(matrix)),
+        ),
+        (DOCS_RST_PATH, render_docs(matrix)),
+    )
+
+
+def text_sha256(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def compare_file(path, expected):
     if path.exists():
         actual = path.read_text(encoding="utf-8")
@@ -987,26 +1003,84 @@ def compare_file(path, expected):
 
 def check_generated(matrix):
     failures = []
-    for path, expected in (
-        (MATRIX_JSON_PATH, stable_json(matrix)),
-        (
-            GRAPHICS_ROADMAP_JSON_PATH,
-            stable_json(build_graphics_backend_roadmap(matrix)),
-        ),
-        (DOCS_RST_PATH, render_docs(matrix)),
-    ):
+    for path, expected in generated_artifact_specs(matrix):
         diff = compare_file(path, expected)
         if diff:
             failures.append((path, diff))
     return failures
 
 
-def print_generated_failures(failures):
+def build_generated_check_report(matrix):
+    artifacts = []
+    for path, expected in generated_artifact_specs(matrix):
+        actual = path.read_text(encoding="utf-8") if path.exists() else ""
+        diff = compare_file(path, expected)
+        artifacts.append(
+            {
+                "path": relpath(path),
+                "exists": path.exists(),
+                "stale": bool(diff),
+                "actual_sha256": text_sha256(actual),
+                "expected_sha256": text_sha256(expected),
+                "diff_line_count": len(diff),
+                "diff": diff,
+            }
+        )
+
+    stale_count = sum(1 for artifact in artifacts if artifact["stale"])
+    stale_artifacts = [artifact["path"] for artifact in artifacts if artifact["stale"]]
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py check",
+        "ok": stale_count == 0,
+        "summary": {
+            "artifact_count": len(artifacts),
+            "stale_count": stale_count,
+            "stale_artifacts": stale_artifacts,
+            "total_diff_line_count": sum(
+                artifact["diff_line_count"] for artifact in artifacts
+            ),
+        },
+        "artifacts": artifacts,
+    }
+
+
+def write_json_report(path, report):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(stable_json(report), encoding="utf-8")
+    print("Wrote {}".format(display_path(path)))
+
+
+def print_generated_failure_summary(report):
+    stale_artifacts = [
+        artifact for artifact in report["artifacts"] if artifact["stale"]
+    ]
+    if not stale_artifacts:
+        return
+    print("", file=sys.stderr)
+    print("Stale artifact summary:", file=sys.stderr)
+    for artifact in stale_artifacts:
+        existence = "exists" if artifact["exists"] else "missing"
+        print(
+            "- {path}: {diff_line_count} diff lines ({existence}); "
+            "actual={actual_sha256}, expected={expected_sha256}".format(
+                **artifact,
+                existence=existence,
+            ),
+            file=sys.stderr,
+        )
+
+
+def print_generated_failures(report):
     print("Generated support matrix artifacts are stale.", file=sys.stderr)
     print("Run: python tools/support_matrix.py update", file=sys.stderr)
-    for path, diff in failures:
-        print("\nDiff for {}:".format(relpath(path)), file=sys.stderr)
-        preview = diff[:120]
+    print_generated_failure_summary(report)
+    for artifact in report["artifacts"]:
+        if not artifact["stale"]:
+            continue
+        diff = artifact["diff"]
+        print("\nDiff for {}:".format(artifact["path"]), file=sys.stderr)
+        preview = diff[:GENERATED_DIFF_PREVIEW_LIMIT]
         for line in preview:
             print(line, file=sys.stderr)
         if len(diff) > len(preview):
@@ -1205,8 +1279,13 @@ def parse_args(argv):
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("update", help="Regenerate checked-in support artifacts")
-    subparsers.add_parser(
+    check_parser = subparsers.add_parser(
         "check", help="Validate catalogs and fail if generated artifacts are stale"
+    )
+    check_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Optional JSON report path for generated artifact freshness.",
     )
 
     audit_parser = subparsers.add_parser("audit", help="Print current support backlog")
@@ -1279,9 +1358,12 @@ def main(argv=None):
         return 0
 
     if args.command == "check":
-        failures = check_generated(matrix)
-        if failures:
-            print_generated_failures(failures)
+        report = build_generated_check_report(matrix)
+        if args.output is not None:
+            output = args.output if args.output.is_absolute() else ROOT / args.output
+            write_json_report(output, report)
+        if not report["ok"]:
+            print_generated_failures(report)
             return 1
         print("Support matrix catalogs and generated artifacts are current.")
         return 0

@@ -8,9 +8,13 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.OS }}
+    timeout-minutes: 45
     strategy:
       matrix:
         backend:

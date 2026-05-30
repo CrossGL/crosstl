@@ -4882,6 +4882,107 @@ def test_slangc_smoke_compiles_generated_stage_interfaces_if_available(tmp_path)
     )
 
 
+def test_slangc_smoke_compiles_generated_mesh_task_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangMeshTaskCompileSmoke {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main(uvec3 groupId @ gl_WorkGroupID) @numthreads(1, 1, 1) {
+                payload.meshlet = groupId.x;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                uvec3 threadId @ gl_LocalInvocationID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                verts[1].position = vec4(float(threadId.x), 1.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 0.0, 1.0, 1.0);
+                verts[0].uv = vec2(0.0, 0.0);
+                verts[1].uv = vec2(1.0, 0.0);
+                verts[2].uv = vec2(0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].culled = false;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[numthreads(1, 1, 1)]\n[shader("amplification")]' in generated_code
+    assert "void ASMain(uint3 groupId : SV_GroupID)" in generated_code
+    assert "DispatchMesh(1, 1, 1, payload);" in generated_code
+    assert '[numthreads(32, 1, 1)]\n[outputtopology("triangle")]' in generated_code
+    assert '[shader("mesh")]' in generated_code
+    assert (
+        "void MSMain(in payload MeshPayload payload, "
+        "uint3 threadId : SV_GroupThreadID, "
+        "out vertices MeshVertex verts[3], out indices uint3 tris[1], "
+        "out primitives MeshPrimitive prims[1])" in generated_code
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "bool culled : SV_CullPrimitive;" in generated_code
+    assert (
+        "verts[0].position = float4(float(payload.meshlet), 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert (
+        "verts[1].position = float4(float(threadId.x), 1.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+    assert "prims[0].culled = false;" in generated_code
+    assert ": gl_WorkGroupID" not in generated_code
+    assert ": gl_LocalInvocationID" not in generated_code
+    assert ": mesh_payload" not in generated_code
+    assert ": vertices" not in generated_code
+    assert ": indices" not in generated_code
+    assert ": primitives" not in generated_code
+    assert "MeshOpNode" not in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "amplification",
+        profile="as_6_5",
+        entry="ASMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "mesh",
+        profile="ms_6_5",
+        entry="MSMain",
+    )
+
+
 @pytest.mark.parametrize(
     ("shader_type", "semantic", "message"),
     [
@@ -18270,6 +18371,377 @@ def test_prefix_and_postfix_unary_operators_preserve_position():
     assert "\n    --i;\n" in generated_code
     assert "for (int j = 0; j < 2; j++)" in generated_code
     assert "++j" not in generated_code
+
+
+def test_wave_intrinsics_with_float_types_lower_to_native_slang():
+    """Issue #504: Wave/subgroup intrinsics with float operands."""
+    code = """
+    shader SlangWaveFloat {
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                float value = float(tid.x) * 0.1;
+                float waveSum = WaveActiveSum(value);
+                float waveProduct = WaveActiveProduct(value + 1.0);
+                float waveMin = WaveActiveMin(waveSum);
+                float waveMax = WaveActiveMax(waveProduct);
+                float prefixSum = WavePrefixSum(value);
+                float prefixProduct = WavePrefixProduct(value + 1.0);
+                float broadcast = WaveReadLaneAt(waveSum, 0u);
+                float firstLane = WaveReadLaneFirst(waveMax);
+                float quadX = QuadReadAcrossX(value);
+                float quadY = QuadReadAcrossY(value);
+                float quadDiag = QuadReadAcrossDiagonal(value);
+                float quadLane = QuadReadLaneAt(value, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float waveSum = WaveActiveSum(value);" in generated_code
+    assert "float waveProduct = WaveActiveProduct(value + 1.0);" in generated_code
+    assert "float waveMin = WaveActiveMin(waveSum);" in generated_code
+    assert "float waveMax = WaveActiveMax(waveProduct);" in generated_code
+    assert "float prefixSum = WavePrefixSum(value);" in generated_code
+    assert "float prefixProduct = WavePrefixProduct(value + 1.0);" in generated_code
+    assert "float broadcast = WaveReadLaneAt(waveSum, 0u);" in generated_code
+    assert "float firstLane = WaveReadLaneFirst(waveMax);" in generated_code
+    assert "float quadX = QuadReadAcrossX(value);" in generated_code
+    assert "float quadY = QuadReadAcrossY(value);" in generated_code
+    assert "float quadDiag = QuadReadAcrossDiagonal(value);" in generated_code
+    assert "float quadLane = QuadReadLaneAt(value, 2u);" in generated_code
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_wave_intrinsics_in_fragment_stage_lower_to_native_slang():
+    """Issue #504: Wave intrinsics in fragment shader stage."""
+    code = """
+    shader SlangWaveFragment {
+        fragment {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool first = WaveIsFirstLane();
+                uint sum = WaveActiveSum(lane);
+                bool allActive = WaveActiveAllTrue(lane > 0u);
+                bool anyActive = WaveActiveAnyTrue(first);
+                uvec4 ballot = WaveActiveBallot(first);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "bool first = WaveIsFirstLane();" in generated_code
+    assert "uint sum = WaveActiveSum(lane);" in generated_code
+    assert "bool allActive = WaveActiveAllTrue(lane > 0u);" in generated_code
+    assert "bool anyActive = WaveActiveAnyTrue(first);" in generated_code
+    assert "uint4 ballot = WaveActiveBallot(first);" in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_image_atomics_on_1d_textures_emit_slang_interlocked():
+    """Issue #482: Image atomic operations on 1D textures."""
+    code = """
+    shader ImageAtomics1D {
+        uimage1D counters @r32ui;
+        image1D signedCounters @r32i;
+
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                int pixel = int(tid.x);
+                uint added = imageAtomicAdd(counters, pixel, 1u);
+                uint exchanged = imageAtomicExchange(counters, pixel, added);
+                int minVal = imageAtomicMin(signedCounters, pixel, -1);
+                int maxVal = imageAtomicMax(signedCounters, pixel, 100);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture1D<uint> counters : register(u0);" in generated_code
+    assert "RWTexture1D<int> signedCounters : register(u1);" in generated_code
+    assert "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original);" in (
+        generated_code
+    )
+    assert "InterlockedExchange(counters[pixel]," in generated_code
+    assert "InterlockedMin(signedCounters[pixel], -1," in generated_code
+    assert "InterlockedMax(signedCounters[pixel], 100," in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "None(" not in generated_code
+
+
+def test_image_atomics_compare_swap_on_3d_texture():
+    """Issue #482: imageAtomicCompSwap on 3D image textures."""
+    code = """
+    shader ImageAtomicCompSwap3D {
+        uimage3D volume @r32ui;
+
+        compute {
+            @numthreads(4, 4, 4)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec3 voxel = ivec3(tid);
+                uint swapped = imageAtomicCompSwap(volume, voxel, 0u, 1u);
+                uint orResult = imageAtomicOr(volume, voxel, swapped);
+                uint xorResult = imageAtomicXor(volume, voxel, orResult);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture3D<uint> volume : register(u0);" in generated_code
+    assert (
+        "InterlockedCompareExchange(volume[voxel], 0u, 1u, "
+        "cgl_imageAtomicCompSwap_original);" in generated_code
+    )
+    assert "InterlockedOr(volume[voxel]," in generated_code
+    assert "InterlockedXor(volume[voxel]," in generated_code
+    assert "None(" not in generated_code
+
+
+def test_storage_image_load_store_3d_and_formats():
+    """Issue #477: Storage image load/store with 3D images and explicit formats."""
+    code = """
+    shader StorageImage3D {
+        image3D volumeData @rgba32f;
+        uimage3D volumeFlags @r32ui;
+
+        compute {
+            @numthreads(4, 4, 4)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec3 voxel = ivec3(tid);
+                vec4 data = imageLoad(volumeData, voxel);
+                imageStore(volumeData, voxel, data * 2.0);
+                uint flags = imageLoad(volumeFlags, voxel);
+                imageStore(volumeFlags, voxel, flags | 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture3D<float4> volumeData : register(u0);" in generated_code
+    assert "RWTexture3D<uint> volumeFlags : register(u1);" in generated_code
+    assert "float4 data = volumeData[voxel];" in generated_code
+    assert "volumeData[voxel] = data * 2.0;" in generated_code
+    assert "uint flags = volumeFlags[voxel];" in generated_code
+    assert "volumeFlags[voxel] = flags | 1u;" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_storage_image_load_store_1d_array():
+    """Issue #477: Storage image load/store on 1D array images."""
+    code = """
+    shader StorageImage1DArray {
+        image1DArray layers @rgba32f;
+
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(int(tid.x), 0);
+                vec4 value = imageLoad(layers, coord);
+                imageStore(layers, coord, value + vec4(1.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture1DArray<float4> layers : register(u0);" in generated_code
+    assert "float4 value = layers[coord];" in generated_code
+    assert "layers[coord] = value + float4(1.0);" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_texel_fetch_with_cube_and_3d_textures():
+    """Issue #457: texelFetch on 3D textures."""
+    code = """
+    shader TexelFetch3D {
+        sampler3d volumeTex;
+
+        compute {
+            vec4 fetchVolume(sampler3d vol, ivec3 coord, int lod) {
+                return texelFetch(vol, coord, lod);
+            }
+
+            void main() {
+                vec4 voxel = fetchVolume(volumeTex, ivec3(1, 2, 3), 0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler3D<float4> volumeTex : register(t0);" in generated_code
+    assert "float4 fetchVolume(Sampler3D<float4> vol, int3 coord, int lod)" in (
+        generated_code
+    )
+    assert "return vol.Load(int4(coord, lod));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texture_query_operations_on_various_types():
+    """Issue #452: textureSize and textureQueryLevels on 2D, 3D, cube, and array textures."""
+    code = """
+    shader TextureQueries {
+        sampler2d tex2d;
+        sampler3d tex3d;
+        samplercube texCube;
+        sampler2darray tex2dArray;
+
+        compute {
+            void main() {
+                ivec2 size2d = textureSize(tex2d, 0);
+                ivec3 size3d = textureSize(tex3d, 0);
+                ivec2 sizeCube = textureSize(texCube, 0);
+                ivec3 sizeArray = textureSize(tex2dArray, 0);
+                int levels2d = textureQueryLevels(tex2d);
+                int levels3d = textureQueryLevels(tex3d);
+                int levelsCube = textureQueryLevels(texCube);
+                int levelsArray = textureQueryLevels(tex2dArray);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> tex2d : register(t0);" in generated_code
+    assert "Sampler3D<float4> tex3d : register(t1);" in generated_code
+    assert "SamplerCube<float4> texCube : register(t2);" in generated_code
+    assert "Sampler2DArray<float4> tex2dArray : register(t3);" in generated_code
+    assert "cgl_textureSize_sampler2D(tex2d, 0)" in generated_code
+    assert "cgl_textureSize_sampler3D(tex3d, 0)" in generated_code
+    assert "cgl_textureSize_samplerCube(texCube, 0)" in generated_code
+    assert "cgl_textureSize_sampler2DArray(tex2dArray, 0)" in generated_code
+    assert "cgl_textureQueryLevels_sampler2D(tex2d)" in generated_code
+    assert "cgl_textureQueryLevels_sampler3D(tex3d)" in generated_code
+    assert "cgl_textureQueryLevels_samplerCube(texCube)" in generated_code
+    assert "cgl_textureQueryLevels_sampler2DArray(tex2dArray)" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "GetDimensions" in generated_code
+
+
+def test_texture_query_image_size_on_storage_images():
+    """Issue #452: imageSize on storage image resources."""
+    code = """
+    shader ImageSizeQueries {
+        image2D img2d @rgba32f;
+        uimage3D img3d @r32ui;
+        image2DArray imgArray @rgba32f;
+
+        compute {
+            void main() {
+                ivec2 size2d = imageSize(img2d);
+                ivec3 size3d = imageSize(img3d);
+                ivec3 sizeArray = imageSize(imgArray);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float4> img2d : register(u0);" in generated_code
+    assert "RWTexture3D<uint> img3d : register(u1);" in generated_code
+    assert "RWTexture2DArray<float4> imgArray : register(u2);" in generated_code
+    assert "cgl_imageSize" in generated_code
+    assert "imageSize(" not in generated_code
+    assert "GetDimensions" in generated_code
+
+
+def test_basic_texture_sampling_with_bias_lod_grad():
+    """Issue #423: Basic texture sampling with bias, LOD, and gradient."""
+    code = """
+    shader TextureSampling {
+        sampler2d diffuse;
+        sampler3d volume;
+        samplercube envMap;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 uvw = vec3(0.25, 0.5, 0.75);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                vec4 basic = texture(diffuse, uv);
+                vec4 biased = texture(diffuse, uv, 0.5);
+                vec4 lodSample = textureLod(diffuse, uv, 2.0);
+                vec4 gradSample = textureGrad(
+                    diffuse, uv, vec2(0.1, 0.0), vec2(0.0, 0.1)
+                );
+                vec4 vol = texture(volume, uvw);
+                vec4 volLod = textureLod(volume, uvw, 1.0);
+                vec4 cube = texture(envMap, dir);
+                vec4 cubeLod = textureLod(envMap, dir, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuse : register(t0);" in generated_code
+    assert "Sampler3D<float4> volume : register(t1);" in generated_code
+    assert "SamplerCube<float4> envMap : register(t2);" in generated_code
+    assert "float4 basic = diffuse.Sample(uv);" in generated_code
+    assert "float4 biased = diffuse.SampleBias(uv, 0.5);" in generated_code
+    assert "float4 lodSample = diffuse.SampleLevel(uv, 2.0);" in generated_code
+    assert "float4 gradSample = diffuse.SampleGrad(uv," in generated_code
+    assert "float4 vol = volume.Sample(uvw);" in generated_code
+    assert "float4 volLod = volume.SampleLevel(uvw, 1.0);" in generated_code
+    assert "float4 cube = envMap.Sample(dir);" in generated_code
+    assert "float4 cubeLod = envMap.SampleLevel(dir, 3.0);" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_shadow_sampler_basic_compare_operations():
+    """Issue #423: Shadow sampler basic comparison operations."""
+    code = """
+    shader ShadowSampling {
+        sampler2dshadow shadowMap;
+        samplercubeshadow cubeShadow;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                float depth = 0.75;
+                float shadow2d = textureCompare(shadowMap, uv, depth);
+                float shadowLod = textureCompareLod(shadowMap, uv, depth, 0.0);
+                float shadowCube = textureCompare(cubeShadow, dir, depth);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DShadow shadowMap : register(t0);" in generated_code
+    assert "SamplerCubeShadow cubeShadow : register(t1);" in generated_code
+    assert "float shadow2d = shadowMap.SampleCmp(uv, depth);" in generated_code
+    assert "float shadowLod = shadowMap.SampleCmpLevel(uv, depth, 0.0);" in (
+        generated_code
+    )
+    assert "float shadowCube = cubeShadow.SampleCmp(dir, depth);" in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
 
 
 if __name__ == "__main__":

@@ -2,15 +2,19 @@ name: Assign issue to contributor
 on:
   issue_comment:
 
+permissions:
+  issues: write
+
 jobs:
   assign:
     name: Take an issue
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       issues: write
     steps:
       - name: take the issue
-        uses: bdougie/take-action@main
+        uses: bdougie/take-action@1439165ac45a7461c2d89a59952cd7d941964b87
         with:
           message: Thank you for taking on this issue! If you have any questions or need assistance, feel free to ask.
           trigger: "@CrossGL-issue-bot assign me"

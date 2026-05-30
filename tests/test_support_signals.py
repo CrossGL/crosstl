@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 
@@ -290,6 +291,88 @@ def test_build_report_skips_documented_candidates_mapped_to_existing_features():
     )
 
 
+def test_build_report_creates_ci_failure_issues_from_pytest_summaries():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "opengl",
+                "name": "OpenGL / GLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    failure_report = {
+        "schema_version": 1,
+        "generator": "tools/pytest_failure_summary.py",
+        "path": "support/generated/full-tests-failure-summary.json",
+        "failures": [
+            {
+                "nodeid": (
+                    "tests.test_translator.test_codegen."
+                    "test_external_shader_validators::test_generated_glsl_validates"
+                ),
+                "file": (
+                    "tests/test_translator/test_codegen/"
+                    "test_external_shader_validators.py"
+                ),
+                "kind": "failure",
+                "category": "backend_compiler_validation",
+                "backend": "opengl",
+                "message": "glslangValidator rejected generated GLSL",
+            },
+            {
+                "nodeid": "tests.test_support_matrix::test_matrix_check",
+                "file": "tests/test_support_matrix.py",
+                "kind": "failure",
+                "category": "support_automation",
+                "backend": "unknown",
+                "message": "support matrix check failed",
+            },
+        ],
+    }
+
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[failure_report],
+    )
+
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 2,
+        "categories": {
+            "backend_compiler_validation": 1,
+            "support_automation": 1,
+        },
+        "backends": {"opengl": 1, "unknown": 1},
+    }
+    assert {
+        issue["key"]
+        for issue in report["issues"]
+        if issue["kind"] == "pytest_failure_summary"
+    } == {
+        (
+            "extracted:opengl:ci.pytest.backend-compiler-validation:"
+            "pytest_failure_summary"
+        ),
+        "extracted:frontend:ci.pytest.support-automation:pytest_failure_summary",
+    }
+    opengl_issue = next(
+        issue for issue in report["issues"] if issue["backend_id"] == "opengl"
+    )
+    assert opengl_issue["signal"]["failure_count"] == 1
+    assert (
+        "glslangValidator rejected generated GLSL"
+        in opengl_issue["signal"]["failures"][0]["message"]
+    )
+
+
 def test_build_report_records_missing_docs_probe_health():
     module = load_signals_module()
     backends = {
@@ -313,4 +396,92 @@ def test_build_report_records_missing_docs_probe_health():
         "ok": 0,
         "failed": 0,
         "linked_documents": 0,
+    }
+
+
+def test_build_report_creates_issues_from_pytest_failure_summary():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    failure_report = {
+        "path": "support/generated/full-tests-failure-summary.json",
+        "generator": "tools/pytest_failure_summary.py",
+        "failures": [
+            {
+                "nodeid": (
+                    "tests.test_translator.test_codegen.test_directx_codegen::test_wave"
+                ),
+                "file": "tests/test_translator/test_codegen/test_directx_codegen.py",
+                "kind": "failure",
+                "category": "backend_codegen",
+                "backend": "directx",
+                "message": "assert generated HLSL contains WaveActiveSum",
+            },
+            {
+                "nodeid": "tests.test_translator.test_parser::test_parse",
+                "file": "tests/test_translator/test_parser.py",
+                "kind": "failure",
+                "category": "frontend_ir",
+                "backend": "unknown",
+                "message": "parser failed",
+            },
+        ],
+    }
+
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[failure_report],
+    )
+
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 2,
+        "categories": {"backend_codegen": 1, "frontend_ir": 1},
+        "backends": {"directx": 1, "unknown": 1},
+    }
+    assert report["source"]["pytest_failure_summaries"] == [
+        "support/generated/full-tests-failure-summary.json"
+    ]
+    failure_issues = [
+        issue for issue in report["issues"] if issue["kind"] == "pytest_failure_summary"
+    ]
+    assert [issue["backend_id"] for issue in failure_issues] == [
+        "directx",
+        "frontend",
+    ]
+    assert failure_issues[0]["feature_id"] == "ci.pytest.backend-codegen"
+    assert failure_issues[0]["signal"]["failure_count"] == 1
+    assert failure_issues[1]["backend"] == "Frontend / IR / Parser"
+    assert failure_issues[1]["signal"]["failures"][0]["message"] == "parser failed"
+
+
+def test_load_pytest_failure_report_validates_generator_and_missing_files(tmp_path):
+    module = load_signals_module()
+    missing = tmp_path / "missing.json"
+    wrong_generator = tmp_path / "wrong-generator.json"
+    wrong_generator.write_text(
+        json.dumps({"generator": "tools/other.py", "failures": []}),
+        encoding="utf-8",
+    )
+
+    missing_report = module.load_pytest_failure_report(missing)
+    wrong_report = module.load_pytest_failure_report(wrong_generator)
+
+    assert missing_report["load_error"]["type"] == "FileNotFoundError"
+    assert wrong_report["load_error"] == {
+        "type": "UnexpectedGenerator",
+        "message": "expected tools/pytest_failure_summary.py, got tools/other.py",
     }

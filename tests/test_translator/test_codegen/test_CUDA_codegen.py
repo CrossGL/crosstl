@@ -4805,6 +4805,76 @@ class TestCudaCodeGen:
         assert "InterlockedCompareExchange(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_byte_address_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
+        """Test CUDA preserves byte-address atomic metadata through references."""
+        source_code = """
+        shader ByteAddressBufferReferenceAtomicsCUDA {
+            RWByteAddressBuffer output;
+            RWByteAddressBuffer outputs[2];
+            ByteAddressBuffer readonlyBytes;
+
+            uint bumpRef(RWByteAddressBuffer& outputRef, uint offset, uint value) {
+                uint old = outputRef.InterlockedAdd(offset, value);
+                uint exchanged;
+                outputRef.InterlockedExchange(offset, old, exchanged);
+                return exchanged;
+            }
+
+            void rejectReadOnlyRef(
+                ByteAddressBuffer& readonlyRef,
+                uint offset,
+                uint value
+            ) {
+                uint old;
+                readonlyRef.InterlockedAdd(offset, value, old);
+            }
+
+            compute {
+                void main(uint which, uint offset, uint value) {
+                    uint first = bumpRef(output, offset, value);
+                    uint second = bumpRef(outputs[which], offset, first);
+                    rejectReadOnlyRef(readonlyBytes, offset, second);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "unsigned char* output;" in cuda_code
+        assert "unsigned char* outputs[2];" in cuda_code
+        assert "const unsigned char* readonlyBytes;" in cuda_code
+        assert (
+            "__device__ uint bumpRef(unsigned char* const& outputRef, "
+            "uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ void rejectReadOnlyRef("
+            "const unsigned char* const& readonlyRef, uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "uint old = cgl_byte_address_atomic_add_uint(" "outputRef, offset, value);"
+        ) in cuda_code
+        assert (
+            "exchanged = cgl_byte_address_atomic_exchange_uint("
+            "outputRef, offset, old);"
+        ) in cuda_code
+        assert "uint first = bumpRef(output, offset, value);" in cuda_code
+        assert "uint second = bumpRef(outputs[which], offset, first);" in cuda_code
+        assert "rejectReadOnlyRef(readonlyBytes, offset, second);" in cuda_code
+        assert (
+            "/* unsupported CUDA byte-address buffer call: "
+            "InterlockedAdd on const ByteAddressBuffer& */ ((void)0);" in cuda_code
+        )
+        assert "outputRef.InterlockedAdd(" not in cuda_code
+        assert "outputRef.InterlockedExchange(" not in cuda_code
+        assert "readonlyRef.InterlockedAdd(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
         """Test CUDA maps array and 3D sampled texture calls by resource type."""
         source_code = """

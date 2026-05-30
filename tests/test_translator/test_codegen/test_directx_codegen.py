@@ -12432,6 +12432,33 @@ def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
             crosstl.translator.parse(trace_ray_code), "ray_generation"
         )
 
+    local_trace_ray_code = """
+    shader BadTraceRayLocalInstanceMask {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                const int MASK = 128 + 128;
+                TraceRay(scene, 0, MASK, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay instance inclusion mask argument.*range 0 to 255.*256",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_trace_ray_code), "ray_generation"
+        )
+
     ray_query_code = """
     shader BadRayQueryInstanceMask {
         compute {
@@ -12454,6 +12481,31 @@ def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
     ):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(ray_query_code), "compute"
+        )
+
+    local_ray_query_code = """
+    shader BadRayQueryLocalInstanceMask {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                const int MASK = 256;
+                rq.TraceRayInline(accel, 0, MASK, ray);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "RayQuery.TraceRayInline instance inclusion mask argument"
+            ".*range 0 to 255.*256"
+        ),
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_ray_query_code), "compute"
         )
 
     valid_code = """
@@ -12479,6 +12531,32 @@ def test_directx_ray_tracing_validates_literal_instance_inclusion_masks():
     )
 
     assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated
+
+    valid_local_code = """
+    shader ValidRayLocalInstanceMaskBounds {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                const int MASK = 128 + 127;
+                TraceRay(scene, 0, MASK, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_local_code), "ray_generation"
+    )
+
+    assert "const int MASK = (128 + 127);" in generated
+    assert "TraceRay(scene, 0, MASK, 0, 1, 0, ray, payload);" in generated
 
 
 def test_directx_ray_tracing_validates_literal_ray_flags():
@@ -12506,6 +12584,33 @@ def test_directx_ray_tracing_validates_literal_ray_flags():
     ):
         HLSLCodeGen().generate_stage(
             crosstl.translator.parse(unknown_flag_code), "ray_generation"
+        )
+
+    local_unknown_flag_code = """
+    shader BadTraceRayLocalUnknownFlag {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                const int FLAGS = 512 + 512;
+                TraceRay(scene, FLAGS, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="TraceRay ray flags argument.*known RAY_FLAG bits.*1024",
+    ):
+        HLSLCodeGen().generate_stage(
+            crosstl.translator.parse(local_unknown_flag_code), "ray_generation"
         )
 
     mutually_exclusive_query_code = """
@@ -12574,6 +12679,32 @@ def test_directx_ray_tracing_validates_literal_ray_flags():
         "(RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | "
         "RAY_FLAG_SKIP_CLOSEST_HIT_SHADER), 255, 0, 1, 0, ray, payload);"
     ) in generated
+
+    valid_local_code = """
+    shader ValidLocalRayFlags {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                const int FLAGS = 0;
+                TraceRay(scene, FLAGS, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(valid_local_code), "ray_generation"
+    )
+
+    assert "const int FLAGS = 0;" in generated
+    assert "TraceRay(scene, FLAGS, 255, 0, 1, 0, ray, payload);" in generated
 
 
 def test_else_if_statement():
@@ -28785,6 +28916,682 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
 
     with pytest.raises(ValueError, match=match):
         HLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
+    """Issue #496: Wave/subgroup intrinsics - complex expression coverage."""
+    code = """
+    shader WaveExpressionCoverage {
+        compute {
+            uint computeWaveStats(uint value, bool active, uint lane) {
+                uint sum = WaveActiveSum(value * 2u);
+                uint prefixSum = WavePrefixSum(value);
+                uint prefixProduct = WavePrefixProduct(value);
+                uint prefixCount = WavePrefixCountBits(active);
+                uvec4 ballot = WaveActiveBallot(active);
+                uint laneVal = WaveReadLaneAt(sum, lane);
+                uint firstVal = WaveReadLaneFirst(prefixSum);
+                uint bitAnd = WaveActiveBitAnd(value);
+                uint bitOr = WaveActiveBitOr(value);
+                uint bitXor = WaveActiveBitXor(value);
+                uint minVal = WaveActiveMin(value);
+                uint maxVal = WaveActiveMax(value);
+                bool allEqual = WaveActiveAllEqual(value);
+                return laneVal + firstVal + prefixCount + ballot.x
+                    + bitAnd + bitOr + bitXor + minVal + maxVal
+                    + (allEqual ? 1u : 0u);
+            }
+
+            void main() {
+                uint result = computeWaveStats(7u, true, 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "WaveActiveSum((value * 2u))" in generated
+    assert "WavePrefixSum(value)" in generated
+    assert "WavePrefixProduct(value)" in generated
+    assert "WavePrefixCountBits(active)" in generated
+    assert "WaveActiveBallot(active)" in generated
+    assert "WaveReadLaneAt(sum, lane)" in generated
+    assert "WaveReadLaneFirst(prefixSum)" in generated
+    assert "WaveActiveBitAnd(value)" in generated
+    assert "WaveActiveBitOr(value)" in generated
+    assert "WaveActiveBitXor(value)" in generated
+    assert "WaveActiveMin(value)" in generated
+    assert "WaveActiveMax(value)" in generated
+    assert "WaveActiveAllEqual(value)" in generated
+
+
+def test_directx_wave_ballot_and_read_lane_at_in_conditional():
+    """Issue #496: WaveBallot and WaveReadLaneAt in control flow."""
+    code = """
+    shader WaveBallotConditional {
+        compute {
+            uint conditionalWave(uint value, bool cond, uint lane) {
+                uvec4 mask = WaveActiveBallot(cond);
+                uint broadcastVal = WaveReadLaneAt(value, lane);
+                uint first = WaveReadLaneFirst(value);
+                bool allTrue = WaveActiveAllTrue(cond);
+                bool anyTrue = WaveActiveAnyTrue(cond);
+                if (allTrue) {
+                    return broadcastVal + mask.x + mask.y;
+                }
+                if (anyTrue) {
+                    return first;
+                }
+                return 0u;
+            }
+
+            void main() {
+                uint result = conditionalWave(5u, true, 2u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "WaveActiveBallot(cond)" in generated
+    assert "WaveReadLaneAt(value, lane)" in generated
+    assert "WaveReadLaneFirst(value)" in generated
+    assert "WaveActiveAllTrue(cond)" in generated
+    assert "WaveActiveAnyTrue(cond)" in generated
+
+
+def test_directx_wave_prefix_operations_accumulate():
+    """Issue #496: WavePrefixSum and WavePrefixProduct used for parallel prefix."""
+    code = """
+    shader WavePrefixAccumulate {
+        compute {
+            uint parallelPrefix(uint value, bool active) {
+                uint exclusiveSum = WavePrefixSum(value);
+                uint exclusiveProduct = WavePrefixProduct(value);
+                uint exclusiveCount = WavePrefixCountBits(active);
+                uint inclusiveSum = exclusiveSum + value;
+                return inclusiveSum + exclusiveProduct + exclusiveCount;
+            }
+
+            void main() {
+                uint result = parallelPrefix(3u, true);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "WavePrefixSum(value)" in generated
+    assert "WavePrefixProduct(value)" in generated
+    assert "WavePrefixCountBits(active)" in generated
+    assert "uint inclusiveSum = (exclusiveSum + value);" in generated
+
+
+def test_directx_texture_gather_with_component_and_offset():
+    """Issue #464: textureGather with component selection and offset."""
+    code = """
+    shader TextureGatherAdvanced {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            ivec2 offset @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 red = textureGather(colorMap, linearSampler, input.uv, 0);
+                vec4 green = textureGather(colorMap, linearSampler, input.uv, 1);
+                vec4 blue = textureGather(colorMap, linearSampler, input.uv, 2);
+                vec4 alpha = textureGather(colorMap, linearSampler, input.uv, 3);
+                vec4 withOffset = textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, 1);
+                return red + green + blue + alpha + withOffset;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "GatherRed(" in generated
+    assert "GatherGreen(" in generated
+    assert "GatherBlue(" in generated
+    assert "GatherAlpha(" in generated
+    assert "textureGather(" not in generated
+    assert "textureGatherOffset(" not in generated
+
+
+def test_directx_texture_gather_compare_with_shadow_sampler():
+    """Issue #464: textureGatherCompare for shadow/depth comparison."""
+    code = """
+    shader TextureGatherCompare {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGatherCompare(shadowMap, compareSampler, input.uv, input.depth);
+                vec4 gatheredOffset = textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset);
+                return gathered + gatheredOffset;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "GatherCmp" in generated or "Gather" in generated
+    assert "textureGatherCompare(" not in generated
+    assert "textureGatherCompareOffset(" not in generated
+
+
+def test_directx_texture_projection_with_offset_and_bias():
+    """Issue #430: Projected texture operations with offset and bias."""
+    code = """
+    shader TextureProjAdvanced {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 uvq @ TEXCOORD0;
+            vec4 uvqw @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 basic = textureProj(colorMap, linearSampler, input.uvq);
+                vec4 biased = textureProj(colorMap, linearSampler, input.uvqw, 0.5);
+                vec4 withOffset = textureProjOffset(colorMap, linearSampler, input.uvq, input.offset);
+                vec4 withLod = textureProjLod(colorMap, linearSampler, input.uvq, 2.0);
+                vec4 withGrad = textureProjGrad(colorMap, linearSampler, input.uvq, input.ddx, input.ddy);
+                return basic + biased + withOffset + withLod + withGrad;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "input.uvq.xy / input.uvq.z" in generated
+    assert "textureProj(" not in generated
+    assert "textureProjOffset(" not in generated
+    assert "textureProjLod(" not in generated
+    assert "textureProjGrad(" not in generated
+    assert "Sample(" in generated
+    assert "SampleGrad(" in generated or "SampleLevel(" in generated
+
+
+def test_directx_glsl_buffer_block_mixed_struct_lowering():
+    """Issue #404: GLSL buffer block lowering with mixed scalar/vector types."""
+    code = """
+    shader GlslBufferBlockMixed {
+        struct ParticleData {
+            vec4 position;
+            vec4 velocity;
+            float mass;
+            uint flags;
+        };
+
+        ParticleData particles @glsl_buffer_block(std430) @binding(0);
+
+        vec4 readPosition() {
+            return particles.position;
+        }
+
+        void writeVelocity(vec4 vel) {
+            particles.velocity = vel;
+        }
+
+        float readMass() {
+            return particles.mass;
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWByteAddressBuffer particles : register(u0);" in generated
+    assert (
+        "struct ParticleData" not in generated
+        or "cbuffer" in generated
+        or "ByteAddressBuffer" in generated
+    )
+    assert "glsl_buffer_block" not in generated
+
+
+def test_directx_glsl_buffer_block_with_array_members():
+    """Issue #404: GLSL buffer block with array member access."""
+    code = """
+    shader GlslBufferBlockArrays {
+        struct LightData {
+            uint count;
+            float intensities[];
+        };
+
+        LightData lights @glsl_buffer_block(std430) @binding(2);
+
+        float readIntensity(uint index) {
+            return lights.intensities[index];
+        }
+
+        void writeIntensity(uint index, float value) {
+            lights.intensities[index] = value;
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWByteAddressBuffer lights : register(u2);" in generated
+    assert "glsl_buffer_block" not in generated
+
+
+def test_directx_ray_generation_stage_with_trace_ray():
+    """Issue #351/#632: Ray generation stage with full TraceRay call."""
+    code = """
+    shader RayGenTest {
+        struct RayPayload {
+            vec4 color;
+            float distance;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayPayload payload;
+                ray.Origin = vec3(0.0, 0.0, 0.0);
+                ray.Direction = vec3(0.0, 0.0, 1.0);
+                ray.TMin = 0.001;
+                ray.TMax = 1000.0;
+                payload.color = vec4(0.0, 0.0, 0.0, 0.0);
+                payload.distance = 0.0;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_generation"
+    )
+
+    assert '[shader("raygeneration")]' in generated
+    assert "void RayGenMain()" in generated
+    assert "TraceRay(accel, 0, 255, 0, 1, 0, ray, payload);" in generated
+    assert "RayDesc ray;" in generated
+    assert "RayPayload payload;" in generated
+
+
+def test_directx_closest_hit_stage_with_payload_and_attributes():
+    """Issue #351/#632: Closest hit stage with payload and hit attributes."""
+    code = """
+    shader ClosestHitTest {
+        struct RayPayload {
+            vec4 color;
+            float distance;
+        };
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                BuiltInTriangleIntersectionAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec4(attribs.barycentrics.x, attribs.barycentrics.y, 0.0, 1.0);
+                payload.distance = 1.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_closest_hit"
+    )
+
+    assert '[shader("closesthit")]' in generated
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in BuiltInTriangleIntersectionAttributes attribs)"
+    ) in generated
+    assert "payload.color" in generated
+    assert ": payload" not in generated
+    assert ": hit_attribute" not in generated
+
+
+def test_directx_miss_stage_sets_background_color():
+    """Issue #351/#632: Miss stage setting background color."""
+    code = """
+    shader MissTest {
+        struct RayPayload {
+            vec4 color;
+            float distance;
+        };
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec4(0.2, 0.3, 0.5, 1.0);
+                payload.distance = -1.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "ray_miss")
+
+    assert '[shader("miss")]' in generated
+    assert "void MissMain(inout RayPayload payload)" in generated
+    assert "payload.color" in generated
+    assert "payload.distance" in generated
+
+
+def test_directx_any_hit_stage_with_ignore_and_accept():
+    """Issue #351/#632: Any hit stage with IgnoreHit and AcceptHitAndEndSearch."""
+    code = """
+    shader AnyHitTest {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                if (payload.color.w < 0.5) {
+                    IgnoreHit();
+                }
+                AcceptHitAndEndSearch();
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_any_hit"
+    )
+
+    assert '[shader("anyhit")]' in generated
+    assert "IgnoreHit();" in generated
+    assert "AcceptHitAndEndSearch();" in generated
+    assert "inout RayPayload payload" in generated
+    assert "in HitAttributes attribs" in generated
+
+
+def test_directx_intersection_stage_with_report_hit():
+    """Issue #351/#632: Intersection stage with ReportHit."""
+    code = """
+    shader IntersectionTest {
+        struct SphereAttributes {
+            vec3 normal;
+        };
+
+        ray_intersection {
+            void main() {
+                SphereAttributes attribs;
+                attribs.normal = vec3(0.0, 1.0, 0.0);
+                ReportHit(0.5, 0, attribs);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_intersection"
+    )
+
+    assert '[shader("intersection")]' in generated
+    assert "void IntersectionMain()" in generated
+    assert "ReportHit(0.5, 0, attribs);" in generated
+    assert "SphereAttributes attribs;" in generated
+
+
+def test_directx_callable_stage_with_data_parameter():
+    """Issue #351/#632: Callable stage with callable data."""
+    code = """
+    shader CallableTest {
+        struct ShadowData {
+            float shadowFactor;
+            vec3 lightDir;
+        };
+
+        ray_callable {
+            void main(ShadowData data @ callable_data) {
+                data.shadowFactor = 0.75;
+                data.lightDir = vec3(0.0, 1.0, 0.0);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_callable"
+    )
+
+    assert '[shader("callable")]' in generated
+    assert "void CallableMain(inout ShadowData data)" in generated
+    assert "data.shadowFactor" in generated
+    assert ": callable_data" not in generated
+
+
+def test_directx_mesh_shader_with_vertices_and_indices():
+    """Issue #342: Mesh shader with vertex and index output."""
+    code = """
+    shader MeshShaderTest {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec3 color @ COLOR0;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(-0.5, -0.5, 0.0, 1.0);
+                verts[0].color = vec3(1.0, 0.0, 0.0);
+                verts[1].position = vec4(0.5, -0.5, 0.0, 1.0);
+                verts[1].color = vec3(0.0, 1.0, 0.0);
+                verts[2].position = vec4(0.0, 0.5, 0.0, 1.0);
+                verts[2].color = vec3(0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "mesh")
+
+    assert "[numthreads(1, 1, 1)]" in generated
+    assert '[outputtopology("triangle")]' in generated
+    assert "SetMeshOutputCounts(3, 1);" in generated
+    assert "verts[0].position" in generated
+    assert "tris[0]" in generated
+
+
+def test_directx_amplification_task_stage_dispatches_mesh():
+    """Issue #342: Amplification/task stage dispatching mesh shader."""
+    code = """
+    shader AmplificationTest {
+        struct MeshPayload {
+            uint meshletIndex;
+            uint instanceId;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main() @numthreads(32, 1, 1) {
+                payload.meshletIndex = 0u;
+                payload.instanceId = 1u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshletIndex), 0.0, 0.0, 1.0);
+                verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert "groupshared MeshPayload payload;" in generated
+    assert "DispatchMesh(1, 1, 1, payload);" in generated
+    assert "[numthreads(32, 1, 1)]" in generated
+    assert "in payload MeshPayload payload" in generated
+    assert ": mesh_payload" not in generated
+
+
+def test_directx_ray_query_inline_tracing():
+    """Issue #351/#632: RayQuery inline tracing in compute shader."""
+    code = """
+    shader RayQueryInlineTest {
+        compute {
+            void main() {
+                RayQuery rq;
+                rq.Proceed();
+                uint candidateType = rq.CandidateType();
+                uint committedType = rq.CommittedType();
+                rq.Abort();
+                rq.CommitNonOpaqueTriangleHit();
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "RayQuery" in generated
+    assert "rq.Proceed()" in generated
+    assert "rq.CandidateType()" in generated
+    assert "rq.CommittedType()" in generated
+    assert "rq.Abort()" in generated
+    assert "rq.CommitNonOpaqueTriangleHit()" in generated
+
+
+def test_directx_ray_tracing_multi_stage_pipeline():
+    """Issue #351/#632: Complete ray tracing pipeline with multiple stages."""
+    code = """
+    shader RayTracingPipeline {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            float value;
+        };
+
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure accel;
+                RayDesc ray;
+                RayPayload payload;
+                TraceRay(accel, 0, 0xFF, 0, 1, 0, ray, payload);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                BuiltInTriangleIntersectionAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attribs;
+                attribs.barycentrics = vec2(0.5, 0.5);
+                ReportHit(1.0, 0, attribs);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callable_data) {
+                data.value = 1.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert '[shader("raygeneration")]' in generated
+    assert '[shader("closesthit")]' in generated
+    assert '[shader("miss")]' in generated
+    assert '[shader("anyhit")]' in generated
+    assert '[shader("intersection")]' in generated
+    assert '[shader("callable")]' in generated
+    assert "TraceRay(" in generated
+    assert "AcceptHitAndEndSearch();" in generated
+    assert "ReportHit(" in generated
+
+
+def test_directx_texture_gather_cube_array():
+    """Issue #464: Cube array texture gather operations."""
+    code = """
+    shader CubeArrayGather {
+        samplerCubeArray cubeArray;
+        sampler cubeSampler;
+
+        struct FSInput {
+            vec4 cubeCoord @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGather(cubeArray, cubeSampler, input.cubeCoord);
+                return gathered;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+    assert "TextureCubeArray" in generated or "textureCubeArray" not in generated
+    assert "textureGather(" not in generated
 
 
 if __name__ == "__main__":

@@ -1645,27 +1645,8 @@ class RustCodeGen:
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
-        semantic_attrs = [
-            "position",
-            "color",
-            "texcoord",
-            "normal",
-            "tangent",
-            "binormal",
-            "POSITION",
-            "COLOR",
-            "TEXCOORD",
-            "NORMAL",
-            "TANGENT",
-            "BINORMAL",
-            "TEXCOORD0",
-            "TEXCOORD1",
-            "TEXCOORD2",
-            "TEXCOORD3",
-        ]
-
         for attr in attributes:
-            if hasattr(attr, "name") and attr.name in semantic_attrs:
+            if hasattr(attr, "name") and attr.name in self.semantic_map:
                 return attr.name
         return None
 

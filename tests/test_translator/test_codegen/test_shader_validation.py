@@ -1179,6 +1179,50 @@ shader MetalResourceArrayElementHelperValidation {
 """
 
 
+METAL_RESOURCE_ARRAY_HELPER_ELEMENT_ALIAS_COMPUTE_SHADER = """
+shader MetalResourceArrayHelperElementAliasValidation {
+    sampler2D textures[4];
+    sampler samplers[4];
+    image2D images @rgba32f[4];
+
+    vec4 sampleAlias(
+        sampler2D texs[4],
+        sampler samps[4],
+        int layer,
+        vec2 uv
+    ) {
+        let texAlias = texs[layer];
+        let sampAlias = samps[layer];
+        return texture(texAlias, sampAlias, uv);
+    }
+
+    vec4 readAlias(image2D imgs[4] @rgba32f, int layer, ivec2 pixel) {
+        let imgAlias = imgs[layer];
+        return imageLoad(imgAlias, pixel);
+    }
+
+    void writeAlias(
+        image2D imgs[4] @rgba32f,
+        int layer,
+        ivec2 pixel,
+        vec4 value
+    ) {
+        let imgAlias = imgs[layer];
+        imageStore(imgAlias, pixel, value);
+    }
+
+    compute {
+        void main(uvec3 gid @ gl_GlobalInvocationID) {
+            int layer = int(gid.x & 3u);
+            vec4 sampled = sampleAlias(textures, samplers, layer, vec2(0.5));
+            vec4 oldValue = readAlias(images, layer, ivec2(0, 0));
+            writeAlias(images, layer, ivec2(1, 0), sampled + oldValue);
+        }
+    }
+}
+"""
+
+
 SAMPLER_ARRAY_LOCAL_ALIAS_FRAGMENT_SHADER = """
 shader SamplerArrayLocalAliasValidation {
     sampler2D textures[4];
@@ -6834,6 +6878,34 @@ def test_generated_metal_sampler_array_local_aliases_compile_with_metal(tmp_path
     assert "textures[input.layer].sample(chainedAlias[input.layer], input.uv)" in code
     assert "paramTextures[layer].sample(chainedSamplerAlias[layer], uv)" in code
     assert "pack.textures[layer].sample(chainedPackSamplerAlias[layer], uv)" in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_resource_array_helper_element_aliases_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_resource_array_helper_element_aliases.metal"
+    output = tmp_path / "compute_resource_array_helper_element_aliases.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            METAL_RESOURCE_ARRAY_HELPER_ELEMENT_ALIAS_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "texture2d<float> texAlias = texs[layer];" in code
+    assert "sampler sampAlias = samps[layer];" in code
+    assert "return texAlias.sample(sampAlias, uv);" in code
+    assert "texture2d<float, access::read_write> imgAlias = imgs[layer];" in code
+    assert "return imgAlias.read(uint2(pixel));" in code
+    assert "imgAlias.write(value, uint2(pixel));" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

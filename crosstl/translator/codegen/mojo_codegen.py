@@ -4178,7 +4178,7 @@ class MojoCodeGen:
         generic_suffix = ""
         if generic_params:
             generic_suffix = (
-                "[" + ", ".join(f"{param}: AnyType" for param in generic_params) + "]"
+                "[" + ", ".join(f"{param}: Copyable" for param in generic_params) + "]"
             )
         code = f"@value\nstruct {node.name}{generic_suffix}:\n"
         self.register_struct_type_metadata(node)

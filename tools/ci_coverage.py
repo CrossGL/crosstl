@@ -49,11 +49,55 @@ FULL_SUITE_REQUIRED_MARKERS = [
     "sdk.lunarg.com/sdk/download/$vulkanSdkVersion/windows",
     "--accept-licenses --default-answer --confirm-command install copy_only=1",
 ]
+FULL_SUITE_FAILURE_SUMMARIES = {
+    "complete": {
+        "job": "pytest",
+        "run_step": "Run complete test suite",
+        "summary_step": "Write complete test failure summary",
+        "upload_step": "Upload complete test failure summary",
+        "junit": "support/generated/full-tests-pytest.xml",
+        "json": "support/generated/full-tests-failure-summary.json",
+        "markdown": "support/generated/full-tests-failure-summary.md",
+        "artifact": "full-test-failure-summary",
+    },
+    "shader_validators": {
+        "job": "shader-validators",
+        "run_step": "Run external shader validator tests",
+        "summary_step": "Write shader validator failure summary",
+        "upload_step": "Upload shader validator failure summary",
+        "junit": "support/generated/shader-validators-pytest.xml",
+        "json": "support/generated/shader-validators-failure-summary.json",
+        "markdown": "support/generated/shader-validators-failure-summary.md",
+        "artifact": "shader-validator-failure-summary-${{ matrix.os }}",
+    },
+    "compiler_smoke_linux": {
+        "job": "compiler-smoke-linux",
+        "run_step": "Run external shader validator tests",
+        "summary_step": "Write compiler smoke failure summary",
+        "upload_step": "Upload compiler smoke failure summary",
+        "junit": "support/generated/compiler-smoke-linux-pytest.xml",
+        "json": "support/generated/compiler-smoke-linux-failure-summary.json",
+        "markdown": "support/generated/compiler-smoke-linux-failure-summary.md",
+        "artifact": "compiler-smoke-linux-failure-summary",
+    },
+    "compiler_smoke_macos": {
+        "job": "compiler-smoke-macos",
+        "run_step": "Run Metal compiler smoke tests",
+        "summary_step": "Write Metal compiler smoke failure summary",
+        "upload_step": "Upload Metal compiler smoke failure summary",
+        "junit": "support/generated/compiler-smoke-macos-pytest.xml",
+        "json": "support/generated/compiler-smoke-macos-failure-summary.json",
+        "markdown": "support/generated/compiler-smoke-macos-failure-summary.md",
+        "artifact": "compiler-smoke-macos-failure-summary",
+    },
+}
 SUPPORT_ISSUE_SYNC_REQUIRED_TESTS = [
     "tests/test_support_matrix.py",
     "tests/test_support_signals.py",
+    "tests/test_support_ci_summary.py",
     "tests/test_support_issue_sync.py",
     "tests/test_pr_issue_links.py",
+    "tests/test_pytest_failure_summary.py",
     "tests/test_ci_workflows.py",
     "tests/test_examples_test_script.py",
     "tests/test_tool_cli.py",
@@ -63,8 +107,10 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     ".github/workflows/docs.yml",
     ".github/workflows/examples-test.yml",
     ".github/workflows/full-tests.yml",
+    ".github/workflows/issue_assign.yml",
     ".github/workflows/support-matrix.yml",
     ".github/workflows/support-issue-sync.yml",
+    ".github/workflows/stale-prs.yml",
     ".github/workflows/translator-tests.yml",
     ".github/workflows/pr-issue-links.yml",
     "crosstl/backend/**",
@@ -77,6 +123,8 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     "examples/test.py",
     "support/**",
     "tools/ci_coverage.py",
+    "tools/pytest_failure_summary.py",
+    "tools/support_ci_summary.py",
     "tools/support_matrix.py",
     "tools/support_signals.py",
     "tools/sync_support_issues.py",
@@ -95,9 +143,23 @@ SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS = [
     "tests/test_ci_workflows.py",
     "tests/test_support_matrix.py",
     "tests/test_support_signals.py",
+    "tests/test_support_ci_summary.py",
     "tests/test_support_issue_sync.py",
     "tests/test_pr_issue_links.py",
+    "tests/test_pytest_failure_summary.py",
     "tests/test_tool_cli.py",
+]
+SUPPORT_ISSUE_SYNC_PLANNED_ACTION_BUDGET_ARGS = [
+    "--planned-action-budget-mode fail",
+    "--max-planned-created 300",
+    "--max-planned-updated 300",
+    "--max-planned-closed 50",
+    "--max-planned-attached 300",
+    "--max-planned-total 600",
+    "--max-planned-stale-parent-closures 0",
+    "--max-planned-stale-backlog-closures 100",
+    "--max-planned-stale-extracted-closures 100",
+    "--max-planned-duplicate-marker-closures 25",
 ]
 SUPPORT_MATRIX_REQUIRED_POLICIES = {
     "push_on_main": "push:",
@@ -105,6 +167,7 @@ SUPPORT_MATRIX_REQUIRED_POLICIES = {
     "daily_schedule": 'cron: "17 3 * * *"',
     "workflow_dispatch": "workflow_dispatch:",
     "matrix_check": "python tools/support_matrix.py check",
+    "matrix_check_report": "--output support/generated/support-matrix-check.json",
     "docs_probe_job": "docs-probe:",
     "docs_probe_on_schedule": "github.event_name == 'schedule'",
     "docs_probe_on_dispatch": "github.event_name == 'workflow_dispatch'",
@@ -138,6 +201,19 @@ EXAMPLES_REQUIRED_POLICIES = {
         'echo "[ERROR] Output file is too small ($FILE_SIZE bytes)"'
     ),
 }
+WORKFLOW_WRITE_PERMISSION_ALLOWLIST = {
+    "issue_assign.yml": ["issues"],
+    "pr-issue-links.yml": ["issues", "pull-requests"],
+    "stale-prs.yml": ["issues", "pull-requests"],
+    "support-issue-sync.yml": ["issues"],
+}
+MUTABLE_ACTION_REFS = {"head", "latest", "main", "master", "trunk"}
+PULL_REQUEST_TARGET_WORKFLOW_ALLOWLIST = {"pr-issue-links.yml"}
+PULL_REQUEST_HEAD_MARKERS = (
+    "github.event.pull_request.head",
+    "github.head_ref",
+    "refs/pull/",
+)
 
 
 class CiCoverageError(RuntimeError):
@@ -221,6 +297,265 @@ def pull_request_path_filters(workflow: str) -> list[str]:
     return yaml_list_values(pull_request, "paths")
 
 
+def workflow_step_section(workflow: str, name: str) -> str:
+    pattern = r"^\s*-\s+name:\s*{}\s*$".format(re.escape(name))
+    match = re.search(pattern, workflow, flags=re.MULTILINE)
+    if not match:
+        return ""
+    next_step = re.search(r"^\s*-\s+name:\s*", workflow[match.end() :], re.MULTILINE)
+    end = match.end() + next_step.start() if next_step else len(workflow)
+    return workflow[match.start() : end]
+
+
+def workflow_step_start(workflow: str, name: str) -> int:
+    pattern = r"^\s*-\s+name:\s*{}\s*$".format(re.escape(name))
+    match = re.search(pattern, workflow, flags=re.MULTILINE)
+    return match.start() if match else -1
+
+
+def workflow_step_after(workflow: str, later_name: str, earlier_name: str) -> bool:
+    later_start = workflow_step_start(workflow, later_name)
+    earlier_start = workflow_step_start(workflow, earlier_name)
+    return later_start >= 0 and earlier_start >= 0 and later_start > earlier_start
+
+
+def workflow_job_text(workflow: str, job_name: str) -> str:
+    return "\n".join(nested_yaml_section(workflow, job_name, 2))
+
+
+def workflow_job_step_section(workflow: str, job_name: str, step_name: str) -> str:
+    return workflow_step_section(workflow_job_text(workflow, job_name), step_name)
+
+
+def workflow_job_step_after(
+    workflow: str, job_name: str, later_name: str, earlier_name: str
+) -> bool:
+    return workflow_step_after(
+        workflow_job_text(workflow, job_name),
+        later_name,
+        earlier_name,
+    )
+
+
+def workflow_job_names(workflow: str) -> list[str]:
+    jobs_section = nested_yaml_section(workflow, "jobs", 0)
+    return [
+        match.group(1)
+        for line in jobs_section
+        if (match := re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line))
+    ]
+
+
+def workflow_job_timeout_minutes(workflow: str, job_name: str) -> int | None:
+    job_text = workflow_job_text(workflow, job_name)
+    match = re.search(r"^    timeout-minutes:\s*([0-9]+)\s*$", job_text, re.MULTILINE)
+    return int(match.group(1)) if match else None
+
+
+def workflow_runtime_report(workflows: dict[str, str]) -> dict[str, Any]:
+    job_timeouts = {}
+    missing_timeouts = {}
+    invalid_timeouts = {}
+    for workflow_name, workflow in workflows.items():
+        timeouts = {
+            job_name: workflow_job_timeout_minutes(workflow, job_name)
+            for job_name in workflow_job_names(workflow)
+        }
+        job_timeouts[workflow_name] = timeouts
+        missing = sorted(
+            job_name for job_name, timeout in timeouts.items() if timeout is None
+        )
+        invalid = sorted(
+            job_name
+            for job_name, timeout in timeouts.items()
+            if timeout is not None and timeout <= 0
+        )
+        if missing:
+            missing_timeouts[workflow_name] = missing
+        if invalid:
+            invalid_timeouts[workflow_name] = invalid
+
+    job_count = sum(len(timeouts) for timeouts in job_timeouts.values())
+    jobs_with_timeouts = sum(
+        timeout is not None
+        for timeouts in job_timeouts.values()
+        for timeout in timeouts.values()
+    )
+    return {
+        "workflow_count": len(workflows),
+        "job_count": job_count,
+        "jobs_with_timeouts": jobs_with_timeouts,
+        "job_timeouts": job_timeouts,
+        "missing_job_timeouts": missing_timeouts,
+        "invalid_job_timeouts": invalid_timeouts,
+    }
+
+
+def workflow_has_top_level_permissions(workflow: str) -> bool:
+    return re.search(r"^permissions:\s*(?:\S.*)?$", workflow, re.MULTILINE) is not None
+
+
+def workflow_top_level_permissions(workflow: str) -> dict[str, str]:
+    inline = re.search(r"^permissions:\s*(\S.+?)\s*$", workflow, re.MULTILINE)
+    section = nested_yaml_section(workflow, "permissions", 0)
+    if inline and not section:
+        return {"*": strip_yaml_scalar(inline.group(1))}
+
+    permissions = {}
+    for line in section:
+        match = re.match(r"^  ([A-Za-z0-9_-]+):\s*([A-Za-z-]+)\s*$", line)
+        if match:
+            permissions[match.group(1)] = strip_yaml_scalar(match.group(2))
+    return permissions
+
+
+def workflow_write_permissions(permissions: dict[str, str]) -> list[str]:
+    writes = []
+    for permission, access in permissions.items():
+        if access == "write" or access == "write-all":
+            writes.append(permission)
+    return sorted(writes)
+
+
+def workflow_permissions_report(workflows: dict[str, str]) -> dict[str, Any]:
+    explicit_permissions = {
+        workflow_name: workflow_has_top_level_permissions(workflow)
+        for workflow_name, workflow in workflows.items()
+    }
+    declared_permissions = {
+        workflow_name: workflow_top_level_permissions(workflow)
+        for workflow_name, workflow in workflows.items()
+    }
+    write_permissions = {
+        workflow_name: workflow_write_permissions(permissions)
+        for workflow_name, permissions in declared_permissions.items()
+    }
+    unexpected_writes = {}
+    missing_required_writes = {}
+    for workflow_name, writes in write_permissions.items():
+        allowed = set(WORKFLOW_WRITE_PERMISSION_ALLOWLIST.get(workflow_name, []))
+        actual = set(writes)
+        unexpected = sorted(actual - allowed)
+        missing = sorted(allowed - actual)
+        if unexpected:
+            unexpected_writes[workflow_name] = unexpected
+        if missing:
+            missing_required_writes[workflow_name] = missing
+
+    return {
+        "workflow_count": len(workflows),
+        "explicit_permissions": explicit_permissions,
+        "missing_explicit_permissions": sorted(
+            workflow_name
+            for workflow_name, explicit in explicit_permissions.items()
+            if not explicit
+        ),
+        "declared_permissions": declared_permissions,
+        "write_permissions": write_permissions,
+        "unexpected_write_permissions": unexpected_writes,
+        "missing_required_write_permissions": missing_required_writes,
+    }
+
+
+def workflow_action_refs(workflow: str) -> list[str]:
+    refs = []
+    for match in re.finditer(r"^\s*uses:\s+(.+?)\s*$", workflow, re.MULTILINE):
+        action_ref = strip_yaml_scalar(match.group(1))
+        if action_ref.startswith("./") or "@" not in action_ref:
+            continue
+        refs.append(action_ref)
+    return refs
+
+
+def action_ref_name(action_ref: str) -> str:
+    return action_ref.rsplit("@", 1)[1].strip()
+
+
+def workflow_actions_report(workflows: dict[str, str]) -> dict[str, Any]:
+    action_refs = {
+        workflow_name: workflow_action_refs(workflow)
+        for workflow_name, workflow in workflows.items()
+    }
+    mutable_refs = {}
+    for workflow_name, refs in action_refs.items():
+        mutable = [
+            action_ref
+            for action_ref in refs
+            if action_ref_name(action_ref).lower() in MUTABLE_ACTION_REFS
+        ]
+        if mutable:
+            mutable_refs[workflow_name] = mutable
+    return {
+        "workflow_count": len(workflows),
+        "action_refs": action_refs,
+        "mutable_refs": mutable_refs,
+    }
+
+
+def workflow_has_pull_request_target(workflow: str) -> bool:
+    return (
+        re.search(r"^\s*pull_request_target:\s*$", workflow, re.MULTILINE) is not None
+    )
+
+
+def workflow_pr_head_markers(workflow: str) -> list[str]:
+    return sorted(marker for marker in PULL_REQUEST_HEAD_MARKERS if marker in workflow)
+
+
+def checkout_persists_credentials(checkout_step: str) -> bool:
+    return "persist-credentials: false" not in checkout_step
+
+
+def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
+    target_workflows = sorted(
+        workflow_name
+        for workflow_name, workflow in workflows.items()
+        if workflow_has_pull_request_target(workflow)
+    )
+    unexpected = sorted(
+        set(target_workflows) - set(PULL_REQUEST_TARGET_WORKFLOW_ALLOWLIST)
+    )
+    trusted_base_checkout = {}
+    checkout_credentials_persist = {}
+    head_context_markers = {}
+    support_traceability = {}
+    github_token_scoped_to_sync = {}
+
+    for workflow_name in target_workflows:
+        workflow = workflows[workflow_name]
+        checkout_step = workflow_step_section(workflow, "Checkout trusted base")
+        sync_step = workflow_step_section(workflow, "Sync PR issue links")
+        trusted_base_checkout[workflow_name] = (
+            "uses: actions/checkout@" in checkout_step
+            and "ref:" not in checkout_step
+            and "repository:" not in checkout_step
+        )
+        checkout_credentials_persist[workflow_name] = checkout_persists_credentials(
+            checkout_step
+        )
+        markers = workflow_pr_head_markers(workflow)
+        if markers:
+            head_context_markers[workflow_name] = markers
+        support_traceability[workflow_name] = (
+            "python tools/sync_pr_issue_links.py" in sync_step
+            and "--check-support-traceability" in sync_step
+        )
+        github_token_scoped_to_sync[workflow_name] = (
+            "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in sync_step
+        )
+
+    return {
+        "allowlist": sorted(PULL_REQUEST_TARGET_WORKFLOW_ALLOWLIST),
+        "workflows": target_workflows,
+        "unexpected_workflows": unexpected,
+        "trusted_base_checkout": trusted_base_checkout,
+        "checkout_credentials_persist": checkout_credentials_persist,
+        "head_context_markers": head_context_markers,
+        "support_traceability": support_traceability,
+        "github_token_scoped_to_sync": github_token_scoped_to_sync,
+    }
+
+
 def load_backends() -> list[dict[str, Any]]:
     return json.loads(read_text(BACKENDS_PATH))["backends"]
 
@@ -230,6 +565,19 @@ def workflow_text(name: str) -> str:
     if not path.exists():
         raise CiCoverageError("Workflow does not exist: {}".format(relpath(path)))
     return read_text(path)
+
+
+def all_workflow_texts() -> dict[str, str]:
+    if not WORKFLOW_DIR.exists():
+        raise CiCoverageError(
+            "Workflow directory does not exist: {}".format(relpath(WORKFLOW_DIR))
+        )
+    workflows = {
+        path.name: read_text(path) for path in sorted(WORKFLOW_DIR.glob("*.yml"))
+    }
+    if not workflows:
+        raise CiCoverageError("No workflow files found in {}".format(WORKFLOW_DIR))
+    return workflows
 
 
 def parse_matrix_values(raw: str) -> list[str]:
@@ -333,6 +681,55 @@ def translator_workflow_report(
     return report
 
 
+def full_suite_failure_summary_report(workflow: str) -> dict[str, dict[str, bool]]:
+    summaries = {}
+    for name, config in FULL_SUITE_FAILURE_SUMMARIES.items():
+        job = config["job"]
+        run_step = workflow_job_step_section(workflow, job, config["run_step"])
+        summary_step = workflow_job_step_section(workflow, job, config["summary_step"])
+        upload_step = workflow_job_step_section(workflow, job, config["upload_step"])
+        summaries[name] = {
+            "writes_junit": (
+                "--junitxml {}".format(config["junit"]) in run_step
+                or "--junitxml\n          {}".format(config["junit"]) in run_step
+            ),
+            "writes_failure_summary": (
+                "python tools/pytest_failure_summary.py" in summary_step
+                and config["junit"] in summary_step
+                and "--json-output {}".format(config["json"]) in summary_step
+                and "--markdown-output {}".format(config["markdown"]) in summary_step
+            ),
+            "appends_to_step_summary": (
+                'cat {} >> "$GITHUB_STEP_SUMMARY"'.format(config["markdown"])
+                in summary_step
+            ),
+            "summary_on_failure": "if: always()" in summary_step,
+            "summary_after_run": workflow_job_step_after(
+                workflow,
+                job,
+                config["summary_step"],
+                config["run_step"],
+            ),
+            "uploads_failure_summary": (
+                "actions/upload-artifact@v4" in upload_step
+                and "name: {}".format(config["artifact"]) in upload_step
+                and config["junit"] in upload_step
+                and config["json"] in upload_step
+                and config["markdown"] in upload_step
+            ),
+            "upload_on_failure": "if: always()" in upload_step,
+            "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step,
+            "upload_retention": "retention-days: 30" in upload_step,
+            "upload_after_summary": workflow_job_step_after(
+                workflow,
+                job,
+                config["upload_step"],
+                config["summary_step"],
+            ),
+        }
+    return summaries
+
+
 def full_suite_report(workflow: str) -> dict[str, Any]:
     required_markers = {
         marker: marker in workflow for marker in FULL_SUITE_REQUIRED_MARKERS
@@ -349,20 +746,56 @@ def full_suite_report(workflow: str) -> dict[str, Any]:
         ),
         "required_markers": required_markers,
         "required_tools": required_tools,
+        "failure_summaries": full_suite_failure_summary_report(workflow),
     }
 
 
 def support_issue_sync_report(workflow: str) -> dict[str, Any]:
     path_filters = pull_request_path_filters(workflow)
+    support_matrix_check_step = workflow_step_section(
+        workflow, "Validate support matrix artifacts"
+    )
+    support_matrix_check_upload_step = workflow_step_section(
+        workflow, "Upload support matrix check report"
+    )
+    ci_coverage_upload_step = workflow_step_section(
+        workflow, "Upload CI coverage report"
+    )
+    support_signal_upload_step = workflow_step_section(
+        workflow, "Upload support signal reports"
+    )
+    download_test_failure_step = workflow_step_section(
+        workflow, "Download test failure summaries"
+    )
+    extract_signal_step = workflow_step_section(
+        workflow, "Extract generated support signals"
+    )
+    dry_run_step = workflow_step_section(workflow, "Dry-run issue sync")
+    plan_step = workflow_step_section(workflow, "Plan GitHub issue sync")
+    sync_step = workflow_step_section(workflow, "Sync GitHub issues")
+    summary_step = workflow_step_section(workflow, "Write support automation summary")
+    issue_report_upload_step = workflow_step_section(
+        workflow, "Upload support issue sync reports"
+    )
     return {
         "workflow": "support-issue-sync.yml",
         "hourly_schedule": 'cron: "17 * * * *"' in workflow,
+        "workflow_run_full_tests": (
+            "workflow_run:" in workflow
+            and "Complete Test Suite" in workflow
+            and "types:" in workflow
+            and "completed" in workflow
+            and "branches:" in workflow
+            and "main" in workflow
+        ),
         "dry_run_on_pull_request": (
-            "github.event_name == 'pull_request'" in workflow
-            and "--dry-run" in workflow
+            "if: github.event_name == 'pull_request'" in dry_run_step
+            and "--dry-run" in dry_run_step
         ),
         "mutates_outside_pull_request": (
-            "github.event_name != 'pull_request'" in workflow
+            "if: github.event_name != 'pull_request'" in sync_step
+            and "--dry-run" not in sync_step
+            and "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in sync_step
         ),
         "required_tests": {
             test: test in workflow for test in SUPPORT_ISSUE_SYNC_REQUIRED_TESTS
@@ -372,20 +805,229 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             for path in SUPPORT_ISSUE_SYNC_REQUIRED_PATH_FILTERS
         },
         "min_desired_issues": "--min-desired-issues 10" in workflow,
+        "writes_support_matrix_check_report": (
+            "python tools/support_matrix.py check --output support/generated/support-matrix-check.json"
+            in support_matrix_check_step
+        ),
+        "uploads_support_matrix_check_report": (
+            "actions/upload-artifact@v4" in support_matrix_check_upload_step
+            and "name: support-matrix-check-report" in support_matrix_check_upload_step
+            and "support/generated/support-matrix-check.json"
+            in support_matrix_check_upload_step
+        ),
+        "uploads_support_matrix_check_report_on_failure": (
+            "if: always()" in support_matrix_check_upload_step
+        ),
+        "support_matrix_check_report_ignores_missing_files": (
+            "if-no-files-found: ignore" in support_matrix_check_upload_step
+        ),
+        "support_matrix_check_report_retention": (
+            "retention-days: 30" in support_matrix_check_upload_step
+        ),
+        "support_matrix_check_upload_after_validate": workflow_step_after(
+            workflow,
+            "Upload support matrix check report",
+            "Validate support matrix artifacts",
+        ),
+        "issue_sync_uses_support_matrix_check_report": (
+            "--matrix-check-report support/generated/support-matrix-check.json"
+            in dry_run_step
+            and "--matrix-check-report support/generated/support-matrix-check.json"
+            in plan_step
+            and "--matrix-check-report support/generated/support-matrix-check.json"
+            in sync_step
+        ),
+        "writes_support_automation_summary": (
+            "python tools/support_ci_summary.py" in summary_step
+            and "--matrix-check support/generated/support-matrix-check.json"
+            in summary_step
+            and "--issue-plan support/generated/support-issue-plan.json" in summary_step
+            and "--sync-summary support/generated/support-issue-sync-summary.json"
+            in summary_step
+            and "--output support/generated/support-issue-ci-summary.md" in summary_step
+        ),
+        "support_automation_summary_on_failure": "if: always()" in summary_step,
+        "appends_support_automation_summary_to_step_summary": (
+            '--step-summary "$GITHUB_STEP_SUMMARY"' in summary_step
+        ),
+        "support_automation_summary_emits_annotations": (
+            "--github-annotations" in summary_step
+        ),
+        "support_automation_summary_fails_on_attention": (
+            "--fail-on-attention" in summary_step
+        ),
+        "support_automation_summary_after_issue_sync": (
+            workflow_step_after(
+                workflow,
+                "Write support automation summary",
+                "Dry-run issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Write support automation summary",
+                "Plan GitHub issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Write support automation summary",
+                "Sync GitHub issues",
+            )
+        ),
+        "dry_run_writes_issue_plan": (
+            "--plan-output support/generated/support-issue-plan.json" in dry_run_step
+        ),
+        "plans_issue_sync_before_mutation": (
+            "if: github.event_name != 'pull_request'" in plan_step
+            and "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in plan_step
+            and "--inspect-existing" in plan_step
+            and "--plan-output support/generated/support-issue-plan.json" in plan_step
+            and "--dry-run" in plan_step
+            and workflow_step_after(
+                workflow,
+                "Sync GitHub issues",
+                "Plan GitHub issue sync",
+            )
+        ),
+        "checks_planned_action_budget": all(
+            flag in plan_step for flag in SUPPORT_ISSUE_SYNC_PLANNED_ACTION_BUDGET_ARGS
+        ),
+        "sync_replans_before_mutation": (
+            "--inspect-existing" in sync_step
+            and "--plan-output support/generated/support-issue-plan.json" in sync_step
+        ),
+        "sync_checks_planned_action_budget": all(
+            flag in sync_step for flag in SUPPORT_ISSUE_SYNC_PLANNED_ACTION_BUDGET_ARGS
+        ),
+        "sync_writes_issue_summary": (
+            "--sync-summary-output support/generated/support-issue-sync-summary.json"
+            in sync_step
+        ),
+        "uploads_ci_coverage_artifact_on_failure": (
+            "if: always()" in ci_coverage_upload_step
+        ),
+        "ci_coverage_artifact_retention": (
+            "retention-days: 30" in ci_coverage_upload_step
+        ),
+        "uploads_support_signal_artifact": (
+            "actions/upload-artifact@v4" in support_signal_upload_step
+            and "name: support-signal-reports" in support_signal_upload_step
+            and "support/generated/backend-docs-report.json"
+            in support_signal_upload_step
+            and "support/generated/support-signals.json" in support_signal_upload_step
+        ),
+        "uploads_support_signal_artifact_on_failure": (
+            "if: always()" in support_signal_upload_step
+        ),
+        "support_signal_artifact_ignores_missing_files": (
+            "if-no-files-found: ignore" in support_signal_upload_step
+        ),
+        "support_signal_artifact_retention": (
+            "retention-days: 30" in support_signal_upload_step
+        ),
+        "support_signal_upload_after_extract": workflow_step_after(
+            workflow,
+            "Upload support signal reports",
+            "Extract generated support signals",
+        ),
+        "downloads_test_failure_summaries": (
+            "actions/download-artifact@v4" in download_test_failure_step
+            and "github-token: ${{ secrets.GITHUB_TOKEN }}"
+            in download_test_failure_step
+            and "run-id: ${{ github.event.workflow_run.id }}"
+            in download_test_failure_step
+            and 'pattern: "*failure-summary*"' in download_test_failure_step
+            and "path: support/generated/pytest-failures" in download_test_failure_step
+        ),
+        "downloads_test_failure_summaries_on_workflow_run": (
+            "if: github.event_name == 'workflow_run'" in download_test_failure_step
+        ),
+        "test_failure_summary_download_non_blocking": (
+            "continue-on-error: true" in download_test_failure_step
+        ),
+        "support_signals_uses_pytest_failure_summaries": (
+            "--pytest-failure-summary" in extract_signal_step
+            and "support/generated/pytest-failures" in extract_signal_step
+        ),
+        "uploads_pytest_failure_summary_inputs": (
+            "support/generated/pytest-failures/**" in support_signal_upload_step
+        ),
+        "uploads_issue_sync_report_artifact": (
+            "actions/upload-artifact@v4" in issue_report_upload_step
+            and "name: support-issue-sync-reports" in issue_report_upload_step
+            and "support/generated/support-matrix-check.json"
+            in issue_report_upload_step
+            and "support/generated/support-issue-plan.json" in issue_report_upload_step
+            and "support/generated/support-issue-sync-summary.json"
+            in issue_report_upload_step
+            and "support/generated/support-issue-ci-summary.md"
+            in issue_report_upload_step
+        ),
+        "uploads_issue_sync_report_artifact_on_failure": (
+            "if: always()" in issue_report_upload_step
+        ),
+        "issue_sync_report_artifact_ignores_missing_files": (
+            "if-no-files-found: ignore" in issue_report_upload_step
+        ),
+        "issue_sync_report_artifact_retention": (
+            "retention-days: 30" in issue_report_upload_step
+        ),
+        "issue_sync_report_upload_after_sync": (
+            workflow_step_after(
+                workflow,
+                "Upload support issue sync reports",
+                "Dry-run issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Upload support issue sync reports",
+                "Plan GitHub issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Upload support issue sync reports",
+                "Sync GitHub issues",
+            )
+            and workflow_step_after(
+                workflow,
+                "Upload support issue sync reports",
+                "Write support automation summary",
+            )
+        ),
     }
 
 
 def support_matrix_report(workflow: str) -> dict[str, Any]:
+    check_upload_step = workflow_step_section(
+        workflow, "Upload support matrix check report"
+    )
+    docs_probe_upload_step = workflow_step_section(
+        workflow, "Upload documentation probe report"
+    )
     return {
         "workflow": "support-matrix.yml",
         "required_policies": {
             name: marker in workflow
             for name, marker in SUPPORT_MATRIX_REQUIRED_POLICIES.items()
         },
-        "uploads_docs_probe_artifact": (
-            "actions/upload-artifact@v4" in workflow
-            and "support/generated/backend-docs-report.json" in workflow
+        "uploads_check_report_artifact": (
+            "actions/upload-artifact@v4" in check_upload_step
+            and "support/generated/support-matrix-check.json" in check_upload_step
         ),
+        "uploads_check_report_artifact_on_failure": "if: always()" in check_upload_step,
+        "check_report_artifact_retention": "retention-days: 30" in check_upload_step,
+        "check_report_upload_after_validate": workflow_step_after(
+            workflow,
+            "Upload support matrix check report",
+            "Validate support matrix",
+        ),
+        "uploads_docs_probe_artifact": (
+            "actions/upload-artifact@v4" in docs_probe_upload_step
+            and "support/generated/backend-docs-report.json" in docs_probe_upload_step
+        ),
+        "uploads_docs_probe_artifact_on_failure": (
+            "if: always()" in docs_probe_upload_step
+        ),
+        "docs_probe_artifact_retention": "retention-days: 30" in docs_probe_upload_step,
     }
 
 
@@ -396,10 +1038,6 @@ def docs_report(workflow: str) -> dict[str, Any]:
             name: marker in workflow for name, marker in DOCS_REQUIRED_POLICIES.items()
         },
     }
-
-
-def workflow_job_text(workflow: str, job_name: str) -> str:
-    return "\n".join(nested_yaml_section(workflow, job_name, 2))
 
 
 def example_backend_values(workflow: str) -> list[str]:
@@ -440,13 +1078,14 @@ def build_report() -> dict[str, Any]:
         translator_test_matrix_name(backend) for backend in backends
     ] + ["general"]
 
-    backend_workflow = workflow_text("backend-tests.yml")
-    translator_workflow = workflow_text("translator-tests.yml")
-    docs_workflow = workflow_text("docs.yml")
-    examples_workflow = workflow_text("examples-test.yml")
-    full_workflow = workflow_text("full-tests.yml")
-    support_matrix_workflow = workflow_text("support-matrix.yml")
-    support_issue_workflow = workflow_text("support-issue-sync.yml")
+    workflow_texts = all_workflow_texts()
+    backend_workflow = workflow_texts["backend-tests.yml"]
+    translator_workflow = workflow_texts["translator-tests.yml"]
+    docs_workflow = workflow_texts["docs.yml"]
+    examples_workflow = workflow_texts["examples-test.yml"]
+    full_workflow = workflow_texts["full-tests.yml"]
+    support_matrix_workflow = workflow_texts["support-matrix.yml"]
+    support_issue_workflow = workflow_texts["support-issue-sync.yml"]
 
     report = {
         "schema_version": 1,
@@ -456,6 +1095,10 @@ def build_report() -> dict[str, Any]:
             "backend_ids": backend_ids,
         },
         "workflows": {
+            "runtime": workflow_runtime_report(workflow_texts),
+            "permissions": workflow_permissions_report(workflow_texts),
+            "actions": workflow_actions_report(workflow_texts),
+            "pull_request_target": pull_request_target_report(workflow_texts),
             "backend_tests": workflow_matrix_report(
                 "backend-tests.yml",
                 backend_workflow,
@@ -488,6 +1131,92 @@ def load_report(path: Path) -> dict[str, Any]:
 
 def validation_errors(report: dict[str, Any]) -> list[str]:
     errors = []
+    runtime = report["workflows"]["runtime"]
+    for workflow_name, job_names in runtime["missing_job_timeouts"].items():
+        errors.append(
+            "{} missing timeout-minutes for jobs: {}".format(
+                workflow_name, ", ".join(job_names)
+            )
+        )
+    for workflow_name, job_names in runtime["invalid_job_timeouts"].items():
+        errors.append(
+            "{} has invalid timeout-minutes for jobs: {}".format(
+                workflow_name, ", ".join(job_names)
+            )
+        )
+
+    permissions = report["workflows"]["permissions"]
+    for workflow_name in permissions["missing_explicit_permissions"]:
+        errors.append("{} missing explicit permissions".format(workflow_name))
+    for workflow_name, permission_names in permissions[
+        "unexpected_write_permissions"
+    ].items():
+        errors.append(
+            "{} has unexpected write permissions: {}".format(
+                workflow_name, ", ".join(permission_names)
+            )
+        )
+    for workflow_name, permission_names in permissions[
+        "missing_required_write_permissions"
+    ].items():
+        errors.append(
+            "{} missing required write permissions: {}".format(
+                workflow_name, ", ".join(permission_names)
+            )
+        )
+
+    actions = report["workflows"]["actions"]
+    for workflow_name, action_refs in actions["mutable_refs"].items():
+        errors.append(
+            "{} has mutable action refs: {}".format(
+                workflow_name, ", ".join(action_refs)
+            )
+        )
+
+    pull_request_target = report["workflows"]["pull_request_target"]
+    for workflow_name in pull_request_target["unexpected_workflows"]:
+        errors.append(
+            "{} uses pull_request_target but is not allowlisted".format(workflow_name)
+        )
+    for workflow_name, trusted in pull_request_target["trusted_base_checkout"].items():
+        if not trusted:
+            errors.append(
+                "{} pull_request_target must checkout trusted base".format(
+                    workflow_name
+                )
+            )
+    for workflow_name, persists in pull_request_target[
+        "checkout_credentials_persist"
+    ].items():
+        if persists:
+            errors.append(
+                "{} pull_request_target checkout must not persist credentials".format(
+                    workflow_name
+                )
+            )
+    for workflow_name, markers in pull_request_target["head_context_markers"].items():
+        errors.append(
+            "{} pull_request_target references PR head context: {}".format(
+                workflow_name, ", ".join(markers)
+            )
+        )
+    for workflow_name, enabled in pull_request_target["support_traceability"].items():
+        if not enabled:
+            errors.append(
+                "{} pull_request_target must check support traceability".format(
+                    workflow_name
+                )
+            )
+    for workflow_name, scoped in pull_request_target[
+        "github_token_scoped_to_sync"
+    ].items():
+        if not scoped:
+            errors.append(
+                "{} pull_request_target must scope GITHUB_TOKEN to sync step".format(
+                    workflow_name
+                )
+            )
+
     for key in ("backend_tests", "translator_tests"):
         workflow = report["workflows"][key]
         for dimension in ("components", "python_versions", "oses"):
@@ -554,20 +1283,82 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
             errors.append(
                 "full-tests.yml missing compiler tool coverage: {}".format(tool)
             )
+    for summary_name, summary_fields in full_tests["failure_summaries"].items():
+        for field, present in summary_fields.items():
+            if not present:
+                errors.append(
+                    "full-tests.yml missing pytest failure summary for {}: {}".format(
+                        summary_name,
+                        field,
+                    )
+                )
 
     support_matrix = report["workflows"]["support_matrix"]
     for policy, present in support_matrix["required_policies"].items():
         if not present:
             errors.append("support-matrix.yml missing policy: {}".format(policy))
+    if not support_matrix["uploads_check_report_artifact"]:
+        errors.append("support-matrix.yml missing check report artifact upload")
+    if not support_matrix["uploads_check_report_artifact_on_failure"]:
+        errors.append("support-matrix.yml check report artifact must upload on failure")
+    if not support_matrix["check_report_artifact_retention"]:
+        errors.append(
+            "support-matrix.yml check report artifact must set retention-days"
+        )
+    if not support_matrix["check_report_upload_after_validate"]:
+        errors.append(
+            "support-matrix.yml check report upload must run after validation"
+        )
     if not support_matrix["uploads_docs_probe_artifact"]:
         errors.append("support-matrix.yml missing docs probe artifact upload")
+    if not support_matrix["uploads_docs_probe_artifact_on_failure"]:
+        errors.append("support-matrix.yml docs probe artifact must upload on failure")
+    if not support_matrix["docs_probe_artifact_retention"]:
+        errors.append("support-matrix.yml docs probe artifact must set retention-days")
 
     support_sync = report["workflows"]["support_issue_sync"]
     for field in (
         "hourly_schedule",
+        "workflow_run_full_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
         "min_desired_issues",
+        "writes_support_matrix_check_report",
+        "uploads_support_matrix_check_report",
+        "uploads_support_matrix_check_report_on_failure",
+        "support_matrix_check_report_ignores_missing_files",
+        "support_matrix_check_report_retention",
+        "support_matrix_check_upload_after_validate",
+        "issue_sync_uses_support_matrix_check_report",
+        "writes_support_automation_summary",
+        "support_automation_summary_on_failure",
+        "appends_support_automation_summary_to_step_summary",
+        "support_automation_summary_emits_annotations",
+        "support_automation_summary_fails_on_attention",
+        "support_automation_summary_after_issue_sync",
+        "dry_run_writes_issue_plan",
+        "plans_issue_sync_before_mutation",
+        "checks_planned_action_budget",
+        "sync_replans_before_mutation",
+        "sync_checks_planned_action_budget",
+        "sync_writes_issue_summary",
+        "uploads_ci_coverage_artifact_on_failure",
+        "ci_coverage_artifact_retention",
+        "uploads_support_signal_artifact",
+        "uploads_support_signal_artifact_on_failure",
+        "support_signal_artifact_ignores_missing_files",
+        "support_signal_artifact_retention",
+        "support_signal_upload_after_extract",
+        "downloads_test_failure_summaries",
+        "downloads_test_failure_summaries_on_workflow_run",
+        "test_failure_summary_download_non_blocking",
+        "support_signals_uses_pytest_failure_summaries",
+        "uploads_pytest_failure_summary_inputs",
+        "uploads_issue_sync_report_artifact",
+        "uploads_issue_sync_report_artifact_on_failure",
+        "issue_sync_report_artifact_ignores_missing_files",
+        "issue_sync_report_artifact_retention",
+        "issue_sync_report_upload_after_sync",
     ):
         if not support_sync[field]:
             errors.append("support-issue-sync.yml missing {}".format(field))
@@ -630,6 +1421,68 @@ def compare_bool_value(
     }
 
 
+def workflow_timeout_presence(runtime: dict[str, Any]) -> dict[str, bool]:
+    return {
+        "{}:{}".format(workflow_name, job_name): timeout is not None and timeout > 0
+        for workflow_name, timeouts in runtime["job_timeouts"].items()
+        for job_name, timeout in timeouts.items()
+    }
+
+
+def workflow_required_write_presence(permissions: dict[str, Any]) -> dict[str, bool]:
+    write_permissions = permissions["write_permissions"]
+    presence = {}
+    for (
+        workflow_name,
+        required_permissions,
+    ) in WORKFLOW_WRITE_PERMISSION_ALLOWLIST.items():
+        if workflow_name not in write_permissions:
+            continue
+        actual_permissions = set(write_permissions[workflow_name])
+        for permission in required_permissions:
+            presence["{}:{}".format(workflow_name, permission)] = (
+                permission in actual_permissions
+            )
+    return presence
+
+
+def workflow_write_policy_presence(permissions: dict[str, Any]) -> dict[str, bool]:
+    return {
+        workflow_name: not bool(
+            permissions["unexpected_write_permissions"].get(workflow_name)
+        )
+        for workflow_name in permissions["explicit_permissions"]
+    }
+
+
+def workflow_action_policy_presence(actions: dict[str, Any]) -> dict[str, bool]:
+    return {
+        workflow_name: not bool(actions["mutable_refs"].get(workflow_name))
+        for workflow_name in actions["action_refs"]
+    }
+
+
+def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, bool]:
+    presence = {}
+    for workflow_name in report["workflows"]:
+        presence["{}:allowlisted".format(workflow_name)] = (
+            workflow_name not in report["unexpected_workflows"]
+        )
+    for workflow_name, trusted in report["trusted_base_checkout"].items():
+        presence["{}:trusted_base_checkout".format(workflow_name)] = trusted
+    for workflow_name, persists in report["checkout_credentials_persist"].items():
+        presence["{}:no_persisted_checkout_credentials".format(workflow_name)] = (
+            not persists
+        )
+    for workflow_name, markers in report["head_context_markers"].items():
+        presence["{}:no_pr_head_context".format(workflow_name)] = not bool(markers)
+    for workflow_name, enabled in report["support_traceability"].items():
+        presence["{}:support_traceability".format(workflow_name)] = enabled
+    for workflow_name, scoped in report["github_token_scoped_to_sync"].items():
+        presence["{}:github_token_scoped_to_sync".format(workflow_name)] = scoped
+    return presence
+
+
 def build_ci_coverage_comparison(
     baseline: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
@@ -682,6 +1535,60 @@ def build_ci_coverage_comparison(
             shrinks.append(change)
         if change["added"]:
             growth.append(change)
+
+    baseline_runtime = baseline["workflows"]["runtime"]
+    current_runtime = current["workflows"]["runtime"]
+    add_bool_map_change(
+        "workflows",
+        "job_timeouts",
+        workflow_timeout_presence(baseline_runtime),
+        workflow_timeout_presence(current_runtime),
+    )
+
+    baseline_permissions = baseline["workflows"]["permissions"]
+    current_permissions = current["workflows"]["permissions"]
+    add_bool_map_change(
+        "workflows",
+        "explicit_permissions",
+        baseline_permissions["explicit_permissions"],
+        current_permissions["explicit_permissions"],
+    )
+    add_bool_map_change(
+        "workflows",
+        "required_write_permissions",
+        workflow_required_write_presence(baseline_permissions),
+        workflow_required_write_presence(current_permissions),
+    )
+    add_bool_map_change(
+        "workflows",
+        "write_permission_policy",
+        workflow_write_policy_presence(baseline_permissions),
+        workflow_write_policy_presence(current_permissions),
+    )
+
+    baseline_actions = baseline["workflows"]["actions"]
+    current_actions = current["workflows"]["actions"]
+    add_bool_map_change(
+        "workflows",
+        "action_ref_policy",
+        workflow_action_policy_presence(baseline_actions),
+        workflow_action_policy_presence(current_actions),
+    )
+
+    baseline_pull_request_target = baseline["workflows"]["pull_request_target"]
+    current_pull_request_target = current["workflows"]["pull_request_target"]
+    add_set_change(
+        "workflows",
+        "pull_request_target_workflows",
+        baseline_pull_request_target["workflows"],
+        current_pull_request_target["workflows"],
+    )
+    add_bool_map_change(
+        "workflows",
+        "pull_request_target_policy",
+        pull_request_target_policy_presence(baseline_pull_request_target),
+        pull_request_target_policy_presence(current_pull_request_target),
+    )
 
     for workflow_key in ("backend_tests", "translator_tests"):
         baseline_workflow = baseline["workflows"][workflow_key]
@@ -769,6 +1676,18 @@ def build_ci_coverage_comparison(
         baseline_full["required_tools"],
         current_full["required_tools"],
     )
+    for summary_name in sorted(
+        set(baseline_full["failure_summaries"]) | set(current_full["failure_summaries"])
+    ):
+        baseline_summary = baseline_full["failure_summaries"].get(summary_name, {})
+        current_summary = current_full["failure_summaries"].get(summary_name, {})
+        for field in sorted(set(baseline_summary) | set(current_summary)):
+            add_bool_change(
+                "full-tests.yml",
+                "failure_summaries.{}.{}".format(summary_name, field),
+                bool(baseline_summary.get(field)),
+                bool(current_summary.get(field)),
+            )
 
     baseline_matrix = baseline["workflows"]["support_matrix"]
     current_matrix = current["workflows"]["support_matrix"]
@@ -780,18 +1699,89 @@ def build_ci_coverage_comparison(
     )
     add_bool_change(
         "support-matrix.yml",
+        "uploads_check_report_artifact",
+        baseline_matrix["uploads_check_report_artifact"],
+        current_matrix["uploads_check_report_artifact"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "uploads_check_report_artifact_on_failure",
+        baseline_matrix["uploads_check_report_artifact_on_failure"],
+        current_matrix["uploads_check_report_artifact_on_failure"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "check_report_artifact_retention",
+        baseline_matrix["check_report_artifact_retention"],
+        current_matrix["check_report_artifact_retention"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "check_report_upload_after_validate",
+        baseline_matrix["check_report_upload_after_validate"],
+        current_matrix["check_report_upload_after_validate"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
         "uploads_docs_probe_artifact",
         baseline_matrix["uploads_docs_probe_artifact"],
         current_matrix["uploads_docs_probe_artifact"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "uploads_docs_probe_artifact_on_failure",
+        baseline_matrix["uploads_docs_probe_artifact_on_failure"],
+        current_matrix["uploads_docs_probe_artifact_on_failure"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "docs_probe_artifact_retention",
+        baseline_matrix["docs_probe_artifact_retention"],
+        current_matrix["docs_probe_artifact_retention"],
     )
 
     baseline_support = baseline["workflows"]["support_issue_sync"]
     current_support = current["workflows"]["support_issue_sync"]
     for dimension in (
         "hourly_schedule",
+        "workflow_run_full_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
         "min_desired_issues",
+        "writes_support_matrix_check_report",
+        "uploads_support_matrix_check_report",
+        "uploads_support_matrix_check_report_on_failure",
+        "support_matrix_check_report_ignores_missing_files",
+        "support_matrix_check_report_retention",
+        "support_matrix_check_upload_after_validate",
+        "issue_sync_uses_support_matrix_check_report",
+        "writes_support_automation_summary",
+        "support_automation_summary_on_failure",
+        "appends_support_automation_summary_to_step_summary",
+        "support_automation_summary_after_issue_sync",
+        "dry_run_writes_issue_plan",
+        "plans_issue_sync_before_mutation",
+        "checks_planned_action_budget",
+        "sync_replans_before_mutation",
+        "sync_checks_planned_action_budget",
+        "sync_writes_issue_summary",
+        "uploads_ci_coverage_artifact_on_failure",
+        "ci_coverage_artifact_retention",
+        "uploads_support_signal_artifact",
+        "uploads_support_signal_artifact_on_failure",
+        "support_signal_artifact_ignores_missing_files",
+        "support_signal_artifact_retention",
+        "support_signal_upload_after_extract",
+        "downloads_test_failure_summaries",
+        "downloads_test_failure_summaries_on_workflow_run",
+        "test_failure_summary_download_non_blocking",
+        "support_signals_uses_pytest_failure_summaries",
+        "uploads_pytest_failure_summary_inputs",
+        "uploads_issue_sync_report_artifact",
+        "uploads_issue_sync_report_artifact_on_failure",
+        "issue_sync_report_artifact_ignores_missing_files",
+        "issue_sync_report_artifact_retention",
+        "issue_sync_report_upload_after_sync",
     ):
         add_bool_change(
             "support-issue-sync.yml",
@@ -839,6 +1829,10 @@ def ok_text(value: bool) -> str:
     return "yes" if value else "no"
 
 
+def comma_list(values: list[str]) -> str:
+    return ", ".join(values) if values else "none"
+
+
 def dimension_summary(dimension: dict[str, list[str]]) -> str:
     if dimension_ok(dimension):
         return "{} / {}".format(len(dimension["actual"]), len(dimension["expected"]))
@@ -862,6 +1856,10 @@ def markdown_table(headers: list[str], rows: list[list[Any]]) -> list[str]:
 
 def render_markdown(report: dict[str, Any]) -> str:
     errors = validation_errors(report)
+    runtime = report["workflows"]["runtime"]
+    permissions = report["workflows"]["permissions"]
+    actions = report["workflows"]["actions"]
+    pull_request_target = report["workflows"]["pull_request_target"]
     backend_tests = report["workflows"]["backend_tests"]
     translator_tests = report["workflows"]["translator_tests"]
     docs = report["workflows"]["docs"]
@@ -884,6 +1882,137 @@ def render_markdown(report: dict[str, Any]) -> str:
             [
                 ["Backends", report["catalog"]["backend_count"]],
                 ["Backend IDs", ", ".join(report["catalog"]["backend_ids"])],
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Workflow Runtime",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            ["Workflow", "Jobs", "Timeouts", "Missing", "Invalid"],
+            [
+                [
+                    workflow_name,
+                    len(timeouts),
+                    "{} / {}".format(
+                        sum(timeout is not None for timeout in timeouts.values()),
+                        len(timeouts),
+                    ),
+                    comma_list(runtime["missing_job_timeouts"].get(workflow_name, [])),
+                    comma_list(runtime["invalid_job_timeouts"].get(workflow_name, [])),
+                ]
+                for workflow_name, timeouts in sorted(runtime["job_timeouts"].items())
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Workflow Permissions",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            [
+                "Workflow",
+                "Explicit",
+                "Write permissions",
+                "Unexpected writes",
+                "Missing required writes",
+            ],
+            [
+                [
+                    workflow_name,
+                    ok_text(permissions["explicit_permissions"][workflow_name]),
+                    comma_list(permissions["write_permissions"].get(workflow_name, [])),
+                    comma_list(
+                        permissions["unexpected_write_permissions"].get(
+                            workflow_name, []
+                        )
+                    ),
+                    comma_list(
+                        permissions["missing_required_write_permissions"].get(
+                            workflow_name, []
+                        )
+                    ),
+                ]
+                for workflow_name in sorted(permissions["explicit_permissions"])
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Workflow Actions",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            ["Workflow", "Action refs", "Mutable refs"],
+            [
+                [
+                    workflow_name,
+                    len(actions["action_refs"].get(workflow_name, [])),
+                    comma_list(actions["mutable_refs"].get(workflow_name, [])),
+                ]
+                for workflow_name in sorted(actions["action_refs"])
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## Pull Request Target",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            [
+                "Workflow",
+                "Trusted checkout",
+                "No persisted credentials",
+                "No PR head context",
+                "Traceability",
+                "Token scoped",
+            ],
+            [
+                [
+                    workflow_name,
+                    ok_text(
+                        pull_request_target["trusted_base_checkout"].get(
+                            workflow_name, False
+                        )
+                    ),
+                    ok_text(
+                        not pull_request_target["checkout_credentials_persist"].get(
+                            workflow_name, True
+                        )
+                    ),
+                    ok_text(
+                        not pull_request_target["head_context_markers"].get(
+                            workflow_name
+                        )
+                    ),
+                    ok_text(
+                        pull_request_target["support_traceability"].get(
+                            workflow_name, False
+                        )
+                    ),
+                    ok_text(
+                        pull_request_target["github_token_scoped_to_sync"].get(
+                            workflow_name, False
+                        )
+                    ),
+                ]
+                for workflow_name in pull_request_target["workflows"]
             ],
         )
     )
@@ -1005,6 +2134,15 @@ def render_markdown(report: dict[str, Any]) -> str:
                     "Compiler tools",
                     ok_text(all(full_tests["required_tools"].values())),
                 ],
+                [
+                    "Pytest failure summaries",
+                    ok_text(
+                        all(
+                            all(fields.values())
+                            for fields in full_tests["failure_summaries"].values()
+                        )
+                    ),
+                ],
             ],
         )
     )
@@ -1024,8 +2162,32 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(all(support_matrix["required_policies"].values())),
                 ],
                 [
+                    "Support matrix check artifact",
+                    ok_text(support_matrix["uploads_check_report_artifact"]),
+                ],
+                [
+                    "Check artifact upload on failure",
+                    ok_text(support_matrix["uploads_check_report_artifact_on_failure"]),
+                ],
+                [
+                    "Check artifact retention",
+                    ok_text(support_matrix["check_report_artifact_retention"]),
+                ],
+                [
+                    "Check artifact upload after validation",
+                    ok_text(support_matrix["check_report_upload_after_validate"]),
+                ],
+                [
                     "Documentation probe artifact",
                     ok_text(support_matrix["uploads_docs_probe_artifact"]),
+                ],
+                [
+                    "Documentation probe upload on failure",
+                    ok_text(support_matrix["uploads_docs_probe_artifact_on_failure"]),
+                ],
+                [
+                    "Documentation probe artifact retention",
+                    ok_text(support_matrix["docs_probe_artifact_retention"]),
                 ],
             ],
         )
@@ -1051,6 +2213,170 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(support_sync["mutates_outside_pull_request"]),
                 ],
                 ["Minimum desired issues", ok_text(support_sync["min_desired_issues"])],
+                [
+                    "Support matrix check report",
+                    ok_text(support_sync["writes_support_matrix_check_report"]),
+                ],
+                [
+                    "Support matrix check artifact",
+                    ok_text(support_sync["uploads_support_matrix_check_report"]),
+                ],
+                [
+                    "Support matrix check upload on failure",
+                    ok_text(
+                        support_sync["uploads_support_matrix_check_report_on_failure"]
+                    ),
+                ],
+                [
+                    "Support matrix check ignores missing files",
+                    ok_text(
+                        support_sync[
+                            "support_matrix_check_report_ignores_missing_files"
+                        ]
+                    ),
+                ],
+                [
+                    "Support matrix check artifact retention",
+                    ok_text(support_sync["support_matrix_check_report_retention"]),
+                ],
+                [
+                    "Support matrix check upload after validation",
+                    ok_text(support_sync["support_matrix_check_upload_after_validate"]),
+                ],
+                [
+                    "Issue sync uses support matrix check",
+                    ok_text(
+                        support_sync["issue_sync_uses_support_matrix_check_report"]
+                    ),
+                ],
+                [
+                    "Support automation summary",
+                    ok_text(support_sync["writes_support_automation_summary"]),
+                ],
+                [
+                    "Support automation summary on failure",
+                    ok_text(support_sync["support_automation_summary_on_failure"]),
+                ],
+                [
+                    "Support automation summary in step summary",
+                    ok_text(
+                        support_sync[
+                            "appends_support_automation_summary_to_step_summary"
+                        ]
+                    ),
+                ],
+                [
+                    "Support automation summary after issue sync",
+                    ok_text(
+                        support_sync["support_automation_summary_after_issue_sync"]
+                    ),
+                ],
+                [
+                    "Dry-run writes issue plan",
+                    ok_text(support_sync["dry_run_writes_issue_plan"]),
+                ],
+                [
+                    "Issue sync planned before mutation",
+                    ok_text(support_sync["plans_issue_sync_before_mutation"]),
+                ],
+                [
+                    "Planned action budget guard",
+                    ok_text(support_sync["checks_planned_action_budget"]),
+                ],
+                [
+                    "Sync replans before mutation",
+                    ok_text(support_sync["sync_replans_before_mutation"]),
+                ],
+                [
+                    "Sync planned action budget guard",
+                    ok_text(support_sync["sync_checks_planned_action_budget"]),
+                ],
+                [
+                    "Issue sync writes summary",
+                    ok_text(support_sync["sync_writes_issue_summary"]),
+                ],
+                [
+                    "CI coverage artifact upload on failure",
+                    ok_text(support_sync["uploads_ci_coverage_artifact_on_failure"]),
+                ],
+                [
+                    "CI coverage artifact retention",
+                    ok_text(support_sync["ci_coverage_artifact_retention"]),
+                ],
+                [
+                    "Support signal artifact",
+                    ok_text(support_sync["uploads_support_signal_artifact"]),
+                ],
+                [
+                    "Support signal upload on failure",
+                    ok_text(support_sync["uploads_support_signal_artifact_on_failure"]),
+                ],
+                [
+                    "Support signal ignores missing files",
+                    ok_text(
+                        support_sync["support_signal_artifact_ignores_missing_files"]
+                    ),
+                ],
+                [
+                    "Support signal artifact retention",
+                    ok_text(support_sync["support_signal_artifact_retention"]),
+                ],
+                [
+                    "Support signal upload after extract",
+                    ok_text(support_sync["support_signal_upload_after_extract"]),
+                ],
+                [
+                    "Full-test workflow_run trigger",
+                    ok_text(support_sync["workflow_run_full_tests"]),
+                ],
+                [
+                    "Downloads test failure summaries",
+                    ok_text(support_sync["downloads_test_failure_summaries"]),
+                ],
+                [
+                    "Test failure download scoped to workflow_run",
+                    ok_text(
+                        support_sync["downloads_test_failure_summaries_on_workflow_run"]
+                    ),
+                ],
+                [
+                    "Test failure download non-blocking",
+                    ok_text(support_sync["test_failure_summary_download_non_blocking"]),
+                ],
+                [
+                    "Support signals consume pytest failures",
+                    ok_text(
+                        support_sync["support_signals_uses_pytest_failure_summaries"]
+                    ),
+                ],
+                [
+                    "Uploads pytest failure inputs",
+                    ok_text(support_sync["uploads_pytest_failure_summary_inputs"]),
+                ],
+                [
+                    "Issue sync report artifact",
+                    ok_text(support_sync["uploads_issue_sync_report_artifact"]),
+                ],
+                [
+                    "Issue sync report upload on failure",
+                    ok_text(
+                        support_sync["uploads_issue_sync_report_artifact_on_failure"]
+                    ),
+                ],
+                [
+                    "Issue sync report ignores missing files",
+                    ok_text(
+                        support_sync["issue_sync_report_artifact_ignores_missing_files"]
+                    ),
+                ],
+                [
+                    "Issue sync report artifact retention",
+                    ok_text(support_sync["issue_sync_report_artifact_retention"]),
+                ],
+                [
+                    "Issue sync report upload after sync",
+                    ok_text(support_sync["issue_sync_report_upload_after_sync"]),
+                ],
                 [
                     "Planner tests",
                     ok_text(all(support_sync["required_tests"].values())),

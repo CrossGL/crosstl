@@ -5,8 +5,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = [
     "tools/ci_coverage.py",
+    "tools/pytest_failure_summary.py",
     "tools/support_matrix.py",
     "tools/support_signals.py",
+    "tools/support_ci_summary.py",
     "tools/sync_pr_issue_links.py",
     "tools/sync_support_issues.py",
 ]

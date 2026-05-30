@@ -9799,9 +9799,9 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert not codegen.resource_access_aliasable_type("TextureBox<int>")
     assert not codegen.resource_access_aliasable_type("BufferBox<int>")
     assert not codegen.resource_access_aliasable_type("SamplerBox<float>")
-    assert "struct TextureBox[T: AnyType]:" in generated_code
-    assert "struct BufferBox[T: AnyType]:" in generated_code
-    assert "struct SamplerBox[T: AnyType]:" in generated_code
+    assert "struct TextureBox[T: Copyable]:" in generated_code
+    assert "struct BufferBox[T: Copyable]:" in generated_code
+    assert "struct SamplerBox[T: Copyable]:" in generated_code
     assert "alias TextureMode = Int32" in generated_code
     assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
     assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
@@ -9839,8 +9839,8 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
     codegen = MojoCodeGen()
     generated_code = codegen.generate(parse_code(tokenize_code(source)))
 
-    assert "struct Box[T: AnyType]:" in generated_code
-    assert "struct Pair[T: AnyType]:" in generated_code
+    assert "struct Box[T: Copyable]:" in generated_code
+    assert "struct Pair[T: Copyable]:" in generated_code
     assert "var left: Box[T]" in generated_code
     assert "var right: Box[T]" in generated_code
     assert "var globalBox = Box[Int32](0, 0)" in generated_code
@@ -10377,7 +10377,7 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
     codegen = MojoCodeGen()
     generated_code = codegen.generate(_generic_user_struct_vector_matrix_payload_ast())
 
-    assert "struct Holder[T: AnyType]:" in generated_code
+    assert "struct Holder[T: Copyable]:" in generated_code
     assert "struct CrossGLMatrixF32C2R2:" in generated_code
     assert (
         "var globalVec = Holder[SIMD[DType.float32, 4]]("
@@ -10912,6 +10912,228 @@ def test_aggregate_target_shape_preserves_return_struct_field_constructors():
 
     assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
     assert "struct AggregateBox:" in generated_code
+    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badLocalArrayDeclaration(bool choose) {
+                vec3 values[2] = {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*declaration values array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badLocalMatrixArrayDeclaration() {
+                mat2 transforms[2] = {
+                    mat2(1.0, 0.0, 0.0, 1.0),
+                    vec3(1.0, 2.0, 3.0)
+                };
+            }
+            """,
+            r"aggregate target.*declaration transforms array literal element 2"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_local_declarations(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _aggregate_target_shape_local_struct_alias_ast(function_name):
+    source = """
+    struct VecBox {
+        vec3 values[2];
+        int tag;
+    };
+    struct MatrixBox {
+        mat2 transforms[2];
+        int tag;
+    };
+    struct AggregateBox {
+        vec3 values[2];
+        mat2 transforms[1];
+        int tag;
+    };
+
+    void badPositionalAlias(int mode) {}
+    void badNamedAlias() {}
+    void okAlias(bool choose, int mode) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    float_type = PrimitiveType("float")
+    int_type = PrimitiveType("int")
+    vec_box = NamedType("VecBox")
+    matrix_box = NamedType("MatrixBox")
+    aggregate_box = NamedType("AggregateBox")
+
+    def float_literal(value):
+        return LiteralNode(value, float_type)
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    def call(name, *args):
+        return FunctionCallNode(name, list(args))
+
+    def vec2(x, y):
+        return call("vec2", float_literal(x), float_literal(y))
+
+    def vec3(x, y, z):
+        return call("vec3", float_literal(x), float_literal(y), float_literal(z))
+
+    def mat2_scalars():
+        return call(
+            "mat2",
+            float_literal(1.0),
+            float_literal(0.0),
+            float_literal(0.0),
+            float_literal(1.0),
+        )
+
+    def mat2_vectors():
+        return call(
+            "mat2",
+            vec2(1.0, 0.0),
+            vec2(0.0, 1.0),
+        )
+
+    bad_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                vec2(1.0, 2.0),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                vec3(1.0, 2.0, 3.0),
+            ),
+        ],
+    )
+    good_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                vec3(7.0, 8.0, 9.0),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                vec3(10.0, 11.0, 12.0),
+            ),
+        ],
+    )
+
+    if function_name == "badPositionalAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    vec_box,
+                    FunctionCallNode(
+                        "VecBox",
+                        [
+                            ArrayLiteralNode([bad_match, vec3(4.0, 5.0, 6.0)]),
+                            int_literal(1),
+                        ],
+                    ),
+                )
+            ]
+        )
+    elif function_name == "badNamedAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    matrix_box,
+                    ConstructorNode(
+                        matrix_box,
+                        [],
+                        {
+                            "transforms": ArrayLiteralNode(
+                                [mat2_scalars(), vec3(1.0, 2.0, 3.0)]
+                            ),
+                            "tag": int_literal(1),
+                        },
+                    ),
+                )
+            ]
+        )
+    elif function_name == "okAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    aggregate_box,
+                    ConstructorNode(
+                        aggregate_box,
+                        [],
+                        {
+                            "values": ArrayLiteralNode(
+                                [
+                                    TernaryOpNode(
+                                        IdentifierNode("choose"),
+                                        vec3(1.0, 2.0, 3.0),
+                                        vec3(4.0, 5.0, 6.0),
+                                    ),
+                                    good_match,
+                                ]
+                            ),
+                            "transforms": ArrayLiteralNode([mat2_vectors()]),
+                            "tag": int_literal(1),
+                        },
+                    ),
+                )
+            ]
+        )
+    return ast
+
+
+@pytest.mark.parametrize(
+    ("function_name", "pattern"),
+    [
+        (
+            "badPositionalAlias",
+            r"aggregate target.*declaration box field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            "badNamedAlias",
+            r"aggregate target.*declaration box field MatrixBox\.transforms"
+            r" array literal element 2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_local_struct_aliases(
+    function_name, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(_aggregate_target_shape_local_struct_alias_ast(function_name))
+
+
+def test_aggregate_target_shape_preserves_local_struct_alias_constructors():
+    generated_code = generate_code(
+        _aggregate_target_shape_local_struct_alias_ast("okAlias")
+    )
+
+    assert "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01" in generated_code
+    assert "var box: AggregateBox = AggregateBox(" in generated_code
     assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
     assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
 
@@ -21922,6 +22144,387 @@ def test_match_guarded_literal_arm_lowers_for_mojo_codegen():
     assert "value = 1" in generated_code
     assert "else:\n        value = 2" in generated_code
     assert "Unsupported match arm" not in generated_code
+
+
+def test_mojo_compute_shader_synchronization_barriers():
+    """Issue #494: Synchronization and memory barriers in compute shader context."""
+    code = """
+    shader BarrierCompute {
+        compute {
+            void main() {
+                int sharedVal = 0;
+                sharedVal = 1;
+                barrier();
+                int result = sharedVal + 1;
+                memoryBarrier();
+                sharedVal = result;
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "_crossgl_memory_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "\n    barrier()" not in generated_code
+    assert "memoryBarrier()" not in generated_code
+    assert "workgroupBarrier()" not in generated_code
+
+
+def test_mojo_multisample_storage_image_load_store_in_compute():
+    """Issue #486: Multisample storage image handling in compute context."""
+    code = """
+    image2DMS msColor;
+    uimage2DMS msCounter;
+    iimage2DMSArray msSignedLayers;
+
+    shader MultisampleCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int sampleIdx = 0;
+                vec4 color = imageLoad(msColor, pixel, sampleIdx);
+                imageStore(msColor, pixel, sampleIdx, color);
+                uint count = imageLoad(msCounter, pixel, sampleIdx);
+                imageStore(msCounter, pixel, sampleIdx, count);
+                ivec3 layerPixel = ivec3(0, 0, 0);
+                int signedVal = imageLoad(msSignedLayers, layerPixel, sampleIdx);
+                imageStore(msSignedLayers, layerPixel, sampleIdx, signedVal);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2DMS:" in generated_code
+    assert "struct UImage2DMS:" in generated_code
+    assert "struct IImage2DMSArray:" in generated_code
+    assert "image_load(msColor, pixel, sampleIdx)" in generated_code
+    assert "image_store(msColor, pixel, sampleIdx, color)" in generated_code
+    assert "image_load(msCounter, pixel, sampleIdx)" in generated_code
+    assert "image_store(msCounter, pixel, sampleIdx, count)" in generated_code
+    assert "image_load(msSignedLayers, layerPixel, sampleIdx)" in generated_code
+    assert (
+        "image_store(msSignedLayers, layerPixel, sampleIdx, signedVal)"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32"
+        in generated_code
+    )
+
+
+def test_mojo_image_atomics_in_compute_shader():
+    """Issue #480: Image atomic operations in compute shader context."""
+    code = """
+    uimage2D counterImage;
+
+    shader AtomicCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint oldVal = imageAtomicAdd(counterImage, pixel, 1u);
+                uint maxVal = imageAtomicMax(counterImage, pixel, oldVal);
+                uint minVal = imageAtomicMin(counterImage, pixel, 0u);
+                uint andVal = imageAtomicAnd(counterImage, pixel, 0xFFu);
+                uint orVal = imageAtomicOr(counterImage, pixel, 0x01u);
+                uint xorVal = imageAtomicXor(counterImage, pixel, 0x0Fu);
+                uint exchVal = imageAtomicExchange(counterImage, pixel, 42u);
+                uint cmpVal = imageAtomicCompSwap(counterImage, pixel, 42u, 100u);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_and_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_or_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_xor_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+
+
+def test_mojo_storage_image_load_store_operations():
+    """Issue #475: RW image load/store operations."""
+    code = """
+    image2D colorImage;
+    iimage2D signedImage;
+    uimage2D counterImage;
+    image3D volumeImage;
+
+    shader StorageImageCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, color);
+                int signedVal = imageLoad(signedImage, pixel);
+                imageStore(signedImage, pixel, signedVal);
+                uint counterVal = imageLoad(counterImage, pixel);
+                imageStore(counterImage, pixel, counterVal);
+                ivec3 voxel = ivec3(0, 0, 0);
+                vec4 volumeColor = imageLoad(volumeImage, voxel);
+                imageStore(volumeImage, voxel, volumeColor);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage2D:" in generated_code
+    assert "struct Image3D:" in generated_code
+    assert "image_load(colorImage, pixel)" in generated_code
+    assert "image_store(colorImage, pixel, color)" in generated_code
+    assert "image_load(signedImage, pixel)" in generated_code
+    assert "image_store(signedImage, pixel, signedVal)" in generated_code
+    assert "image_load(counterImage, pixel)" in generated_code
+    assert "image_store(counterImage, pixel, counterVal)" in generated_code
+    assert "image_load(volumeImage, voxel)" in generated_code
+    assert "image_store(volumeImage, voxel, volumeColor)" in generated_code
+    assert (
+        "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: Image3D, coord: SIMD[DType.int32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_advanced_texture_gather_operations():
+    """Issue #470: Advanced texture operations (textureGather, cube arrays)."""
+    code = """
+    sampler2D colorMap;
+    samplerCubeArray cubeArrayMap;
+    sampler2DArray layeredMap;
+    sampler2DShadow shadowMap;
+
+    vec4 gatherColor(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv);
+    }
+    vec4 gatherCubeArray(samplerCubeArray tex, vec4 dir) {
+        return textureGather(tex, dir);
+    }
+    vec4 gatherWithOffset(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset);
+    }
+    vec4 gatherCompare(sampler2DShadow tex, vec2 uv, float refDepth) {
+        return textureGatherCompare(tex, uv, refDepth);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_TextureCubeArray" in generated_code
+    assert "_crossgl_texture_gather_offset_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
+    assert "struct Texture2D:" in generated_code
+    assert "struct TextureCubeArray:" in generated_code
+    assert "struct Texture2DShadow:" in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
+def test_mojo_multisample_texture_operations():
+    """Issue #461: Multisample texture support."""
+    code = """
+    sampler2DMS msTexture;
+    sampler2DMSArray msArrayTexture;
+
+    vec4 fetchSample(sampler2DMS tex, ivec2 pixel, int sampleIdx) {
+        return texelFetch(tex, pixel, sampleIdx);
+    }
+    vec4 fetchArraySample(sampler2DMSArray tex, ivec3 pixelLayer, int sampleIdx) {
+        return texelFetch(tex, pixelLayer, sampleIdx);
+    }
+    int getMsSampleCount(sampler2DMS tex) {
+        return textureSamples(tex);
+    }
+    ivec2 getMsSize(sampler2DMS tex) {
+        return textureSize(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DMS:" in generated_code
+    assert "struct Texture2DMSArray:" in generated_code
+    assert "texel_fetch(tex, pixel, sampleIdx)" in generated_code
+    assert "texel_fetch(tex, pixelLayer, sampleIdx)" in generated_code
+    assert "texture_samples(tex)" in generated_code
+    assert "texture_size(tex)" in generated_code
+    assert "fn texel_fetch(tex: Texture2DMS" in generated_code
+    assert "fn texel_fetch(tex: Texture2DMSArray" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert "texelFetch" not in generated_code
+    assert "textureSamples" not in generated_code
+
+
+def test_mojo_texel_fetch_operations():
+    """Issue #455: texelFetch/Load equivalents."""
+    code = """
+    sampler2D colorMap;
+    sampler1D lineMap;
+    sampler2DArray layerMap;
+
+    vec4 fetchPixel(sampler2D tex, ivec2 pixel, int lod) {
+        return texelFetch(tex, pixel, lod);
+    }
+    vec4 fetchLine(sampler1D tex, int pixel, int lod) {
+        return texelFetch(tex, pixel, lod);
+    }
+    vec4 fetchLayer(sampler2DArray tex, ivec3 pixelLayer, int lod) {
+        return texelFetch(tex, pixelLayer, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texel_fetch(tex, pixel, lod)" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
+        in generated_code
+    )
+    assert "fn texel_fetch(tex: Texture1D, coord: Int32, lod: Int32)" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DArray, coord: SIMD[DType.int32, 4], lod: Int32)"
+        in generated_code
+    )
+    assert "struct Texture2D:" in generated_code
+    assert "struct Texture1D:" in generated_code
+    assert "struct Texture2DArray:" in generated_code
+    assert "texelFetch" not in generated_code
+
+
+def test_mojo_texture_query_operations():
+    """Issue #450: textureSize/GetDimensions."""
+    code = """
+    sampler1D strip;
+    sampler2D colorMap;
+    sampler2DArray layers;
+    sampler3D volume;
+    samplerCube cubeMap;
+
+    int getStripWidth(sampler1D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec2 getMapSize(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec3 getLayerSize(sampler2DArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec3 getVolumeSize(sampler3D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec2 getCubeSize(samplerCube tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_size(tex, lod)" in generated_code
+    assert "texture_query_levels(tex)" in generated_code
+    assert "fn texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture3D, lod: Int32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: TextureCube, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "textureSize" not in generated_code
+    assert "textureQueryLevels" not in generated_code
+
+
+def test_mojo_image_size_query_for_storage_images():
+    """Issue #450: imageSize for storage images."""
+    code = """
+    image2D colorImage;
+    iimage3D signedVolume;
+    uimage2DArray counterLayers;
+
+    ivec2 getImgSize(image2D image) {
+        return imageSize(image);
+    }
+    ivec3 getSignedVolumeSize(iimage3D image) {
+        return imageSize(image);
+    }
+    ivec3 getCounterLayerSize(uimage2DArray image) {
+        return imageSize(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_size(image)" in generated_code
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "fn image_size(image: IImage3D) -> SIMD[DType.int32, 4]:" in generated_code
+    assert (
+        "fn image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in generated_code
+    )
+    assert "imageSize" not in generated_code
+
+
+def test_mojo_image_samples_query_for_multisample_images():
+    """Issue #486: imageSamples for multisample images."""
+    code = """
+    uimage2DMS msCounter;
+    image2DMS msColor;
+
+    int getCounterSamples(uimage2DMS image) {
+        return imageSamples(image);
+    }
+    int getColorSamples(image2DMS image) {
+        return imageSamples(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_samples(image)" in generated_code
+    assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "imageSamples" not in generated_code
 
 
 def test_mojo_imports():

@@ -26,10 +26,13 @@ jobs:
   sync:
     name: Assign closing-keyword issues
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout trusted base
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5

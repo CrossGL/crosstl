@@ -92,6 +92,104 @@ def test_support_matrix_generated_artifacts_are_current():
     assert "generated artifacts are current" in result.stdout
 
 
+def test_support_matrix_check_writes_machine_readable_report(tmp_path):
+    report_path = tmp_path / "support-matrix-check.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/support_matrix.py",
+            "check",
+            "--output",
+            str(report_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "Wrote" in result.stdout
+    assert report["schema_version"] == 1
+    assert report["ok"] is True
+    assert report["summary"] == {
+        "artifact_count": 3,
+        "stale_count": 0,
+        "stale_artifacts": [],
+        "total_diff_line_count": 0,
+    }
+    assert {artifact["path"] for artifact in report["artifacts"]} == {
+        "support/generated/support-matrix.json",
+        "support/generated/graphics-backend-roadmap.json",
+        "docs/source/support-matrix.rst",
+    }
+    assert all(artifact["diff"] == [] for artifact in report["artifacts"])
+
+
+def test_generated_check_report_includes_stale_artifact_diff(tmp_path, monkeypatch):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    matrix_path = tmp_path / "support-matrix.json"
+    roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    docs_path = tmp_path / "support-matrix.rst"
+    monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
+    monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
+    module.write_generated(matrix)
+    matrix_path.write_text("{}\n", encoding="utf-8")
+
+    report = module.build_generated_check_report(matrix)
+    stale_artifacts = [
+        artifact for artifact in report["artifacts"] if artifact["stale"]
+    ]
+
+    assert report["ok"] is False
+    assert report["summary"] == {
+        "artifact_count": 3,
+        "stale_count": 1,
+        "stale_artifacts": [stale_artifacts[0]["path"]],
+        "total_diff_line_count": stale_artifacts[0]["diff_line_count"],
+    }
+    assert len(stale_artifacts) == 1
+    assert stale_artifacts[0]["path"].endswith("support-matrix.json")
+    assert stale_artifacts[0]["exists"] is True
+    assert stale_artifacts[0]["actual_sha256"] != stale_artifacts[0]["expected_sha256"]
+    assert stale_artifacts[0]["diff_line_count"] == len(stale_artifacts[0]["diff"])
+    assert any(line.startswith("-{}") for line in stale_artifacts[0]["diff"])
+
+
+def test_print_generated_failures_reports_stale_artifact_summary(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    matrix_path = tmp_path / "support-matrix.json"
+    roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    docs_path = tmp_path / "support-matrix.rst"
+    monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
+    monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
+    module.write_generated(matrix)
+    matrix_path.write_text("{}\n", encoding="utf-8")
+    report = module.build_generated_check_report(matrix)
+
+    module.print_generated_failures(report)
+
+    captured = capsys.readouterr()
+    assert "Generated support matrix artifacts are stale." in captured.err
+    assert "Run: python tools/support_matrix.py update" in captured.err
+    assert "Stale artifact summary:" in captured.err
+    assert "support-matrix.json:" in captured.err
+    assert "diff lines (exists); actual=" in captured.err
+    assert "expected=" in captured.err
+    assert "Diff for" in captured.err
+
+
 def test_validate_backend_catalog_rejects_duplicate_aliases():
     module = load_support_matrix_module()
     backends = {

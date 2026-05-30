@@ -806,6 +806,306 @@ def test_metal_wave_intrinsics_emit_compile_safe_diagnostics():
     assert "WaveOpNode" not in generated_code
 
 
+def test_metal_wave_is_first_lane_lowers_to_simd_is_first():
+    shader = """
+    shader MetalWaveIsFirstLane {
+        compute {
+            void main() {
+                bool isFirst = WaveIsFirstLane();
+                uint laneIdx = WaveGetLaneIndex();
+                uint firstBroadcast = WaveReadLaneFirst(laneIdx);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "bool isFirst = simd_is_first();" in generated_code
+    assert "uint firstBroadcast = simd_broadcast_first(laneIdx);" in generated_code
+    assert "uint crossglWaveLaneIndex [[thread_index_in_simdgroup]]" in generated_code
+    assert "uint laneIdx = crossglWaveLaneIndex;" in generated_code
+    assert "WaveIsFirstLane()" not in generated_code
+    assert "WaveReadLaneFirst(" not in generated_code
+
+
+def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive():
+    shader = """
+    shader MetalWavePrefixOps {
+        compute {
+            void main() {
+                uint value = 5u;
+                bool predicate = value > 2u;
+                uint prefixSum = WavePrefixSum(value);
+                uint prefixProd = WavePrefixProduct(value);
+                uint prefixCount = WavePrefixCountBits(predicate);
+                uint countBits = WaveActiveCountBits(predicate);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint prefixSum = simd_prefix_exclusive_sum(value);" in generated_code
+    assert "uint prefixProd = simd_prefix_exclusive_product(value);" in generated_code
+    assert (
+        "uint prefixCount = simd_prefix_exclusive_sum((predicate) ? 1u : 0u);"
+        in generated_code
+    )
+    assert (
+        "uint countBits = uint(popcount(simd_vote::vote_t(simd_ballot(predicate))));"
+        in generated_code
+    )
+    assert "WavePrefixSum(" not in generated_code
+    assert "WavePrefixProduct(" not in generated_code
+    assert "WavePrefixCountBits(" not in generated_code
+    assert "WaveActiveCountBits(" not in generated_code
+
+
+def test_metal_wave_read_lane_at_lowers_to_simd_broadcast():
+    shader = """
+    shader MetalWaveReadLaneAt {
+        compute {
+            void main() {
+                uint value = 7u;
+                uint fromLane3 = WaveReadLaneAt(value, 3u);
+                uint fromFirst = WaveReadLaneFirst(value);
+                uint laneIdx = WaveGetLaneIndex();
+                uint fromDynamic = WaveReadLaneAt(value, laneIdx);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "uint fromLane3 = simd_broadcast(value, ushort(3u));" in generated_code
+    assert "uint fromFirst = simd_broadcast_first(value);" in generated_code
+    assert (
+        "uint fromDynamic = simd_broadcast(value, ushort(laneIdx));" in generated_code
+    )
+    assert "WaveReadLaneAt(" not in generated_code
+    assert "WaveReadLaneFirst(" not in generated_code
+
+
+def test_metal_wave_ballot_and_active_all_equal_vector_lowering():
+    shader = """
+    shader MetalWaveBallotAllEqual {
+        compute {
+            void main() {
+                uint scalarVal = 1u;
+                uvec3 vecVal = uvec3(1u, 2u, 3u);
+                bool scalarEqual = WaveActiveAllEqual(scalarVal);
+                bool vectorEqual = WaveActiveAllEqual(vecVal);
+                uvec4 ballot = WaveActiveBallot(scalarEqual);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "bool scalarEqual = simd_all(scalarVal == simd_broadcast_first(scalarVal));"
+        in generated_code
+    )
+    assert (
+        "bool vectorEqual = simd_all(all(vecVal == simd_broadcast_first(vecVal)));"
+        in generated_code
+    )
+    assert "uint4 ballot = __crossgl_metal_wave_ballot(scalarEqual);" in generated_code
+    assert "uint4 __crossgl_metal_wave_ballot(bool predicate)" in generated_code
+    assert "WaveActiveAllEqual(" not in generated_code
+    assert "WaveActiveBallot(" not in generated_code
+
+
+def test_metal_wave_active_reductions_lower_to_simd_intrinsics():
+    shader = """
+    shader MetalWaveActiveReductions {
+        compute {
+            void main() {
+                int value = 42;
+                int sumVal = WaveActiveSum(value);
+                int prodVal = WaveActiveProduct(value);
+                int minVal = WaveActiveMin(value);
+                int maxVal = WaveActiveMax(value);
+                int andVal = WaveActiveBitAnd(value);
+                int orVal = WaveActiveBitOr(value);
+                int xorVal = WaveActiveBitXor(value);
+                bool anyTrue = WaveActiveAnyTrue(sumVal > 0);
+                bool allTrue = WaveActiveAllTrue(prodVal > 0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "int sumVal = simd_sum(value);" in generated_code
+    assert "int prodVal = simd_product(value);" in generated_code
+    assert "int minVal = simd_min(value);" in generated_code
+    assert "int maxVal = simd_max(value);" in generated_code
+    assert "int andVal = simd_and(value);" in generated_code
+    assert "int orVal = simd_or(value);" in generated_code
+    assert "int xorVal = simd_xor(value);" in generated_code
+    assert "bool anyTrue = simd_any(sumVal > 0);" in generated_code
+    assert "bool allTrue = simd_all(prodVal > 0);" in generated_code
+    assert "WaveActiveSum(" not in generated_code
+    assert "WaveActiveProduct(" not in generated_code
+    assert "WaveActiveBitAnd(" not in generated_code
+
+
+def test_metal_quad_operations_lower_to_quad_shuffle():
+    shader = """
+    shader MetalQuadOps {
+        compute {
+            void main() {
+                float value = 1.0;
+                bool predicate = value > 0.5;
+                float quadX = QuadReadAcrossX(value);
+                float quadY = QuadReadAcrossY(quadX);
+                float quadDiag = QuadReadAcrossDiagonal(quadY);
+                float quadLane = QuadReadLaneAt(value, 2u);
+                bool anyQuad = QuadAny(predicate);
+                bool allQuad = QuadAll(predicate);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "float quadX = quad_shuffle_xor(value, ushort(1));" in generated_code
+    assert "float quadY = quad_shuffle_xor(quadX, ushort(2));" in generated_code
+    assert "float quadDiag = quad_shuffle_xor(quadY, ushort(3));" in generated_code
+    assert "float quadLane = quad_broadcast(value, ushort(2u));" in generated_code
+    assert "bool anyQuad = quad_any(predicate);" in generated_code
+    assert "bool allQuad = quad_all(predicate);" in generated_code
+    assert "QuadReadAcrossX(" not in generated_code
+    assert "QuadReadAcrossY(" not in generated_code
+    assert "QuadReadAcrossDiagonal(" not in generated_code
+    assert "QuadReadLaneAt(" not in generated_code
+    assert "QuadAny(" not in generated_code
+    assert "QuadAll(" not in generated_code
+
+
+def test_metal_texture_gather_basic_operations():
+    shader = """
+    shader MetalTextureGatherBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0) @ gl_FragColor {
+                vec4 gatherR = textureGather(colorMap, linearSampler, uv, 0);
+                vec4 gatherG = textureGather(colorMap, linearSampler, uv, 1);
+                vec4 gatherB = textureGather(colorMap, linearSampler, uv, 2);
+                vec4 gatherA = textureGather(colorMap, linearSampler, uv, 3);
+                return gatherR + gatherG + gatherB + gatherA;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "colorMap.gather(linearSampler, uv, int2(0), component::x)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, int2(0), component::y)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, int2(0), component::z)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, int2(0), component::w)" in generated_code
+    assert "textureGather(" not in generated_code
+
+
+def test_metal_texture_gather_with_offset():
+    shader = """
+    shader MetalTextureGatherOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0) @ gl_FragColor {
+                ivec2 offset = ivec2(1, -1);
+                vec4 gathered = textureGatherOffset(colorMap, linearSampler, uv, offset, 0);
+                return gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "colorMap.gather(linearSampler, uv, offset, component::x)" in generated_code
+    assert "textureGatherOffset(" not in generated_code
+
+
+def test_metal_texture_gather_compare():
+    shader = """
+    shader MetalTextureGatherCompare {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0, float depth @ texcoord1) @ gl_FragColor {
+                vec4 gathered = textureGatherCompare(shadowMap, compareSampler, uv, depth);
+                return gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "shadowMap.gather_compare(compareSampler, uv, depth)" in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
+def test_metal_texture_proj_basic_operations():
+    shader = """
+    shader MetalTextureProjBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0) @ gl_FragColor {
+                vec4 projected = textureProj(colorMap, linearSampler, projCoord);
+                return projected;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z)" in generated_code
+    )
+    assert "textureProj(" not in generated_code
+
+
+def test_metal_texture_proj_with_vec4_coord():
+    shader = """
+    shader MetalTextureProjVec4 {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec4 projCoord @ texcoord0) @ gl_FragColor {
+                vec4 projected = textureProj(colorMap, linearSampler, projCoord);
+                return projected;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.w)" in generated_code
+    )
+    assert "textureProj(" not in generated_code
+
+
 def test_metal_shared_local_variables_use_threadgroup_address_space():
     shader = """
     shader SharedLocalStorage {
@@ -25103,6 +25403,76 @@ def test_metal_resource_array_local_aliases_preserve_element_metadata():
     assert "texture2d<float> texAlias = textures;" not in fragment_code
     assert "texture2d<float, access::read_write> imageAlias = images;" not in (
         compute_code
+    )
+
+
+def test_metal_resource_array_helper_element_aliases_preserve_metadata():
+    shader = """
+    shader ResourceArrayHelperElementAliases {
+        sampler2D textures[4];
+        sampler samplers[4];
+        image2D images @rgba32f[4];
+
+        vec4 sampleAlias(
+            sampler2D texs[4],
+            sampler samps[4],
+            int layer,
+            vec2 uv
+        ) {
+            let texAlias = texs[layer];
+            let sampAlias = samps[layer];
+            return texture(texAlias, sampAlias, uv);
+        }
+
+        vec4 readAlias(image2D imgs[4] @rgba32f, int layer, ivec2 pixel) {
+            let imgAlias = imgs[layer];
+            return imageLoad(imgAlias, pixel);
+        }
+
+        void writeAlias(
+            image2D imgs[4] @rgba32f,
+            int layer,
+            ivec2 pixel,
+            vec4 value
+        ) {
+            let imgAlias = imgs[layer];
+            imageStore(imgAlias, pixel, value);
+        }
+
+        compute {
+            void main(uvec3 gid @ gl_GlobalInvocationID) {
+                int layer = int(gid.x & 3u);
+                vec4 sampled = sampleAlias(textures, samplers, layer, vec2(0.5));
+                vec4 oldValue = readAlias(images, layer, ivec2(0, 0));
+                writeAlias(images, layer, ivec2(1, 0), sampled + oldValue);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "array<texture2d<float>, 4> texs" in generated_code
+    assert "array<sampler, 4> samps" in generated_code
+    assert "array<texture2d<float, access::read_write>, 4> imgs" in generated_code
+    assert "texture2d<float> texAlias = texs[layer];" in generated_code
+    assert "sampler sampAlias = samps[layer];" in generated_code
+    assert "return texAlias.sample(sampAlias, uv);" in generated_code
+    assert (
+        "texture2d<float, access::read_write> imgAlias = imgs[layer];" in generated_code
+    )
+    assert "return imgAlias.read(uint2(pixel));" in generated_code
+    assert "imgAlias.write(value, uint2(pixel));" in generated_code
+    assert "sampleAlias(textures, samplers, layer, float2(0.5))" in generated_code
+    assert "readAlias(images, layer, int2(0, 0))" in generated_code
+    assert "writeAlias(images, layer, int2(1, 0), sampled + oldValue)" in (
+        generated_code
+    )
+    assert "texture2d<float> texAlias = texs;" not in generated_code
+    assert "texture2d<float, access::read_write> imgAlias = imgs;" not in (
+        generated_code
     )
 
 
