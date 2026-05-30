@@ -94,6 +94,39 @@ class TestCudaCodeGen:
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
 
+    def test_unsupported_graphics_pipeline_stages_raise_diagnostics(self):
+        """CUDA rejects CrossGL stages that have no CUDA shader-stage equivalent."""
+        source_code = """
+        shader UnsupportedCudaStages {
+            geometry {
+                void main() { }
+            }
+
+            tessellation_control {
+                void main() { }
+            }
+
+            tessellation_evaluation {
+                void main() { }
+            }
+
+            mesh {
+                void main() { }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                "CUDA output does not support stage type\\(s\\): "
+                "geometry, mesh, tessellation_control, tessellation_evaluation"
+            ),
+        ):
+            CudaCodeGen().generate(ast)
+
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
         """Test compute-stage helper functions are emitted before kernel calls."""
         source_code = """

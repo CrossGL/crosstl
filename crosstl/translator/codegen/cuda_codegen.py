@@ -32,6 +32,7 @@ from ..ast import (
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .resource_arrays import format_array_declarator
+from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
 
 
@@ -117,6 +118,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Generate complete CUDA source for a CrossGL AST."""
         self.output = []
         self.indent_level = 0
+        self.validate_supported_stage_types(ast_node)
         self.variable_types = {}
         self.image_resource_accesses = {}
         (
@@ -151,6 +153,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.visit(ast_node)
         self.insert_helper_functions()
         return "\n".join(self.output)
+
+    def unsupported_stage_types(self):
+        return {
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "object",
+            "amplification",
+        }
+
+    def validate_supported_stage_types(self, ast_node, target_stage=None):
+        unsupported_stages = []
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.append(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(
+                f"CUDA output does not support stage type(s): {stage_list}"
+            )
 
     def visit(self, node):
         """Dispatch an AST node to its CUDA visitor method."""

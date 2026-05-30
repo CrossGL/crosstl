@@ -465,10 +465,38 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 96,
+        "unsupported_marker_count": 103,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "def unsupported_stage_types(self):"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "unsupported_stages = []"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "if stage_name in self.unsupported_stage_types() and stage_matches("
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "unsupported_stages.append(stage_name)"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "if unsupported_stages:"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "stage_list = \", \".join(sorted(unsupported_stages))"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"CUDA output does not support stage type(s): {stage_list}\""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
           },
           {
@@ -518,34 +546,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_plain_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_plain_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "def unsupported_plain_atomic_call(self, operation, reason, fallback):"
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "\"\"\"Return diagnostic code for unsupported plain CUDA atomics.\"\"\""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} atomic call: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "def unsupported_structured_buffer_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "\"\"\"Return diagnostic code for unsupported structured-buffer atomics.\"\"\""
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} structured buffer atomic: \""
           }
         ]
       },
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 417
+        "test_count": 418
       },
       "translator_codegen": {
         "exists": true,
@@ -1170,7 +1170,7 @@
       "category": "stages",
       "feature": "Geometry stage",
       "feature_id": "stage.geometry",
-      "notes": "",
+      "notes": "CUDA codegen rejects geometry stages explicitly because CUDA has no geometry shader-stage equivalent.",
       "status": "unsupported"
     },
     {
@@ -1233,7 +1233,7 @@
       "category": "stages",
       "feature": "Tessellation stages",
       "feature_id": "stage.tessellation",
-      "notes": "",
+      "notes": "CUDA codegen rejects tessellation control and evaluation stages explicitly because CUDA has no tessellation shader-stage equivalent.",
       "status": "unsupported"
     },
     {
@@ -1314,7 +1314,7 @@
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
-      "notes": "",
+      "notes": "CUDA codegen rejects mesh, task, object, and amplification-style stages explicitly because CUDA has no mesh shader-stage equivalent.",
       "status": "unsupported"
     },
     {
@@ -2673,8 +2673,8 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
-      "status": "unsupported"
+      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+      "status": "partial"
     },
     {
       "backend": "Vulkan SPIR-V",
@@ -3310,8 +3310,10 @@
       "name": "Geometry stage",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"
+          ],
+          "notes": "CUDA codegen rejects geometry stages explicitly because CUDA has no geometry shader-stage equivalent.",
           "status": "unsupported"
         },
         "directx": {
@@ -3372,8 +3374,10 @@
       "name": "Tessellation stages",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"
+          ],
+          "notes": "CUDA codegen rejects tessellation control and evaluation stages explicitly because CUDA has no tessellation shader-stage equivalent.",
           "status": "unsupported"
         },
         "directx": {
@@ -3434,8 +3438,10 @@
       "name": "Mesh/task/amplification stages",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"
+          ],
+          "notes": "CUDA codegen rejects mesh, task, object, and amplification-style stages explicitly because CUDA has no mesh shader-stage equivalent.",
           "status": "unsupported"
         },
         "directx": {
@@ -5678,10 +5684,13 @@
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_and_mesh_intrinsics"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics"
           ],
-          "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
-          "status": "unsupported"
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+          "status": "partial"
         },
         "rust": {
           "evidence": [],
@@ -6024,10 +6033,10 @@
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 4,
+        "partial": 5,
         "supported": 38,
         "unknown": 0,
-        "unsupported": 1,
+        "unsupported": 0,
         "validated_rejection": 0
       },
       "rust": {
