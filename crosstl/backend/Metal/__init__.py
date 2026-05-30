@@ -1,5 +1,5 @@
 """Metal source backend exports for CrossGL Translator."""
 
-from .MetalParser import MetalParser
-from .MetalLexer import MetalLexer
 from .MetalCrossGLCodeGen import MetalToCrossGLConverter
+from .MetalLexer import MetalLexer
+from .MetalParser import MetalParser

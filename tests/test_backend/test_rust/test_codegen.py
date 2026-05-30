@@ -1,9 +1,7 @@
 import pytest
+
 import crosstl
 import crosstl.translator
-from crosstl.backend.Rust.RustLexer import RustLexer
-from crosstl.backend.Rust.RustParser import RustParser
-from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustAst import (
     BinaryOpNode,
     BlockNode,
@@ -15,6 +13,9 @@ from crosstl.backend.Rust.RustAst import (
     ShaderNode,
     VariableNode,
 )
+from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
+from crosstl.backend.Rust.RustLexer import RustLexer
+from crosstl.backend.Rust.RustParser import RustParser
 
 
 def parse_and_generate(code: str) -> str:

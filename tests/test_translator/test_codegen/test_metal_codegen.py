@@ -11861,7 +11861,7 @@ def test_else_if_statement():
                 void main() {
                     float result = add(1.0, 2.0);
                 }
-                
+
                 float add(float a, float b) {
                     return a + b;
                 }
@@ -11971,8 +11971,8 @@ def test_bitwise_or_operator():
         VSOutput main(VSInput input) {
             VSOutput output;
             // Use bitwise AND on texture coordinates (for testing purposes)
-            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15), 
-                                float(int(input.texCoord.y * 100.0) | 15), 
+            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15),
+                                float(int(input.texCoord.y * 100.0) | 15),
                                 0.0, 1.0);
             return output;
         }
@@ -12001,19 +12001,19 @@ def test_metal_texture_types():
         sampler2D albedoMap;
         sampler2D environmentMap;
         sampler2D depthMap;
-        
+
         struct VSOutput {
             vec2 texCoord;
             vec4 position @ gl_Position;
         };
-        
+
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
                 vec4 albedo = texture(albedoMap, input.texCoord);
                 vec3 normal = normalize(vec3(0.0, 1.0, 0.0));
                 vec4 reflection = texture(environmentMap, normalize(normal));
                 float depth = texture(depthMap, input.texCoord).r;
-                
+
                 return albedo * depth;
             }
         }
@@ -12046,17 +12046,17 @@ def test_metal_attributes_semantics():
             vec3 normal @ NORMAL;
             vec2 texCoord @ TEXCOORD0;
         };
-        
+
         struct VSOutput {
             vec4 position @ gl_Position;
             vec3 worldNormal;
             vec2 texCoord;
         };
-        
+
         struct FSOutput {
             vec4 color @ gl_FragColor;
         };
-        
+
         vertex {
             VSOutput main(VSInput input, uint vertexID @ gl_VertexID) {
                 VSOutput output;
@@ -12066,7 +12066,7 @@ def test_metal_attributes_semantics():
                 return output;
             }
         }
-        
+
         fragment {
             FSOutput main(VSOutput input) {
                 FSOutput output;
@@ -12113,7 +12113,7 @@ def test_metal_vector_type_conversions():
             mat3 mat3Field;
             mat4 mat4Field;
         };
-        
+
         vertex {
             TestTypes main() {
                 TestTypes output;
@@ -12123,12 +12123,12 @@ def test_metal_vector_type_conversions():
                 output.ivec2Field = ivec2(1, 2);
                 output.ivec3Field = ivec3(1, 2, 3);
                 output.ivec4Field = ivec4(1, 2, 3, 4);
-                
+
                 // Set matrix fields
                 output.mat2Field = mat2(1.0, 0.0, 0.0, 1.0);
                 output.mat3Field = mat3(1.0);
                 output.mat4Field = mat4(1.0);
-                
+
                 return output;
             }
         }
@@ -12165,25 +12165,25 @@ def test_metal_texture_sampling():
         sampler2D colorMap;
         sampler2D normalMap;
         sampler2D envMap;
-        
+
         struct VSOutput {
             vec2 texCoord;
             vec3 normal;
             vec3 viewDir;
         };
-        
+
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
                 // Basic sampling
                 vec4 color = texture(colorMap, input.texCoord);
-                
+
                 // Component selection after sampling
                 vec3 normalTS = texture(normalMap, input.texCoord).rgb;
-                
+
                 // Sampling with direction
                 vec3 reflectDir = normalize(input.normal);
                 vec4 reflectionColor = texture(envMap, input.texCoord);
-                
+
                 // Combined result
                 return color;
             }
@@ -12219,13 +12219,13 @@ def test_metal_constant_buffer():
             float roughness;
             vec2 textureScale;
         };
-        
+
         MaterialParams material;
-        
+
         struct VSOutput {
             vec2 texCoord;
         };
-        
+
         fragment {
             vec4 main(VSOutput input) @ gl_FragColor {
                 vec2 scaledTexCoord = input.texCoord * material.textureScale;
@@ -12276,23 +12276,23 @@ def test_metal_array_handling(array_test_data):
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             return output;
         }
     }

@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 
 
@@ -260,7 +262,7 @@ def test_attributes_tokenization():
     @value
     struct MyStruct:
         var data: Int32
-    
+
     @compute_shader
     fn compute_main():
         pass

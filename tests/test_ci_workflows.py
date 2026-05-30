@@ -1,10 +1,10 @@
-from pathlib import Path
 import copy
 import importlib.util
 import json
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -60,7 +60,7 @@ def _parse_matrix_values(raw):
 
 def _matrix_values(workflow_text, key):
     inline = re.search(
-        r"^\s*{}:\s*(\[[^\n]+\])\s*$".format(re.escape(key)),
+        rf"^\s*{re.escape(key)}:\s*(\[[^\n]+\])\s*$",
         workflow_text,
         flags=re.MULTILINE,
     )
@@ -68,13 +68,13 @@ def _matrix_values(workflow_text, key):
         return _parse_matrix_values(inline.group(1))
 
     block = re.search(
-        r"^\s*{}:\s*\n\s*\[\s*(.*?)\s*\]".format(re.escape(key)),
+        rf"^\s*{re.escape(key)}:\s*\n\s*\[\s*(.*?)\s*\]",
         workflow_text,
         flags=re.MULTILINE | re.DOTALL,
     )
     if block:
         return _parse_matrix_values(block.group(1))
-    raise AssertionError("matrix key not found: {}".format(key))
+    raise AssertionError(f"matrix key not found: {key}")
 
 
 def test_ci_runs_the_complete_pytest_suite_on_pull_requests_and_pushes():

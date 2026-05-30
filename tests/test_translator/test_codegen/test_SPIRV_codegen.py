@@ -4,32 +4,31 @@ import subprocess
 
 import pytest
 
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
-from crosstl.translator.codegen.SPIRV_codegen import (
-    SpirvType,
-    SpirvId,
-    VulkanSPIRVCodeGen,
-)
 from crosstl.translator.ast import (
-    ShaderNode,
-    StageNode,
-    StructNode,
-    EnumNode,
-    VariableNode,
-    FunctionNode,
-    AssignmentNode,
-    ReturnNode,
     BinaryOpNode,
-    ExecutionModel,
-    PrimitiveType,
     BlockNode,
+    EnumNode,
+    ExecutionModel,
     ExpressionStatementNode,
+    FunctionNode,
     MeshOpNode,
+    PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReturnNode,
+    ShaderNode,
     ShaderStage,
+    StageNode,
+    StructNode,
+    VariableNode,
 )
+from crosstl.translator.codegen.SPIRV_codegen import (
+    SpirvId,
+    SpirvType,
+    VulkanSPIRVCodeGen,
+)
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def spirv_named_ids(spv_code, name):
@@ -8154,28 +8153,28 @@ class TestVulkanSPIRVCodeGen:
         self, tmp_path, helper_source, payload_expression
     ):
         source_code = """
-        shader TaskHelperPayloadSPIRV {
-            struct TaskPayloadA {
+        shader TaskHelperPayloadSPIRV {{
+            struct TaskPayloadA {{
                 uint meshlet;
-            };
+            }};
 
-            struct TaskPayloadB {
+            struct TaskPayloadB {{
                 uint other;
-            };
+            }};
 
-            task {
+            task {{
                 @taskPayloadSharedEXT TaskPayloadA payloadA;
                 @taskPayloadSharedEXT TaskPayloadB payloadB;
 
-                %s
+                {}
 
-                void main() @numthreads(1, 1, 1) {
-                    DispatchMesh(2, 3, 4, %s);
+                void main() @numthreads(1, 1, 1) {{
+                    DispatchMesh(2, 3, 4, {});
                     int afterDispatch = 1;
-                }
-            }
-        }
-        """ % (helper_source, payload_expression)
+                }}
+            }}
+        }}
+        """.format(helper_source, payload_expression)
 
         ast = Parser(Lexer(source_code).tokens).parse()
         spv_code = VulkanSPIRVCodeGen().generate(ast)

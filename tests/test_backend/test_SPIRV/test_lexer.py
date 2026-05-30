@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 
 

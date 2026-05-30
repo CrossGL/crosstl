@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from crosstl.translator.ast import (
     ArrayAccessNode,

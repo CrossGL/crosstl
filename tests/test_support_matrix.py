@@ -1,5 +1,5 @@
-import json
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -50,7 +50,7 @@ def _backend(backend_id, aliases, extension):
         "translator_codegen": codegen_path,
         "native_backend": native_backend,
         "tests": [test_path],
-        "docs": [{"name": "Docs", "url": "https://example.com/{}".format(backend_id)}],
+        "docs": [{"name": "Docs", "url": f"https://example.com/{backend_id}"}],
     }
 
 

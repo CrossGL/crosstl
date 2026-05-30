@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
-from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
+from collections import Counter
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -280,7 +280,7 @@ def render_markdown(summary: dict[str, Any], sample_limit: int = 20) -> str:
             )
         omitted = len(summary["failures"]) - sample_limit
         if omitted > 0:
-            lines.append("- Additional failures omitted: {}".format(omitted))
+            lines.append(f"- Additional failures omitted: {omitted}")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -289,7 +289,7 @@ def write_output(path: Path | None, text: str) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
-    print("Wrote {}".format(display_path(path)))
+    print(f"Wrote {display_path(path)}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

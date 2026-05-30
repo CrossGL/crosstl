@@ -386,7 +386,7 @@ jobs:
           backends = ['metal', 'directx', 'opengl', 'vulkan']
           extensions = {
               'metal': '.metal',
-              'directx': '.hlsl', 
+              'directx': '.hlsl',
               'opengl': '.glsl',
               'vulkan': '.spirv'
           }

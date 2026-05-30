@@ -1,7 +1,7 @@
 import importlib.util
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "sync_pr_issue_links.py"
@@ -38,16 +38,14 @@ class FakeClient:
     def get_issue(self, number):
         issue = self.issues.get(number)
         if issue is None:
-            raise self.module.GitHubApiError(
-                "GET", "/issues/{}".format(number), 404, ""
-            )
+            raise self.module.GitHubApiError("GET", f"/issues/{number}", 404, "")
         return issue
 
     def add_issue_assignee(self, number, login):
         error_status = self.assign_errors.get(number)
         if error_status is not None:
             raise self.module.GitHubApiError(
-                "POST", "/issues/{}/assignees".format(number), error_status, ""
+                "POST", f"/issues/{number}/assignees", error_status, ""
             )
         self.assigned.append((number, login))
         self.issues[number].setdefault("assignees", []).append({"login": login})

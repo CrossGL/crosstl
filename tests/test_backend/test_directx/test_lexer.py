@@ -1,5 +1,6 @@
-import pytest
 from typing import Iterable, List
+
+import pytest
 
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 

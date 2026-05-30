@@ -3,30 +3,6 @@
 # pylint: disable=unused-import
 from crosstl.backend.common_ast import (
     ASTNode,
-    ShaderNode,
-    VariableNode,
-    AssignmentNode,
-    FunctionNode,
-    ArrayAccessNode,
-    BinaryOpNode,
-    UnaryOpNode,
-    ReturnNode,
-    FunctionCallNode,
-    IfNode,
-    ForNode,
-    WhileNode,
-    DoWhileNode,
-    VectorConstructorNode,
-    MemberAccessNode,
-    TernaryOpNode,
-    StructNode,
-    SwitchNode,
-    CaseNode,
-    PostfixOpNode,
-    BreakNode,
-    ContinueNode,
-    DiscardNode,
-    InitializerListNode,
 )
 
 # GLSL-specific nodes

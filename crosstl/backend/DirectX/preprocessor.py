@@ -256,7 +256,7 @@ class HLSLPreprocessor:
         for base in search_paths:
             candidate = os.path.join(base, target)
             if os.path.isfile(candidate):
-                with open(candidate, "r", encoding="utf-8") as handle:
+                with open(candidate, encoding="utf-8") as handle:
                     return handle.read(), candidate
 
         if self.strict:

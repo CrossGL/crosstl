@@ -1,8 +1,8 @@
 """Lexer for importing Rust source into CrossGL Translator."""
 
 import re
-from typing import Iterator, Tuple, List
 from enum import Enum, auto
+from typing import Iterator, List, Tuple
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -423,7 +423,7 @@ class RustLexer:
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "RustLexer":
         """Create a lexer instance from a Rust source file."""
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             return cls(f.read())
 
 

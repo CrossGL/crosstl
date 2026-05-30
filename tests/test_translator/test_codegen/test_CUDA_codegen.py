@@ -4,12 +4,11 @@ import shutil
 import subprocess
 
 import pytest
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
+
 from crosstl.translator.ast import (
-    AssignmentNode,
     ArrayAccessNode,
     ArrayType,
+    AssignmentNode,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
@@ -26,6 +25,8 @@ from crosstl.translator.ast import (
     VariableNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):

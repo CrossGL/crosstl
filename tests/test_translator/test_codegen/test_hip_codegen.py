@@ -4,11 +4,10 @@ import shutil
 import subprocess
 
 import pytest
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
+
 from crosstl.translator.ast import (
-    AssignmentNode,
     ArrayAccessNode,
+    AssignmentNode,
     BlockNode,
     ConstructorPatternNode,
     ExecutionModel,
@@ -16,7 +15,6 @@ from crosstl.translator.ast import (
     FunctionNode,
     IdentifierNode,
     LiteralNode,
-    LiteralPatternNode,
     MatchArmNode,
     MatchNode,
     MemberAccessNode,
@@ -29,6 +27,8 @@ from crosstl.translator.ast import (
     WildcardPatternNode,
 )
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def compile_hip_if_hipcc_available(hip_code, tmp_path):
@@ -8325,7 +8325,7 @@ class TestHipCodeGen:
                     } else {
                         i = i - 1;
                     }
-                    
+
                     for (int j = 0; j < 10; j++) {
                         i = i * 2;
                     }

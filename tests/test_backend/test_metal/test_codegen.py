@@ -1,13 +1,15 @@
 import re
-import pytest
 from typing import List
+
+import pytest
+
+from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
-from crosstl.backend.Metal.MetalCrossGLCodeGen import MetalToCrossGLConverter
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser

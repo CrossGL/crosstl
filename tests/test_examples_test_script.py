@@ -1,6 +1,6 @@
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "examples" / "test.py"
@@ -46,7 +46,7 @@ def test_build_summary_records_regression_budget_and_failures():
 def test_build_summary_accepts_current_known_failure_budget():
     module = load_examples_test_module()
     failures = [
-        ("KnownFailure{}".format(index), "backend", "expected")
+        (f"KnownFailure{index}", "backend", "expected")
         for index in range(module.KNOWN_FAILURE_BUDGET)
     ]
 

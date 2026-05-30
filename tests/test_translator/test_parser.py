@@ -1,8 +1,8 @@
-from crosstl.translator.lexer import Lexer
-import pytest
 from pathlib import Path
 from typing import List
-from crosstl.translator.parser import Parser
+
+import pytest
+
 from crosstl.translator.ast import (
     ArrayType,
     AssignmentNode,
@@ -17,12 +17,15 @@ from crosstl.translator.ast import (
     LoopNode,
     MatrixType,
     MemberAccessNode,
+    MeshOpNode,
     NamedType,
-    PointerType,
     PointerAccessNode,
+    PointerType,
     PreprocessorNode,
     PrimitiveType,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReferenceType,
     ShaderNode,
     ShaderStage,
@@ -31,10 +34,9 @@ from crosstl.translator.ast import (
     VariableNode,
     VectorType,
     WaveOpNode,
-    RayTracingOpNode,
-    MeshOpNode,
-    RayQueryOpNode,
 )
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -755,8 +757,8 @@ def test_and_operator():
         VSOutput main(VSInput input) {
             VSOutput output;
             // Use bitwise AND on texture coordinates (for testing purposes)
-            output.color = vec4(float(int(input.texCoord.x * 100.0) & 15), 
-                                float(int(input.texCoord.y * 100.0) & 15), 
+            output.color = vec4(float(int(input.texCoord.x * 100.0) & 15),
+                                float(int(input.texCoord.y * 100.0) & 15),
                                 0.0, 1.0);
             return output;
         }
@@ -903,7 +905,7 @@ def test_array_syntax():
     struct VSOutput {
         vec4 color @ COLOR;
     };
-    
+
     struct Particle {
         vec3 position;
         vec3 velocity;
@@ -922,24 +924,24 @@ def test_array_syntax():
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
             particles[index].velocity = vec3(1.0, 0.0, 0.0);
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             return output;
         }
     }

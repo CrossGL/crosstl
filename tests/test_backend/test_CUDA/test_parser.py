@@ -1,8 +1,7 @@
 """Test CUDA Parser"""
 
 import pytest
-from crosstl.backend.CUDA.CudaLexer import CudaLexer
-from crosstl.backend.CUDA.CudaParser import CudaParser
+
 from crosstl.backend.CUDA.CudaAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -23,13 +22,15 @@ from crosstl.backend.CUDA.CudaAst import (
     ReturnNode,
     ShaderNode,
     SharedMemoryNode,
-    SyncNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
 )
+from crosstl.backend.CUDA.CudaLexer import CudaLexer
+from crosstl.backend.CUDA.CudaParser import CudaParser
 
 
 class TestCudaParser:

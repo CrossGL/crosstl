@@ -2,13 +2,13 @@ import textwrap
 
 import pytest
 
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 VERTEX_GLSL = textwrap.dedent("""
     #version 450 core

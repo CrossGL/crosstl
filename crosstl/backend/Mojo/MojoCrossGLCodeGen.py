@@ -3,8 +3,8 @@
 import re
 
 from .MojoAst import *
-from .MojoParser import *
 from .MojoLexer import *
+from .MojoParser import *
 
 
 class MojoToCrossGLConverter:

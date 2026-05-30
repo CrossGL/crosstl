@@ -10,14 +10,14 @@ from crosstl.translator.codegen.stage_utils import (
     collect_stage_local_variables,
     compute_local_size,
     deduplicate_named_declarations,
+    normalize_stage_name,
+    order_functions_by_dependencies,
+    should_emit_qualified_function,
     stage_layout_entries,
     stage_layout_entry,
     stage_layout_entry_arguments,
     stage_layout_entry_value,
     stage_layout_qualifiers,
-    normalize_stage_name,
-    order_functions_by_dependencies,
-    should_emit_qualified_function,
     stage_matches,
 )
 
@@ -105,8 +105,7 @@ class DummyAst:
 
 def walk_dummy_nodes(root):
     if isinstance(root, list):
-        for item in root:
-            yield item
+        yield from root
     elif root is not None:
         yield root
 

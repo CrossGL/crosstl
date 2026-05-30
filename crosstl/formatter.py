@@ -1,12 +1,12 @@
 """Formatting helpers for generated shader and compute source code."""
 
+import logging
 import os
+import shutil
 import subprocess
 import tempfile
-from pathlib import Path
 from enum import Enum
-import logging
-import shutil
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +140,7 @@ class CodeFormatter:
                 logger.error(f"clang-format failed: {result.stderr}")
                 return code
 
-            with open(tmp_path, "r") as f:
+            with open(tmp_path) as f:
                 formatted_code = f.read()
 
             return formatted_code
@@ -267,7 +267,7 @@ def format_file(file_path, language=None):
     formatter = CodeFormatter()
 
     try:
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             code = f.read()
 
         formatted_code = formatter.format_code(code, language, file_path)

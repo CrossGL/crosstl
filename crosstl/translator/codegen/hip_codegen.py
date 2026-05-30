@@ -7,19 +7,17 @@ for GPU programming.
 """
 
 from ..ast import (
-    ASTNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ASTNode,
     BreakNode,
     CbufferNode,
     ContinueNode,
-    ForInNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
     LiteralPatternNode,
-    MatchNode,
     MemberAccessNode,
     PrimitiveType,
     RangeNode,
@@ -29,9 +27,9 @@ from ..ast import (
     VariableNode,
     WildcardPatternNode,
 )
+from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .resource_arrays import format_array_declarator
 from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
 

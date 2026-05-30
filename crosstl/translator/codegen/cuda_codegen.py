@@ -1,37 +1,29 @@
 """CrossGL-to-CUDA code generator."""
 
 from ..ast import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
     ContinueNode,
-    ForInNode,
-    ForNode,
-    IfNode,
-    LiteralPatternNode,
-    LiteralNode,
-    RangeNode,
-    ReturnNode,
-    StructNode,
-    VariableNode,
-    ArrayAccessNode,
-    ArrayLiteralNode,
-    ArrayNode,
-    ShaderNode,
-    FunctionNode,
-    FunctionCallNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
+    IfNode,
+    LiteralNode,
+    LiteralPatternNode,
     MemberAccessNode,
     PointerAccessNode,
-    UnaryOpNode,
+    RangeNode,
+    ReturnNode,
     TernaryOpNode,
-    BlockNode,
+    UnaryOpNode,
+    VariableNode,
     WildcardPatternNode,
 )
+from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .resource_arrays import format_array_declarator
 from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
 

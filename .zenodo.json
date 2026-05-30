@@ -14,7 +14,7 @@
     ],
     "keywords": [
         "programming languages",
-        "code translation", 
+        "code translation",
         "cross-platform development",
         "GPU computing",
         "graphics programming",
@@ -34,7 +34,7 @@
             "relation": "isDocumentedBy"
         },
         {
-            "scheme": "url", 
+            "scheme": "url",
             "identifier": "https://crossgl.github.io/crossgl-docs/",
             "relation": "isDocumentedBy"
         }

@@ -2,8 +2,8 @@ import pytest
 
 from crosstl.translator import parse
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen

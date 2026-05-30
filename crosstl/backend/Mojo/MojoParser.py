@@ -1,7 +1,7 @@
 """Parser for Mojo source AST construction."""
 
-from .MojoLexer import *
 from .MojoAst import *
+from .MojoLexer import *
 
 
 class MojoParser:

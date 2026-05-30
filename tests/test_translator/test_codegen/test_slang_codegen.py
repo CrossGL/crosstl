@@ -1,9 +1,9 @@
-from crosstl.translator.lexer import Lexer
-import pytest
 import shutil
 import subprocess
 from typing import List
-from crosstl.translator.parser import Parser
+
+import pytest
+
 from crosstl.translator.ast import (
     ArrayAccessNode,
     AtomicOpNode,
@@ -15,6 +15,8 @@ from crosstl.translator.ast import (
     PrimitiveType,
 )
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:

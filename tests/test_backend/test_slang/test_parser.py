@@ -1,7 +1,8 @@
-import pytest
 from typing import List
-from crosstl.backend.slang import SlangLexer
-from crosstl.backend.slang import SlangParser
+
+import pytest
+
+from crosstl.backend.slang import SlangLexer, SlangParser
 from crosstl.backend.slang.SlangAst import (
     ArrayAccessNode,
     AssignmentNode,

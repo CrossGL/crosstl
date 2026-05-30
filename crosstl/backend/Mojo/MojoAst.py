@@ -1,9 +1,9 @@
 """Mojo AST Node definitions"""
 
 from ..common_ast import (
-    ASTNode,
     ArrayAccessNode,
     AssignmentNode,
+    ASTNode,
     AttributeNode,
     BinaryOpNode,
     BreakNode,

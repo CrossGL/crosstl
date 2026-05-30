@@ -1,11 +1,11 @@
 import pytest
 
 import crosstl.translator
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 

@@ -12926,7 +12926,7 @@ fragment {
                 void main() {
                     float result = add(1.0, 2.0);
                 }
-                
+
                 float add(float a, float b) {
                     return a + b;
                 }
@@ -13077,8 +13077,8 @@ def test_bitwise_and_operator():
         VSOutput main(VSInput input) {
             VSOutput output;
             // Use bitwise AND on texture coordinates (for testing purposes)
-            output.color = vec4(float(int(input.texCoord.x * 100.0) & 15), 
-                                float(int(input.texCoord.y * 100.0) & 15), 
+            output.color = vec4(float(int(input.texCoord.x * 100.0) & 15),
+                                float(int(input.texCoord.y * 100.0) & 15),
                                 0.0, 1.0);
             return output;
         }
@@ -13206,8 +13206,8 @@ def test_bitwise_or_operator():
         VSOutput main(VSInput input) {
             VSOutput output;
             // Use bitwise OR on texture coordinates (for testing purposes)
-            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15), 
-                                float(int(input.texCoord.y * 100.0) | 15), 
+            output.color = vec4(float(int(input.texCoord.x * 100.0) | 15),
+                                float(int(input.texCoord.y * 100.0) | 15),
                                 0.0, 1.0);
             return output;
         }
@@ -13251,23 +13251,23 @@ def test_directx_array_handling(array_test_data):
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             return output;
         }
     }

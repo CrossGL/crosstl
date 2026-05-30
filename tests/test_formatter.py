@@ -1,9 +1,9 @@
 from unittest import mock
-import pytest
+
 
 from crosstl.formatter import (
-    ShaderLanguage,
     CodeFormatter,
+    ShaderLanguage,
     format_file,
     format_shader_code,
 )

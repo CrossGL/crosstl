@@ -1,7 +1,7 @@
 """Canonical CrossGL abstract syntax tree node definitions."""
 
-from typing import List, Optional, Any, Union, Dict
 from enum import Enum
+from typing import Any, Dict, List, Optional, Union
 
 
 class ASTNode:

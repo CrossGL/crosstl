@@ -1,11 +1,12 @@
-import pytest
-import crosstl.translator
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
+from typing import List
+
+import pytest
+
+import crosstl.translator
 from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -17,6 +18,8 @@ from crosstl.translator.ast import (
     BreakNode,
     ConstructorNode,
     ConstructorPatternNode,
+    EnumNode,
+    EnumVariantNode,
     ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
@@ -28,8 +31,8 @@ from crosstl.translator.ast import (
     IdentifierPatternNode,
     IfNode,
     LambdaNode,
-    LiteralPatternNode,
     LiteralNode,
+    LiteralPatternNode,
     LoopNode,
     MatchArmNode,
     MatchNode,
@@ -43,16 +46,15 @@ from crosstl.translator.ast import (
     ShaderNode,
     ShaderStage,
     StructMemberNode,
-    StructPatternNode,
     StructNode,
-    EnumNode,
-    EnumVariantNode,
+    StructPatternNode,
     TernaryOpNode,
     VariableNode,
     WhileNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
-from typing import List
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:

@@ -2,20 +2,20 @@ shader PerlinNoise {
     struct VertexInput {
         vec3 position;
     }
-    
+
     struct VertexOutput {
         vec2 uv;
         vec4 position;
     }
-    
+
     struct FragmentInput {
         vec2 uv;
     }
-    
+
     struct FragmentOutput {
         vec4 color;
     }
-    
+
     vertex {
         VertexOutput main(VertexInput input) {
             VertexOutput output;

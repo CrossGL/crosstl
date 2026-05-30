@@ -1,8 +1,8 @@
 """Lexer for importing CUDA source into CrossGL Translator."""
 
 import re
-from typing import Iterator, Tuple, List
 from enum import Enum, auto
+from typing import Iterator, List, Tuple
 
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
@@ -491,7 +491,7 @@ class CudaLexer:
     @classmethod
     def from_file(cls, filepath: str) -> "CudaLexer":
         """Create a lexer instance from a file"""
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             return cls(f.read())
 
 

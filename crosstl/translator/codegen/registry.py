@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Optional, Sequence, Type, Any
+from typing import Any, Iterable, Sequence
 
 
 def _normalize_backend_name(name: str) -> str:
@@ -17,18 +17,18 @@ class BackendSpec:
     """Descriptor for a target code generator backend."""
 
     name: str
-    codegen_class: Type[Any]
+    codegen_class: type[Any]
     aliases: Sequence[str] = ()
     file_extensions: Sequence[str] = ()
-    format_backend: Optional[str] = None
+    format_backend: str | None = None
 
 
 class BackendRegistry:
     """Lookup table for target code generators by backend name and alias."""
 
     def __init__(self) -> None:
-        self._by_name: Dict[str, BackendSpec] = {}
-        self._by_alias: Dict[str, str] = {}
+        self._by_name: dict[str, BackendSpec] = {}
+        self._by_alias: dict[str, str] = {}
 
     def register(self, spec: BackendSpec, *, overwrite: bool = False) -> BackendSpec:
         """Register a backend spec and all of its aliases."""
@@ -51,7 +51,7 @@ class BackendRegistry:
 
         return spec
 
-    def resolve_name(self, name: str) -> Optional[str]:
+    def resolve_name(self, name: str) -> str | None:
         """Resolve a backend name or alias to its canonical registry name."""
         if not name:
             return None
@@ -60,7 +60,7 @@ class BackendRegistry:
             return key
         return self._by_alias.get(key)
 
-    def get(self, name: str) -> Optional[BackendSpec]:
+    def get(self, name: str) -> BackendSpec | None:
         """Return the backend spec registered for a name or alias."""
         resolved = self.resolve_name(name)
         if not resolved:
@@ -75,7 +75,7 @@ class BackendRegistry:
         """Return registered canonical backend names in sorted order."""
         return sorted(self._by_name.keys())
 
-    def aliases(self) -> Dict[str, str]:
+    def aliases(self) -> dict[str, str]:
         """Return a copy of the alias-to-backend mapping."""
         return dict(self._by_alias)
 
@@ -88,12 +88,12 @@ def register_backend(spec: BackendSpec, *, overwrite: bool = False) -> BackendSp
     return BACKEND_REGISTRY.register(spec, overwrite=overwrite)
 
 
-def normalize_backend_name(name: str) -> Optional[str]:
+def normalize_backend_name(name: str) -> str | None:
     """Resolve a backend name or alias through the global registry."""
     return BACKEND_REGISTRY.resolve_name(name)
 
 
-def get_backend(name: str) -> Optional[BackendSpec]:
+def get_backend(name: str) -> BackendSpec | None:
     """Return a backend spec from the global registry."""
     return BACKEND_REGISTRY.get(name)
 
@@ -103,7 +103,7 @@ def backend_names() -> Sequence[str]:
     return BACKEND_REGISTRY.names()
 
 
-def get_backend_extension(name: str) -> Optional[str]:
+def get_backend_extension(name: str) -> str | None:
     """Return the preferred output extension for a backend, if known."""
     spec = BACKEND_REGISTRY.get(name)
     if not spec or not spec.file_extensions:

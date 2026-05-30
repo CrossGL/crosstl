@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
 import json
-from pathlib import Path
 import sys
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,7 +121,7 @@ def invalid_field_error(
     return load_error(
         path,
         "InvalidReportField",
-        "{} must be {}, got {}".format(field, expected, value_type_label(value)),
+        f"{field} must be {expected}, got {value_type_label(value)}",
     )
 
 
@@ -164,7 +164,7 @@ def validate_nested_field_types(
         if not value_matches_type(value, expected_type):
             return invalid_field_error(
                 path,
-                "{}.{}".format(prefix, field),
+                f"{prefix}.{field}",
                 expected_type,
                 value,
             )
@@ -199,9 +199,7 @@ def validate_counter_map(
     for counter in counters:
         counter_value = value[counter]
         if not value_matches_type(counter_value, int):
-            return invalid_field_error(
-                path, "{}.{}".format(field, counter), int, counter_value
-            )
+            return invalid_field_error(path, f"{field}.{counter}", int, counter_value)
     return None
 
 
@@ -232,7 +230,7 @@ def validate_optional_object_list(
         if not isinstance(item, dict):
             return invalid_field_error(
                 path,
-                "{}[{}]".format(field, index),
+                f"{field}[{index}]",
                 dict,
                 item,
             )
@@ -252,7 +250,7 @@ def validate_mode(
         return load_error(
             path,
             "InvalidReportField",
-            "{} must be dry-run or sync, got {}".format(field, mode),
+            f"{field} must be dry-run or sync, got {mode}",
         )
     return None
 
@@ -271,7 +269,7 @@ def validate_budget_contract(
         if bool_field in value and not value_matches_type(value[bool_field], bool):
             return invalid_field_error(
                 path,
-                "{}.{}".format(field, bool_field),
+                f"{field}.{bool_field}",
                 bool,
                 value[bool_field],
             )
@@ -280,14 +278,14 @@ def validate_budget_contract(
         and "ok" in value
         and not value_matches_type(value["ok"], bool)
     ):
-        return invalid_field_error(path, "{}.ok".format(field), bool, value["ok"])
+        return invalid_field_error(path, f"{field}.ok", bool, value["ok"])
     violations = value.get("violations")
     if violations is None:
         return None
     if not isinstance(violations, list):
         return invalid_field_error(
             path,
-            "{}.violations".format(field),
+            f"{field}.violations",
             list,
             violations,
         )
@@ -295,7 +293,7 @@ def validate_budget_contract(
         if not isinstance(violation, dict):
             return invalid_field_error(
                 path,
-                "{}.violations[{}]".format(field, index),
+                f"{field}.violations[{index}]",
                 dict,
                 violation,
             )
@@ -336,7 +334,7 @@ def validate_matrix_check_contract(
         if not isinstance(artifact_path, str):
             return invalid_field_error(
                 path,
-                "summary.stale_artifacts[{}]".format(index),
+                f"summary.stale_artifacts[{index}]",
                 str,
                 artifact_path,
             )
@@ -347,7 +345,7 @@ def validate_matrix_check_contract(
         error = validate_nested_field_types(
             artifact,
             path,
-            "artifacts[{}]".format(index),
+            f"artifacts[{index}]",
             {
                 "path": str,
                 "exists": bool,
@@ -359,9 +357,7 @@ def validate_matrix_check_contract(
             return error
         diff = artifact.get("diff")
         if diff is not None and not isinstance(diff, list):
-            return invalid_field_error(
-                path, "artifacts[{}].diff".format(index), list, diff
-            )
+            return invalid_field_error(path, f"artifacts[{index}].diff", list, diff)
     return None
 
 
@@ -427,12 +423,12 @@ def validate_issue_plan_contract(
             return load_error(
                 path,
                 "MissingReportFields",
-                "existing missing required counters: {}".format(counter),
+                f"existing missing required counters: {counter}",
             )
         if not value_matches_type(existing[counter], int):
             return invalid_field_error(
                 path,
-                "existing.{}".format(counter),
+                f"existing.{counter}",
                 int,
                 existing[counter],
             )
@@ -586,7 +582,7 @@ def load_optional_json(
         return load_error(
             path,
             "InvalidReportType",
-            "expected JSON object, got {}".format(type(data).__name__),
+            f"expected JSON object, got {type(data).__name__}",
         )
     schema_error = validate_report_schema(
         data,
@@ -639,8 +635,8 @@ def sample_label(sample: dict[str, Any]) -> str:
     key = sample.get("key") or sample.get("child_key") or "unknown"
     number = sample.get("number")
     if number is not None:
-        return "`{}` (#{})".format(key, number)
-    return "`{}`".format(key)
+        return f"`{key}` (#{number})"
+    return f"`{key}`"
 
 
 def sample_details(sample: dict[str, Any]) -> str:
@@ -662,11 +658,9 @@ def render_action_samples(samples: dict[str, Any] | None) -> list[str]:
         for sample in samples.get(action, []):
             details = sample_details(sample)
             if details:
-                lines.append(
-                    "- {}: {} ({})".format(action, sample_label(sample), details)
-                )
+                lines.append(f"- {action}: {sample_label(sample)} ({details})")
             else:
-                lines.append("- {}: {}".format(action, sample_label(sample)))
+                lines.append(f"- {action}: {sample_label(sample)}")
     return lines if len(lines) > 2 else []
 
 
@@ -697,9 +691,9 @@ def render_managed_issue_audit(audit: dict[str, Any] | None) -> list[str]:
             if category:
                 details = ", ".join(value for value in (details, category) if value)
             if details:
-                lines.append("  - {} ({})".format(sample_label(sample), details))
+                lines.append(f"  - {sample_label(sample)} ({details})")
             else:
-                lines.append("  - {}".format(sample_label(sample)))
+                lines.append(f"  - {sample_label(sample)}")
     return lines if len(lines) > 2 else []
 
 
@@ -708,8 +702,8 @@ def operation_ledger_label(entry: dict[str, Any]) -> str:
         child_key = entry.get("child_key", "unknown")
         child_number = entry.get("child_number")
         if child_number is not None:
-            return "`{}` (#{})".format(child_key, child_number)
-        return "`{}`".format(child_key)
+            return f"`{child_key}` (#{child_number})"
+        return f"`{child_key}`"
     return sample_label(entry)
 
 
@@ -742,7 +736,7 @@ def render_operation_ledger(entries: list[dict[str, Any]] | None) -> list[str]:
                 )
             )
         else:
-            lines.append("- {}: {}".format(action, operation_ledger_label(entry)))
+            lines.append(f"- {action}: {operation_ledger_label(entry)}")
     if len(entries) > OPERATION_LEDGER_SUMMARY_LIMIT:
         lines.append(
             "Additional operation ledger entries omitted from summary: {}".format(
@@ -759,9 +753,9 @@ def render_load_error(
 ) -> list[str]:
     error = report.get("load_error", {})
     return [
-        "## {}".format(title),
+        f"## {title}",
         "",
-        "Report: failed to load `{}`.".format(display_path(path)),
+        f"Report: failed to load `{display_path(path)}`.",
         "",
         markdown_table(
             ["Field", "Value"],
@@ -874,14 +868,14 @@ def render_matrix_check(report: dict[str, Any] | None, path: Path | None) -> lis
         return [
             "## Support Matrix",
             "",
-            "Report: not available at `{}`.".format(display_path(path)),
+            f"Report: not available at `{display_path(path)}`.",
         ]
     if report.get("load_error"):
         return render_load_error("Support Matrix", report, path)
 
     summary = report.get("summary", {})
     rows = [
-        ["Report", "`{}`".format(display_path(path))],
+        ["Report", f"`{display_path(path)}`"],
         ["Status", status_label(report.get("ok"))],
         ["Artifacts", summary.get("artifact_count", 0)],
         ["Stale artifacts", summary.get("stale_count", 0)],
@@ -907,13 +901,13 @@ def render_issue_plan(report: dict[str, Any] | None, path: Path | None) -> list[
         return [
             "## Issue Plan",
             "",
-            "Report: not available at `{}`.".format(display_path(path)),
+            f"Report: not available at `{display_path(path)}`.",
         ]
     if report.get("load_error"):
         return render_load_error("Issue Plan", report, path)
 
     rows = [
-        ["Report", "`{}`".format(display_path(path))],
+        ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
     rows.extend(
@@ -1040,7 +1034,7 @@ def render_issue_plan(report: dict[str, Any] | None, path: Path | None) -> list[
     if operation:
         lines.extend(["", "Preflight failure operation:"])
         for key, value in sorted(operation.items()):
-            lines.append("- {}: `{}`".format(key, value))
+            lines.append(f"- {key}: `{value}`")
     lines.extend(render_managed_issue_audit(audit))
     lines.extend(render_action_samples(report.get("planned_action_samples")))
     return lines
@@ -1051,13 +1045,13 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
         return [
             "## Issue Sync",
             "",
-            "Report: not available at `{}`.".format(display_path(path)),
+            f"Report: not available at `{display_path(path)}`.",
         ]
     if report.get("load_error"):
         return render_load_error("Issue Sync", report, path)
 
     rows = [
-        ["Report", "`{}`".format(display_path(path))],
+        ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
     summary = report.get("sync_summary")
@@ -1114,7 +1108,7 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
     if operation:
         lines.extend(["", "Sync failure operation:"])
         for key, value in sorted(operation.items()):
-            lines.append("- {}: `{}`".format(key, value))
+            lines.append(f"- {key}: `{value}`")
     action_overruns = reconciliation.get("action_overruns", [])
     closure_overruns = reconciliation.get("closure_overruns", [])
     if action_overruns or closure_overruns:
@@ -1154,11 +1148,11 @@ def github_annotation(
     file: str | None = None,
     level: str = "error",
 ) -> str:
-    properties = ["title={}".format(github_command_escape(title, property_value=True))]
+    properties = [f"title={github_command_escape(title, property_value=True)}"]
     if file:
         properties.insert(
             0,
-            "file={}".format(github_command_escape(file, property_value=True)),
+            f"file={github_command_escape(file, property_value=True)}",
         )
     return "::{level} {properties}::{message}".format(
         level=level,
@@ -1454,13 +1448,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
-        print("Wrote {}".format(display_path(output)))
+        print(f"Wrote {display_path(output)}")
 
     if args.step_summary is not None:
         args.step_summary.parent.mkdir(parents=True, exist_ok=True)
         with args.step_summary.open("a", encoding="utf-8") as handle:
             handle.write(text)
-        print("Appended {}".format(args.step_summary))
+        print(f"Appended {args.step_summary}")
 
     if args.github_annotations:
         for annotation in github_annotation_lines(

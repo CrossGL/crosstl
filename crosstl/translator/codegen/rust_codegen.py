@@ -3,18 +3,17 @@
 import re
 
 from ..ast import (
-    ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
     CaseNode,
-    CbufferNode,
-    ContinueNode,
     ConstructorNode,
     ConstructorPatternNode,
+    ContinueNode,
     DoWhileNode,
     EnumNode,
     ExpressionStatementNode,
@@ -32,9 +31,8 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     PointerAccessNode,
-    ReturnNode,
     RangeNode,
-    ShaderNode,
+    ReturnNode,
     StructNode,
     StructPatternNode,
     SwitchNode,
@@ -46,7 +44,7 @@ from ..ast import (
     WhileNode,
     WildcardPatternNode,
 )
-from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
+from .array_utils import get_array_size_from_node
 from .stage_utils import normalize_stage_name, stage_matches
 
 

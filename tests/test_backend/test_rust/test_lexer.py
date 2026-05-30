@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.backend.Rust.RustLexer import RustLexer
 
 
@@ -306,8 +308,8 @@ def test_references_tokenization():
 
 def test_generics_tokenization():
     code = """
-    fn generic_function<T, U>(a: T, b: U) -> T 
-    where 
+    fn generic_function<T, U>(a: T, b: U) -> T
+    where
         T: Clone,
         U: Debug,
     {

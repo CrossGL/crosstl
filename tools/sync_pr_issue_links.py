@@ -10,16 +10,14 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from urllib import error
-from urllib import parse
-from urllib import request
+from urllib import error, parse, request
 
 API_VERSION = "2026-03-10"
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +26,7 @@ SUPPORT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
 SECTION_BEGIN = "<!-- crossgl-pr-issue-links:start -->"
 SECTION_END = "<!-- crossgl-pr-issue-links:end -->"
 SECTION_RE = re.compile(
-    r"\n*{}\n.*?\n{}\n*".format(re.escape(SECTION_BEGIN), re.escape(SECTION_END)),
+    rf"\n*{re.escape(SECTION_BEGIN)}\n.*?\n{re.escape(SECTION_END)}\n*",
     re.DOTALL,
 )
 FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
@@ -111,7 +109,7 @@ class GitHubApiError(RuntimeError):
     """Raised when GitHub returns an unexpected API error."""
 
     def __init__(self, method: str, path: str, status: int, body: str):
-        super().__init__("{} {} failed with {}: {}".format(method, path, status, body))
+        super().__init__(f"{method} {path} failed with {status}: {body}")
         self.method = method
         self.path = path
         self.status = status
@@ -152,7 +150,7 @@ class GitHubClient:
             body = json.dumps(payload).encode("utf-8")
         req = request.Request(url, data=body, method=method)
         req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("Authorization", "Bearer {}".format(self.token))
+        req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("X-GitHub-Api-Version", API_VERSION)
         if body is not None:
             req.add_header("Content-Type", "application/json")
@@ -169,20 +167,20 @@ class GitHubClient:
             raise GitHubApiError(method, path, exc.code, error_body) from exc
 
     def get_issue(self, number: int) -> dict[str, Any]:
-        issue, _ = self.request("GET", "/repos/{}/issues/{}".format(self.repo, number))
+        issue, _ = self.request("GET", f"/repos/{self.repo}/issues/{number}")
         return issue
 
     def add_issue_assignee(self, number: int, login: str) -> None:
         self.request(
             "POST",
-            "/repos/{}/issues/{}/assignees".format(self.repo, number),
+            f"/repos/{self.repo}/issues/{number}/assignees",
             {"assignees": [login]},
         )
 
     def update_pull_body(self, number: int, body: str) -> None:
         self.request(
             "PATCH",
-            "/repos/{}/pulls/{}".format(self.repo, number),
+            f"/repos/{self.repo}/pulls/{number}",
             {"body": body},
         )
 
@@ -192,7 +190,7 @@ class GitHubClient:
         while True:
             payload, _ = self.request(
                 "GET",
-                "/repos/{}/pulls/{}/files".format(self.repo, number),
+                f"/repos/{self.repo}/pulls/{number}/files",
                 query={"per_page": 100, "page": page},
             )
             batch = payload or []
@@ -204,7 +202,7 @@ class GitHubClient:
     def read_json_file(self, repo: str, path: str, ref: str) -> dict[str, Any]:
         payload, _ = self.request(
             "GET",
-            "/repos/{}/contents/{}".format(repo, parse.quote(path)),
+            f"/repos/{repo}/contents/{parse.quote(path)}",
             query={"ref": ref},
         )
         if not isinstance(payload, dict):
@@ -222,7 +220,7 @@ class GitHubClient:
         while True:
             payload, _ = self.request(
                 "GET",
-                "/repos/{}/issues".format(self.repo),
+                f"/repos/{self.repo}/issues",
                 query={
                     "labels": "support:matrix",
                     "state": "open",
@@ -348,8 +346,8 @@ def managed_section(
 ) -> str:
     reference_issue_numbers = reference_issue_numbers or []
     lines = [SECTION_BEGIN]
-    lines.extend("Closes #{}".format(number) for number in issue_numbers)
-    lines.extend("Refs #{}".format(number) for number in reference_issue_numbers)
+    lines.extend(f"Closes #{number}" for number in issue_numbers)
+    lines.extend(f"Refs #{number}" for number in reference_issue_numbers)
     lines.append(SECTION_END)
     return "\n".join(lines)
 
@@ -381,9 +379,7 @@ def support_backlog_row_details(matrix: dict[str, Any]) -> dict[str, dict[str, A
     for feature in matrix.get("features", []):
         feature_id = feature.get("id")
         for backend_id, support in feature.get("support", {}).items():
-            support_lookup["backlog:{}:{}".format(backend_id, feature_id)] = (
-                support or {}
-            )
+            support_lookup[f"backlog:{backend_id}:{feature_id}"] = support or {}
 
     rows = {}
     for item in matrix.get("backlog", []):
@@ -432,7 +428,7 @@ def support_matrix_issue_numbers(
             pr.head_sha,
         )
     except (GitHubApiError, ValueError, json.JSONDecodeError, OSError) as exc:
-        print("::warning::Could not inspect PR support matrix links: {}".format(exc))
+        print(f"::warning::Could not inspect PR support matrix links: {exc}")
         return [], []
 
     base_backlog_keys = support_backlog_keys(base_matrix)
@@ -647,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
         print("--event-path or GITHUB_EVENT_PATH is required", file=sys.stderr)
         return 2
     if not token:
-        print("{} or GH_TOKEN is required".format(args.token_env), file=sys.stderr)
+        print(f"{args.token_env} or GH_TOKEN is required", file=sys.stderr)
         return 2
 
     pr = load_pr_context(args.event_path)
@@ -681,7 +677,7 @@ def main(argv: list[str] | None = None) -> int:
                 "reference, no managed support issue reference, and no explicit "
                 "'Support issue traceability: no issue closed' marker."
             )
-            print("::warning::{}".format(warning))
+            print(f"::warning::{warning}")
             step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
             if step_summary:
                 with open(step_summary, "a", encoding="utf-8") as handle:
@@ -692,7 +688,7 @@ def main(argv: list[str] | None = None) -> int:
                             **summary
                         )
                     )
-                    handle.write("- Action: {}\n".format(warning))
+                    handle.write(f"- Action: {warning}\n")
     if summary.get("traceability_failed"):
         if not args.enforce_support_traceability:
             return 0

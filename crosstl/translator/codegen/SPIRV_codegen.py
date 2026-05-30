@@ -3,29 +3,11 @@
 import re
 from typing import List, Optional, Tuple, Union
 
-from .array_utils import parse_array_type, detect_array_element_type
-from .enum_utils import (
-    collect_generic_enum_specializations,
-    collect_generic_enum_struct_definitions,
-    enum_struct_fields,
-    enum_variant_payload_fields,
-    generic_enum_specialized_fields,
-    generic_enum_specialized_variant_fields,
-    generic_type_parts,
-    resolve_generic_enum_specialization,
-)
-from .image_access_contracts import (
-    collect_function_image_access_requirements,
-    collect_function_parameter_names,
-    image_access_diagnostic_name,
-    image_access_requirement_label,
-    image_access_satisfies_requirement,
-)
 from ..ast import (
-    AssignmentNode,
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
+    AssignmentNode,
     BinaryOpNode,
     BreakNode,
     ConstructorNode,
@@ -50,8 +32,8 @@ from ..ast import (
     RayTracingOpNode,
     ReturnNode,
     ShaderNode,
-    StructPatternNode,
     StructNode,
+    StructPatternNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -59,6 +41,24 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
     WildcardPatternNode,
+)
+from .array_utils import parse_array_type
+from .enum_utils import (
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    enum_struct_fields,
+    enum_variant_payload_fields,
+    generic_enum_specialized_fields,
+    generic_enum_specialized_variant_fields,
+    generic_type_parts,
+    resolve_generic_enum_specialization,
+)
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    image_access_diagnostic_name,
+    image_access_requirement_label,
+    image_access_satisfies_requirement,
 )
 
 

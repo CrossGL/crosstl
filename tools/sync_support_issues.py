@@ -11,17 +11,15 @@ closes managed backlog issues that disappear from the matrix.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from urllib import error
-from urllib import parse
-from urllib import request
+from urllib import error, parse, request
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
@@ -60,7 +58,7 @@ MATRIX_CHECK_REPORT_REQUIRED_FIELDS = (
 
 API_VERSION = "2026-03-10"
 MARKER_NAME = "crossgl-support-issue-sync"
-MARKER_RE = re.compile(r"<!--\s*{}:\s*([^>\s]+)\s*-->".format(MARKER_NAME))
+MARKER_RE = re.compile(rf"<!--\s*{MARKER_NAME}:\s*([^>\s]+)\s*-->")
 
 LABEL_MANAGED = "support:matrix"
 LABEL_PARENT = "support:parent"
@@ -94,7 +92,7 @@ class GitHubApiError(RuntimeError):
         body: str,
         headers: dict[str, str] | None = None,
     ):
-        super().__init__("{} {} failed with {}: {}".format(method, path, status, body))
+        super().__init__(f"{method} {path} failed with {status}: {body}")
         self.method = method
         self.path = path
         self.status = status
@@ -113,7 +111,7 @@ class SupportIssueSyncMutationError(RuntimeError):
         cause: Exception,
         operation_ledger: list[dict[str, Any]] | None = None,
     ):
-        super().__init__("support issue sync failed during {}: {}".format(phase, cause))
+        super().__init__(f"support issue sync failed during {phase}: {cause}")
         self.phase = phase
         self.operation = operation
         self.summary = dict(summary)
@@ -130,9 +128,7 @@ class SupportIssueSyncPreflightError(RuntimeError):
         operation: dict[str, Any],
         cause: Exception,
     ):
-        super().__init__(
-            "support issue sync preflight failed during {}: {}".format(phase, cause)
-        )
+        super().__init__(f"support issue sync preflight failed during {phase}: {cause}")
         self.phase = phase
         self.operation = operation
         self.cause = cause
@@ -178,7 +174,7 @@ def load_optional_json(path: Path | None) -> dict[str, Any] | None:
         return optional_json_load_error(
             path,
             "InvalidReportType",
-            "expected JSON object, got {}".format(type(data).__name__),
+            f"expected JSON object, got {type(data).__name__}",
         )
     return data
 
@@ -290,7 +286,7 @@ def input_failure_summary(
 
 
 def marker_for(key: str) -> str:
-    return "<!-- {}: {} -->".format(MARKER_NAME, key)
+    return f"<!-- {MARKER_NAME}: {key} -->"
 
 
 def marker_key(body: str | None) -> str | None:
@@ -397,13 +393,13 @@ def parent_body(
 
     return "\n\n".join(
         [
-            marker_for("parent:{}".format(backend_id)),
+            marker_for(f"parent:{backend_id}"),
             "# {} Support Coverage".format(backend["name"]),
             "This issue is managed from `support/generated/support-matrix.json` by `tools/sync_support_issues.py`.",
-            "Open backlog rows: **{}**".format(len(rows)),
+            f"Open backlog rows: **{len(rows)}**",
             markdown_table(["Status", "Count"], summary_rows),
-            "## Current Backlog\n\n{}".format(backlog_text),
-            "## Documentation Sources\n\n{}".format(docs_text),
+            f"## Current Backlog\n\n{backlog_text}",
+            f"## Documentation Sources\n\n{docs_text}",
         ]
     )
 
@@ -411,8 +407,8 @@ def parent_body(
 def frontend_parent_body() -> str:
     return "\n\n".join(
         [
-            marker_for("parent:{}".format(FRONTEND_ID)),
-            "# {} Support Coverage".format(FRONTEND_NAME),
+            marker_for(f"parent:{FRONTEND_ID}"),
+            f"# {FRONTEND_NAME} Support Coverage",
             "This issue is managed by `tools/sync_support_issues.py`.",
             "The current support matrix is backend-oriented, so there are no frontend-specific backlog sub-issues to create yet.",
             "Frontend, parser, IR, validation, and shared source-language work should be added to the support catalog before it can produce generated child issues here.",
@@ -429,7 +425,7 @@ def child_body(
     support = entry.get("support", {})
     feature = entry.get("feature", {})
     evidence = support.get("evidence") or []
-    evidence_text = "\n".join("- `{}`".format(value) for value in evidence)
+    evidence_text = "\n".join(f"- `{value}`" for value in evidence)
     if not evidence_text:
         evidence_text = "- No evidence is recorded for this non-supported row."
     notes = item.get("notes") or support.get("notes") or "No notes recorded."
@@ -456,9 +452,9 @@ def child_body(
             "## Feature Description\n\n{}".format(
                 feature.get("description", "No feature description recorded.")
             ),
-            "## Current Gap\n\n{}".format(notes),
-            "## Recorded Evidence\n\n{}".format(evidence_text),
-            "## Extracted Signals\n\n{}".format(signal_text),
+            f"## Current Gap\n\n{notes}",
+            f"## Recorded Evidence\n\n{evidence_text}",
+            f"## Extracted Signals\n\n{signal_text}",
             "## Completion Rule\n\nWhen this matrix row becomes `supported`, the next sync will close this managed sub-issue as completed.",
         ]
     )
@@ -466,7 +462,7 @@ def child_body(
 
 def format_signal_hits(title: str, hits: list[dict[str, Any]]) -> str:
     if not hits:
-        return "- {}: none detected.".format(title)
+        return f"- {title}: none detected."
     rows = []
     for hit in hits[:8]:
         label = (
@@ -483,12 +479,12 @@ def format_signal_hits(title: str, hits: list[dict[str, Any]]) -> str:
         extra_details = []
         for field in ("kind", "category", "backend", "message"):
             if hit.get(field):
-                extra_details.append("{}={}".format(field, hit[field]))
+                extra_details.append(f"{field}={hit[field]}")
         if extra_details:
             details = "{}; {}".format(details, "; ".join(extra_details))
         if count is not None:
-            details = "{}, count={}".format(details, count)
-        rows.append("- {}: `{}` ({})".format(title, label, details))
+            details = f"{details}, count={count}"
+        rows.append(f"- {title}: `{label}` ({details})")
     return "\n".join(rows)
 
 
@@ -531,7 +527,7 @@ def extracted_issue_body(
                 ],
             ),
             "## Required Action\n\n{}".format(issue["title"]),
-            "## Extracted Signals\n\n{}".format(format_signal_section(signal)),
+            f"## Extracted Signals\n\n{format_signal_section(signal)}",
             "## Completion Rule\n\nThe next sync closes this issue when generated extraction no longer reports this gap.",
         ]
     )
@@ -550,7 +546,7 @@ def build_desired_issues(
     for backend in matrix.get("backends", []):
         backend_id = backend["id"]
         rows = rows_by_backend.get(backend_id, [])
-        parent_key = "parent:{}".format(backend_id)
+        parent_key = f"parent:{backend_id}"
         parent_labels = (
             LABEL_MANAGED,
             LABEL_PARENT,
@@ -563,10 +559,10 @@ def build_desired_issues(
             labels=parent_labels,
         )
 
-    frontend_key = "parent:{}".format(FRONTEND_ID)
+    frontend_key = f"parent:{FRONTEND_ID}"
     desired[frontend_key] = DesiredIssue(
         key=frontend_key,
-        title="[Support Matrix] {} coverage".format(FRONTEND_NAME),
+        title=f"[Support Matrix] {FRONTEND_NAME} coverage",
         body=frontend_parent_body(),
         labels=(
             LABEL_MANAGED,
@@ -578,7 +574,7 @@ def build_desired_issues(
     for item in matrix.get("backlog", []):
         backend_id = item["backend_id"]
         feature_id = item["feature_id"]
-        key = "backlog:{}:{}".format(backend_id, feature_id)
+        key = f"backlog:{backend_id}:{feature_id}"
         labels = (
             LABEL_MANAGED,
             LABEL_BACKLOG,
@@ -593,7 +589,7 @@ def build_desired_issues(
             ),
             body=child_body(item, lookup, signals_by_row),
             labels=labels,
-            parent_key="parent:{}".format(backend_id),
+            parent_key=f"parent:{backend_id}",
         )
 
     for issue in (signals or {}).get("issues", []):
@@ -648,9 +644,9 @@ def validate_desired_issues(
     expected_parent_keys = {
         "parent:{}".format(backend["id"]) for backend in matrix.get("backends", [])
     }
-    expected_parent_keys.add("parent:{}".format(FRONTEND_ID))
+    expected_parent_keys.add(f"parent:{FRONTEND_ID}")
     for key in sorted(expected_parent_keys - set(desired)):
-        errors.append("missing desired parent issue: {}".format(key))
+        errors.append(f"missing desired parent issue: {key}")
 
     for item in matrix.get("backlog", []):
         if item.get("status") not in BACKLOG_STATUSES:
@@ -663,7 +659,7 @@ def validate_desired_issues(
             )
         key = "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
         if key not in desired:
-            errors.append("missing desired backlog issue: {}".format(key))
+            errors.append(f"missing desired backlog issue: {key}")
 
     expected_signal_backends = {backend["id"] for backend in matrix.get("backends", [])}
     expected_signal_backends.add(FRONTEND_ID)
@@ -675,11 +671,9 @@ def validate_desired_issues(
 
     for key, issue in desired.items():
         if marker_for(key) not in issue.body:
-            errors.append(
-                "desired issue {} body is missing its sync marker".format(key)
-            )
+            errors.append(f"desired issue {key} body is missing its sync marker")
         if LABEL_MANAGED not in issue.labels:
-            errors.append("desired issue {} is missing managed label".format(key))
+            errors.append(f"desired issue {key} is missing managed label")
         if issue.parent_key and issue.parent_key not in desired:
             errors.append(
                 "desired issue {} references missing parent {}".format(
@@ -687,13 +681,9 @@ def validate_desired_issues(
                 )
             )
         if key.startswith("backlog:") and LABEL_BACKLOG not in issue.labels:
-            errors.append(
-                "desired backlog issue {} is missing backlog label".format(key)
-            )
+            errors.append(f"desired backlog issue {key} is missing backlog label")
         if key.startswith("extracted:") and LABEL_EXTRACTED not in issue.labels:
-            errors.append(
-                "desired extracted issue {} is missing extracted label".format(key)
-            )
+            errors.append(f"desired extracted issue {key} is missing extracted label")
 
     return errors
 
@@ -809,7 +799,7 @@ class GitHubClient:
             body = json.dumps(payload).encode("utf-8")
         req = request.Request(url, data=body, method=method)
         req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("Authorization", "Bearer {}".format(self.token))
+        req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("X-GitHub-Api-Version", API_VERSION)
         if body is not None:
             req.add_header("Content-Type", "application/json")
@@ -858,7 +848,7 @@ class GitHubClient:
         return items
 
     def list_managed_issues(self) -> list[dict[str, Any]]:
-        owner_repo = "/repos/{}".format(self.repo)
+        owner_repo = f"/repos/{self.repo}"
         return self.paginate(
             owner_repo + "/issues",
             {
@@ -868,7 +858,7 @@ class GitHubClient:
         )
 
     def ensure_label(self, name: str, color: str, description: str) -> None:
-        path = "/repos/{}/labels".format(self.repo)
+        path = f"/repos/{self.repo}/labels"
         try:
             self.request(
                 "POST",
@@ -896,7 +886,7 @@ class GitHubClient:
     def create_issue(self, desired: DesiredIssue) -> dict[str, Any]:
         issue, _ = self.request(
             "POST",
-            "/repos/{}/issues".format(self.repo),
+            f"/repos/{self.repo}/issues",
             {
                 "title": desired.title,
                 "body": desired.body,
@@ -1017,7 +1007,7 @@ def duplicate_closed_body(issue: dict[str, Any], key: str) -> str:
             marker_for(key),
             "# Duplicate Managed Support Issue",
             "This managed issue was closed because another managed issue already owns the same support sync marker.",
-            "Sync marker: `{}`".format(key),
+            f"Sync marker: `{key}`",
             "Previous title: `{}`".format(issue.get("title", "")),
         ]
     )
@@ -1939,7 +1929,7 @@ def write_json_report(path: Path, report: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    print("Wrote {}".format(path))
+    print(f"Wrote {path}")
 
 
 def raise_sync_mutation_error(
@@ -1994,13 +1984,13 @@ def sync_issues(
     )
 
     if dry_run:
-        print("Dry run: would manage {} desired issues".format(len(desired)))
+        print(f"Dry run: would manage {len(desired)} desired issues")
         parent_count = sum(1 for key in desired if key.startswith("parent:"))
         child_count = sum(1 for key in desired if key.startswith("backlog:"))
         extracted_count = sum(1 for key in desired if key.startswith("extracted:"))
-        print("Parents: {}".format(parent_count))
-        print("Backlog sub-issues: {}".format(child_count))
-        print("Extracted signal sub-issues: {}".format(extracted_count))
+        print(f"Parents: {parent_count}")
+        print(f"Backlog sub-issues: {child_count}")
+        print(f"Extracted signal sub-issues: {extracted_count}")
         return summary
 
     for label, (color, description) in desired_label_catalog(desired).items():
@@ -2405,7 +2395,7 @@ def main(argv: list[str] | None = None) -> int:
     if validation_errors:
         print("Support issue plan is invalid:", file=sys.stderr)
         for message in validation_errors:
-            print("- {}".format(message), file=sys.stderr)
+            print(f"- {message}", file=sys.stderr)
         return 1
 
     token = os.environ.get(args.token_env) or os.environ.get("GH_TOKEN")
@@ -2415,7 +2405,7 @@ def main(argv: list[str] | None = None) -> int:
         print("--repo or GITHUB_REPOSITORY is required", file=sys.stderr)
         return 2
     if not token:
-        print("{} or GH_TOKEN is required".format(args.token_env), file=sys.stderr)
+        print(f"{args.token_env} or GH_TOKEN is required", file=sys.stderr)
         return 2
 
     client = GitHubClient(

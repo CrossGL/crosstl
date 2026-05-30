@@ -3,10 +3,12 @@
 This module provides common test cases and verification utilities for arrays.
 """
 
+from typing import Any, Dict, List
+
 import pytest
-from crosstl.translator.parser import Parser
+
 from crosstl.translator.lexer import Lexer
-from typing import List, Dict, Any
+from crosstl.translator.parser import Parser
 
 # Common shader template with comprehensive array handling scenarios
 ARRAY_TEST_SHADER = """
@@ -29,31 +31,31 @@ shader ArrayTest {
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
             particles[index].velocity = vec3(1.0, 0.0, 0.0);
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             // Write to array
             weights[index] = sum;
-            
+
             // Nested array dimension
             float multiDim[3][4];  // Not all backends may support this
             multiDim[0][1] = 2.0;
-            
+
             return output;
         }
     }

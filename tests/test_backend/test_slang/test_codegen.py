@@ -1,9 +1,9 @@
-from crosstl.backend.slang import SlangCrossGLCodeGen
-from crosstl.backend.slang import SlangLexer
-from crosstl.backend.slang import SlangParser
-from crosstl import translate
-import pytest
 from typing import List
+
+import pytest
+
+from crosstl import translate
+from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 
 
 def generate_code(ast_node):

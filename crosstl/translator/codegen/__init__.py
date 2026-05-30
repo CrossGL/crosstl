@@ -1,20 +1,20 @@
 """Public registry helpers for CrossGL target code generation."""
 
-from .registry import (
-    BackendSpec,
-    register_backend,
-    get_backend,
-    get_codegen,
-    get_backend_extension,
-    normalize_backend_name,
-    backend_names,
-)
 from .cuda_codegen import CudaCodeGen
 from .directx_codegen import HLSLCodeGen
 from .GLSL_codegen import GLSLCodeGen
 from .hip_codegen import HipCodeGen
 from .metal_codegen import MetalCodeGen
 from .mojo_codegen import MojoCodeGen
+from .registry import (
+    BackendSpec,
+    backend_names,
+    get_backend,
+    get_backend_extension,
+    get_codegen,
+    normalize_backend_name,
+    register_backend,
+)
 from .rust_codegen import RustCodeGen
 from .SPIRV_codegen import VulkanSPIRVCodeGen
 

@@ -1,8 +1,5 @@
 """Reverse code generator that emits CrossGL from HLSL AST nodes."""
 
-from .DirectxAst import *
-from .DirectxParser import *
-from .DirectxLexer import *
 from ..common_ast import (
     ArrayAccessNode,
     BreakNode,
@@ -10,6 +7,9 @@ from ..common_ast import (
     ContinueNode,
     TextureSampleNode,
 )
+from .DirectxAst import *
+from .DirectxLexer import *
+from .DirectxParser import *
 
 
 class HLSLToCrossGLConverter:
@@ -1495,15 +1495,12 @@ class HLSLToCrossGLConverter:
         if node is None or isinstance(node, (str, int, float, bool)):
             return
         if isinstance(node, dict):
-            for value in node.values():
-                yield value
+            yield from node.values()
             return
         if isinstance(node, (list, tuple, set)):
-            for value in node:
-                yield value
+            yield from node
             return
-        for value in getattr(node, "__dict__", {}).values():
-            yield value
+        yield from getattr(node, "__dict__", {}).values()
 
     def collect_direct_texture_method_usage_names(self, root):
         comparison_names = set()

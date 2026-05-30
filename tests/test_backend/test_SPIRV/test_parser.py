@@ -1,10 +1,11 @@
-import pytest
 from typing import List
-from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
+
+import pytest
+
 from crosstl.backend.SPIRV import VulkanParser
 from crosstl.backend.SPIRV.VulkanAst import (
-    AssignmentNode,
     ArrayAccessNode,
+    AssignmentNode,
     BinaryOpNode,
     BreakNode,
     CaseNode,
@@ -24,6 +25,7 @@ from crosstl.backend.SPIRV.VulkanAst import (
     VariableNode,
     WhileNode,
 )
+from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 
 
 def parse_code(tokens: List):
@@ -46,7 +48,7 @@ def tokenize_code(code: str) -> List:
 
 def test_mod_parsing():
     code = """
-    
+
     void main() {
         int a = 10 % 3;  // Basic modulus
     }

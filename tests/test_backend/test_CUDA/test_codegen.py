@@ -1,10 +1,10 @@
 """Test CUDA Code Generation"""
 
-import pytest
+
 from crosstl import translate
+from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
-from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 
 
 class TestCudaCodeGen:
@@ -74,7 +74,7 @@ class TestCudaCodeGen:
         __global__ void kernel1(float* data) {
             data[threadIdx.x] = 1.0f;
         }
-        
+
         __global__ void kernel2(int* data) {
             data[threadIdx.x] = 2;
         }

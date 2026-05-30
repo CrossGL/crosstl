@@ -3,8 +3,8 @@
 import re
 
 from .RustAst import *
-from .RustParser import *
 from .RustLexer import *
+from .RustParser import *
 
 RUST_NUMERIC_LITERAL_RE = re.compile(
     r"^(?P<body>"

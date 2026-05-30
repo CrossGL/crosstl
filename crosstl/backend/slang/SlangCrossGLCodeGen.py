@@ -4,8 +4,8 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from .SlangAst import *
-from .SlangParser import *
 from .SlangLexer import *
+from .SlangParser import *
 
 
 class SlangToCrossGLConverter:

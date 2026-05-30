@@ -5,7 +5,7 @@ This module contains tests for the HIP lexer functionality,
 ensuring proper tokenization of HIP code constructs.
 """
 
-import pytest
+
 from crosstl.backend.HIP.HipLexer import HipLexer
 
 
@@ -396,11 +396,11 @@ class TestHipLexer:
     def test_whitespace_handling(self):
         """Test whitespace and newline handling"""
         code = """
-        
+
         int    x   =   5   ;
-        
+
         float y = 3.14f;
-        
+
         """
         lexer = HipLexer(code)
         tokens = lexer.tokenize()

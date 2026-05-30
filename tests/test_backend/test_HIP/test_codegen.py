@@ -1,10 +1,10 @@
 """Test HIP Code Generation"""
 
-import pytest
+
 from crosstl import translate
+from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
-from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
 
 class TestHipCodeGen:
@@ -119,7 +119,7 @@ class TestHipCodeGen:
         __global__ void kernel1() {
             int x = 1;
         }
-        
+
         __global__ void kernel2() {
             int x = 2;
         }

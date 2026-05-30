@@ -11,13 +11,13 @@ import difflib
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORT_DIR = ROOT / "support"
@@ -73,19 +73,17 @@ class SupportMatrixError(Exception):
 
 def require_mapping(value, description):
     if not isinstance(value, dict):
-        raise SupportMatrixError("{} must be an object".format(description))
+        raise SupportMatrixError(f"{description} must be an object")
 
 
 def require_list(value, description):
     if not isinstance(value, list):
-        raise SupportMatrixError("{} must be a list".format(description))
+        raise SupportMatrixError(f"{description} must be a list")
 
 
 def validate_id(value, description):
     if not isinstance(value, str) or not ID_PATTERN.fullmatch(value):
-        raise SupportMatrixError(
-            "{} must match {}".format(description, ID_PATTERN.pattern)
-        )
+        raise SupportMatrixError(f"{description} must match {ID_PATTERN.pattern}")
 
 
 def load_json(path):
@@ -215,41 +213,37 @@ def validate_backend_catalog(backends_data):
         backend_id = backend.get("id")
         if not backend_id:
             raise SupportMatrixError("Every backend requires an 'id'")
-        validate_id(backend_id, "Backend id '{}'".format(backend_id))
+        validate_id(backend_id, f"Backend id '{backend_id}'")
         if backend_id in ids:
-            raise SupportMatrixError("Duplicate backend id: {}".format(backend_id))
+            raise SupportMatrixError(f"Duplicate backend id: {backend_id}")
         ids.add(backend_id)
 
         for key in ("name", "translator_codegen", "native_backend", "tests", "docs"):
             if key not in backend:
-                raise SupportMatrixError(
-                    "Backend '{}' is missing '{}'".format(backend_id, key)
-                )
+                raise SupportMatrixError(f"Backend '{backend_id}' is missing '{key}'")
 
         if not isinstance(backend["name"], str) or not backend["name"].strip():
             raise SupportMatrixError(
-                "Backend '{}' name must be a non-empty string".format(backend_id)
+                f"Backend '{backend_id}' name must be a non-empty string"
             )
         target_extension = backend.get("target_extension")
         if not isinstance(target_extension, str) or not target_extension.startswith(
             "."
         ):
             raise SupportMatrixError(
-                "Backend '{}' target_extension must start with '.'".format(backend_id)
+                f"Backend '{backend_id}' target_extension must start with '.'"
             )
         if target_extension in extensions:
             raise SupportMatrixError(
-                "Duplicate backend target extension: {}".format(target_extension)
+                f"Duplicate backend target extension: {target_extension}"
             )
         extensions.add(target_extension)
 
-        require_list(
-            backend.get("aliases", []), "Backend '{}' aliases".format(backend_id)
-        )
+        require_list(backend.get("aliases", []), f"Backend '{backend_id}' aliases")
         for alias in backend.get("aliases", []):
-            validate_id(alias, "Backend '{}' alias '{}'".format(backend_id, alias))
+            validate_id(alias, f"Backend '{backend_id}' alias '{alias}'")
             if alias in aliases:
-                raise SupportMatrixError("Duplicate backend alias: {}".format(alias))
+                raise SupportMatrixError(f"Duplicate backend alias: {alias}")
             aliases.add(alias)
 
         if not path_exists(backend["translator_codegen"]):
@@ -264,11 +258,11 @@ def validate_backend_catalog(backends_data):
                     backend_id, backend["native_backend"]
                 )
             )
-        require_list(backend.get("tests", []), "Backend '{}' tests".format(backend_id))
+        require_list(backend.get("tests", []), f"Backend '{backend_id}' tests")
         for test_path in backend.get("tests", []):
             if not isinstance(test_path, str):
                 raise SupportMatrixError(
-                    "Backend '{}' test paths must be strings".format(backend_id)
+                    f"Backend '{backend_id}' test paths must be strings"
                 )
             if not path_exists(test_path):
                 raise SupportMatrixError(
@@ -276,16 +270,16 @@ def validate_backend_catalog(backends_data):
                         backend_id, test_path
                     )
                 )
-        require_list(backend.get("docs", []), "Backend '{}' docs".format(backend_id))
+        require_list(backend.get("docs", []), f"Backend '{backend_id}' docs")
         for doc in backend.get("docs", []):
-            require_mapping(doc, "Backend '{}' docs entry".format(backend_id))
+            require_mapping(doc, f"Backend '{backend_id}' docs entry")
             if not doc.get("name") or not doc.get("url"):
                 raise SupportMatrixError(
-                    "Backend '{}' has a docs entry missing name/url".format(backend_id)
+                    f"Backend '{backend_id}' has a docs entry missing name/url"
                 )
             if not isinstance(doc["name"], str) or not isinstance(doc["url"], str):
                 raise SupportMatrixError(
-                    "Backend '{}' docs name/url must be strings".format(backend_id)
+                    f"Backend '{backend_id}' docs name/url must be strings"
                 )
             if urllib.parse.urlparse(doc["url"]).scheme not in {"http", "https"}:
                 raise SupportMatrixError(
@@ -373,16 +367,14 @@ def validate_feature_catalog(features_data, backend_ids):
         feature_id = feature.get("id")
         if not feature_id:
             raise SupportMatrixError("Every feature requires an 'id'")
-        validate_id(feature_id, "Feature id '{}'".format(feature_id))
+        validate_id(feature_id, f"Feature id '{feature_id}'")
         if feature_id in feature_ids:
-            raise SupportMatrixError("Duplicate feature id: {}".format(feature_id))
+            raise SupportMatrixError(f"Duplicate feature id: {feature_id}")
         feature_ids.add(feature_id)
 
         for key in ("category", "name", "description"):
             if key not in feature:
-                raise SupportMatrixError(
-                    "Feature '{}' is missing '{}'".format(feature_id, key)
-                )
+                raise SupportMatrixError(f"Feature '{feature_id}' is missing '{key}'")
             if not isinstance(feature[key], str) or not feature[key].strip():
                 raise SupportMatrixError(
                     "Feature '{}' '{}' must be a non-empty string".format(
@@ -393,7 +385,7 @@ def validate_feature_catalog(features_data, backend_ids):
         support = feature.get("support", {})
         if not isinstance(support, dict):
             raise SupportMatrixError(
-                "Feature '{}' support must be an object".format(feature_id)
+                f"Feature '{feature_id}' support must be an object"
             )
         unknown_backend_ids = set(support) - backend_ids
         if unknown_backend_ids:
@@ -568,7 +560,7 @@ def validate_matrix(matrix):
         feature_id = feature.get("id")
         if feature_id in seen_features:
             raise SupportMatrixError(
-                "Generated matrix contains duplicate feature id: {}".format(feature_id)
+                f"Generated matrix contains duplicate feature id: {feature_id}"
             )
         seen_features.add(feature_id)
         support = feature.get("support", {})
@@ -729,7 +721,7 @@ def rst_escape(text):
 
 def csv_cell(text):
     escaped = rst_escape(text).replace('"', '""')
-    return '"{}"'.format(escaped)
+    return f'"{escaped}"'
 
 
 def csv_row(cells):
@@ -738,13 +730,13 @@ def csv_row(cells):
 
 def render_csv_table(title, headers, rows, widths=None):
     lines = []
-    lines.append(".. csv-table:: {}".format(title))
-    lines.append("   :header: {}".format(csv_row(headers)))
+    lines.append(f".. csv-table:: {title}")
+    lines.append(f"   :header: {csv_row(headers)}")
     if widths:
         lines.append("   :widths: {}".format(", ".join(str(width) for width in widths)))
     lines.append("")
     for row in rows:
-        lines.append("   {}".format(csv_row(row)))
+        lines.append(f"   {csv_row(row)}")
     lines.append("")
     return lines
 
@@ -1048,7 +1040,7 @@ def build_generated_check_report(matrix):
 def write_json_report(path, report):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stable_json(report), encoding="utf-8")
-    print("Wrote {}".format(display_path(path)))
+    print(f"Wrote {display_path(path)}")
 
 
 def print_generated_failure_summary(report):
@@ -1145,7 +1137,7 @@ def audit(
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(stable_json(report), encoding="utf-8")
-        print("Wrote {}".format(display_path(output)))
+        print(f"Wrote {display_path(output)}")
 
     print(
         "Support matrix: {} features across {} backends".format(
@@ -1168,7 +1160,7 @@ def audit(
             continue
         counts = matrix["summary"]["status_counts"][backend["id"]]
         count_text = ", ".join(
-            "{}={}".format(status, counts.get(status, 0)) for status in STATUS_ORDER
+            f"{status}={counts.get(status, 0)}" for status in STATUS_ORDER
         )
         print("{}: {}".format(backend["name"], count_text))
 
@@ -1224,7 +1216,7 @@ def fetch_url(url, timeout):
         return {
             "ok": False,
             "url": url,
-            "error": "{}: {}".format(exc.__class__.__name__, exc),
+            "error": f"{exc.__class__.__name__}: {exc}",
             "elapsed_ms": int((time.time() - started) * 1000),
         }
 
@@ -1347,14 +1339,14 @@ def main(argv=None):
     try:
         backends_data, features_data, matrix = load_and_validate()
     except SupportMatrixError as exc:
-        print("support matrix error: {}".format(exc), file=sys.stderr)
+        print(f"support matrix error: {exc}", file=sys.stderr)
         return 2
 
     if args.command == "update":
         write_generated(matrix)
-        print("Updated {}".format(relpath(MATRIX_JSON_PATH)))
-        print("Updated {}".format(relpath(GRAPHICS_ROADMAP_JSON_PATH)))
-        print("Updated {}".format(relpath(DOCS_RST_PATH)))
+        print(f"Updated {relpath(MATRIX_JSON_PATH)}")
+        print(f"Updated {relpath(GRAPHICS_ROADMAP_JSON_PATH)}")
+        print(f"Updated {relpath(DOCS_RST_PATH)}")
         return 0
 
     if args.command == "check":
@@ -1382,7 +1374,7 @@ def main(argv=None):
                 output=output,
             )
         except SupportMatrixError as exc:
-            print("support matrix error: {}".format(exc), file=sys.stderr)
+            print(f"support matrix error: {exc}", file=sys.stderr)
             return 2
 
     if args.command == "docs":
@@ -1391,7 +1383,7 @@ def main(argv=None):
             output_path = ROOT / output_path
         return docs_report(backends_data, output_path, args.timeout, args.strict)
 
-    raise AssertionError("unhandled command: {}".format(args.command))
+    raise AssertionError(f"unhandled command: {args.command}")
 
 
 if __name__ == "__main__":

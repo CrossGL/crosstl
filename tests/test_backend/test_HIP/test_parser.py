@@ -3,8 +3,8 @@
 import pytest
 
 from crosstl.backend.HIP.HipAst import (
-    AssignmentNode,
     ArrayAccessNode,
+    AssignmentNode,
     AtomicOperationNode,
     BinaryOpNode,
     CastNode,
@@ -12,24 +12,24 @@ from crosstl.backend.HIP.HipAst import (
     DesignatedInitializerNode,
     DoWhileNode,
     ForNode,
-    FunctionNode,
     FunctionCallNode,
+    FunctionNode,
     HipBuiltinNode,
     IfNode,
     InitializerListNode,
-    KernelNode,
     KernelLaunchNode,
+    KernelNode,
     MemberAccessNode,
     NewNode,
     RangeForNode,
-    SyncNode,
+    ReturnNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
     WhileNode,
-    ReturnNode,
 )
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser, HipProgramNode

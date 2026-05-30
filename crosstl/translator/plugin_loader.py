@@ -8,7 +8,7 @@ import os
 from typing import Iterable
 
 from .codegen.registry import BackendSpec, register_backend
-from .source_registry import SourceSpec, SOURCE_REGISTRY
+from .source_registry import SOURCE_REGISTRY, SourceSpec
 
 logger = logging.getLogger(__name__)
 

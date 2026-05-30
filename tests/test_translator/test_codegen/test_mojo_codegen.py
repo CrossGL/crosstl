@@ -3,15 +3,14 @@ import subprocess
 from typing import List
 
 import pytest
+
 import crosstl.translator
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
-    AtomicOpNode,
     ArrayAccessNode,
     ArrayLiteralNode,
     ArrayType,
     AssignmentNode,
+    AtomicOpNode,
     BinaryOpNode,
     BlockNode,
     BufferOpNode,
@@ -22,11 +21,11 @@ from crosstl.translator.ast import (
     FunctionCallNode,
     IdentifierNode,
     IdentifierPatternNode,
-    LiteralPatternNode,
     LiteralNode,
-    MatrixType,
+    LiteralPatternNode,
     MatchArmNode,
     MatchNode,
+    MatrixType,
     MemberAccessNode,
     MeshOpNode,
     NamedType,
@@ -34,8 +33,8 @@ from crosstl.translator.ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReturnNode,
-    SwizzleNode,
     StructPatternNode,
+    SwizzleNode,
     SyncNode,
     TernaryOpNode,
     TextureNode,
@@ -46,6 +45,8 @@ from crosstl.translator.ast import (
     WildcardPatternNode,
 )
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:

@@ -11,9 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
@@ -289,7 +289,7 @@ def strip_yaml_scalar(value: str) -> str:
 
 def yaml_list_values(section: list[str], key: str) -> list[str]:
     for index, line in enumerate(section):
-        if line.strip() != "{}:".format(key):
+        if line.strip() != f"{key}:":
             continue
         indent = leading_spaces(line)
         values = []
@@ -309,7 +309,7 @@ def pull_request_path_filters(workflow: str) -> list[str]:
 
 
 def workflow_step_section(workflow: str, name: str) -> str:
-    pattern = r"^\s*-\s+name:\s*{}\s*$".format(re.escape(name))
+    pattern = rf"^\s*-\s+name:\s*{re.escape(name)}\s*$"
     match = re.search(pattern, workflow, flags=re.MULTILINE)
     if not match:
         return ""
@@ -319,7 +319,7 @@ def workflow_step_section(workflow: str, name: str) -> str:
 
 
 def workflow_step_start(workflow: str, name: str) -> int:
-    pattern = r"^\s*-\s+name:\s*{}\s*$".format(re.escape(name))
+    pattern = rf"^\s*-\s+name:\s*{re.escape(name)}\s*$"
     match = re.search(pattern, workflow, flags=re.MULTILINE)
     return match.start() if match else -1
 
@@ -586,20 +586,20 @@ def load_backends() -> list[dict[str, Any]]:
 def workflow_text(name: str) -> str:
     path = WORKFLOW_DIR / name
     if not path.exists():
-        raise CiCoverageError("Workflow does not exist: {}".format(relpath(path)))
+        raise CiCoverageError(f"Workflow does not exist: {relpath(path)}")
     return read_text(path)
 
 
 def all_workflow_texts() -> dict[str, str]:
     if not WORKFLOW_DIR.exists():
         raise CiCoverageError(
-            "Workflow directory does not exist: {}".format(relpath(WORKFLOW_DIR))
+            f"Workflow directory does not exist: {relpath(WORKFLOW_DIR)}"
         )
     workflows = {
         path.name: read_text(path) for path in sorted(WORKFLOW_DIR.glob("*.yml"))
     }
     if not workflows:
-        raise CiCoverageError("No workflow files found in {}".format(WORKFLOW_DIR))
+        raise CiCoverageError(f"No workflow files found in {WORKFLOW_DIR}")
     return workflows
 
 
@@ -615,7 +615,7 @@ def parse_matrix_values(raw: str) -> list[str]:
 
 def matrix_values(workflow: str, key: str) -> list[str]:
     inline = re.search(
-        r"^\s*{}:\s*(\[[^\n]+\])\s*$".format(re.escape(key)),
+        rf"^\s*{re.escape(key)}:\s*(\[[^\n]+\])\s*$",
         workflow,
         flags=re.MULTILINE,
     )
@@ -623,13 +623,13 @@ def matrix_values(workflow: str, key: str) -> list[str]:
         return parse_matrix_values(inline.group(1))
 
     block = re.search(
-        r"^\s*{}:\s*\n\s*\[\s*(.*?)\s*\]".format(re.escape(key)),
+        rf"^\s*{re.escape(key)}:\s*\n\s*\[\s*(.*?)\s*\]",
         workflow,
         flags=re.MULTILINE | re.DOTALL,
     )
     if block:
         return parse_matrix_values(block.group(1))
-    raise CiCoverageError("Matrix key not found: {}".format(key))
+    raise CiCoverageError(f"Matrix key not found: {key}")
 
 
 def backend_test_matrix_name(backend: dict[str, Any]) -> str:
@@ -1210,7 +1210,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
 
     permissions = report["workflows"]["permissions"]
     for workflow_name in permissions["missing_explicit_permissions"]:
-        errors.append("{} missing explicit permissions".format(workflow_name))
+        errors.append(f"{workflow_name} missing explicit permissions")
     for workflow_name, permission_names in permissions[
         "unexpected_write_permissions"
     ].items():
@@ -1239,7 +1239,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     pull_request_target = report["workflows"]["pull_request_target"]
     for workflow_name in pull_request_target["unexpected_workflows"]:
         errors.append(
-            "{} uses pull_request_target but is not allowlisted".format(workflow_name)
+            f"{workflow_name} uses pull_request_target but is not allowlisted"
         )
     for workflow_name, trusted in pull_request_target["trusted_base_checkout"].items():
         if not trusted:
@@ -1316,7 +1316,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     docs = report["workflows"]["docs"]
     for policy, present in docs["required_policies"].items():
         if not present:
-            errors.append("docs.yml missing policy: {}".format(policy))
+            errors.append(f"docs.yml missing policy: {policy}")
 
     examples = report["workflows"]["examples"]
     for dimension in ("python_versions", "oses", "backend_coverage"):
@@ -1330,7 +1330,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
             )
     for policy, present in examples["required_policies"].items():
         if not present:
-            errors.append("examples-test.yml missing policy: {}".format(policy))
+            errors.append(f"examples-test.yml missing policy: {policy}")
     if not examples["backend_specific_strict"]:
         errors.append("examples-test.yml backend-specific job must fail on errors")
     if not examples["stability_fails_on_regression"]:
@@ -1354,17 +1354,13 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         )
     for marker, present in full_tests["required_markers"].items():
         if not present:
-            errors.append("full-tests.yml missing marker: {}".format(marker))
+            errors.append(f"full-tests.yml missing marker: {marker}")
     for tool, present in full_tests["required_tools"].items():
         if not present:
-            errors.append(
-                "full-tests.yml missing compiler tool coverage: {}".format(tool)
-            )
+            errors.append(f"full-tests.yml missing compiler tool coverage: {tool}")
     for download, present in full_tests["download_retries"].items():
         if not present:
-            errors.append(
-                "full-tests.yml missing external download retry: {}".format(download)
-            )
+            errors.append(f"full-tests.yml missing external download retry: {download}")
     for summary_name, summary_fields in full_tests["failure_summaries"].items():
         for field, present in summary_fields.items():
             if not present:
@@ -1378,7 +1374,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     support_matrix = report["workflows"]["support_matrix"]
     for policy, present in support_matrix["required_policies"].items():
         if not present:
-            errors.append("support-matrix.yml missing policy: {}".format(policy))
+            errors.append(f"support-matrix.yml missing policy: {policy}")
     if not support_matrix["uploads_check_report_artifact"]:
         errors.append("support-matrix.yml missing check report artifact upload")
     if not support_matrix["uploads_check_report_artifact_on_failure"]:
@@ -1401,7 +1397,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     pr_issue_links = report["workflows"]["pr_issue_links"]
     for policy, present in pr_issue_links["required_policies"].items():
         if not present:
-            errors.append("pr-issue-links.yml missing policy: {}".format(policy))
+            errors.append(f"pr-issue-links.yml missing policy: {policy}")
 
     support_sync = report["workflows"]["support_issue_sync"]
     for field in (
@@ -1448,17 +1444,13 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "issue_sync_report_upload_after_sync",
     ):
         if not support_sync[field]:
-            errors.append("support-issue-sync.yml missing {}".format(field))
+            errors.append(f"support-issue-sync.yml missing {field}")
     for test, present in support_sync["required_tests"].items():
         if not present:
-            errors.append(
-                "support-issue-sync.yml missing planner test: {}".format(test)
-            )
+            errors.append(f"support-issue-sync.yml missing planner test: {test}")
     for path_filter, present in support_sync["required_path_filters"].items():
         if not present:
-            errors.append(
-                "support-issue-sync.yml missing path filter: {}".format(path_filter)
-            )
+            errors.append(f"support-issue-sync.yml missing path filter: {path_filter}")
 
     return errors
 
@@ -1510,7 +1502,7 @@ def compare_bool_value(
 
 def workflow_timeout_presence(runtime: dict[str, Any]) -> dict[str, bool]:
     return {
-        "{}:{}".format(workflow_name, job_name): timeout is not None and timeout > 0
+        f"{workflow_name}:{job_name}": timeout is not None and timeout > 0
         for workflow_name, timeouts in runtime["job_timeouts"].items()
         for job_name, timeout in timeouts.items()
     }
@@ -1527,9 +1519,7 @@ def workflow_required_write_presence(permissions: dict[str, Any]) -> dict[str, b
             continue
         actual_permissions = set(write_permissions[workflow_name])
         for permission in required_permissions:
-            presence["{}:{}".format(workflow_name, permission)] = (
-                permission in actual_permissions
-            )
+            presence[f"{workflow_name}:{permission}"] = permission in actual_permissions
     return presence
 
 
@@ -1552,25 +1542,23 @@ def workflow_action_policy_presence(actions: dict[str, Any]) -> dict[str, bool]:
 def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, bool]:
     presence = {}
     for workflow_name in report["workflows"]:
-        presence["{}:allowlisted".format(workflow_name)] = (
+        presence[f"{workflow_name}:allowlisted"] = (
             workflow_name not in report["unexpected_workflows"]
         )
     for workflow_name, trusted in report["trusted_base_checkout"].items():
-        presence["{}:trusted_base_checkout".format(workflow_name)] = trusted
+        presence[f"{workflow_name}:trusted_base_checkout"] = trusted
     for workflow_name, persists in report["checkout_credentials_persist"].items():
-        presence["{}:no_persisted_checkout_credentials".format(workflow_name)] = (
-            not persists
-        )
+        presence[f"{workflow_name}:no_persisted_checkout_credentials"] = not persists
     for workflow_name, markers in report["head_context_markers"].items():
-        presence["{}:no_pr_head_context".format(workflow_name)] = not bool(markers)
+        presence[f"{workflow_name}:no_pr_head_context"] = not bool(markers)
     for workflow_name, enabled in report["support_traceability"].items():
-        presence["{}:support_traceability".format(workflow_name)] = enabled
+        presence[f"{workflow_name}:support_traceability"] = enabled
     for workflow_name, enabled in report["support_closure_sync"].items():
-        presence["{}:support_closure_sync".format(workflow_name)] = enabled
+        presence[f"{workflow_name}:support_closure_sync"] = enabled
     for workflow_name, enabled in report["support_reference_sync"].items():
-        presence["{}:support_reference_sync".format(workflow_name)] = enabled
+        presence[f"{workflow_name}:support_reference_sync"] = enabled
     for workflow_name, scoped in report["github_token_scoped_to_sync"].items():
-        presence["{}:github_token_scoped_to_sync".format(workflow_name)] = scoped
+        presence[f"{workflow_name}:github_token_scoped_to_sync"] = scoped
     return presence
 
 
@@ -1781,7 +1769,7 @@ def build_ci_coverage_comparison(
         for field in sorted(set(baseline_summary) | set(current_summary)):
             add_bool_change(
                 "full-tests.yml",
-                "failure_summaries.{}.{}".format(summary_name, field),
+                f"failure_summaries.{summary_name}.{field}",
                 bool(baseline_summary.get(field)),
                 bool(current_summary.get(field)),
             )
@@ -1930,7 +1918,7 @@ def write_report(report: dict[str, Any], output: Path | None) -> None:
         return
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
-    print("Wrote {}".format(display_path(output)))
+    print(f"Wrote {display_path(output)}")
 
 
 def ok_text(value: bool) -> str:
@@ -2529,7 +2517,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
     if errors:
         lines.extend(["", "## Errors", ""])
-        lines.extend("- {}".format(error) for error in errors)
+        lines.extend(f"- {error}" for error in errors)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -2540,7 +2528,7 @@ def write_markdown(report: dict[str, Any], output: Path | None) -> None:
         return
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
-    print("Wrote {}".format(display_path(output)))
+    print(f"Wrote {display_path(output)}")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -2605,7 +2593,7 @@ def main(argv: list[str] | None = None) -> int:
 
         report = build_report()
     except CiCoverageError as exc:
-        print("CI coverage error: {}".format(exc), file=sys.stderr)
+        print(f"CI coverage error: {exc}", file=sys.stderr)
         return 2
 
     errors = validation_errors(report)
@@ -2626,7 +2614,7 @@ def main(argv: list[str] | None = None) -> int:
         if errors:
             print("CI coverage check failed:", file=sys.stderr)
             for error in errors:
-                print("- {}".format(error), file=sys.stderr)
+                print(f"- {error}", file=sys.stderr)
             return 1
         print("CI coverage check passed.")
     return 0

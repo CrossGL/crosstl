@@ -11,22 +11,20 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections import Counter
 import difflib
-from functools import lru_cache
 import hashlib
-from html.parser import HTMLParser
-from io import BytesIO
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from collections import Counter
+from functools import lru_cache
+from html.parser import HTMLParser
+from io import BytesIO
+from pathlib import Path
 from typing import Any
-from urllib import error
-from urllib import parse
-from urllib import request
+from urllib import error, parse, request
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORT_DIR = ROOT / "support"
@@ -406,7 +404,7 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
                 {
                     "kind": "pdf",
                     "parser": None,
-                    "error": "No PDF text extractor is available: {}".format(exc),
+                    "error": f"No PDF text extractor is available: {exc}",
                     "links": [],
                     "text_length": 0,
                 },
@@ -785,7 +783,7 @@ def link_score(url: str, base_url: str, backend: dict[str, Any]) -> int:
     extension = Path(parsed.path).suffix.lower()
     if extension in SKIPPED_LINK_EXTENSIONS:
         return 0
-    haystack = "{} {}".format(parsed.path, parsed.query).lower()
+    haystack = f"{parsed.path} {parsed.query}".lower()
     backend_terms = set(backend.get("aliases", [])) | set(
         split_identifier(backend["id"])
     )
@@ -951,7 +949,7 @@ def fetch_url(url: str, timeout: float) -> dict[str, Any]:
         return {
             "ok": False,
             "url": url,
-            "error": "{}: {}".format(exc.__class__.__name__, exc),
+            "error": f"{exc.__class__.__name__}: {exc}",
             "elapsed_ms": int((time.time() - started) * 1000),
         }
 
@@ -1226,7 +1224,7 @@ def documented_candidate_issues(
             feature_id = "docs.{}".format(candidate_key(candidate["term"]))
             issues.append(
                 {
-                    "key": "extracted:{}:{}:{}".format(backend_id, feature_id, kind),
+                    "key": f"extracted:{backend_id}:{feature_id}:{kind}",
                     "kind": kind,
                     "title": title,
                     "backend_id": backend_id,
@@ -1358,7 +1356,7 @@ def pytest_failure_issues(
             {"id": FRONTEND_ID, "name": FRONTEND_NAME},
         )
         category_key = candidate_key(category)
-        feature_id = "ci.pytest.{}".format(category_key)
+        feature_id = f"ci.pytest.{category_key}"
         samples = [pytest_failure_sample(failure) for failure in failures[:12]]
         issues.append(
             {
@@ -1601,7 +1599,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(stable_json(report), encoding="utf-8")
-        print("Wrote {}".format(relpath(output)))
+        print(f"Wrote {relpath(output)}")
         print(
             "Docs: total={total}, ok={ok}, failed={failed}, linked={linked_documents}, feature_hits={feature_hits}, candidate_terms={candidate_terms}".format(
                 **report["summary"]
@@ -1629,7 +1627,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"extract", "update"}:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(expected, encoding="utf-8")
-        print("Wrote {}".format(relpath(output)))
+        print(f"Wrote {relpath(output)}")
         return 0
 
     diff = compare_file(output, expected)

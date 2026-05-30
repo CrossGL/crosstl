@@ -1,7 +1,7 @@
 """Lexer for importing Metal source into CrossGL Translator."""
 
 import re
-from typing import Dict, Iterator, Tuple, List, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from .preprocessor import MetalPreprocessor
 
@@ -385,7 +385,7 @@ class MetalLexer:
         strict_preprocessor: bool = False,
     ) -> "MetalLexer":
         """Create a lexer instance from a Metal source file."""
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             return cls(
                 f.read(),
                 preprocess=preprocess,

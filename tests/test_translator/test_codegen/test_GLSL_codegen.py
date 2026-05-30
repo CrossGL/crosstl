@@ -10647,7 +10647,7 @@ def test_function_call():
     vec2 perlinNoise(vec2 uv) {
         return vec2(0.0, 0.0);
     }
-    
+
     sampler2D iChannel0;
 
     vertex {
@@ -10830,23 +10830,23 @@ def test_opengl_array_handling(array_test_data):
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             return output;
         }
     }
