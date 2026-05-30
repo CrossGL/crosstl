@@ -1851,9 +1851,23 @@
           ]
         },
         "metal": {
-          "status": "unsupported",
-          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
-          "evidence": ["crosstl/translator/codegen/metal_codegen.py::WaveOpNode"]
+          "status": "supported",
+          "notes": "Lowers CrossGL Wave* operations to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_builtins_use_compute_stage_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_builtins_thread_through_compute_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_intrinsics_emit_compile_safe_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_is_first_lane_lowers_to_simd_is_first",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_read_lane_at_lowers_to_simd_broadcast",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_ballot_and_active_all_equal_vector_lowering",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_active_reductions_lower_to_simd_intrinsics"
+          ]
         },
         "vulkan": {
           "status": "partial",

@@ -37,7 +37,7 @@ implicitly supported.
 
    "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
-   "Metal", "35", "5", "0", "0", "3", "0"
+   "Metal", "36", "5", "0", "0", "2", "0"
    "Vulkan SPIR-V", "17", "17", "1", "0", "0", "8"
    "CUDA", "11", "12", "0", "0", "3", "17"
    "HIP", "10", "12", "0", "0", "3", "18"
@@ -56,7 +56,7 @@ scope for graphics backend completion work.
 
    "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "4", "0", "0", "1", "0"
-   "Metal", "35", "5", "0", "0", "3", "0"
+   "Metal", "36", "5", "0", "0", "2", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
@@ -79,7 +79,6 @@ scope for graphics backend completion work.
    "Metal", "textures", "Advanced texture operations", "partial", "Several unsupported combinations intentionally emit diagnostics."
    "DirectX / HLSL", "language", "Wave/subgroup intrinsics", "partial", "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed."
    "OpenGL / GLSL", "language", "Wave/subgroup intrinsics", "unsupported", "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented."
-   "Metal", "language", "Wave/subgroup intrinsics", "unsupported", "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics."
 
 Feature Matrix
 --------------
@@ -155,7 +154,7 @@ Each category below uses the status codes from the legend.
    "Function declarations and calls", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Control flow", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Synchronization and memory barriers", "Y", "Y", "Y", "Y", "Y", "P", "P", "?", "Y"
-   "Wave/subgroup intrinsics", "P", "U", "U", "P", "?", "?", "R", "?", "P"
+   "Wave/subgroup intrinsics", "P", "U", "Y", "P", "?", "?", "R", "?", "P"
    "Match/pattern lowering", "Y", "Y", "Y", "?", "P", "P", "P", "Y", "P"
    "Vector and matrix expressions", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
    "Bitwise operations", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
@@ -358,7 +357,6 @@ need an audit before implementation work can be scoped accurately.
    "Rust", "language", "Synchronization and memory barriers", "unknown", ""
    "DirectX / HLSL", "language", "Wave/subgroup intrinsics", "partial", "WaveOpNode calls are preserved as native HLSL Wave* intrinsics. Current tests cover pass-through for WaveActiveSum; broader Shader Model wave validation is still needed."
    "OpenGL / GLSL", "language", "Wave/subgroup intrinsics", "unsupported", "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented."
-   "Metal", "language", "Wave/subgroup intrinsics", "unsupported", "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics."
    "Vulkan SPIR-V", "language", "Wave/subgroup intrinsics", "partial", "Lowers WaveGetLaneCount, WaveGetLaneIndex, WaveIsFirstLane, WaveActiveSum/Product/Min/Max/BitAnd/BitOr/BitXor, WavePrefixSum/Product, WaveActiveAllTrue/AnyTrue/Ballot, WaveReadLaneAt, WaveReadLaneFirst, QuadRead*, WaveMatch, and WaveMultiPrefix* to SPIR-V GroupNonUniform operations with spirv-as/spirv-val coverage where tools are available. Dynamic or out-of-range quad lanes and invalid multi-prefix masks emit deterministic diagnostics."
    "CUDA", "language", "Wave/subgroup intrinsics", "unknown", ""
    "HIP", "language", "Wave/subgroup intrinsics", "unknown", ""

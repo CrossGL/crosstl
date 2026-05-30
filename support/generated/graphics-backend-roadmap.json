@@ -161,15 +161,6 @@
       "feature_id": "language.wave_intrinsics",
       "notes": "The frontend parses WaveOpNode and the OpenGL backend currently preserves the HLSL Wave* spelling, but native GLSL subgroup lowering and validator coverage are not implemented.",
       "status": "unsupported"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "language",
-      "feature": "Wave/subgroup intrinsics",
-      "feature_id": "language.wave_intrinsics",
-      "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
-      "status": "unsupported"
     }
   ],
   "features": [
@@ -1461,10 +1452,22 @@
         },
         "metal": {
           "evidence": [
-            "crosstl/translator/codegen/metal_codegen.py::WaveOpNode"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_intrinsics_lower_to_simdgroup_and_diagnose_gaps",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_op_ir_nodes_lower_to_simdgroup_intrinsics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_builtins_use_compute_stage_parameters",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_builtins_thread_through_compute_helpers",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_lane_helper_calls_diagnose_non_compute_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_match_threads_lane_count_and_diagnoses_unavailable_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_multi_prefix_threads_lane_context_and_diagnoses_unavailable_contexts",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_intrinsics_emit_compile_safe_diagnostics",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_is_first_lane_lowers_to_simd_is_first",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_prefix_ops_lower_to_simd_prefix_exclusive",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_read_lane_at_lowers_to_simd_broadcast",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_ballot_and_active_all_equal_vector_lowering",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_wave_active_reductions_lower_to_simd_intrinsics"
           ],
-          "notes": "The Metal backend currently preserves WaveOpNode spellings rather than lowering to simdgroup intrinsics.",
-          "status": "unsupported"
+          "notes": "Lowers CrossGL Wave* operations to Metal simdgroup intrinsics or helper functions, threads compute-stage lane metadata through helper calls, and emits compile-safe diagnostics for contexts where Metal cannot supply simdgroup lane values.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -1585,14 +1588,14 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 19,
+      "backlog_count": 18,
       "by_backend": {
         "directx": 6,
-        "metal": 8,
+        "metal": 7,
         "opengl": 5
       },
       "by_category": {
-        "language": 3,
+        "language": 2,
         "resources": 2,
         "stages": 8,
         "textures": 6
@@ -1602,7 +1605,7 @@
         "partial": 15,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 4,
+        "unsupported": 3,
         "validated_rejection": 0
       }
     },
@@ -1619,9 +1622,9 @@
       "metal": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 35,
+        "supported": 36,
         "unknown": 0,
-        "unsupported": 3,
+        "unsupported": 2,
         "validated_rejection": 0
       },
       "opengl": {
