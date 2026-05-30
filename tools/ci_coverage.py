@@ -520,6 +520,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
     checkout_credentials_persist = {}
     head_context_markers = {}
     support_traceability = {}
+    support_closure_sync = {}
     github_token_scoped_to_sync = {}
 
     for workflow_name in target_workflows:
@@ -541,6 +542,10 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
             "python tools/sync_pr_issue_links.py" in sync_step
             and "--check-support-traceability" in sync_step
         )
+        support_closure_sync[workflow_name] = (
+            "python tools/sync_pr_issue_links.py" in sync_step
+            and "--sync-support-closures" in sync_step
+        )
         github_token_scoped_to_sync[workflow_name] = (
             "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in sync_step
         )
@@ -553,6 +558,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
         "checkout_credentials_persist": checkout_credentials_persist,
         "head_context_markers": head_context_markers,
         "support_traceability": support_traceability,
+        "support_closure_sync": support_closure_sync,
         "github_token_scoped_to_sync": github_token_scoped_to_sync,
     }
 
@@ -1229,6 +1235,13 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
                     workflow_name
                 )
             )
+    for workflow_name, enabled in pull_request_target["support_closure_sync"].items():
+        if not enabled:
+            errors.append(
+                "{} pull_request_target must sync support issue closures".format(
+                    workflow_name
+                )
+            )
     for workflow_name, scoped in pull_request_target[
         "github_token_scoped_to_sync"
     ].items():
@@ -1505,6 +1518,8 @@ def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, boo
         presence["{}:no_pr_head_context".format(workflow_name)] = not bool(markers)
     for workflow_name, enabled in report["support_traceability"].items():
         presence["{}:support_traceability".format(workflow_name)] = enabled
+    for workflow_name, enabled in report["support_closure_sync"].items():
+        presence["{}:support_closure_sync".format(workflow_name)] = enabled
     for workflow_name, scoped in report["github_token_scoped_to_sync"].items():
         presence["{}:github_token_scoped_to_sync".format(workflow_name)] = scoped
     return presence
@@ -2016,6 +2031,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "No persisted credentials",
                 "No PR head context",
                 "Traceability",
+                "Support closures",
                 "Token scoped",
             ],
             [
@@ -2038,6 +2054,11 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ),
                     ok_text(
                         pull_request_target["support_traceability"].get(
+                            workflow_name, False
+                        )
+                    ),
+                    ok_text(
+                        pull_request_target["support_closure_sync"].get(
                             workflow_name, False
                         )
                     ),

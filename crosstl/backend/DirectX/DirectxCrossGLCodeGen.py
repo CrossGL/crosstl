@@ -1696,6 +1696,27 @@ class HLSLToCrossGLConverter:
 
         return comparison_keys, regular_keys
 
+    def function_variable_type_maps(self, root):
+        global_variable_types = {
+            getattr(node, "name", None): getattr(node, "vtype", None)
+            for node in getattr(root, "global_variables", []) or []
+        }
+        global_variable_types.pop(None, None)
+        type_maps = {}
+
+        for func in getattr(root, "functions", []) or []:
+            function_variable_types = dict(global_variable_types)
+            for param in getattr(func, "params", []) or []:
+                if getattr(param, "name", None):
+                    function_variable_types[param.name] = getattr(param, "vtype", None)
+            self.collect_variable_types_from_nodes(
+                getattr(func, "body", []), function_variable_types
+            )
+            type_maps[getattr(func, "name", None)] = function_variable_types
+
+        type_maps.pop(None, None)
+        return type_maps
+
     def propagate_function_texture_usage(
         self, root, function_usage, comparison_names, regular_names
     ):
@@ -1748,6 +1769,46 @@ class HLSLToCrossGLConverter:
 
         return changed
 
+    def propagate_function_texture_member_usage(
+        self, root, function_usage, member_comparison_keys, member_regular_keys
+    ):
+        type_maps = self.function_variable_type_maps(root)
+        changed = False
+
+        def apply_call_usage(node, caller_function_name):
+            nonlocal changed
+            if not isinstance(node, FunctionCallNode) or not isinstance(node.name, str):
+                return
+            callee_usage = function_usage.get(node.name)
+            if not callee_usage:
+                return
+            variable_types = type_maps.get(caller_function_name, {})
+            for usage_kind, usage_keys in (
+                ("comparison", member_comparison_keys),
+                ("regular", member_regular_keys),
+            ):
+                for param_index in callee_usage[usage_kind]:
+                    if param_index >= len(node.args):
+                        continue
+                    member_key = self.expression_struct_member_key(
+                        node.args[param_index], variable_types
+                    )
+                    if member_key and member_key not in usage_keys:
+                        usage_keys.add(member_key)
+                        changed = True
+
+        def visit(node, caller_function_name):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            apply_call_usage(node, caller_function_name)
+            for child in self.iter_ast_children(node):
+                visit(child, caller_function_name)
+
+        for func in getattr(root, "functions", []) or []:
+            visit(getattr(func, "body", []), getattr(func, "name", None))
+
+        return changed
+
     def collect_shadow_texture_names(self, root):
         comparison_names, regular_names = self.collect_nonparameter_texture_usage_names(
             root
@@ -1758,6 +1819,10 @@ class HLSLToCrossGLConverter:
         function_usage = self.collect_function_texture_parameter_usage(root)
         while self.propagate_function_texture_usage(
             root, function_usage, comparison_names, regular_names
+        ):
+            pass
+        while self.propagate_function_texture_member_usage(
+            root, function_usage, member_comparison_keys, member_regular_keys
         ):
             pass
 

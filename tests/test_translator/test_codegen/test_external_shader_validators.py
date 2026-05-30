@@ -11,6 +11,7 @@ from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
@@ -420,6 +421,127 @@ shader HLSLTessellationValidator {
                 + patch[1].position * bary.y
                 + patch[2].position * bary.z;
             return vec4(position, 1.0);
+        }
+    }
+}
+"""
+
+
+SLANG_TESSELLATION_VALIDATOR_SHADER = """
+shader SlangTessellationValidator {
+    struct VSOut {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct HSOut {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct PatchConstants {
+        float outer[3] @ gl_TessLevelOuter;
+        float inner[1] @ gl_TessLevelInner;
+    };
+
+    tessellation_control {
+        PatchConstants HSConst(
+            InputPatch<VSOut, 3> inputPatch,
+            uint patchID @ gl_PrimitiveID
+        ) {
+            PatchConstants patch;
+            VSOut first = gl_in[0];
+            patch.outer[0] = first.position.x + float(patchID);
+            patch.outer[1] = first.position.y;
+            patch.outer[2] = first.position.z;
+            patch.inner[0] = 1.0;
+            return patch;
+        }
+
+        HSOut main(InputPatch<VSOut, 3> inputPatch)
+            @domain(tri)
+            @partitioning(integer)
+            @outputtopology(triangle_cw)
+            @outputcontrolpoints(3)
+            @patchconstantfunc(HSConst) {
+            HSOut output;
+            VSOut current = gl_in[gl_InvocationID];
+            output.position = current.position;
+            output.uv = current.uv;
+            return output;
+        }
+    }
+
+    tessellation_evaluation {
+        vec4 main(OutputPatch<HSOut, 3> patch, vec3 bary @ gl_TessCoord)
+            @domain(tri) @ gl_Position {
+            vec4 p0 = patch[0].position * bary.x;
+            vec4 p1 = patch[1].position * bary.y;
+            vec4 p2 = patch[2].position * bary.z;
+            return p0 + p1 + p2;
+        }
+    }
+}
+"""
+
+
+SLANG_RAY_STAGE_VALIDATOR_SHADER = """
+shader SlangRayStageValidator {
+    struct RayPayload {
+        vec3 color;
+    };
+
+    struct HitAttributes {
+        vec2 barycentrics;
+    };
+
+    struct CallableData {
+        uint value;
+    };
+
+    ray_generation {
+        void main() {
+            uvec3 launch = gl_LaunchIDEXT;
+            uint launchSizeX = gl_LaunchSizeEXT.x;
+        }
+    }
+
+    ray_closest_hit {
+        void main(
+            RayPayload payload @ payload,
+            HitAttributes attributes @ hit_attribute
+        ) {
+            payload.color = vec3(attributes.barycentrics, 1.0);
+        }
+    }
+
+    ray_any_hit {
+        void main(
+            RayPayload payload @ payload,
+            HitAttributes attributes @ hit_attribute
+        ) {
+            payload.color = vec3(attributes.barycentrics, 0.5);
+            AcceptHitAndEndSearch();
+        }
+    }
+
+    ray_miss {
+        void main(RayPayload payload @ rayPayloadInEXT) {
+            payload.color = vec3(0.0, 0.0, 0.0);
+        }
+    }
+
+    ray_callable {
+        void main(CallableData data @ callableDataInEXT) {
+            data.value = data.value + 1u;
+        }
+    }
+
+    ray_intersection {
+        void main() {
+            HitAttributes attributes;
+            attributes.barycentrics = vec2(0.25, 0.75);
+            bool accepted = ReportHit(1.0, 0, attributes);
         }
     }
 }
@@ -1422,6 +1544,33 @@ def _run_validator(command):
     assert result.returncode == 0, diagnostics
 
 
+def _compile_slang_hlsl_entry(
+    slangc,
+    source_path,
+    output_path,
+    entry,
+    stage,
+    profile,
+):
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "hlsl",
+            "-entry",
+            entry,
+            "-stage",
+            stage,
+            "-profile",
+            profile,
+            "-o",
+            str(output_path),
+            str(source_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def _run_validator_or_skip_unsupported_extension(
     command, extension, unsupported_diagnostics=()
 ):
@@ -1913,6 +2062,114 @@ def test_generated_hlsl_tessellation_pair_compile_with_dxc(tmp_path):
     )
     assert hull_output.exists()
     assert domain_output.exists()
+
+
+def test_generated_slang_tessellation_pair_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_tessellation_pair.slang"
+    hull_output = tmp_path / "slang_tessellation_pair_hs.hlsl"
+    domain_output = tmp_path / "slang_tessellation_pair_ds.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_TESSELLATION_VALIDATOR_SHADER)
+    )
+    assert "float4 position : SV_Position;" in code
+    assert "float2 uv : TEXCOORD0;" in code
+    assert "float outer[3] : SV_TessFactor;" in code
+    assert "float inner[1] : SV_InsideTessFactor;" in code
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint patchID : SV_PrimitiveID)"
+    ) in code
+    assert '[domain("tri")]' in code
+    assert '[partitioning("integer")]' in code
+    assert '[outputtopology("triangle_cw")]' in code
+    assert "[outputcontrolpoints(3)]" in code
+    assert '[patchconstantfunc("HSConst")]' in code
+    assert '[shader("hull")]' in code
+    assert (
+        "HSOut HSMain(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)"
+    ) in code
+    assert "VSOut first = inputPatch[0];" in code
+    assert "VSOut current = inputPatch[gl_InvocationID];" in code
+    assert '[shader("domain")]' in code
+    assert (
+        "float4 DSMain(OutputPatch<HSOut, 3> patch, "
+        "float3 bary : SV_DomainLocation) : SV_Position"
+    ) in code
+    assert "return p0 + p1 + p2;" in code
+    assert "gl_in" not in code
+    assert ": gl_TessCoord" not in code
+    assert ": gl_TessLevelOuter" not in code
+    assert ": gl_TessLevelInner" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hull_output, "HSMain", "hull", "hs_6_0"
+    )
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, domain_output, "DSMain", "domain", "ds_6_0"
+    )
+
+
+def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_ray_stage_library.slang"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_RAY_STAGE_VALIDATOR_SHADER)
+    )
+    assert '[shader("raygeneration")]' in code
+    assert "void RayGenMain()" in code
+    assert "uint3 launch = DispatchRaysIndex();" in code
+    assert "uint launchSizeX = DispatchRaysDimensions().x;" in code
+    assert '[shader("closesthit")]' in code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in code
+    )
+    assert '[shader("anyhit")]' in code
+    assert (
+        "void AnyHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in code
+    )
+    assert "AcceptHitAndEndSearch();" in code
+    assert '[shader("miss")]' in code
+    assert "void MissMain(inout RayPayload payload)" in code
+    assert '[shader("callable")]' in code
+    assert "void CallableMain(inout CallableData data)" in code
+    assert '[shader("intersection")]' in code
+    assert "void IntersectionMain()" in code
+    assert "bool accepted = ReportHit(1.0, 0, attributes);" in code
+    assert "payload.color = float3(attributes.barycentrics, 1.0);" in code
+    assert "payload.color = float3(attributes.barycentrics, 0.5);" in code
+    assert "payload.color = float3(0.0, 0.0, 0.0);" in code
+    assert "data.value = data.value + 1u;" in code
+    assert ": payload" not in code
+    assert ": hit_attribute" not in code
+    assert "rayPayloadInEXT" not in code
+    assert "callableDataInEXT" not in code
+    assert "gl_LaunchIDEXT" not in code
+    assert "gl_LaunchSizeEXT" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("anyhit", "AnyHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
+        ("intersection", "IntersectionMain"),
+    ]:
+        _compile_slang_hlsl_entry(
+            slangc,
+            shader_path,
+            tmp_path / f"slang_ray_stage_library_{stage}.hlsl",
+            entry,
+            stage,
+            "sm_6_3",
+        )
 
 
 @pytest.mark.parametrize(

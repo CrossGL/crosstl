@@ -798,7 +798,9 @@ def test_basic_shader():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert generated_code is not None
-        assert "fn main(" in generated_code
+        assert "fn vertex_main(" in generated_code
+        assert "fn fragment_main(" in generated_code
+        assert "fn main(" not in generated_code
         assert "# CrossGL shader stage: vertex" in generated_code
         assert "# CrossGL shader stage: fragment" in generated_code
         assert "@vertex_shader" not in generated_code
@@ -806,6 +808,54 @@ def test_basic_shader():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo basic shader codegen not implemented.")
+
+
+def test_vertex_fragment_shader_entries_compile_as_mojo_package(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader main {
+        struct VSInput {
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 color @ COLOR;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.color = vec4(input.texCoord, 0.0, 1.0);
+                return output;
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return input.color;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn vertex_main(input: VSInput) -> VSOutput:" in generated_code
+    assert "fn fragment_main(input: VSOutput) -> SIMD[DType.float32, 4]:" in (
+        generated_code
+    )
+    assert "fn main(" not in generated_code
+
+    package_dir = tmp_path / "vf_shader_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "vf_shader_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
 
 
 def test_return_semantic_metadata_and_validation_for_mojo_codegen():
@@ -1139,6 +1189,128 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     for shader, message in invalid_cases:
         with pytest.raises(ValueError, match=message):
             generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_struct_member_position_normal_texcoord_semantics_produce_annotations():
+    code = """
+    struct VertexInput {
+        vec4 position @ POSITION;
+        vec3 normal @ NORMAL;
+        vec2 texCoord @ TEXCOORD;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var position: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var normal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var texCoord: SIMD[DType.float32, 2]  # texcoord" in generated_code
+
+
+def test_stage_input_output_structs_with_sv_position_emit_mojo_annotations():
+    code = """
+    shader VertexPipeline {
+        struct VSOutput {
+            vec4 pos @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput out;
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var pos: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var uv: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "# CrossGL shader stage: vertex" in generated_code
+
+
+def test_direct_function_return_semantic_sv_target_produces_output_annotation():
+    code = """
+    shader FragmentOutput {
+        fragment {
+            vec4 main() @ SV_Target {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL return semantic: stage=fragment semantic=color(0) "
+        "source=SV_Target" in generated_code
+    )
+    assert "fn fragment_main() -> SIMD[DType.float32, 4]:" in generated_code
+
+
+def test_multiple_stage_parameters_with_different_semantics_all_handled():
+    code = """
+    shader MultiParam {
+        vertex {
+            vec4 main(
+                vec3 pos @ POSITION,
+                vec3 norm @ NORMAL,
+                vec2 uv0 @ TEXCOORD0,
+                vec2 uv1 @ TEXCOORD1,
+                uint vid @ gl_VertexID
+            ) @ gl_Position {
+                return vec4(pos, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pos: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "norm: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "uv0: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "uv1: SIMD[DType.float32, 2]  # texcoord1" in generated_code
+    assert "vid: UInt32  # vertex_id" in generated_code
+    assert (
+        "# CrossGL return semantic: stage=vertex semantic=position "
+        "source=gl_Position" in generated_code
+    )
+
+
+def test_vertex_stage_full_input_struct_position_normal_texcoord():
+    code = """
+    shader FullVertexInput {
+        struct VSInput {
+            vec4 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texCoord0 @ TEXCOORD0;
+            vec2 texCoord1 @ TEXCOORD1;
+        };
+
+        struct VSOutput {
+            vec4 clipPos @ SV_Position;
+            vec3 worldNormal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput out;
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var position: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var normal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var texCoord0: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "var texCoord1: SIMD[DType.float32, 2]  # texcoord1" in generated_code
+    assert "var clipPos: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var worldNormal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var uv: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "# CrossGL shader stage: vertex" in generated_code
 
 
 def test_compute_stage_local_helper_functions_emit_before_entry_point():
@@ -22960,6 +23132,141 @@ def test_mojo_storage_image_combined_load_store_and_atomics():
     assert "imageAtomicAdd" not in generated_code
     assert "imageAtomicMax" not in generated_code
     assert "imageAtomicExchange" not in generated_code
+
+
+def test_match_literal_patterns_emit_if_elif_chain_for_mojo_codegen():
+    code = """
+    int classify(int mode) {
+        match mode {
+            0 => { return 10; }
+            1 => { return 20; }
+            2 => { return 30; }
+        }
+        return -1;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if mode == 0:" in generated_code
+    assert "elif mode == 1:" in generated_code
+    assert "elif mode == 2:" in generated_code
+    assert "return 10" in generated_code
+    assert "return 20" in generated_code
+    assert "return 30" in generated_code
+    assert "switch" not in generated_code
+    assert "case" not in generated_code
+
+
+def test_match_wildcard_pattern_emits_else_clause_for_mojo_codegen():
+    code = """
+    int classify(int mode) {
+        match mode {
+            0 => { return 10; }
+            1 => { return 20; }
+            _ => { return -1; }
+        }
+        return 0;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if mode == 0:" in generated_code
+    assert "elif mode == 1:" in generated_code
+    assert "else:" in generated_code
+    assert "return (-1)" in generated_code or "return -1" in generated_code
+    assert "match" not in generated_code.replace("__cgl_match", "")
+
+
+def test_match_constructor_pattern_emits_variant_check_for_mojo_codegen():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int unwrap(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(x) => x,
+            _ => 0
+        };
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "variant ==" in generated_code or ".variant ==" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0" in generated_code
+
+
+def test_match_expression_with_literal_patterns_for_mojo_codegen():
+    code = """
+    int decode(int flag) {
+        int result = match flag {
+            0 => 100,
+            1 => 200,
+            _ => 999
+        };
+        return result;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "__cgl_match_value_0" in generated_code
+    assert "if flag == 0:" in generated_code
+    assert "elif flag == 1:" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = 100" in generated_code
+    assert "__cgl_match_value_0 = 200" in generated_code
+    assert "__cgl_match_value_0 = 999" in generated_code
+
+
+def test_multisample_texture_fetch_with_sample_index_for_mojo_codegen():
+    code = """
+    sampler2DMS msTexture;
+
+    vec4 fetchSample(ivec2 pixel, int sampleIdx) {
+        return texelFetch(msTexture, pixel, sampleIdx);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DMS:" in generated_code
+    assert "texel_fetch(msTexture, pixel, sampleIdx)" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "texelFetch" not in generated_code
+
+
+def test_multisample_texture_samples_query_for_mojo_codegen():
+    code = """
+    sampler2DMS msTexture;
+
+    int getSamples() {
+        return textureSamples(msTexture);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_samples(msTexture)" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "textureSamples" not in generated_code
+
+
+def test_multisample_image_samples_query_for_mojo_codegen():
+    code = """
+    image2DMS msImage;
+
+    int getImageSamples() {
+        return imageSamples(msImage);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_samples(msImage)" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "imageSamples" not in generated_code
 
 
 if __name__ == "__main__":

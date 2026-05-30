@@ -21441,6 +21441,356 @@ class TestVulkanSPIRVCodeGen:
         assert "OpTypeSampledImage" in spv_code
         assert "WARNING" not in spv_code
 
+    def test_image_gather_emits_op_image_gather_with_component(self, tmp_path):
+        source_code = """
+        shader GatherComponents {
+            sampler2d colorMap;
+            sampler2darray layerMap;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec4 gatherR = textureGather(colorMap, texCoord, 0);
+                    vec4 gatherG = textureGather(colorMap, texCoord, 1);
+                    vec4 gatherB = textureGather(colorMap, texCoord, 2);
+                    vec3 uvLayer = vec3(texCoord, 0.0);
+                    vec4 gatherLayer = textureGather(layerMap, uvLayer, 3);
+                    fragColor = gatherR + gatherG + gatherB + gatherLayer;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert spv_code.count("OpImageGather") == 4
+        assert f"OpImageGather {vec4_type.group(1)}" in spv_code
+        assert "OpTypeSampledImage" in spv_code
+        gather_lines = [
+            line for line in spv_code.splitlines() if "OpImageGather" in line
+        ]
+        assert len(gather_lines) == 4
+        for line in gather_lines:
+            assert re.search(r"OpImageGather %\d+ %\d+ %\d+ %\d+", line)
+        assert "OpFunctionCall" not in spv_code
+        assert "textureGather" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_explicit_lod_sampling_emits_op_image_sample_explicit_lod(self, tmp_path):
+        source_code = """
+        shader ExplicitLod {
+            sampler2d diffuse;
+            sampler2darray layers;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec4 mip0 = textureLod(diffuse, texCoord, 0.0);
+                    vec4 mip3 = textureLod(diffuse, texCoord, 3.0);
+                    vec3 uvLayer = vec3(texCoord, 2.0);
+                    vec4 layerMip = textureLod(layers, uvLayer, 1.5);
+                    fragColor = mip0 + mip3 + layerMip;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert spv_code.count("OpImageSampleExplicitLod") == 3
+        assert "OpImageSampleImplicitLod" not in spv_code
+        lod_lines = [
+            line for line in spv_code.splitlines() if "OpImageSampleExplicitLod" in line
+        ]
+        assert all("Lod" in line for line in lod_lines)
+        assert all(
+            re.search(r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Lod %\d+", line)
+            for line in lod_lines
+        )
+        assert "OpFunctionCall" not in spv_code
+        assert "textureLod" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_gradient_sampling_emits_op_image_sample_explicit_lod_with_grad(
+        self, tmp_path
+    ):
+        source_code = """
+        shader GradientSampling {
+            sampler2d colorMap;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec2 ddx = vec2(0.01, 0.0);
+                    vec2 ddy = vec2(0.0, 0.01);
+                    vec4 gradColor = textureGrad(colorMap, texCoord, ddx, ddy);
+                    vec2 ddx2 = vec2(0.05, 0.05);
+                    vec2 ddy2 = vec2(-0.05, 0.05);
+                    vec4 gradColor2 = textureGrad(colorMap, texCoord, ddx2, ddy2);
+                    fragColor = gradColor + gradColor2;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert spv_code.count("OpImageSampleExplicitLod") == 2
+        assert "OpImageSampleImplicitLod" not in spv_code
+        grad_lines = [
+            line for line in spv_code.splitlines() if "OpImageSampleExplicitLod" in line
+        ]
+        assert all("Grad" in line for line in grad_lines)
+        assert all(
+            re.search(r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ Grad %\d+ %\d+", line)
+            for line in grad_lines
+        )
+        assert not any(re.search(r"\bLod\b", line) for line in grad_lines)
+        assert "OpFunctionCall" not in spv_code
+        assert "textureGrad" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_implicit_lod_with_const_offset_emits_correct_operand(self, tmp_path):
+        source_code = """
+        shader OffsetSampling {
+            sampler2d colorMap;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec4 shifted = textureOffset(colorMap, texCoord, ivec2(1, -1));
+                    vec4 shifted2 = textureOffset(colorMap, texCoord, ivec2(-2, 3));
+                    fragColor = shifted + shifted2;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert "ConstOffset" in spv_code
+        assert len(re.findall(r"\bConstOffset\b", spv_code)) == 2
+        assert spv_code.count("OpImageSampleImplicitLod") == 2
+        implicit_lines = [
+            line for line in spv_code.splitlines() if "OpImageSampleImplicitLod" in line
+        ]
+        assert all("ConstOffset" in line for line in implicit_lines)
+        assert "OpImageSampleExplicitLod" not in spv_code
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+        ivec2_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(int_type.group(1))} 2",
+            spv_code,
+        )
+        assert ivec2_type is not None
+        assert re.search(
+            rf"%\d+ = OpConstantComposite {re.escape(ivec2_type.group(1))} %\d+ %\d+",
+            spv_code,
+        )
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "textureOffset" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_texel_fetch_emits_op_image_fetch_with_lod(self, tmp_path):
+        source_code = """
+        shader TexelFetchTest {
+            sampler2d colorMap;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    ivec2 pixel = ivec2(10, 20);
+                    vec4 mip0 = texelFetch(colorMap, pixel, 0);
+                    vec4 mip2 = texelFetch(colorMap, pixel, 2);
+                    vec4 mip5 = texelFetch(colorMap, pixel, 5);
+                    fragColor = mip0 + mip2 + mip5;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert spv_code.count("OpImageFetch") == 3
+        assert f"OpImageFetch {vec4_type.group(1)}" in spv_code
+        fetch_lines = [line for line in spv_code.splitlines() if "OpImageFetch" in line]
+        assert all("Lod" in line for line in fetch_lines)
+        assert all("Sample" not in line for line in fetch_lines)
+        assert all(
+            re.search(r"OpImageFetch %\d+ %\d+ %\d+ Lod %\d+", line)
+            for line in fetch_lines
+        )
+        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 3
+        assert "OpImageSampleExplicitLod" not in spv_code
+        assert "OpImageSampleImplicitLod" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert "texelFetch" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_multisample_fetch_emits_sample_operand_not_lod(self, tmp_path):
+        source_code = """
+        shader MultisampleFetch {
+            sampler2dms msTexture;
+            sampler2dmsarray msArray;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    ivec2 pixel = ivec2(32, 64);
+                    ivec3 pixelLayer = ivec3(32, 64, 0);
+                    int sampleIdx = 3;
+                    vec4 s0 = texelFetch(msTexture, pixel, 0);
+                    vec4 s3 = texelFetch(msTexture, pixel, sampleIdx);
+                    vec4 layerS0 = texelFetch(msArray, pixelLayer, 0);
+                    vec4 layerS3 = texelFetch(msArray, pixelLayer, sampleIdx);
+                    fragColor = s0 + s3 + layerS0 + layerS3;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec4_type is not None
+        assert " 2D 0 0 1 1 Unknown" in spv_code
+        assert " 2D 0 1 1 1 Unknown" in spv_code
+        assert spv_code.count("OpImageFetch") == 4
+        fetch_lines = [line for line in spv_code.splitlines() if "OpImageFetch" in line]
+        assert all("Sample" in line for line in fetch_lines)
+        assert all("Lod" not in line for line in fetch_lines)
+        assert all(
+            re.search(r"OpImageFetch %\d+ %\d+ %\d+ Sample %\d+", line)
+            for line in fetch_lines
+        )
+        assert len(re.findall(r"%\d+ = OpImage %\d+ %\d+", spv_code)) == 4
+        assert "OpFunctionCall" not in spv_code
+        assert "texelFetch" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_image_operand_mask_order_maintained_for_combined_operands(self, tmp_path):
+        source_code = """
+        shader OperandOrder {
+            sampler2d colorMap;
+
+            compute {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.5);
+                    ivec2 pixel = ivec2(10, 20);
+                    ivec2 offset = ivec2(1, 0);
+                    vec2 ddx = vec2(0.1, 0.0);
+                    vec2 ddy = vec2(0.0, 0.1);
+                    vec4 lodWithOffset = textureLodOffset(
+                        colorMap,
+                        uv,
+                        2.0,
+                        ivec2(1, -1)
+                    );
+                    vec4 gradWithOffset = textureGradOffset(
+                        colorMap,
+                        uv,
+                        ddx,
+                        ddy,
+                        ivec2(-1, 0)
+                    );
+                    vec4 fetchWithOffset = texelFetchOffset(
+                        colorMap,
+                        pixel,
+                        0,
+                        offset
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        lod_offset_match = re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ (Lod\|ConstOffset) %\d+ %\d+",
+            spv_code,
+        )
+        assert lod_offset_match is not None
+        assert lod_offset_match.group(1) == "Lod|ConstOffset"
+
+        grad_offset_match = re.search(
+            r"OpImageSampleExplicitLod %\d+ %\d+ %\d+ "
+            r"(Grad\|ConstOffset) %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert grad_offset_match is not None
+        assert grad_offset_match.group(1) == "Grad|ConstOffset"
+
+        fetch_offset_match = re.search(
+            r"OpImageFetch %\d+ %\d+ %\d+ (Lod\|(?:Const)?Offset) %\d+ %\d+",
+            spv_code,
+        )
+        assert fetch_offset_match is not None
+        mask = fetch_offset_match.group(1)
+        parts = mask.split("|")
+        operand_order = {
+            "Bias": 0,
+            "Lod": 1,
+            "Grad": 2,
+            "ConstOffset": 3,
+            "Offset": 4,
+            "ConstOffsets": 5,
+            "Sample": 6,
+            "MinLod": 7,
+        }
+        indices = [operand_order[p] for p in parts]
+        assert indices == sorted(indices)
+
+        assert "OpFunctionCall" not in spv_code
+        assert "textureLodOffset" not in spv_code
+        assert "textureGradOffset" not in spv_code
+        assert "texelFetchOffset" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_cube_array_sampler(self):
         source_code = """
         shader CubeArrayTest {
@@ -22043,3 +22393,303 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING: WaveActiveAnyTrue requires a scalar bool argument" in spv_code
         assert "OpGroupNonUniformAll" not in spv_code
         assert "OpGroupNonUniformAny" not in spv_code
+
+    def test_array_type_declaration_emits_optypearray_with_opconstant_size(self):
+        source_code = """
+        shader ArrayTypeDecl {
+            compute {
+                void main() {
+                    float values[4];
+                    values[0] = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+
+        size_const = re.search(
+            rf"(%\d+) = OpConstant {re.escape(int_type.group(1))} 4\b", spv_code
+        )
+        assert size_const is not None, "Array size OpConstant 4 not emitted"
+
+        array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(float_type.group(1))} "
+            rf"{re.escape(size_const.group(1))}",
+            spv_code,
+        )
+        assert (
+            array_type is not None
+        ), "OpTypeArray with float element and size 4 not found"
+        assert "WARNING" not in spv_code
+
+    def test_array_element_access_emits_opaccesschain_with_index(self):
+        source_code = """
+        shader ArrayElementAccess {
+            compute {
+                void main() {
+                    float values[3];
+                    values[0] = 10.0;
+                    values[1] = 20.0;
+                    float x = values[0];
+                    float y = values[1];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        values_var = spirv_named_variable(spv_code, "values", storage_class="Function")
+
+        access_chains = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(values_var)} %\d+",
+            spv_code,
+        )
+        assert (
+            len(access_chains) >= 2
+        ), f"Expected at least 2 OpAccessChain for array element access, got {len(access_chains)}"
+
+        loads = [
+            line
+            for line in spv_code.splitlines()
+            if "OpLoad" in line and any(ac in line for ac in access_chains)
+        ]
+        assert loads, "No OpLoad from OpAccessChain result found"
+        assert "WARNING" not in spv_code
+
+    def test_local_array_initialization_emits_opcompositeconstruct(self):
+        source_code = """
+        shader ArrayInit {
+            compute {
+                void main() {
+                    float values[3] = {1.0, 2.0, 3.0};
+                    float sum = values[0] + values[1] + values[2];
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert int_type is not None
+
+        size_const = re.search(
+            rf"(%\d+) = OpConstant {re.escape(int_type.group(1))} 3\b", spv_code
+        )
+        assert size_const is not None
+
+        array_type = re.search(
+            rf"(%\d+) = OpTypeArray {re.escape(float_type.group(1))} "
+            rf"{re.escape(size_const.group(1))}",
+            spv_code,
+        )
+        assert array_type is not None
+
+        array_construct = re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(array_type.group(1))} "
+            rf"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            array_construct is not None
+        ), "OpCompositeConstruct for array initialization not found"
+        assert "WARNING" not in spv_code
+
+    def test_struct_type_declaration_emits_optypestruct_with_member_types(self):
+        source_code = """
+        struct Light {
+            vec3 position;
+            float intensity;
+            int active;
+        };
+
+        shader StructTypeDecl {
+            compute {
+                void main() {
+                    Light light;
+                    light.intensity = 1.0;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        struct_id = spirv_named_id(spv_code, "Light")
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        int_type = re.search(r"(%\d+) = OpTypeInt 32 1", spv_code)
+        assert float_type is not None
+        assert int_type is not None
+
+        vec3_type = re.search(
+            rf"(%\d+) = OpTypeVector {re.escape(float_type.group(1))} 3", spv_code
+        )
+        assert vec3_type is not None
+
+        struct_def = re.search(
+            rf"{re.escape(struct_id)} = OpTypeStruct "
+            rf"{re.escape(vec3_type.group(1))} "
+            rf"{re.escape(float_type.group(1))} "
+            rf"{re.escape(int_type.group(1))}",
+            spv_code,
+        )
+        assert (
+            struct_def is not None
+        ), "OpTypeStruct with vec3, float, int member types not found"
+
+        assert "OpMemberName" in spv_code
+        assert '"position"' in spv_code
+        assert '"intensity"' in spv_code
+        assert '"active"' in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_struct_construction_emits_opcompositeconstruct(self):
+        source_code = """
+        struct Material {
+            float roughness;
+            float metallic;
+        };
+
+        shader StructConstruction {
+            compute {
+                void main() {
+                    Material mat = Material(0.5, 1.0);
+                    float r = mat.roughness;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        struct_id = spirv_named_id(spv_code, "Material")
+
+        construct = re.search(
+            rf"%\d+ = OpCompositeConstruct {re.escape(struct_id)} %\d+ %\d+",
+            spv_code,
+        )
+        assert (
+            construct is not None
+        ), "OpCompositeConstruct for struct construction not found"
+        assert "WARNING" not in spv_code
+
+    def test_struct_member_access_emits_opaccesschain_or_opcompositeextract(self):
+        source_code = """
+        struct Particle {
+            vec3 velocity;
+            float mass;
+        };
+
+        shader StructMemberAccess {
+            compute {
+                void main() {
+                    Particle p;
+                    p.velocity = vec3(1.0, 0.0, 0.0);
+                    p.mass = 2.5;
+                    vec3 v = p.velocity;
+                    float m = p.mass;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        p_var = spirv_named_variable(spv_code, "p", storage_class="Function")
+
+        member_accesses = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(p_var)} %\d+",
+            spv_code,
+        )
+        assert len(member_accesses) >= 2, (
+            f"Expected at least 2 OpAccessChain for struct member access, "
+            f"got {len(member_accesses)}"
+        )
+
+        stores_to_members = [
+            line
+            for line in spv_code.splitlines()
+            if "OpStore" in line and any(ac in line for ac in member_accesses)
+        ]
+        assert stores_to_members, "No OpStore to struct member via OpAccessChain found"
+        assert "WARNING" not in spv_code
+
+    def test_nested_struct_access_emits_chained_access(self):
+        source_code = """
+        struct Inner {
+            float value;
+        };
+
+        struct Outer {
+            Inner nested;
+            float scale;
+        };
+
+        shader NestedStructAccess {
+            compute {
+                void main() {
+                    Outer obj;
+                    obj.scale = 2.0;
+                    obj.nested.value = 3.14;
+                    float v = obj.nested.value;
+                    float s = obj.scale;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        inner_id = spirv_named_id(spv_code, "Inner")
+        outer_id = spirv_named_id(spv_code, "Outer")
+
+        assert re.search(
+            rf"{re.escape(inner_id)} = OpTypeStruct %\d+", spv_code
+        ), "Inner struct type not declared"
+        assert re.search(
+            rf"{re.escape(outer_id)} = OpTypeStruct {re.escape(inner_id)} %\d+",
+            spv_code,
+        ), "Outer struct should contain Inner as first member type"
+
+        obj_var = spirv_named_variable(spv_code, "obj", storage_class="Function")
+
+        first_level = re.findall(
+            rf"(%\d+) = OpAccessChain %\d+ {re.escape(obj_var)} %\d+",
+            spv_code,
+        )
+        assert first_level, "Expected OpAccessChain for struct member access on obj"
+
+        chained = any(
+            re.search(
+                rf"(%\d+) = OpAccessChain %\d+ {re.escape(ac)} %\d+",
+                spv_code,
+            )
+            for ac in first_level
+        )
+        assert (
+            chained
+        ), "Expected a second OpAccessChain using result of the first for nested access"
+        assert "WARNING" not in spv_code

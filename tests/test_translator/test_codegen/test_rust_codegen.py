@@ -22598,3 +22598,200 @@ def test_rust_fragment_stage_with_texture_sampling(tmp_path):
     assert "// texcoord(0)" in generated_code
     assert "input: PSInput" in generated_code
     assert "-> Vec4<f32>" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# Invalid shader shape validation and stage parameter semantics
+# ---------------------------------------------------------------------------
+
+
+def test_rust_invalid_shader_completely_empty(tmp_path):
+    """A shader with absolutely no content emits the standard header and compiles."""
+    code = """
+    shader Empty {
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "// Generated Rust GPU Shader Code" in generated_code
+    assert "use gpu::*;" in generated_code
+    assert "use math::*;" in generated_code
+    assert "#[vertex_shader]" not in generated_code
+    assert "#[fragment_shader]" not in generated_code
+    assert "#[compute_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_vertex_stage_no_body(tmp_path):
+    """Vertex stage with empty main body still produces shader attribute and compiles."""
+    code = """
+    shader NoBody {
+        vertex {
+            void main() {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub fn" in generated_code
+    assert "-> ()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
+    """Shader with only structs and no stages produces struct code but no shader attributes."""
+    code = """
+    shader StructOnly {
+        struct Vertex {
+            vec3 pos @ POSITION;
+            vec3 norm @ NORMAL;
+        };
+        struct Fragment {
+            vec4 color @ COLOR;
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct Vertex" in generated_code
+    assert "pub struct Fragment" in generated_code
+    assert "pub pos: Vec3<f32>," in generated_code
+    assert "pub norm: Vec3<f32>," in generated_code
+    assert "pub color: Vec4<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// color" in generated_code
+    assert "#[vertex_shader]" not in generated_code
+    assert "#[fragment_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
+    """All standard semantics (POSITION, NORMAL, TANGENT, TEXCOORD0-3, COLOR0-1) map correctly."""
+    code = """
+    shader SemanticsFull {
+        struct FullInput {
+            vec3 pos @ POSITION;
+            vec3 norm @ NORMAL;
+            vec3 tang @ TANGENT;
+            vec3 binorm @ BINORMAL;
+            vec2 uv0 @ TEXCOORD0;
+            vec2 uv1 @ TEXCOORD1;
+            vec2 uv2 @ TEXCOORD2;
+            vec2 uv3 @ TEXCOORD3;
+            vec4 col0 @ COLOR0;
+            vec4 col1 @ COLOR1;
+        };
+        struct FullOutput {
+            vec4 position @ gl_Position;
+            vec4 fragColor @ gl_FragColor;
+        };
+        vertex {
+            FullOutput main(FullInput input) {
+                FullOutput output;
+                output.position = vec4(input.pos, 1.0);
+                output.fragColor = input.col0;
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct FullInput" in generated_code
+    assert "pub struct FullOutput" in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// tangent" in generated_code
+    assert "// binormal" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "// texcoord(1)" in generated_code
+    assert "// texcoord(2)" in generated_code
+    assert "// texcoord(3)" in generated_code
+    assert "// color(0)" in generated_code
+    assert "// color(1)" in generated_code
+    assert "#[vertex_shader]" in generated_code
+    assert "input: FullInput" in generated_code
+    assert "-> FullOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
+    """Multiple parameters with bindings produce correct Rust function signature."""
+    code = """
+    shader MultiParam {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 clipPos @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput out;
+                out.clipPos = vec4(input.position, 1.0);
+                out.uv = input.texCoord;
+                return out;
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "input: VSInput" in generated_code
+    assert "input: VSOutput" in generated_code
+    assert "-> VSOutput" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub normal: Vec3<f32>," in generated_code
+    assert "pub texCoord: Vec2<f32>," in generated_code
+    assert "pub clipPos: Vec4<f32>," in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_generate_param_attributes_unit():
+    """Unit test for generate_param_attributes covering all semantic branches."""
+    codegen = RustCodeGen()
+
+    class MockParam:
+        def __init__(self, semantic):
+            self.semantic = semantic
+
+    assert "#[location(0)]" in codegen.generate_param_attributes(MockParam("POSITION"))
+    assert "#[location(1)]" in codegen.generate_param_attributes(MockParam("NORMAL"))
+    assert "#[location(2)]" in codegen.generate_param_attributes(MockParam("TEXCOORD0"))
+    assert "#[location(3)]" in codegen.generate_param_attributes(MockParam("TEXCOORD1"))
+    assert "#[location(2)]" in codegen.generate_param_attributes(MockParam("TEXCOORD"))
+    assert "#[location(4)]" in codegen.generate_param_attributes(MockParam("COLOR"))
+    result_gl_position = codegen.generate_param_attributes(MockParam("gl_Position"))
+    assert (
+        "#[location(0)]" in result_gl_position
+        or "#[builtin(position)]" in result_gl_position
+    )
+    result_gl_fragcolor = codegen.generate_param_attributes(MockParam("gl_FragColor"))
+    assert "#[location(" in result_gl_fragcolor
+    assert codegen.generate_param_attributes(MockParam(None)) == ""
+    assert codegen.generate_param_attributes(MockParam("UNKNOWN_SEMANTIC")) == ""

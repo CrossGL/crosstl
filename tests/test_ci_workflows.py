@@ -183,6 +183,9 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["pull_request_target"]["support_traceability"].values()
     )
     assert all(
+        report["workflows"]["pull_request_target"]["support_closure_sync"].values()
+    )
+    assert all(
         report["workflows"]["pull_request_target"][
             "github_token_scoped_to_sync"
         ].values()
@@ -888,6 +891,7 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     target["checkout_credentials_persist"]["pr-issue-links.yml"] = True
     target["head_context_markers"]["pr-issue-links.yml"] = ["github.head_ref"]
     target["support_traceability"]["pr-issue-links.yml"] = False
+    target["support_closure_sync"]["pr-issue-links.yml"] = False
     target["github_token_scoped_to_sync"]["pr-issue-links.yml"] = False
 
     errors = module.validation_errors(report)
@@ -904,6 +908,10 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     )
     assert (
         "pr-issue-links.yml pull_request_target must check support traceability"
+        in errors
+    )
+    assert (
+        "pr-issue-links.yml pull_request_target must sync support issue closures"
         in errors
     )
     assert (
@@ -1551,6 +1559,7 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
     assert "pull-requests: write" in pr_issue_links
     assert "persist-credentials: false" in pr_issue_links
     assert "python tools/sync_pr_issue_links.py" in pr_issue_links
+    assert "--sync-support-closures" in pr_issue_links
     assert "--check-support-traceability" in pr_issue_links
     assert "--enforce-support-traceability" not in pr_issue_links
 

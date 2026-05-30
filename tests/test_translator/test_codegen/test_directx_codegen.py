@@ -30098,5 +30098,268 @@ def test_directx_dispatch_mesh_rejects_invalid_in_mesh_stage():
         HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "mesh")
 
 
+def test_directx_gather_red_green_blue_alpha_from_component_literals():
+    shader = """
+    shader GatherComponentLiterals {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 red = textureGather(colorMap, linearSampler, input.uv, 0);
+                vec4 green = textureGather(colorMap, linearSampler, input.uv, 1);
+                vec4 blue = textureGather(colorMap, linearSampler, input.uv, 2);
+                vec4 alpha = textureGather(colorMap, linearSampler, input.uv, 3);
+                return red + green + blue + alpha;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "colorMap.GatherRed(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherGreen(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherBlue(linearSampler, input.uv)" in generated_code
+    assert "colorMap.GatherAlpha(linearSampler, input.uv)" in generated_code
+    assert "textureGather(" not in generated_code
+
+
+def test_directx_gather_offset_emits_gather_with_offset_parameter():
+    shader = """
+    shader GatherOffsetTest {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            ivec2 offset @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 basic = textureGatherOffset(colorMap, linearSampler, input.uv, input.offset);
+                vec4 red = textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, 0);
+                vec4 alpha = textureGatherOffset(colorMap, linearSampler, input.uv, input.offset, 3);
+                return basic + red + alpha;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "colorMap.Gather(linearSampler, input.uv, input.offset)" in generated_code
+    assert "colorMap.GatherRed(linearSampler, input.uv, input.offset)" in generated_code
+    assert (
+        "colorMap.GatherAlpha(linearSampler, input.uv, input.offset)" in generated_code
+    )
+    assert "textureGatherOffset(" not in generated_code
+
+
+def test_directx_gather_compare_emits_gather_cmp_red():
+    shader = """
+    shader GatherCompareTest {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+            float depth;
+            ivec2 offset @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 basic = textureGatherCompare(shadowMap, compareSampler, input.uv, input.depth);
+                vec4 withOffset = textureGatherCompareOffset(
+                    shadowMap,
+                    compareSampler,
+                    input.uv,
+                    input.depth,
+                    input.offset
+                );
+                return basic + withOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)" in generated_code
+    )
+    assert (
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, input.offset)"
+        in generated_code
+    )
+    assert "textureGatherCompare(" not in generated_code
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_directx_texture_proj_emits_perspective_divide_and_sample():
+    shader = """
+    shader TextureProjDivide {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+            vec4 projCoord4 @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            float lod;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projected = textureProj(colorMap, linearSampler, input.projCoord);
+                vec4 projLod = textureProjLod(
+                    colorMap,
+                    linearSampler,
+                    input.projCoord,
+                    input.lod
+                );
+                vec4 projOffset = textureProjOffset(
+                    colorMap,
+                    linearSampler,
+                    input.projCoord,
+                    input.offset
+                );
+                return projected + projLod + projOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z)"
+        in generated_code
+    )
+    assert (
+        "colorMap.SampleLevel(linearSampler, input.projCoord.xy / input.projCoord.z, input.lod)"
+        in generated_code
+    )
+    assert (
+        "colorMap.Sample(linearSampler, input.projCoord.xy / input.projCoord.z, input.offset)"
+        in generated_code
+    )
+    assert "textureProj(" not in generated_code
+    assert "textureProjLod(" not in generated_code
+    assert "textureProjOffset(" not in generated_code
+
+
+def test_directx_cube_array_gather_operations():
+    shader = """
+    shader CubeArrayGatherOps {
+        samplerCubeArray cubeArray;
+        sampler cubeSampler;
+
+        struct FSInput {
+            vec4 cubeLayer @ TEXCOORD0;
+        };
+
+        vec4 gatherDefault(samplerCubeArray tex, sampler s, vec4 cubeLayer) {
+            return textureGather(tex, s, cubeLayer);
+        }
+
+        vec4 gatherComponent(samplerCubeArray tex, sampler s, vec4 cubeLayer, int component) {
+            return textureGather(tex, s, cubeLayer, component);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 def = gatherDefault(cubeArray, cubeSampler, input.cubeLayer);
+                vec4 red = textureGather(cubeArray, cubeSampler, input.cubeLayer, 0);
+                vec4 dyn = gatherComponent(cubeArray, cubeSampler, input.cubeLayer, 2);
+                return def + red + dyn;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "tex.Gather(s, cubeLayer)" in generated_code
+    assert "cubeArray.GatherRed(cubeSampler, input.cubeLayer)" in generated_code
+    assert (
+        "float4 gatherDefault(TextureCubeArray tex, SamplerState s, float4 cubeLayer)"
+        in generated_code
+    )
+    assert (
+        "float4 gatherComponent(TextureCubeArray tex, SamplerState s, float4 cubeLayer, int component)"
+        in generated_code
+    )
+    assert "textureGather(" not in generated_code
+
+
+def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
+    shader = """
+    shader TextureProjGradOps {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+            vec2 ddx @ TEXCOORD1;
+            vec2 ddy @ TEXCOORD2;
+            ivec2 offset @ TEXCOORD3;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projGrad = textureProjGrad(
+                    colorMap,
+                    linearSampler,
+                    input.projCoord,
+                    input.ddx,
+                    input.ddy
+                );
+                vec4 projGradOffset = textureProjGradOffset(
+                    colorMap,
+                    linearSampler,
+                    input.projCoord,
+                    input.ddx,
+                    input.ddy,
+                    input.offset
+                );
+                return projGrad + projGradOffset;
+            }
+        }
+    }
+    """
+
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert (
+        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy)"
+        in generated_code
+    )
+    assert (
+        "colorMap.SampleGrad(linearSampler, input.projCoord.xy / input.projCoord.z, input.ddx, input.ddy, input.offset)"
+        in generated_code
+    )
+    assert "textureProjGrad(" not in generated_code
+    assert "textureProjGradOffset(" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -1106,6 +1106,176 @@ def test_metal_texture_proj_with_vec4_coord():
     assert "textureProj(" not in generated_code
 
 
+def test_metal_texture_gather_no_component_defaults():
+    shader = """
+    shader MetalTextureGatherNoComponent {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0) @ gl_FragColor {
+                vec4 gathered = textureGather(colorMap, linearSampler, uv);
+                return gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "colorMap.gather(linearSampler, uv" in generated_code
+    assert "textureGather(" not in generated_code
+
+
+def test_metal_texture_gather_compare_with_offset():
+    shader = """
+    shader MetalTextureGatherCompareOffset {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0, float depth @ texcoord1) @ gl_FragColor {
+                ivec2 offset = ivec2(1, 0);
+                vec4 gathered = textureGatherCompareOffset(shadowMap, compareSampler, uv, depth, offset);
+                return gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "shadowMap.gather_compare(compareSampler, uv, depth, offset)" in generated_code
+    )
+    assert "textureGatherCompareOffset(" not in generated_code
+
+
+def test_metal_texture_proj_lod_emits_division_with_level():
+    shader = """
+    shader MetalTextureProjLod {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0) @ gl_FragColor {
+                vec4 result = textureProjLod(colorMap, linearSampler, projCoord, 2.0);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z, level(2.0))"
+        in generated_code
+    )
+    assert "textureProjLod(" not in generated_code
+
+
+def test_metal_texture_proj_grad_emits_division_with_gradient():
+    shader = """
+    shader MetalTextureProjGrad {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0, vec2 ddx @ texcoord1, vec2 ddy @ texcoord2) @ gl_FragColor {
+                vec4 result = textureProjGrad(colorMap, linearSampler, projCoord, ddx, ddy);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z, gradient2d(ddx, ddy))"
+        in generated_code
+    )
+    assert "textureProjGrad(" not in generated_code
+
+
+def test_metal_texture_proj_lod_vec4_coord_divides_by_w():
+    shader = """
+    shader MetalTextureProjLodVec4 {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec4 projCoord @ texcoord0) @ gl_FragColor {
+                vec4 result = textureProjLod(colorMap, linearSampler, projCoord, 1.5);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.w, level(1.5))"
+        in generated_code
+    )
+    assert "textureProjLod(" not in generated_code
+
+
+def test_metal_texture_gather_offset_multiple_components():
+    shader = """
+    shader MetalTextureGatherOffsetComponents {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec2 uv @ texcoord0) @ gl_FragColor {
+                ivec2 offset = ivec2(1, 0);
+                vec4 gatherR = textureGatherOffset(colorMap, linearSampler, uv, offset, 0);
+                vec4 gatherG = textureGatherOffset(colorMap, linearSampler, uv, offset, 1);
+                vec4 gatherB = textureGatherOffset(colorMap, linearSampler, uv, offset, 2);
+                vec4 gatherA = textureGatherOffset(colorMap, linearSampler, uv, offset, 3);
+                return gatherR + gatherG + gatherB + gatherA;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "colorMap.gather(linearSampler, uv, offset, component::x)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, offset, component::y)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, offset, component::z)" in generated_code
+    assert "colorMap.gather(linearSampler, uv, offset, component::w)" in generated_code
+    assert "textureGatherOffset(" not in generated_code
+
+
+def test_metal_texture_proj_grad_offset_emits_division_with_gradient_and_offset():
+    shader = """
+    shader MetalTextureProjGradOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0, vec2 ddx @ texcoord1, vec2 ddy @ texcoord2) @ gl_FragColor {
+                ivec2 offset = ivec2(1, -1);
+                vec4 result = textureProjGradOffset(colorMap, linearSampler, projCoord, ddx, ddy, offset);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z, gradient2d(ddx, ddy), offset)"
+        in generated_code
+    )
+    assert "textureProjGradOffset(" not in generated_code
+
+
 def test_metal_shared_local_variables_use_threadgroup_address_space():
     shader = """
     shader SharedLocalStorage {
@@ -15638,6 +15808,75 @@ def test_metal_struct_held_storage_image_arrays_preserve_format_and_access():
     assert "imageAtomicAdd(" not in generated_code
 
 
+def test_metal_struct_held_storage_image_element_aliases_preserve_access():
+    shader = """
+    shader StructHeldStorageImageElementAliases {
+        struct ImagePack {
+            image2D pairs[2] @rg16f @readonly;
+            image2D targets[2] @rg16f @writeonly;
+            uimage2D counters[2] @r32ui @readwrite;
+        };
+
+        vec2 readPairAlias(ImagePack pack, int index, ivec2 pixel) {
+            let pairAlias = pack.pairs[index];
+            return imageLoad(pairAlias, pixel);
+        }
+
+        void writePairAlias(ImagePack pack, int index, ivec2 pixel, vec2 value) {
+            let targetAlias = pack.targets[index];
+            imageStore(targetAlias, pixel, value);
+        }
+
+        uint addCounterAlias(ImagePack pack, int index, ivec2 pixel, uint value) {
+            let counterAlias = pack.counters[index];
+            return imageAtomicAdd(counterAlias, pixel, value);
+        }
+
+        compute {
+            void main() {
+                ImagePack pack;
+                ivec2 pixel = ivec2(0, 1);
+                vec2 pair = readPairAlias(pack, 0, pixel);
+                writePairAlias(pack, 1, pixel, pair);
+                uint oldValue = addCounterAlias(pack, 0, pixel, 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "array<texture2d<float, access::read>, 2> pairs;" in generated_code
+    assert "array<texture2d<float, access::write>, 2> targets;" in generated_code
+    assert "array<texture2d<uint, access::read_write>, 2> counters;" in generated_code
+    assert (
+        "texture2d<float, access::read> pairAlias = pack.pairs[index];"
+        in generated_code
+    )
+    assert "return pairAlias.read(uint2(pixel)).xy;" in generated_code
+    assert (
+        "texture2d<float, access::write> targetAlias = pack.targets[index];"
+        in generated_code
+    )
+    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel));" in (
+        generated_code
+    )
+    assert (
+        "texture2d<uint, access::read_write> counterAlias = pack.counters[index];"
+        in generated_code
+    )
+    assert "return counterAlias.atomic_fetch_add(uint2(pixel), value).x;" in (
+        generated_code
+    )
+    assert "texture2d<float, access::read_write> pairAlias" not in generated_code
+    assert "texture2d<float, access::read_write> targetAlias" not in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+
+
 @pytest.mark.parametrize(
     ("statement", "match"),
     [
@@ -27998,6 +28237,311 @@ def test_metal_mixed_shader_with_geometry_only_rejects_geometry_stage():
 
     fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
     assert "fragment" in fragment_code
+
+
+def test_metal_texture_gather_2d_array_splits_coord_and_layer():
+    shader = """
+    shader MetalTextureGather2DArray {
+        sampler2DArray colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 uvLayer @ texcoord0) @ gl_FragColor {
+                vec4 gatherR = textureGather(colorMap, linearSampler, uvLayer, 0);
+                vec4 gatherA = textureGather(colorMap, linearSampler, uvLayer, 3);
+                return gatherR + gatherA;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::x)"
+        in generated_code
+    )
+    assert (
+        "colorMap.gather(linearSampler, uvLayer.xy, uint(uvLayer.z), int2(0), component::w)"
+        in generated_code
+    )
+    assert "textureGather(" not in generated_code
+
+
+def test_metal_texture_gather_cube_array_with_component_selection():
+    shader = """
+    shader MetalTextureGatherCubeArrayComponent {
+        samplerCubeArray cubeArray;
+        sampler cubeSampler;
+
+        fragment {
+            vec4 main(vec4 cubeLayer @ texcoord0) @ gl_FragColor {
+                vec4 gatherR = textureGather(cubeArray, cubeSampler, cubeLayer, 0);
+                vec4 gatherG = textureGather(cubeArray, cubeSampler, cubeLayer, 1);
+                vec4 gatherB = textureGather(cubeArray, cubeSampler, cubeLayer, 2);
+                return gatherR + gatherG + gatherB;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::x)"
+        in generated_code
+    )
+    assert (
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::y)"
+        in generated_code
+    )
+    assert (
+        "cubeArray.gather(cubeSampler, cubeLayer.xyz, uint(cubeLayer.w), component::z)"
+        in generated_code
+    )
+    assert "textureGather(" not in generated_code
+
+
+def test_metal_texture_gather_compare_with_2d_array_depth():
+    shader = """
+    shader MetalGatherCompare2DArray {
+        sampler2DArrayShadow shadowArray;
+        sampler compareSampler;
+
+        fragment {
+            vec4 main(vec3 uvLayer @ texcoord0, float depth @ texcoord1) @ gl_FragColor {
+                vec4 gathered = textureGatherCompare(shadowArray, compareSampler, uvLayer, depth);
+                return gathered;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "shadowArray.gather_compare(compareSampler, uvLayer.xy, uint(uvLayer.z), depth)"
+        in generated_code
+    )
+    assert "textureGatherCompare(" not in generated_code
+
+
+def test_metal_texture_proj_offset_emits_sample_with_division_and_offset():
+    shader = """
+    shader MetalTextureProjOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0) @ gl_FragColor {
+                ivec2 offset = ivec2(1, 0);
+                vec4 result = textureProjOffset(colorMap, linearSampler, projCoord, offset);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z, offset)"
+        in generated_code
+    )
+    assert "textureProjOffset(" not in generated_code
+
+
+def test_metal_texture_proj_lod_offset_emits_division_with_level_and_offset():
+    shader = """
+    shader MetalTextureProjLodOffset {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec3 projCoord @ texcoord0) @ gl_FragColor {
+                ivec2 offset = ivec2(2, -1);
+                vec4 result = textureProjLodOffset(colorMap, linearSampler, projCoord, 3.0, offset);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.z, level(3.0), offset)"
+        in generated_code
+    )
+    assert "textureProjLodOffset(" not in generated_code
+
+
+def test_metal_texture_proj_bias_emits_sample_with_division_and_bias():
+    shader = """
+    shader MetalTextureProjBias {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        fragment {
+            vec4 main(vec4 projCoord @ texcoord0) @ gl_FragColor {
+                vec4 result = textureProj(colorMap, linearSampler, projCoord, 0.5);
+                return result;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert (
+        "colorMap.sample(linearSampler, projCoord.xy / projCoord.w, bias(0.5))"
+        in generated_code
+    )
+    assert "textureProj(" not in generated_code
+
+
+def test_metal_ray_tracing_report_hit_emits_unsupported_diagnostic():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        struct HitAttrib {
+            vec2 bary;
+        };
+        ray_closest_hit {
+            void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+                ReportHit(1.0, 0, attr);
+                payload.color = vec3(1.0, 0.0, 0.0);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Metal ray tracing intrinsic: ReportHit" in generated
+    assert (
+        "intersection acceptance is expressed through the Metal intersection return value"
+        in generated
+    )
+    assert "ReportHit(1.0, 0, attr);" not in generated
+
+
+def test_metal_ray_tracing_ignore_and_accept_hit_emit_diagnostics():
+    code = """
+    shader rt {
+        struct Payload {
+            vec3 color;
+        };
+        struct HitAttrib {
+            vec2 bary;
+        };
+        ray_any_hit {
+            void main(Payload payload @ payload, HitAttrib attr @ hit_attribute) {
+                if (attr.bary.x > 0.5) {
+                    AcceptHitAndEndSearch();
+                } else {
+                    IgnoreHit();
+                }
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "unsupported Metal ray tracing intrinsic: AcceptHitAndEndSearch" in generated
+    assert "Metal hit acceptance is controlled by intersection results" in generated
+    assert "unsupported Metal ray tracing intrinsic: IgnoreHit" in generated
+    assert "Metal does not expose a direct ignore-intersection intrinsic" in generated
+    assert "AcceptHitAndEndSearch();" not in generated
+    assert "IgnoreHit();" not in generated
+
+
+def test_metal_ray_query_operations_lower_to_method_calls():
+    code = """
+    shader rt {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                bool advanced = rq.Proceed();
+                float hitT = rq.CommittedRayT();
+                float candidateT = rq.CandidateRayT();
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "using namespace metal::raytracing;" in generated
+    assert "rq.Proceed()" in generated
+    assert "rq.CommittedRayT()" in generated
+    assert "rq.CandidateRayT()" in generated
+    assert "RayQueryOpNode" not in generated
+
+
+def test_metal_mesh_dispatch_without_grid_context_emits_diagnostic():
+    code = """
+    shader meshpipe {
+        struct Payload {
+            vec4 color;
+        };
+
+        void helper(Payload payload @payload) {
+            DispatchMesh(1u, 1u, 1u, payload);
+        }
+
+        object {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                payload.color = vec4(1.0, 0.0, 0.0, 1.0);
+                DispatchMesh(uvec3(1, 1, 1));
+            }
+        }
+        mesh {
+            void main(Payload payload @payload)
+                @max_total_threads_per_threadgroup(32)
+            {
+                vec4 c = payload.color;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "unsupported Metal mesh payload dispatch: payload argument 'payload' "
+        "uses thread address space"
+    ) in generated
+    assert "set_threadgroups_per_grid" in generated
+    assert "object_data Payload& payload [[payload]]" in generated
+
+
+def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
+    code = """
+    shader meshpipe {
+        void helper() {
+            SetMeshOutputCounts(8, 4);
+        }
+
+        mesh {
+            void main()
+                @max_total_threads_per_threadgroup(32)
+                @max_vertices(64)
+                @max_primitives(32)
+                @outputtopology(triangle)
+            {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(code)))
+
+    assert "set_primitive_count(1)" in generated
+    assert "SetMeshOutputCounts(8, 4)" in generated
 
 
 if __name__ == "__main__":

@@ -3986,6 +3986,71 @@ class TestCudaCodeGen:
 
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_append_consume_untraceable_counters_emit_cuda_diagnostics(self, tmp_path):
+        """Test CUDA rejects append/consume calls when no counter sidecar is known."""
+        source_code = """
+        shader AppendConsumeCounterDiagnosticCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+
+            AppendStructuredBuffer<Particle> chooseAppend(bool useGlobal) {
+                return appendParticles;
+            }
+
+            ConsumeStructuredBuffer<Particle> chooseConsume(bool useGlobal) {
+                return consumeParticles;
+            }
+
+            void process(bool useGlobal, Particle p) {
+                chooseAppend(useGlobal).Append(p);
+                buffer_append(chooseAppend(useGlobal), p);
+                Particle a = chooseConsume(useGlobal).Consume();
+                Particle b = buffer_consume(chooseConsume(useGlobal));
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ Particle* chooseAppend(bool useGlobal)" in cuda_code
+        assert "__device__ const Particle* chooseConsume(bool useGlobal)" in cuda_code
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "Append on AppendStructuredBuffer<Particle> */ ((void)0);"
+        ) in cuda_code
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "buffer_append on AppendStructuredBuffer<Particle> */ ((void)0);"
+        ) in cuda_code
+        assert (
+            "Particle a = /* unsupported CUDA structured buffer call: "
+            "Consume on ConsumeStructuredBuffer<Particle> */ Particle{};"
+        ) in cuda_code
+        assert (
+            "Particle b = /* unsupported CUDA structured buffer call: "
+            "buffer_consume on ConsumeStructuredBuffer<Particle> */ Particle{};"
+        ) in cuda_code
+        assert "cgl_append_structured_buffer(chooseAppend" not in cuda_code
+        assert "cgl_consume_structured_buffer(chooseConsume" not in cuda_code
+        assert ".Append(" not in cuda_code
+        assert ".Consume(" not in cuda_code
+        assert "buffer_append(" not in cuda_code
+        assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_plain_shared_array_atomics_emit_cuda_pointer_atomics(self, tmp_path):
         """Test CUDA atomics on ordinary shared/array lvalues use pointer operands."""
         source_code = """

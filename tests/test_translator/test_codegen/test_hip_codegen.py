@@ -8679,3 +8679,366 @@ class TestHipCodeGen:
         # Check for HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "#include <hip/hip_runtime_api.h>" in hip_code
+
+    def test_barrier_emits_syncthreads(self):
+        """Test barrier() call lowers to __syncthreads() in HIP."""
+        source_code = """
+        shader BarrierShader {
+            compute {
+                void main() {
+                    barrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__syncthreads();" in hip_code
+        assert "barrier()" not in hip_code
+
+    def test_memory_barrier_emits_threadfence(self):
+        """Test memoryBarrier() call lowers to __threadfence() in HIP."""
+        source_code = """
+        shader MemoryBarrierShader {
+            compute {
+                void main() {
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__threadfence();" in hip_code
+        assert "memoryBarrier()" not in hip_code
+
+    def test_workgroup_barrier_emits_syncthreads(self):
+        """Test workgroupBarrier() call lowers to __syncthreads() in HIP."""
+        source_code = """
+        shader WorkgroupBarrierShader {
+            compute {
+                void main() {
+                    workgroupBarrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__syncthreads();" in hip_code
+        assert "workgroupBarrier()" not in hip_code
+
+    def test_cbuffer_members_lowered_to_struct(self):
+        """Test cbuffer declaration lowers to a struct in HIP."""
+        source_code = """
+        shader CbufferShader {
+            cbuffer Params {
+                float4x4 mvp;
+                float time;
+                int frameCount;
+            };
+            compute {
+                void main() {
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "struct Params" in hip_code
+        assert "float4x4 mvp;" in hip_code or "mat4 mvp;" in hip_code
+        assert "float time;" in hip_code
+        assert "int frameCount;" in hip_code
+        assert "cbuffer" not in hip_code
+
+    def test_structured_buffer_maps_to_device_pointer(self):
+        """Test StructuredBuffer<T> maps to const T* device pointer in HIP."""
+        source_code = """
+        shader StructuredBufferPointerShader {
+            StructuredBuffer<float> inputData;
+
+            void readBuffer(StructuredBuffer<int> src, uint idx) {
+                int val = src[idx];
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* inputData;" in hip_code
+        assert "const int* src" in hip_code
+        assert "StructuredBuffer" not in hip_code
+
+    def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self):
+        """Test RWStructuredBuffer<T> maps to T* device pointer with read/write."""
+        source_code = """
+        shader RWStructuredBufferShader {
+            RWStructuredBuffer<int> outputData;
+
+            void writeBuffer(RWStructuredBuffer<float> dst, uint idx, float value) {
+                dst[idx] = value;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int* outputData;" in hip_code
+        assert "float* dst" in hip_code
+        assert "dst[idx] = value;" in hip_code
+        assert "RWStructuredBuffer" not in hip_code
+
+    def test_texture_sampling_tex3d_and_combined_sampler2d(self):
+        """Test HIP generates tex3D for 3D textures and tex2D for combined sampler2D."""
+        source_code = """
+        shader TextureSamplingShader {
+            sampler3d volumeTex;
+            sampler2D colorTex;
+
+            void sampleTextures(
+                sampler3d paramVolume,
+                sampler2D paramColor,
+                vec3 uvw,
+                vec2 uv
+            ) {
+                vec4 volume = texture(paramVolume, uvw);
+                vec4 volumeLod = textureLod(paramVolume, uvw, 2.0);
+                vec4 color = texture(paramColor, uv);
+                vec4 colorLod = textureLod(paramColor, uv, 1.0);
+                vec4 direct = tex2D(paramColor, uv);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t volumeTex;" in hip_code
+        assert "hipTextureObject_t colorTex;" in hip_code
+        assert (
+            "float4 volume = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
+            in hip_code
+        )
+        assert (
+            "float4 volumeLod = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 2.0);"
+            in hip_code
+        )
+        assert "float4 color = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
+        assert (
+            "float4 colorLod = tex2DLod<float4>(paramColor, uv.x, uv.y, 1.0);"
+            in hip_code
+        )
+        assert "float4 direct = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
+        assert "sampler3d" not in hip_code
+        assert "sampler2D" not in hip_code
+        assert " = texture(" not in hip_code
+        assert " = textureLod(" not in hip_code
+
+    def test_struct_members_with_semantics_produce_hip_struct_fields(self):
+        """Test struct members with CrossGL semantics generate proper HIP struct fields."""
+        source_code = """
+        struct VertexInput {
+            vec3 position;
+            vec3 normal;
+            vec2 texCoord;
+        };
+
+        struct VertexOutput {
+            vec4 clipPos;
+            vec3 worldNormal;
+            vec2 uv;
+        };
+
+        shader StructSemanticShader {
+            compute {
+                void main() {
+                    VertexInput input;
+                    input.position = vec3(1.0, 2.0, 3.0);
+                    input.normal = vec3(0.0, 1.0, 0.0);
+                    input.texCoord = vec2(0.5, 0.5);
+                    VertexOutput output;
+                    output.clipPos = vec4(input.position, 1.0);
+                    output.worldNormal = input.normal;
+                    output.uv = input.texCoord;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "struct VertexInput" in hip_code
+        assert "float3 position;" in hip_code
+        assert "float3 normal;" in hip_code
+        assert "float2 texCoord;" in hip_code
+        assert "struct VertexOutput" in hip_code
+        assert "float4 clipPos;" in hip_code
+        assert "float3 worldNormal;" in hip_code
+        assert "float2 uv;" in hip_code
+        assert "input.position = make_float3(1.0, 2.0, 3.0);" in hip_code
+        assert "output.worldNormal = input.normal;" in hip_code
+        assert "output.uv = input.texCoord;" in hip_code
+        assert "VertexInput input;" in hip_code
+        assert "VertexOutput output;" in hip_code
+
+    def test_stage_parameter_semantics_thread_position_in_grid(self):
+        """Test HIP maps compute stage builtins to threadIdx/blockIdx/blockDim."""
+        source_code = """
+        shader ComputeBuiltinsShader {
+            compute {
+                void main() {
+                    int localX = gl_LocalInvocationID.x;
+                    int localY = gl_LocalInvocationID.y;
+                    int localZ = gl_LocalInvocationID.z;
+                    int globalX = gl_GlobalInvocationID.x;
+                    int globalY = gl_GlobalInvocationID.y;
+                    int globalZ = gl_GlobalInvocationID.z;
+                    int groupX = gl_WorkGroupID.x;
+                    int groupY = gl_WorkGroupID.y;
+                    int groupZ = gl_WorkGroupID.z;
+                    int sizeX = gl_WorkGroupSize.x;
+                    int sizeY = gl_WorkGroupSize.y;
+                    int sizeZ = gl_WorkGroupSize.z;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int localX = threadIdx.x;" in hip_code
+        assert "int localY = threadIdx.y;" in hip_code
+        assert "int localZ = threadIdx.z;" in hip_code
+        assert "int globalX = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "int globalY = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "int globalZ = (blockIdx.z * blockDim.z + threadIdx.z);" in hip_code
+        assert "int groupX = blockIdx.x;" in hip_code
+        assert "int groupY = blockIdx.y;" in hip_code
+        assert "int groupZ = blockIdx.z;" in hip_code
+        assert "int sizeX = blockDim.x;" in hip_code
+        assert "int sizeY = blockDim.y;" in hip_code
+        assert "int sizeZ = blockDim.z;" in hip_code
+        assert "gl_LocalInvocationID" not in hip_code
+        assert "gl_GlobalInvocationID" not in hip_code
+        assert "gl_WorkGroupID" not in hip_code
+        assert "gl_WorkGroupSize" not in hip_code
+
+    def test_vertex_stage_with_position_output(self):
+        """Test HIP generates a device function for vertex stage with position output."""
+        source_code = """
+        shader VertexPositionShader {
+            vertex {
+                void main() {
+                    vec4 position = vec4(1.0, 2.0, 3.0, 1.0);
+                    vec3 normal = vec3(0.0, 1.0, 0.0);
+                    vec2 uv = vec2(0.5, 0.5);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ void main()" in hip_code
+        assert "float4 position = make_float4(1.0, 2.0, 3.0, 1.0);" in hip_code
+        assert "float3 normal = make_float3(0.0, 1.0, 0.0);" in hip_code
+        assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
+        assert "vec4" not in hip_code
+        assert "vec3" not in hip_code
+        assert "vec2(" not in hip_code
+
+    def test_texture_sampling_with_cubemap_and_1d_types(self):
+        """Test HIP generates correct texture intrinsics for cubemap and 1D types."""
+        source_code = """
+        shader CubeAndLinearShader {
+            void sampleVariety(
+                sampler1d paramRamp,
+                samplercube paramEnv,
+                float u,
+                vec3 dir
+            ) {
+                vec4 ramp = texture(paramRamp, u);
+                vec4 rampLod = textureLod(paramRamp, u, 1.0);
+                vec4 env = texture(paramEnv, dir);
+                vec4 envLod = textureLod(paramEnv, dir, 2.0);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float4 ramp = tex1D<float4>(paramRamp, u);" in hip_code
+        assert "float4 rampLod = tex1DLod<float4>(paramRamp, u, 1.0);" in hip_code
+        assert (
+            "float4 env = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
+            in hip_code
+        )
+        assert (
+            "float4 envLod = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 2.0);"
+            in hip_code
+        )
+        assert " = texture(" not in hip_code
+        assert " = textureLod(" not in hip_code

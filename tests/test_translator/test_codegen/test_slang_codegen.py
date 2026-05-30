@@ -19379,5 +19379,450 @@ def test_storage_image_access_qualifiers_affect_load_store():
     assert "imageStore(" not in generated_code
 
 
+def test_mesh_stage_emits_shader_mesh_attribute_with_output_topology():
+    code = """
+    shader SlangMeshShaderAttribute {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                out MeshVertex verts[3] @ vertices,
+                out uint3 tris[1] @ indices
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(-0.5, -0.5, 0.0, 1.0);
+                verts[1].position = vec4(0.5, -0.5, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 0.5, 0.0, 1.0);
+                tris[0] = uint3(0, 1, 2);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("mesh")]' in generated_code
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert '[outputtopology("triangle")]' in generated_code
+    assert "void MSMain(" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_amplification_stage_emits_shader_amplification_attribute():
+    code = """
+    shader SlangAmplificationShader {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(32, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                out MeshVertex verts[3] @ vertices,
+                out uint3 tris[1] @ indices
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uint3(0, 0, 0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("amplification")]' in generated_code
+    assert "[numthreads(32, 1, 1)]" in generated_code
+    assert "void ASMain()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_ray_tracing_stages_emit_correct_shader_attributes():
+    code = """
+    shader SlangRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+            float hitT;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                uvec3 launchID = gl_LaunchIDEXT;
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec3(1.0, 0.0, 0.0);
+                payload.hitT = gl_HitTEXT;
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+                payload.hitT = -1.0;
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec3(0.5, 0.5, 0.5);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("raygeneration")]' in generated_code
+    assert '[shader("closesthit")]' in generated_code
+    assert '[shader("miss")]' in generated_code
+    assert '[shader("anyhit")]' in generated_code
+    assert "void RayGenMain()" in generated_code
+    assert "void ClosestHitMain(" in generated_code
+    assert "void MissMain(" in generated_code
+    assert "void AnyHitMain(" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_ray_query_operations_emit_native_member_calls():
+    code = """
+    shader SlangRayQueryOps {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                bool advanced = rq.Proceed();
+                uint status = rq.CommittedStatus();
+                uint candidateType = rq.CandidateType();
+                float2 barycentrics = rq.CandidateTriangleBarycentrics();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool advanced = rq.Proceed();" in generated_code
+    assert "uint status = rq.CommittedStatus();" in generated_code
+    assert "uint candidateType = rq.CandidateType();" in generated_code
+    assert "float2 barycentrics = rq.CandidateTriangleBarycentrics();" in generated_code
+    assert "None(" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_tessellation_stages_emit_hull_and_domain_shader_attributes():
+    code = """
+    shader SlangTessellationAttributes {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float edges[3] @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> patch) {
+                PatchConstants pc;
+                pc.edges[0] = 1.0;
+                pc.edges[1] = 1.0;
+                pc.edges[2] = 1.0;
+                pc.inside = 1.0;
+                return pc;
+            }
+
+            VSOut main(InputPatch<VSOut, 3> patch, uint id @ gl_InvocationID)
+                @domain(tri)
+                @outputcontrolpoints(3)
+                @outputtopology(triangle_cw)
+                @partitioning(integer)
+                @patchconstantfunc(HSConst)
+            {
+                return patch[id];
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<VSOut, 3> patch, float3 coord @ gl_TessCoord)
+                @domain(tri)
+                @gl_Position
+            {
+                return patch[0].position * coord.x
+                     + patch[1].position * coord.y
+                     + patch[2].position * coord.z;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("hull")]' in generated_code
+    assert '[shader("domain")]' in generated_code
+    assert '[domain("tri")]' in generated_code
+    assert "[outputcontrolpoints(3)]" in generated_code
+    assert '[outputtopology("triangle_cw")]' in generated_code
+    assert '[partitioning("integer")]' in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert "VSOut HSMain(" in generated_code
+    assert "DSMain(" in generated_code
+    assert "float3 coord : SV_DomainLocation" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_tessellation_domain_mismatch_raises_diagnostic():
+    code = """
+    shader SlangTessDomainMismatch {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float edges[3] @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> patch) {
+                PatchConstants pc;
+                pc.edges[0] = 1.0;
+                pc.edges[1] = 1.0;
+                pc.edges[2] = 1.0;
+                pc.inside = 1.0;
+                return pc;
+            }
+
+            VSOut main(InputPatch<VSOut, 3> patch, uint id @ gl_InvocationID)
+                @domain(tri)
+                @outputcontrolpoints(3)
+                @outputtopology(triangle_cw)
+                @partitioning(integer)
+                @patchconstantfunc(HSConst)
+            {
+                return patch[id];
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<VSOut, 3> patch, float3 coord @ gl_TessCoord)
+                @domain(quad)
+                @gl_Position
+            {
+                return patch[0].position;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*must match"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_texel_fetch_2d_emits_load_int3():
+    code = """
+    shader TexelFetch2D {
+        sampler2d colorTex;
+
+        fragment {
+            void main() {
+                ivec2 coord = ivec2(10, 20);
+                int mip = 0;
+                vec4 texel = texelFetch(colorTex, coord, mip);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> colorTex : register(t0);" in generated_code
+    assert "float4 texel = colorTex.Load(int3(coord, mip));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_3d_emits_load_int4():
+    code = """
+    shader TexelFetch3DVolume {
+        sampler3d volumeTex;
+
+        compute {
+            void main() {
+                ivec3 voxel = ivec3(1, 2, 3);
+                int mipLevel = 2;
+                vec4 data = texelFetch(volumeTex, voxel, mipLevel);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler3D<float4> volumeTex : register(t0);" in generated_code
+    assert "float4 data = volumeTex.Load(int4(voxel, mipLevel));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_buffer_emits_load_index():
+    code = """
+    shader BufferFetch {
+        ByteAddressBuffer rawData @binding(0);
+
+        compute {
+            void main() {
+                uint offset = 64u;
+                uint fetched = buffer_load(rawData, offset);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "ByteAddressBuffer rawData" in generated_code
+    assert "uint fetched = rawData.Load(offset);" in generated_code
+    assert "buffer_load(" not in generated_code
+
+
+def test_texture_size_emits_get_dimensions_helper():
+    code = """
+    shader TextureSizeQuery {
+        sampler2d scene;
+        sampler3d volume;
+
+        compute {
+            void main() {
+                ivec2 sceneSize = textureSize(scene, 0);
+                ivec3 volSize = textureSize(volume, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int2 sceneSize = cgl_textureSize_sampler2D(scene, 0);" in generated_code
+    assert "int3 volSize = cgl_textureSize_sampler3D(volume, 1);" in generated_code
+    assert "GetDimensions" in generated_code
+    assert "textureSize(" not in generated_code
+
+
+def test_texture_query_levels_emits_get_dimensions_levels():
+    code = """
+    shader QueryLevels {
+        sampler2d diffuse;
+        samplercube envMap;
+
+        compute {
+            void main() {
+                int diffuseLevels = textureQueryLevels(diffuse);
+                int envLevels = textureQueryLevels(envMap);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_samplerCube(SamplerCube<float4> tex)"
+        in generated_code
+    )
+    assert "int diffuseLevels = cgl_textureQueryLevels_sampler2D(diffuse);" in (
+        generated_code
+    )
+    assert "int envLevels = cgl_textureQueryLevels_samplerCube(envMap);" in (
+        generated_code
+    )
+    assert "GetDimensions" in generated_code
+    assert "return levels;" in generated_code
+    assert "textureQueryLevels(" not in generated_code
+
+
+def test_texture_samples_emits_get_dimensions_sample_count():
+    code = """
+    shader SampleCountQuery {
+        sampler2dms msTex;
+        sampler2dmsarray msArrayTex;
+
+        compute {
+            void main() {
+                int sampleCount = textureSamples(msTex);
+                int arrayCount = textureSamples(msArrayTex);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int cgl_textureSamples_sampler2DMS(Sampler2DMS<float4> tex)" in generated_code
+    )
+    assert (
+        "int cgl_textureSamples_sampler2DMSArray(Sampler2DMSArray<float4> tex)"
+        in generated_code
+    )
+    assert "int sampleCount = cgl_textureSamples_sampler2DMS(msTex);" in generated_code
+    assert "int arrayCount = cgl_textureSamples_sampler2DMSArray(msArrayTex);" in (
+        generated_code
+    )
+    assert "GetDimensions" in generated_code
+    assert "return samples;" in generated_code
+    assert "textureSamples(" not in generated_code
+
+
+def test_texel_fetch_2d_array_emits_load_int4():
+    code = """
+    shader TexelFetch2DArray {
+        sampler2darray layeredTex;
+
+        compute {
+            void main() {
+                ivec3 layerCoord = ivec3(5, 10, 2);
+                int lod = 0;
+                vec4 layerData = texelFetch(layeredTex, layerCoord, lod);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DArray<float4> layeredTex : register(t0);" in generated_code
+    assert "float4 layerData = layeredTex.Load(int4(layerCoord, lod));" in (
+        generated_code
+    )
+    assert "texelFetch(" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

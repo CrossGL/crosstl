@@ -8662,6 +8662,214 @@ def test_glsl_shader_record_buffer_rejects_binding_layout():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_glsl_ray_generation_shader_emits_ray_tracing_extension():
+    shader = """
+    shader RayGenExtension {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        ray_generation {
+            layout(location = 0) @rayPayloadEXT RayPayload payload;
+
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "ray_generation")
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in generated_code
+    assert "#extension GL_EXT_ray_query : require" not in generated_code
+    assert "layout(location = 0) rayPayloadEXT RayPayload payload;" in generated_code
+    assert (
+        "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
+        in generated_code
+    )
+    assert "traceRayEXT(" in generated_code
+    assert "TraceRay" not in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_ray_query_in_compute_shader_emits_ray_query_extension():
+    shader = """
+    shader RayQueryComputeExtension {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                if (active) {
+                    uint primitiveIndex = rq.CandidatePrimitiveIndex();
+                }
+                rq.Abort();
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "compute")
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert "if (active_)" in generated_code
+    assert (
+        "uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert "active" not in generated_code.replace("active_", "")
+
+
+def test_glsl_mesh_shader_emits_extension_and_layout():
+    shader = """
+    shader MeshShaderLayout {
+        mesh {
+            layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+            layout(triangles, max_vertices = 64, max_primitives = 126) out;
+            out vec4 vertexColor[64];
+            void main() {
+                SetMeshOutputCounts(64, 126);
+                vertexColor[gl_LocalInvocationIndex] = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert (
+        "layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert (
+        "layout(triangles, max_vertices = 64, max_primitives = 126) out;"
+        in generated_code
+    )
+    assert "out vec4 vertexColor[64];" in generated_code
+    assert "SetMeshOutputsEXT(64, 126);" in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+    assert "vertexColor[gl_LocalInvocationIndex] = vec4(1.0);" in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_task_shader_with_work_group_id_and_dispatch_mesh():
+    shader = """
+    shader TaskShaderDispatch {
+        struct TaskPayload {
+            uint meshletIndices[32];
+            uint meshletCount;
+        };
+
+        task {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() {
+                uint gid = gl_WorkGroupID.x;
+                payload.meshletCount = gid;
+                payload.meshletIndices[gl_LocalInvocationIndex] = gl_LocalInvocationIndex;
+                DispatchMesh(payload.meshletCount, 1, 1);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "task")
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "taskPayloadSharedEXT TaskPayload payload;" in generated_code
+    assert "uint gid = gl_WorkGroupID.x;" in generated_code
+    assert "payload.meshletCount = gid;" in generated_code
+    assert (
+        "payload.meshletIndices[gl_LocalInvocationIndex] = gl_LocalInvocationIndex;"
+        in generated_code
+    )
+    assert "EmitMeshTasksEXT(payload.meshletCount, 1, 1);" in generated_code
+    assert "DispatchMesh" not in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_ray_query_reserved_active_variable_renamed():
+    shader = """
+    shader RayQueryActiveReserved {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                float notReserved = 1.0;
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "compute")
+
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert "float notReserved = 1.0;" in generated_code
+    lines = generated_code.splitlines()
+    active_uses = [
+        line.strip()
+        for line in lines
+        if "active" in line and "active_" not in line and "extension" not in line
+    ]
+    assert (
+        active_uses == []
+    ), f"Found bare 'active' (without underscore) in output: {active_uses}"
+
+
 def test_glsl_stage_local_helpers_emit_before_entrypoint():
     shader = """
     shader StageLocalHelperOrder {

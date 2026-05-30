@@ -4222,6 +4222,7 @@ class MojoCodeGen:
         """Render one CrossGL function or shader entry point as Mojo code."""
         code = ""
         "    " * indent
+        function_name = self.shader_entry_function_name(func, shader_type)
         previous_variable_types = self.variable_types.copy()
         previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
         previous_resource_access_qualifier_aliases = {
@@ -4277,6 +4278,8 @@ class MojoCodeGen:
         else:
             return_type = "void"
         self.function_return_types[func.name] = return_type
+        if function_name != func.name:
+            self.function_return_types[function_name] = return_type
         self.current_return_type = return_type
         return_semantic = self.function_return_semantic(func)
         if return_semantic:
@@ -4288,7 +4291,7 @@ class MojoCodeGen:
         if return_semantic:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
-        code += f"fn {func.name}({params_str}) -> {self.map_type(return_type)}:\n"
+        code += f"fn {function_name}({params_str}) -> {self.map_type(return_type)}:\n"
 
         body = getattr(func, "body", [])
         statements = None
@@ -4317,6 +4320,12 @@ class MojoCodeGen:
         )
         self.current_return_type = previous_return_type
         return code
+
+    def shader_entry_function_name(self, func, shader_type):
+        name = getattr(func, "name", "main")
+        if shader_type in {"vertex", "fragment"} and name == "main":
+            return f"{shader_type}_main"
+        return name
 
     def collect_mutated_parameters(self, body, param_names):
         mutated = set()

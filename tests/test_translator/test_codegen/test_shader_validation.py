@@ -5784,6 +5784,42 @@ shader MetalStructHeldStorageImageArraysValidation {
 """
 
 
+METAL_STRUCT_HELD_STORAGE_IMAGE_ELEMENT_ALIASES_COMPUTE_SHADER = """
+shader MetalStructHeldStorageImageElementAliasesValidation {
+    struct ImagePack {
+        image2D pairs[2] @rg16f @readonly;
+        image2D targets[2] @rg16f @writeonly;
+        uimage2D counters[2] @r32ui @readwrite;
+    };
+
+    vec2 readPairAlias(ImagePack pack, int index, ivec2 pixel) {
+        let pairAlias = pack.pairs[index];
+        return imageLoad(pairAlias, pixel);
+    }
+
+    void writePairAlias(ImagePack pack, int index, ivec2 pixel, vec2 value) {
+        let targetAlias = pack.targets[index];
+        imageStore(targetAlias, pixel, value);
+    }
+
+    uint addCounterAlias(ImagePack pack, int index, ivec2 pixel, uint value) {
+        let counterAlias = pack.counters[index];
+        return imageAtomicAdd(counterAlias, pixel, value);
+    }
+
+    compute {
+        void main() {
+            ImagePack pack;
+            ivec2 pixel = ivec2(0, 1);
+            vec2 pair = readPairAlias(pack, 0, pixel);
+            writePairAlias(pack, 1, pixel, pair);
+            uint oldValue = addCounterAlias(pack, 0, pixel, 1u);
+        }
+    }
+}
+"""
+
+
 METAL_MULTISAMPLE_STORAGE_IMAGE_ALIASES_COMPUTE_SHADER = """
 shader MetalMultisampleStorageImageAliasesValidation {
     image2DMS colorImage @rgba16f;
@@ -10564,6 +10600,38 @@ def test_generated_metal_compute_struct_held_storage_image_arrays_compile_with_m
     )
     assert (
         "array<texture2d<uint, access::read_write>, 2> countersAlias = pack.counters"
+        in code
+    )
+    assert "counterAlias.atomic_fetch_add(uint2(pixel), value).x" in code
+    assert "thread texture2d" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_compute_struct_held_storage_image_element_aliases_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "compute_struct_held_storage_image_element_aliases.metal"
+    output = tmp_path / "compute_struct_held_storage_image_element_aliases.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            METAL_STRUCT_HELD_STORAGE_IMAGE_ELEMENT_ALIASES_COMPUTE_SHADER
+        ),
+        "compute",
+    )
+    assert "texture2d<float, access::read> pairAlias = pack.pairs[index];" in code
+    assert "pairAlias.read(uint2(pixel)).xy" in code
+    assert "texture2d<float, access::write> targetAlias = pack.targets[index];" in code
+    assert "targetAlias.write(float4(value, 0.0, 0.0), uint2(pixel))" in code
+    assert (
+        "texture2d<uint, access::read_write> counterAlias = pack.counters[index];"
         in code
     )
     assert "counterAlias.atomic_fetch_add(uint2(pixel), value).x" in code

@@ -9,6 +9,7 @@ managed closing lines in the PR body.
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import json
 import os
@@ -21,6 +22,8 @@ from urllib import parse
 from urllib import request
 
 API_VERSION = "2026-03-10"
+ROOT = Path(__file__).resolve().parents[1]
+SUPPORT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
 
 SECTION_BEGIN = "<!-- crossgl-pr-issue-links:start -->"
 SECTION_END = "<!-- crossgl-pr-issue-links:end -->"
@@ -59,6 +62,9 @@ ISSUE_REF_RE = re.compile(ISSUE_REF_PATTERN, re.IGNORECASE)
 SUPPORT_TRACEABILITY_RE = re.compile(
     r"^\s*Support issue traceability\s*:\s*(?P<value>.+?)\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+SUPPORT_ISSUE_MARKER_RE = re.compile(
+    r"<!--\s*crossgl-support-issue-sync:\s*([^>\s]+)\s*-->"
 )
 SUPPORT_TRACEABILITY_OPT_OUTS = {
     "coverage only",
@@ -113,6 +119,8 @@ class PullRequestContext:
     body: str
     author: str
     changed_files: tuple[str, ...] = ()
+    head_repo: str | None = None
+    head_sha: str | None = None
 
 
 class GitHubClient:
@@ -187,6 +195,41 @@ class GitHubClient:
                 return files
             page += 1
 
+    def read_json_file(self, repo: str, path: str, ref: str) -> dict[str, Any]:
+        payload, _ = self.request(
+            "GET",
+            "/repos/{}/contents/{}".format(repo, parse.quote(path)),
+            query={"ref": ref},
+        )
+        if not isinstance(payload, dict):
+            raise ValueError("GitHub contents response is not an object")
+        encoding = payload.get("encoding")
+        content = payload.get("content")
+        if encoding != "base64" or not isinstance(content, str):
+            raise ValueError("GitHub contents response is not base64 JSON content")
+        raw = base64.b64decode(content)
+        return json.loads(raw.decode("utf-8"))
+
+    def list_open_support_issues(self) -> list[dict[str, Any]]:
+        issues: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload, _ = self.request(
+                "GET",
+                "/repos/{}/issues".format(self.repo),
+                query={
+                    "labels": "support:matrix",
+                    "state": "open",
+                    "per_page": 100,
+                    "page": page,
+                },
+            )
+            batch = payload or []
+            issues.extend(issue for issue in batch if "pull_request" not in issue)
+            if len(batch) < 100:
+                return issues
+            page += 1
+
 
 def load_pr_context(event_path: Path) -> PullRequestContext:
     event = json.loads(event_path.read_text(encoding="utf-8"))
@@ -201,11 +244,24 @@ def load_pr_context(event_path: Path) -> PullRequestContext:
         title=pull_request.get("title") or "",
         body=pull_request.get("body") or "",
         author=author,
+        head_repo=pull_request.get("head", {}).get("repo", {}).get("full_name"),
+        head_sha=pull_request.get("head", {}).get("sha"),
     )
 
 
 def strip_managed_section(body: str) -> str:
     return SECTION_RE.sub("\n", body or "").strip()
+
+
+def strip_unmanaged_closing_lines(body: str) -> str:
+    lines = []
+    for line in (body or "").splitlines():
+        candidate = line.strip()
+        candidate = re.sub(r"^[-*]\s+", "", candidate)
+        if CLOSING_BLOCK_RE.fullmatch(candidate):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
 
 
 def strip_code_spans(text: str) -> str:
@@ -287,13 +343,71 @@ def managed_section(issue_numbers: list[int]) -> str:
 
 
 def update_body_with_managed_section(body: str, issue_numbers: list[int]) -> str:
-    base = strip_managed_section(body or "")
+    base = strip_unmanaged_closing_lines(strip_managed_section(body or ""))
     if not issue_numbers:
         return base
     section = managed_section(issue_numbers)
     if not base:
         return section
     return base.rstrip() + "\n\n" + section
+
+
+def support_backlog_keys(matrix: dict[str, Any]) -> set[str]:
+    return {
+        "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
+        for item in matrix.get("backlog", [])
+    }
+
+
+def support_issue_marker_key(issue: dict[str, Any]) -> str | None:
+    match = SUPPORT_ISSUE_MARKER_RE.search(issue.get("body") or "")
+    return match.group(1) if match else None
+
+
+def support_closure_issue_numbers(
+    client: GitHubClient,
+    pr: PullRequestContext,
+    repo: str,
+) -> list[int]:
+    if not pr.head_repo or not pr.head_sha:
+        return []
+    if not SUPPORT_MATRIX_PATH.exists():
+        return []
+
+    base_matrix = json.loads(SUPPORT_MATRIX_PATH.read_text(encoding="utf-8"))
+    try:
+        head_matrix = client.read_json_file(
+            pr.head_repo,
+            "support/generated/support-matrix.json",
+            pr.head_sha,
+        )
+    except (GitHubApiError, ValueError, json.JSONDecodeError, OSError) as exc:
+        print("::warning::Could not inspect PR support matrix closures: {}".format(exc))
+        return []
+
+    stale_backlog_keys = support_backlog_keys(base_matrix) - support_backlog_keys(
+        head_matrix
+    )
+    if not stale_backlog_keys:
+        return []
+
+    numbers = []
+    for issue in client.list_open_support_issues():
+        marker_key = support_issue_marker_key(issue)
+        if marker_key in stale_backlog_keys:
+            numbers.append(int(issue["number"]))
+    return sorted(set(numbers))
+
+
+def dedupe_issue_numbers(issue_numbers: list[int]) -> list[int]:
+    deduped = []
+    seen = set()
+    for number in issue_numbers:
+        if number in seen:
+            continue
+        seen.add(number)
+        deduped.append(number)
+    return deduped
 
 
 def issue_assignees(issue: dict[str, Any]) -> set[str]:
@@ -308,10 +422,16 @@ def sync_pr_issue_links(
     dry_run: bool = False,
     check_support_traceability: bool = False,
     enforce_support_traceability: bool = False,
+    sync_support_closures: bool = False,
 ) -> dict[str, int]:
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
+    support_closures = (
+        support_closure_issue_numbers(client, pr, repo) if sync_support_closures else []
+    )
+    issue_numbers = dedupe_issue_numbers(issue_numbers + support_closures)
     summary = {
         "linked": len(issue_numbers),
+        "support_closures": len(support_closures),
         "assigned": 0,
         "assignment_skipped": 0,
         "missing_or_pull": 0,
@@ -409,6 +529,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "explicit 'Support issue traceability: no issue closed' marker"
         ),
     )
+    parser.add_argument(
+        "--sync-support-closures",
+        action="store_true",
+        help=(
+            "Add closing refs for open managed support issues whose backlog rows "
+            "are removed by the PR support matrix"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -438,9 +566,10 @@ def main(argv: list[str] | None = None) -> int:
             args.check_support_traceability or args.enforce_support_traceability
         ),
         enforce_support_traceability=args.enforce_support_traceability,
+        sync_support_closures=args.sync_support_closures,
     )
     print(
-        "PR issue link sync: linked={linked}, assigned={assigned}, assignment_skipped={assignment_skipped}, missing_or_pull={missing_or_pull}, body_updated={body_updated}".format(
+        "PR issue link sync: linked={linked}, support_closures={support_closures}, assigned={assigned}, assignment_skipped={assignment_skipped}, missing_or_pull={missing_or_pull}, body_updated={body_updated}".format(
             **summary
         )
     )

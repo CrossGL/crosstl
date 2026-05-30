@@ -17,11 +17,21 @@ def load_sync_module():
 
 
 class FakeClient:
-    def __init__(self, module, issues=None, assign_errors=None, pull_files=None):
+    def __init__(
+        self,
+        module,
+        issues=None,
+        assign_errors=None,
+        pull_files=None,
+        json_files=None,
+        support_issues=None,
+    ):
         self.module = module
         self.issues = dict(issues or {})
         self.assign_errors = dict(assign_errors or {})
         self.pull_files = list(pull_files or [])
+        self.json_files = dict(json_files or {})
+        self.support_issues = list(support_issues or [])
         self.assigned = []
         self.updated_bodies = []
 
@@ -48,11 +58,18 @@ class FakeClient:
     def list_pull_files(self, number):
         return list(self.pull_files)
 
+    def read_json_file(self, repo, path, ref):
+        return self.json_files[(repo, path, ref)]
 
-def issue(number, assignees=None, is_pull=False):
+    def list_open_support_issues(self):
+        return list(self.support_issues)
+
+
+def issue(number, assignees=None, is_pull=False, body=""):
     payload = {
         "number": number,
         "assignees": [{"login": login} for login in assignees or []],
+        "body": body,
     }
     if is_pull:
         payload["pull_request"] = {}
@@ -104,6 +121,7 @@ def test_sync_assigns_unassigned_issues_and_updates_pr_body():
 
     assert summary == {
         "linked": 2,
+        "support_closures": 0,
         "assigned": 1,
         "assignment_skipped": 0,
         "missing_or_pull": 0,
@@ -115,9 +133,6 @@ def test_sync_assigns_unassigned_issues_and_updates_pr_body():
             5,
             "\n".join(
                 [
-                    "Fixes #10",
-                    "Resolves #11",
-                    "",
                     "<!-- crossgl-pr-issue-links:start -->",
                     "Closes #10",
                     "Closes #11",
@@ -157,6 +172,112 @@ def test_sync_removes_stale_managed_section_when_closing_refs_are_removed():
     assert client.updated_bodies == [(5, "No linked issue now.")]
 
 
+def test_sync_deduplicates_manual_closing_lines_into_managed_section():
+    module = load_sync_module()
+    body = "\n".join(
+        [
+            "Implements reviewed support work.",
+            "",
+            "Closes #10",
+            "- Fixes #10",
+        ]
+    )
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve matrix sync",
+        body=body,
+        author="alice",
+    )
+    client = FakeClient(module, {10: issue(10)})
+
+    summary = module.sync_pr_issue_links(client, pr, "CrossGL/crosstl")
+
+    assert summary["linked"] == 1
+    assert summary["body_updated"] == 1
+    assert client.updated_bodies == [
+        (
+            5,
+            "\n".join(
+                [
+                    "Implements reviewed support work.",
+                    "",
+                    "<!-- crossgl-pr-issue-links:start -->",
+                    "Closes #10",
+                    "<!-- crossgl-pr-issue-links:end -->",
+                ]
+            ),
+        )
+    ]
+
+
+def test_sync_adds_support_matrix_closures_from_removed_backlog_rows(
+    tmp_path, monkeypatch
+):
+    module = load_sync_module()
+    base_matrix = {
+        "backlog": [
+            {
+                "backend_id": "metal",
+                "feature_id": "language.wave_intrinsics",
+            }
+        ]
+    }
+    head_matrix = {"backlog": []}
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(base_matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    marker = (
+        "<!-- crossgl-support-issue-sync: backlog:metal:language.wave_intrinsics -->"
+    )
+    pr = module.PullRequestContext(
+        number=5,
+        title="Mark Metal wave intrinsics supported",
+        body="Support matrix update.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("support/generated/support-matrix.json",),
+    )
+    client = FakeClient(
+        module,
+        issues={498: issue(498)},
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): head_matrix
+        },
+        support_issues=[issue(498, body=marker)],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        enforce_support_traceability=True,
+    )
+
+    assert summary["linked"] == 1
+    assert summary["support_closures"] == 1
+    assert summary["traceability_satisfied"] == 1
+    assert client.updated_bodies == [
+        (
+            5,
+            "\n".join(
+                [
+                    "Support matrix update.",
+                    "",
+                    "<!-- crossgl-pr-issue-links:start -->",
+                    "Closes #498",
+                    "<!-- crossgl-pr-issue-links:end -->",
+                ]
+            ),
+        )
+    ]
+
+
 def test_sync_skips_pull_request_refs_and_non_assignable_authors():
     module = load_sync_module()
     pr = module.PullRequestContext(
@@ -177,6 +298,7 @@ def test_sync_skips_pull_request_refs_and_non_assignable_authors():
     summary = module.sync_pr_issue_links(client, pr, "CrossGL/crosstl")
 
     assert summary["linked"] == 2
+    assert summary["support_closures"] == 0
     assert summary["assigned"] == 0
     assert summary["assignment_skipped"] == 1
     assert summary["missing_or_pull"] == 1
