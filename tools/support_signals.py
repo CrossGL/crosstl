@@ -223,6 +223,7 @@ DOC_CANDIDATE_NOISE = {
     "gltf",
     "hipdeviceptrt",
     "largeimage",
+    "pipelines",
     "summarylargeimage",
 }
 GENERIC_DOC_CANDIDATES = {
@@ -239,11 +240,13 @@ GENERIC_DOC_CANDIDATES = {
     "wave",
 }
 DOC_CANDIDATE_FEATURE_ALIASES = {
+    "descriptorset": "resources.bindings",
     "raytracing": "stage.ray_tracing",
     "svinstanceid": "io.stage_parameters",
     "svvertexid": "io.stage_parameters",
 }
 DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS = (
+    (re.compile(r"^gl[a-z0-9]+"), "io.stage_parameters"),
     (re.compile(r"^sv[a-z0-9]+"), "io.stage_parameters"),
     (
         re.compile(r"^rw(?:byteaddress|structured)?buffer"),
@@ -784,7 +787,9 @@ def actionable_doc_candidate(term: str, backend_id: str | None = None) -> bool:
         return False
     if any(pattern.search(normalized) for pattern in DOC_CANDIDATE_NOISE_PATTERNS):
         return False
-    if backend_id != "vulkan" and term.startswith("Op"):
+    if backend_id == "cuda" and normalized.startswith("cuda"):
+        return False
+    if backend_id != "vulkan" and term.startswith(("Op", "vk")):
         return False
     parts = candidate_parts(term)
     if not parts:

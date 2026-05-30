@@ -587,6 +587,60 @@ def test_build_report_maps_directx_surface_candidates_and_skips_spirv_noise():
     assert report["issues"] == []
 
 
+def test_build_report_maps_opengl_builtin_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "opengl",
+                "name": "OpenGL / GLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": "Input parameter semantics.",
+                "support": {"opengl": {"status": "partial"}},
+            },
+            {
+                "id": "resources.bindings",
+                "category": "resources",
+                "name": "Explicit and automatic resource bindings",
+                "description": "Descriptor set and binding metadata.",
+                "support": {"opengl": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "opengl",
+                "backend": "OpenGL / GLSL",
+                "source": "GLSL docs",
+                "url": "https://example.com/glsl",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "gl_Position", "count": 1},
+                    {"term": "gl_WorkGroupSize", "count": 1},
+                    {"term": "gl_FragCoord", "count": 1},
+                    {"term": "DescriptorSet", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
 def test_build_report_keeps_spirv_op_candidates_for_vulkan():
     module = load_signals_module()
     backends = {
@@ -617,6 +671,44 @@ def test_build_report_keeps_spirv_op_candidates_for_vulkan():
     report = module.build_report(backends, features, docs_report=docs_report)
 
     assert any(issue["feature"] == "OpDecorate" for issue in report["issues"])
+
+
+def test_build_report_ignores_cuda_runtime_doc_candidates():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "cuda",
+                "name": "CUDA",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "cuda",
+                "backend": "CUDA",
+                "source": "CUDA docs",
+                "url": "https://example.com/cuda",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "cudaMalloc", "count": 1},
+                    {"term": "cudaMemcpyAsync", "count": 1},
+                    {"term": "cuda_runtime_api", "count": 1},
+                    {"term": "Pipelines", "count": 1},
+                    {"term": "vkExt", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
 
 
 def test_build_report_maps_hip_texture_resource_candidates_to_catalog_features():
