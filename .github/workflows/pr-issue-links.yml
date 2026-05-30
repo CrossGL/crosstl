@@ -47,4 +47,5 @@ jobs:
           --repo "$GITHUB_REPOSITORY"
           --event-path "$GITHUB_EVENT_PATH"
           --sync-support-closures
+          --sync-support-references
           --check-support-traceability

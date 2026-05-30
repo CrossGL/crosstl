@@ -58,6 +58,12 @@ CLOSING_BLOCK_RE = re.compile(
     ),
     re.IGNORECASE,
 )
+REFERENCE_BLOCK_RE = re.compile(
+    r"\b(?:refs?|references?)\b\s*:?\s+(?P<refs>{}(?:\s*(?:,|and)\s*{})*)".format(
+        ISSUE_REF_PATTERN, ISSUE_REF_PATTERN
+    ),
+    re.IGNORECASE,
+)
 ISSUE_REF_RE = re.compile(ISSUE_REF_PATTERN, re.IGNORECASE)
 SUPPORT_TRACEABILITY_RE = re.compile(
     r"^\s*Support issue traceability\s*:\s*(?P<value>.+?)\s*$",
@@ -253,12 +259,14 @@ def strip_managed_section(body: str) -> str:
     return SECTION_RE.sub("\n", body or "").strip()
 
 
-def strip_unmanaged_closing_lines(body: str) -> str:
+def strip_unmanaged_managed_link_lines(body: str) -> str:
     lines = []
     for line in (body or "").splitlines():
         candidate = line.strip()
         candidate = re.sub(r"^[-*]\s+", "", candidate)
-        if CLOSING_BLOCK_RE.fullmatch(candidate):
+        if CLOSING_BLOCK_RE.fullmatch(candidate) or REFERENCE_BLOCK_RE.fullmatch(
+            candidate
+        ):
             continue
         lines.append(line)
     return "\n".join(lines).strip()
@@ -335,18 +343,27 @@ def has_support_traceability_opt_out(body: str) -> bool:
     return value in SUPPORT_TRACEABILITY_OPT_OUTS
 
 
-def managed_section(issue_numbers: list[int]) -> str:
+def managed_section(
+    issue_numbers: list[int], reference_issue_numbers: list[int] | None = None
+) -> str:
+    reference_issue_numbers = reference_issue_numbers or []
     lines = [SECTION_BEGIN]
     lines.extend("Closes #{}".format(number) for number in issue_numbers)
+    lines.extend("Refs #{}".format(number) for number in reference_issue_numbers)
     lines.append(SECTION_END)
     return "\n".join(lines)
 
 
-def update_body_with_managed_section(body: str, issue_numbers: list[int]) -> str:
-    base = strip_unmanaged_closing_lines(strip_managed_section(body or ""))
-    if not issue_numbers:
+def update_body_with_managed_section(
+    body: str,
+    issue_numbers: list[int],
+    reference_issue_numbers: list[int] | None = None,
+) -> str:
+    reference_issue_numbers = reference_issue_numbers or []
+    base = strip_unmanaged_managed_link_lines(strip_managed_section(body or ""))
+    if not issue_numbers and not reference_issue_numbers:
         return base
-    section = managed_section(issue_numbers)
+    section = managed_section(issue_numbers, reference_issue_numbers)
     if not base:
         return section
     return base.rstrip() + "\n\n" + section
@@ -359,20 +376,53 @@ def support_backlog_keys(matrix: dict[str, Any]) -> set[str]:
     }
 
 
+def support_backlog_row_details(matrix: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    support_lookup = {}
+    for feature in matrix.get("features", []):
+        feature_id = feature.get("id")
+        for backend_id, support in feature.get("support", {}).items():
+            support_lookup["backlog:{}:{}".format(backend_id, feature_id)] = (
+                support or {}
+            )
+
+    rows = {}
+    for item in matrix.get("backlog", []):
+        key = "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
+        support = support_lookup.get(key, {})
+        rows[key] = {
+            "status": item.get("status") or support.get("status"),
+            "notes": item.get("notes") or support.get("notes") or "",
+            "evidence": sorted(support.get("evidence") or []),
+        }
+    return rows
+
+
 def support_issue_marker_key(issue: dict[str, Any]) -> str | None:
     match = SUPPORT_ISSUE_MARKER_RE.search(issue.get("body") or "")
     return match.group(1) if match else None
 
 
-def support_closure_issue_numbers(
+def support_issue_numbers_for_keys(
+    support_issues: list[dict[str, Any]],
+    keys: set[str],
+) -> list[int]:
+    numbers = []
+    for issue in support_issues:
+        marker_key = support_issue_marker_key(issue)
+        if marker_key in keys:
+            numbers.append(int(issue["number"]))
+    return sorted(set(numbers))
+
+
+def support_matrix_issue_numbers(
     client: GitHubClient,
     pr: PullRequestContext,
     repo: str,
-) -> list[int]:
+) -> tuple[list[int], list[int]]:
     if not pr.head_repo or not pr.head_sha:
-        return []
+        return [], []
     if not SUPPORT_MATRIX_PATH.exists():
-        return []
+        return [], []
 
     base_matrix = json.loads(SUPPORT_MATRIX_PATH.read_text(encoding="utf-8"))
     try:
@@ -382,21 +432,40 @@ def support_closure_issue_numbers(
             pr.head_sha,
         )
     except (GitHubApiError, ValueError, json.JSONDecodeError, OSError) as exc:
-        print("::warning::Could not inspect PR support matrix closures: {}".format(exc))
-        return []
+        print("::warning::Could not inspect PR support matrix links: {}".format(exc))
+        return [], []
 
-    stale_backlog_keys = support_backlog_keys(base_matrix) - support_backlog_keys(
-        head_matrix
-    )
-    if not stale_backlog_keys:
-        return []
+    base_backlog_keys = support_backlog_keys(base_matrix)
+    head_backlog_keys = support_backlog_keys(head_matrix)
+    closure_keys = base_backlog_keys - head_backlog_keys
 
-    numbers = []
-    for issue in client.list_open_support_issues():
-        marker_key = support_issue_marker_key(issue)
-        if marker_key in stale_backlog_keys:
-            numbers.append(int(issue["number"]))
-    return sorted(set(numbers))
+    base_rows = support_backlog_row_details(base_matrix)
+    head_rows = support_backlog_row_details(head_matrix)
+    progress_keys = {
+        key
+        for key in base_backlog_keys & head_backlog_keys
+        if base_rows.get(key) != head_rows.get(key)
+    }
+
+    if not closure_keys and not progress_keys:
+        return [], []
+
+    support_issues = client.list_open_support_issues()
+    closure_numbers = support_issue_numbers_for_keys(support_issues, closure_keys)
+    reference_numbers = support_issue_numbers_for_keys(support_issues, progress_keys)
+    reference_numbers = [
+        number for number in reference_numbers if number not in set(closure_numbers)
+    ]
+    return closure_numbers, reference_numbers
+
+
+def support_closure_issue_numbers(
+    client: GitHubClient,
+    pr: PullRequestContext,
+    repo: str,
+) -> list[int]:
+    closure_numbers, _reference_numbers = support_matrix_issue_numbers(client, pr, repo)
+    return closure_numbers
 
 
 def dedupe_issue_numbers(issue_numbers: list[int]) -> list[int]:
@@ -423,15 +492,27 @@ def sync_pr_issue_links(
     check_support_traceability: bool = False,
     enforce_support_traceability: bool = False,
     sync_support_closures: bool = False,
+    sync_support_references: bool = False,
 ) -> dict[str, int]:
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
-    support_closures = (
-        support_closure_issue_numbers(client, pr, repo) if sync_support_closures else []
-    )
+    support_closures: list[int] = []
+    support_references: list[int] = []
+    if sync_support_closures or sync_support_references:
+        support_closures, support_references = support_matrix_issue_numbers(
+            client, pr, repo
+        )
+        if not sync_support_closures:
+            support_closures = []
+        if not sync_support_references:
+            support_references = []
     issue_numbers = dedupe_issue_numbers(issue_numbers + support_closures)
+    reference_issue_numbers = dedupe_issue_numbers(
+        [number for number in support_references if number not in set(issue_numbers)]
+    )
     summary = {
         "linked": len(issue_numbers),
         "support_closures": len(support_closures),
+        "support_references": len(reference_issue_numbers),
         "assigned": 0,
         "assignment_skipped": 0,
         "missing_or_pull": 0,
@@ -462,7 +543,11 @@ def sync_pr_issue_links(
                 continue
             raise
 
-    new_body = update_body_with_managed_section(pr.body, valid_issue_numbers)
+    new_body = update_body_with_managed_section(
+        pr.body,
+        valid_issue_numbers,
+        reference_issue_numbers,
+    )
     if new_body != (pr.body or ""):
         summary["body_updated"] = 1
         if not dry_run:
@@ -473,7 +558,7 @@ def sync_pr_issue_links(
         relevant_paths = support_relevant_paths(changed_files)
         traceability_required = bool(relevant_paths)
         traceability_satisfied = bool(
-            valid_issue_numbers
+            valid_issue_numbers or reference_issue_numbers
         ) or has_support_traceability_opt_out(pr.body)
         summary["traceability_required"] = int(traceability_required)
         summary["traceability_satisfied"] = int(
@@ -517,16 +602,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--check-support-traceability",
         action="store_true",
         help=(
-            "Report whether support-relevant PR files have closing issue refs or "
-            "an explicit 'Support issue traceability: no issue closed' marker"
+            "Report whether support-relevant PR files have closing issue refs, "
+            "managed support issue refs, or an explicit 'Support issue "
+            "traceability: no issue closed' marker"
         ),
     )
     parser.add_argument(
         "--enforce-support-traceability",
         action="store_true",
         help=(
-            "Fail when support-relevant PR files lack closing issue refs or an "
-            "explicit 'Support issue traceability: no issue closed' marker"
+            "Fail when support-relevant PR files lack closing issue refs, managed "
+            "support issue refs, or an explicit 'Support issue traceability: no "
+            "issue closed' marker"
         ),
     )
     parser.add_argument(
@@ -535,6 +622,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Add closing refs for open managed support issues whose backlog rows "
             "are removed by the PR support matrix"
+        ),
+    )
+    parser.add_argument(
+        "--sync-support-references",
+        action="store_true",
+        help=(
+            "Add non-closing refs for open managed support issues whose backlog "
+            "rows remain open but changed in the PR support matrix"
         ),
     )
     return parser.parse_args(argv)
@@ -567,9 +662,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
         enforce_support_traceability=args.enforce_support_traceability,
         sync_support_closures=args.sync_support_closures,
+        sync_support_references=args.sync_support_references,
     )
     print(
-        "PR issue link sync: linked={linked}, support_closures={support_closures}, assigned={assigned}, assignment_skipped={assignment_skipped}, missing_or_pull={missing_or_pull}, body_updated={body_updated}".format(
+        "PR issue link sync: linked={linked}, support_closures={support_closures}, support_references={support_references}, assigned={assigned}, assignment_skipped={assignment_skipped}, missing_or_pull={missing_or_pull}, body_updated={body_updated}".format(
             **summary
         )
     )
@@ -582,8 +678,8 @@ def main(argv: list[str] | None = None) -> int:
         if summary.get("traceability_failed"):
             warning = (
                 "Support-relevant PR changes have no same-repo closing issue "
-                "reference and no explicit 'Support issue traceability: no issue "
-                "closed' marker."
+                "reference, no managed support issue reference, and no explicit "
+                "'Support issue traceability: no issue closed' marker."
             )
             print("::warning::{}".format(warning))
             step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -602,8 +698,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(
             "Support-relevant PR changes must include a same-repo closing issue "
-            "reference or an explicit 'Support issue traceability: no issue closed' "
-            "line in the PR body.",
+            "reference, a managed support issue reference, or an explicit "
+            "'Support issue traceability: no issue closed' line in the PR body.",
             file=sys.stderr,
         )
         return 1

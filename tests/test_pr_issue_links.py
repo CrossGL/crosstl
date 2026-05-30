@@ -122,6 +122,7 @@ def test_sync_assigns_unassigned_issues_and_updates_pr_body():
     assert summary == {
         "linked": 2,
         "support_closures": 0,
+        "support_references": 0,
         "assigned": 1,
         "assignment_skipped": 0,
         "missing_or_pull": 0,
@@ -278,6 +279,109 @@ def test_sync_adds_support_matrix_closures_from_removed_backlog_rows(
     ]
 
 
+def test_sync_adds_support_matrix_refs_from_changed_backlog_rows(tmp_path, monkeypatch):
+    module = load_sync_module()
+    base_matrix = {
+        "features": [
+            {
+                "id": "texture.projected",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Planar projection is supported.",
+                        "evidence": ["tests/old.py::test_planar_projection"],
+                    }
+                },
+            }
+        ],
+        "backlog": [
+            {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar projection is supported.",
+            }
+        ],
+    }
+    head_matrix = {
+        "features": [
+            {
+                "id": "texture.projected",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Planar and cube-shadow projection are supported.",
+                        "evidence": [
+                            "tests/old.py::test_planar_projection",
+                            "tests/new.py::test_cube_shadow_projection",
+                        ],
+                    }
+                },
+            }
+        ],
+        "backlog": [
+            {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar and cube-shadow projection are supported.",
+            }
+        ],
+    }
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(base_matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    marker = "<!-- crossgl-support-issue-sync: backlog:metal:texture.projected -->"
+    pr = module.PullRequestContext(
+        number=5,
+        title="Expand Metal projected texture support",
+        body="Support matrix update.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("support/generated/support-matrix.json",),
+    )
+    client = FakeClient(
+        module,
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): head_matrix
+        },
+        support_issues=[issue(432, body=marker)],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_references=True,
+        enforce_support_traceability=True,
+    )
+
+    assert summary["linked"] == 0
+    assert summary["support_closures"] == 0
+    assert summary["support_references"] == 1
+    assert summary["traceability_satisfied"] == 1
+    assert client.assigned == []
+    assert client.updated_bodies == [
+        (
+            5,
+            "\n".join(
+                [
+                    "Support matrix update.",
+                    "",
+                    "<!-- crossgl-pr-issue-links:start -->",
+                    "Refs #432",
+                    "<!-- crossgl-pr-issue-links:end -->",
+                ]
+            ),
+        )
+    ]
+
+
 def test_sync_skips_pull_request_refs_and_non_assignable_authors():
     module = load_sync_module()
     pr = module.PullRequestContext(
@@ -299,6 +403,7 @@ def test_sync_skips_pull_request_refs_and_non_assignable_authors():
 
     assert summary["linked"] == 2
     assert summary["support_closures"] == 0
+    assert summary["support_references"] == 0
     assert summary["assigned"] == 0
     assert summary["assignment_skipped"] == 1
     assert summary["missing_or_pull"] == 1
