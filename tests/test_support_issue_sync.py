@@ -1254,6 +1254,7 @@ def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys):
 def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, capsys):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
     matrix_check_path = tmp_path / "support-matrix-check.json"
     plan_path = tmp_path / "support-issue-plan.json"
     matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
@@ -1263,6 +1264,8 @@ def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, c
         [
             "--matrix",
             str(matrix_path),
+            "--signals",
+            str(signals_path),
             "--matrix-check-report",
             str(matrix_check_path),
             "--repo",
@@ -1360,6 +1363,7 @@ def test_main_writes_plan_on_preflight_inspection_failure(
 ):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
     plan_path = tmp_path / "support-issue-plan.json"
     matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -1377,6 +1381,8 @@ def test_main_writes_plan_on_preflight_inspection_failure(
         [
             "--matrix",
             str(matrix_path),
+            "--signals",
+            str(signals_path),
             "--repo",
             "owner/repo",
             "--inspect-existing",
@@ -1413,6 +1419,7 @@ def test_main_writes_plan_before_failing_planned_action_budget(
 ):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
     plan_path = tmp_path / "support-issue-plan.json"
     matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
     monkeypatch.setenv("GITHUB_TOKEN", "token")
@@ -1427,6 +1434,8 @@ def test_main_writes_plan_before_failing_planned_action_budget(
         [
             "--matrix",
             str(matrix_path),
+            "--signals",
+            str(signals_path),
             "--repo",
             "owner/repo",
             "--inspect-existing",

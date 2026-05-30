@@ -9,7 +9,7 @@ def tokenize_code(code: str) -> List:
     return lexer.tokenize()
 
 
-def test_struct_tokenization():
+def test_slang_lexer_struct_tokenization():
     code = """
     struct AssembledVertex
     {

@@ -161,6 +161,7 @@ CATALOG_REVIEW_NOISE_TERMS = GENERIC_FEATURE_TOKENS | {
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 TEST_DEF_RE = re.compile(r"^\s*def\s+(test_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
+TEST_CLASS_RE = re.compile(r"^\s*class\s+(Test[A-Za-z0-9_]*)\s*[:(]", re.MULTILINE)
 UNSUPPORTED_RE = re.compile(
     r"unsupported|not support|does not support|notimplemented", re.IGNORECASE
 )
@@ -215,6 +216,7 @@ LINK_KEYWORDS = {
     "wave",
 }
 DOC_CANDIDATE_NOISE = {
+    "descriptorhandle",
     "fontdescriptor",
     "getimagetag",
     "gltf",
@@ -233,6 +235,10 @@ GENERIC_DOC_CANDIDATES = {
     "sampler",
     "texture",
     "wave",
+}
+DOC_CANDIDATE_FEATURE_ALIASES = {
+    "svinstanceid": "io.stage_parameters",
+    "svvertexid": "io.stage_parameters",
 }
 
 
@@ -444,16 +450,20 @@ def cached_file_identifiers(path_text: str) -> frozenset[str]:
 def cached_test_symbols(path_text: str) -> tuple[str, ...]:
     path = ROOT / path_text
     text = read_text(path)
+    names: set[str] = set()
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return tuple(TEST_DEF_RE.findall(text))
+        names.update(TEST_DEF_RE.findall(text))
+        names.update(TEST_CLASS_RE.findall(text))
+        return tuple(sorted(names))
 
-    names = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name.startswith("test_"):
-                names.append(node.name)
+                names.add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            names.add(node.name)
     return tuple(sorted(names))
 
 
@@ -771,6 +781,19 @@ def actionable_doc_candidate(term: str) -> bool:
 def candidate_feature_matches(
     term: str, features: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    alias_feature_id = DOC_CANDIDATE_FEATURE_ALIASES.get(normalize_identifier(term))
+    if alias_feature_id:
+        for feature in features:
+            if feature["id"] == alias_feature_id:
+                return [
+                    {
+                        "feature_id": feature["id"],
+                        "name": feature["name"],
+                        "matched_terms": [term],
+                        "score": 1,
+                    }
+                ]
+
     parts = candidate_parts(term)
     if not parts:
         return []
@@ -1003,11 +1026,14 @@ def catalog_review_issue(
     state: str,
     implementation_hits: list[dict[str, Any]],
     test_hits: list[dict[str, Any]],
+    unsupported_hits: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     status = support.get("status")
     if status not in CATALOG_REVIEW_STATUSES:
         return None
     if state != "tested":
+        return None
+    if support.get("evidence") and unsupported_hits:
         return None
 
     matched_terms = sorted(
@@ -1315,6 +1341,7 @@ def build_report(
                 state,
                 implementation_hits,
                 test_hits,
+                unsupported_hits,
             )
             if issue:
                 issues.append(issue)

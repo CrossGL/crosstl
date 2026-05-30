@@ -187,6 +187,42 @@ def test_build_report_scans_repo_implementation_and_tests():
     assert report["issues"] == []
 
 
+def test_build_report_counts_test_class_names_as_evidence():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "hip",
+                "name": "HIP",
+                "translator_codegen": "crosstl/backend/HIP/HipLexer.py",
+                "tests": ["tests/test_backend/test_HIP/test_lexer.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "source.lexing",
+                "category": "source",
+                "name": "Native lexer coverage",
+                "description": (
+                    "Tokenize backend source language constructs used by the "
+                    "native parser."
+                ),
+                "support": {"hip": {"status": "supported", "evidence": ["test"]}},
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["hip"]
+    test_symbols = {hit["symbol"] for hit in support["tests"]}
+
+    assert support["state"] == "tested"
+    assert "TestHipLexer" in test_symbols
+    assert report["issues"] == []
+
+
 def test_build_report_flags_unsupported_catalog_rows_with_detected_tests():
     module = load_signals_module()
     backends = {
@@ -247,6 +283,47 @@ def test_build_report_flags_unsupported_catalog_rows_with_detected_tests():
             ],
         }
     ]
+
+
+def test_build_report_skips_reviewed_unsupported_rows_with_unsupported_markers():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "catalog.unsupported",
+                "category": "validation",
+                "name": "Unsupported catalog issue",
+                "description": (
+                    "Review unsupported catalog rows with detected "
+                    "implementation tests."
+                ),
+                "support": {
+                    "directx": {
+                        "status": "unsupported",
+                        "evidence": ["tools/support_signals.py::unsupported marker"],
+                    }
+                },
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["directx"]
+
+    assert support["state"] == "tested"
+    assert support["unsupported"]
+    assert report["issues"] == []
 
 
 def test_build_report_does_not_flag_weak_unsupported_catalog_matches():
@@ -382,6 +459,86 @@ def test_build_report_skips_documented_candidates_mapped_to_existing_features():
     assert not any(
         issue["feature"] == "ByteAddressBuffer" for issue in report["issues"]
     )
+
+
+def test_build_report_maps_documented_semantic_candidates_to_stage_io_feature():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "slang",
+                "name": "Slang",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": (
+                    "Input parameter semantics and target builtin attributes."
+                ),
+                "support": {"slang": {"status": "partial"}},
+            }
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "slang",
+                "backend": "Slang",
+                "source": "Slang user guide",
+                "url": "https://example.com/slang",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "SV_VertexID", "count": 1},
+                    {"term": "SV_InstanceID", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert not any(issue["feature"] == "SV_VertexID" for issue in report["issues"])
+    assert not any(issue["feature"] == "SV_InstanceID" for issue in report["issues"])
+
+
+def test_build_report_ignores_non_surface_documented_noise_candidates():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "slang",
+                "name": "Slang",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "slang",
+                "backend": "Slang",
+                "source": "Slang user guide",
+                "url": "https://example.com/slang",
+                "ok": True,
+                "candidate_terms": [{"term": "DescriptorHandle", "count": 1}],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
 
 
 def test_build_report_creates_ci_failure_issues_from_pytest_summaries():
