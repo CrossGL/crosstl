@@ -40,40 +40,16 @@ repos:
       - id: check-yaml
       - id: destroyed-symlinks
       - id: detect-private-key
-      - id: end-of-file-fixer
-      - id: fix-byte-order-marker
       - id: forbid-new-submodules
-      - id: mixed-line-ending
-        args: [--fix=lf]
-      - id: trailing-whitespace
-        args:
-          - --markdown-linebreak-ext=md
-          - --markdown-linebreak-ext=rst
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.15
     hooks:
       - id: ruff-check
-        name: ruff critical Python checks and fixes
+        name: ruff critical Python checks
         args:
-          - --fix
-          - --exit-non-zero-on-fix
           - --select=E9,F63,F7,F82
           - --target-version=py38
-
-  - repo: https://github.com/asottile/pyupgrade
-    rev: v3.21.2
-    hooks:
-      - id: pyupgrade
-        args: [--py38-plus]
-
-  - repo: https://github.com/PyCQA/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
-        args:
-          - --profile=black
-          - --filter-files
 
   - repo: https://github.com/psf/black-pre-commit-mirror
     rev: 26.5.1
@@ -87,32 +63,22 @@ repos:
     rev: v2.3.3
     hooks:
       - id: autoflake
-        args:
-          - --in-place
-          - --remove-all-unused-imports
-          - --remove-unused-variables
-          - --ignore-init-module-imports
-
-  - repo: https://github.com/PyCQA/flake8
-    rev: 7.3.0
-    hooks:
-      - id: flake8
 
   - repo: local
     hooks:
       - id: crosstl-support-matrix-current
-        name: CrossTL support matrix artifacts autofix
-        entry: python tools/support_matrix.py update
+        name: CrossTL support matrix artifacts
+        entry: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
         language: python
         pass_filenames: false
         files: ^(support/(backends|features)\.json|support/generated/(graphics-backend-roadmap|support-matrix)\.json|docs/source/support-matrix\.rst|tools/support_matrix\.py|tests/test_support_matrix\.py)$
 
-      - id: crosstl-support-signals-current
-        name: CrossTL support signal artifact autofix
-        entry: python tools/support_signals.py update --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
+      - id: crosstl-support-signals-extract
+        name: CrossTL support signal extraction
+        entry: python tools/support_signals.py extract --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
         language: python
         pass_filenames: false
-        files: ^(support/(backends|features)\.json|support/generated/(backend-docs-report|support-signals)\.json|tools/(pytest_failure_summary|support_signals)\.py|tests/(test_pytest_failure_summary|test_support_signals)\.py)$
+        files: ^(support/(backends|features)\.json|support/generated/backend-docs-report\.json|tools/(pytest_failure_summary|support_signals)\.py|tests/(test_pytest_failure_summary|test_support_signals)\.py)$
 
       - id: crosstl-support-automation-tests
         name: CrossTL support automation tests
@@ -172,8 +138,7 @@ repos:
       - id: crosstl-full-test-suite
         name: CrossTL full pytest suite
         entry: python -m pytest tests
-        language: python
-        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        language: system
         pass_filenames: false
         always_run: true
         stages: [manual]

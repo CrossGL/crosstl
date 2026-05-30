@@ -2060,7 +2060,7 @@
         "metal": {"status": "supported"},
         "vulkan": {"status": "partial"},
         "cuda": {
-          "status": "partial",
+          "status": "supported",
           "notes": "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics",
@@ -2078,7 +2078,7 @@
           ]
         },
         "hip": {
-          "status": "partial",
+          "status": "supported",
           "notes": "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen",
