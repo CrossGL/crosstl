@@ -122,6 +122,7 @@ PR_ISSUE_LINK_REQUIRED_POLICIES = {
     "sync_command": "python tools/sync_pr_issue_links.py",
     "support_traceability": "--check-support-traceability",
     "support_closure_sync": "--sync-support-closures",
+    "support_reference_sync": "--sync-support-references",
 }
 DOCS_REQUIRED_POLICIES = {
     "push_on_main": "push:",

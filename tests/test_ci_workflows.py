@@ -735,6 +735,7 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
     assert "pull-requests: write" in pr_issue_links
     assert "python tools/sync_pr_issue_links.py" in pr_issue_links
     assert "--sync-support-closures" in pr_issue_links
+    assert "--sync-support-references" in pr_issue_links
     assert "--check-support-traceability" in pr_issue_links
     assert "--enforce-support-traceability" not in pr_issue_links
 
