@@ -19932,7 +19932,7 @@ def test_mixed_scalar_returns_cast_value_to_declared_return_type():
     assert "return enabled;" not in generated_code
 
 
-def test_numeric_conditions_compare_against_zero_in_rust_bool_sites():
+def test_numeric_conditions_compare_against_zero_in_rust_bool_sites(tmp_path):
     code = """
     float choose(int index, uint count, float inputWeight, bool ready) {
         int localIndex = index;
@@ -19977,6 +19977,7 @@ def test_numeric_conditions_compare_against_zero_in_rust_bool_sites():
     assert "else if count {" not in generated_code
     assert "while weight {" not in generated_code
     assert "while i {" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_ternary_branches_cast_to_result_type():
