@@ -21665,11 +21665,10 @@ def test_rust_type_conversions():
 
 
 # ---------------------------------------------------------------------------
-# Issue #516 - Invalid shader shape validation
 # ---------------------------------------------------------------------------
 
 
-def test_rust_invalid_shader_empty_vertex_stage():
+def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
     """Ensure an empty vertex stage still generates valid code with the shader attribute."""
     code = """
     shader EmptyVertex {
@@ -21684,9 +21683,10 @@ def test_rust_invalid_shader_empty_vertex_stage():
     generated_code = generate_code(ast)
     assert "#[vertex_shader]" in generated_code
     assert "pub fn main() -> ()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_invalid_shader_no_stages():
+def test_rust_invalid_shader_no_stages(tmp_path):
     """A shader with no stages should still produce valid header code without crashing."""
     code = """
     shader NoStages {
@@ -21702,9 +21702,10 @@ def test_rust_invalid_shader_no_stages():
     assert "pub struct Data" in generated_code
     assert "#[vertex_shader]" not in generated_code
     assert "#[fragment_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_invalid_shader_missing_return_type():
+def test_rust_invalid_shader_missing_return_type(tmp_path):
     """Vertex stage with void return type should still produce valid Rust code."""
     code = """
     shader VoidVertex {
@@ -21721,10 +21722,10 @@ def test_rust_invalid_shader_missing_return_type():
     assert "#[vertex_shader]" in generated_code
     assert "-> ()" in generated_code
     assert "let x: f32 = 1.0;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 # ---------------------------------------------------------------------------
-# Issue #384 - Constant/uniform buffers
 # ---------------------------------------------------------------------------
 
 
@@ -21827,7 +21828,6 @@ def test_rust_cbuffer_used_in_vertex_stage():
 
 
 # ---------------------------------------------------------------------------
-# Issue #375 - Struct member semantics
 # ---------------------------------------------------------------------------
 
 
@@ -21915,7 +21915,6 @@ def test_rust_struct_member_multiple_texcoords():
 
 
 # ---------------------------------------------------------------------------
-# Issue #363 - Stage parameter semantics
 # ---------------------------------------------------------------------------
 
 
@@ -21997,7 +21996,6 @@ def test_rust_stage_parameter_multiple_params():
 
 
 # ---------------------------------------------------------------------------
-# Issue #327 - Fragment/pixel stage
 # ---------------------------------------------------------------------------
 
 
@@ -22104,7 +22102,6 @@ def test_rust_fragment_stage_multiple_render_targets():
 
 
 # ---------------------------------------------------------------------------
-# Issue #323 - Vertex stage
 # ---------------------------------------------------------------------------
 
 
@@ -22249,3 +22246,355 @@ def test_rust_vertex_and_fragment_pipeline():
     assert "pub baseColor: Vec4<f32>," in generated_code
     assert "pub roughness: f32," in generated_code
     assert "// Constant Buffers" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_cbuffer_repr_c_and_derive():
+    """cbuffer declarations must produce #[repr(C)] and derive traits on the struct."""
+    code = """
+    cbuffer CameraData {
+        mat4 view;
+        mat4 projection;
+        vec3 eyePosition;
+        float nearPlane;
+        float farPlane;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[repr(C)]" in generated_code
+    assert "#[derive(Debug, Clone, Copy)]" in generated_code
+    assert "pub struct CameraData" in generated_code
+    assert "pub view: Mat4<f32>," in generated_code
+    assert "pub projection: Mat4<f32>," in generated_code
+    assert "pub eyePosition: Vec3<f32>," in generated_code
+    assert "pub nearPlane: f32," in generated_code
+    assert "pub farPlane: f32," in generated_code
+    assert "static NEAR_PLANE: f32 = 0.0;" in generated_code
+    assert "static FAR_PLANE: f32 = 0.0;" in generated_code
+
+
+def test_rust_struct_member_semantics_tangent_binormal():
+    """Struct members with TANGENT and BINORMAL semantics produce mapped comments."""
+    code = """
+    shader main {
+        struct VertexData {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec3 tangent @ TANGENT;
+            vec3 binormal @ BINORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            void main(VertexData v) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct VertexData" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub tangent: Vec3<f32>," in generated_code
+    assert "pub binormal: Vec3<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// tangent" in generated_code
+    assert "// binormal" in generated_code
+    assert "// texcoord(0)" in generated_code
+
+
+def test_rust_multiple_cbuffers_in_shader():
+    """Multiple cbuffers inside a single shader produce separate structs."""
+    code = """
+    shader MultiBuffer {
+        cbuffer PerFrame {
+            mat4 viewProjection;
+            float time;
+            float deltaTime;
+        };
+        cbuffer PerMaterial {
+            vec4 albedo;
+            float metallic;
+            float roughness;
+        };
+        cbuffer PerObject {
+            mat4 world;
+            mat4 worldInverseTranspose;
+        };
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+        vertex {
+            void main(VSInput input) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct PerFrame" in generated_code
+    assert "pub struct PerMaterial" in generated_code
+    assert "pub struct PerObject" in generated_code
+    assert "pub viewProjection: Mat4<f32>," in generated_code
+    assert "pub time: f32," in generated_code
+    assert "pub deltaTime: f32," in generated_code
+    assert "pub albedo: Vec4<f32>," in generated_code
+    assert "pub metallic: f32," in generated_code
+    assert "pub roughness: f32," in generated_code
+    assert "pub world: Mat4<f32>," in generated_code
+    assert "pub worldInverseTranspose: Mat4<f32>," in generated_code
+    assert generated_code.count("#[repr(C)]") >= 3
+
+
+def test_rust_structured_buffer_type_mapping():
+    """StructuredBuffer and RWStructuredBuffer types map to correct Rust aliases."""
+    code = """
+    shader ComputeShader {
+        struct Particle {
+            vec3 position @ POSITION;
+            vec3 velocity @ TEXCOORD0;
+            float life @ TEXCOORD1;
+        };
+        StructuredBuffer<Particle> inputParticles;
+        RWStructuredBuffer<Particle> outputParticles;
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct Particle" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub velocity: Vec3<f32>," in generated_code
+    assert "pub life: f32," in generated_code
+    assert "// position" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "// texcoord(1)" in generated_code
+
+
+def test_rust_struct_semantic_fragment_outputs():
+    """Fragment output struct with gl_FragColor semantics produces target annotations."""
+    code = """
+    shader main {
+        struct GBufferOutput {
+            vec4 albedo @ gl_FragColor0;
+            vec4 normals @ gl_FragColor1;
+            vec4 emission @ gl_FragColor2;
+        };
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+        fragment {
+            GBufferOutput main(FSInput input) {
+                GBufferOutput output;
+                output.albedo = vec4(1.0, 0.0, 0.0, 1.0);
+                output.normals = vec4(0.0, 1.0, 0.0, 1.0);
+                output.emission = vec4(0.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct GBufferOutput" in generated_code
+    assert "pub albedo: Vec4<f32>," in generated_code
+    assert "pub normals: Vec4<f32>," in generated_code
+    assert "pub emission: Vec4<f32>," in generated_code
+    assert "// target(0)" in generated_code
+    assert "// target(1)" in generated_code
+    assert "// target(2)" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_vertex_stage_position_output(tmp_path):
+    """Vertex shader produces correct Rust struct with position output."""
+    code = """
+    shader VertexPosition {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+        vertex {
+            VSOutput main(vec3 pos) {
+                VSOutput output;
+                output.position = vec4(pos, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct VSOutput" in generated_code
+    assert "pub position: Vec4<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "-> VSOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_fragment_stage_color_output(tmp_path):
+    """Fragment shader produces correct Rust struct with color output."""
+    code = """
+    shader FragmentColor {
+        struct PSOutput {
+            vec4 color @ gl_FragColor;
+        };
+        fragment {
+            PSOutput main(vec4 fragCoord) {
+                PSOutput output;
+                output.color = vec4(1.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct PSOutput" in generated_code
+    assert "pub color: Vec4<f32>," in generated_code
+    assert "// target(0)" in generated_code
+    assert "-> PSOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_io_semantics_sv_position_sv_target(tmp_path):
+    """SV_Position and SV_Target map to Rust semantic comments (issues #323/#327)."""
+    code = """
+    shader SemanticMapping {
+        struct VSOut {
+            vec4 pos @ gl_Position;
+            vec3 norm @ NORMAL;
+        };
+        struct PSOut {
+            vec4 color @ gl_FragColor;
+        };
+        vertex {
+            VSOut main(vec3 position) {
+                VSOut o;
+                o.pos = vec4(position, 1.0);
+                o.norm = vec3(0.0, 1.0, 0.0);
+                return o;
+            }
+        }
+        fragment {
+            PSOut main(VSOut input) {
+                PSOut o;
+                o.color = vec4(input.norm, 1.0);
+                return o;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct VSOut" in generated_code
+    assert "pub struct PSOut" in generated_code
+    assert "pub pos: Vec4<f32>," in generated_code
+    assert "pub norm: Vec3<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// target(0)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_vertex_multiple_attributes(tmp_path):
+    """Multiple vertex attributes (position, normal, texcoord) are handled."""
+    code = """
+    shader MultiAttrib {
+        struct VertexIn {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texcoord @ TEXCOORD0;
+        };
+        struct VertexOut {
+            vec4 clipPos @ gl_Position;
+            vec3 worldNormal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VertexOut main(VertexIn v) {
+                VertexOut o;
+                o.clipPos = vec4(v.position, 1.0);
+                o.worldNormal = v.normal;
+                o.uv = v.texcoord;
+                return o;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct VertexIn" in generated_code
+    assert "pub struct VertexOut" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub normal: Vec3<f32>," in generated_code
+    assert "pub texcoord: Vec2<f32>," in generated_code
+    assert "pub clipPos: Vec4<f32>," in generated_code
+    assert "pub worldNormal: Vec3<f32>," in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "v: VertexIn" in generated_code
+    assert "-> VertexOut" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_fragment_stage_with_texture_sampling(tmp_path):
+    """Fragment shader with texture sampling produces correct Rust."""
+    code = """
+    shader TexturedFragment {
+        sampler2D diffuseTex;
+
+        struct PSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+        fragment {
+            vec4 main(PSInput input) @ gl_FragColor {
+                return texture(diffuseTex, input.uv);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct PSInput" in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "input: PSInput" in generated_code
+    assert "-> Vec4<f32>" in generated_code

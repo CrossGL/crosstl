@@ -18374,7 +18374,6 @@ def test_prefix_and_postfix_unary_operators_preserve_position():
 
 
 def test_wave_intrinsics_with_float_types_lower_to_native_slang():
-    """Issue #504: Wave/subgroup intrinsics with float operands."""
     code = """
     shader SlangWaveFloat {
         compute {
@@ -18417,7 +18416,6 @@ def test_wave_intrinsics_with_float_types_lower_to_native_slang():
 
 
 def test_wave_intrinsics_in_fragment_stage_lower_to_native_slang():
-    """Issue #504: Wave intrinsics in fragment shader stage."""
     code = """
     shader SlangWaveFragment {
         fragment {
@@ -18445,7 +18443,6 @@ def test_wave_intrinsics_in_fragment_stage_lower_to_native_slang():
 
 
 def test_image_atomics_on_1d_textures_emit_slang_interlocked():
-    """Issue #482: Image atomic operations on 1D textures."""
     code = """
     shader ImageAtomics1D {
         uimage1D counters @r32ui;
@@ -18479,7 +18476,6 @@ def test_image_atomics_on_1d_textures_emit_slang_interlocked():
 
 
 def test_image_atomics_compare_swap_on_3d_texture():
-    """Issue #482: imageAtomicCompSwap on 3D image textures."""
     code = """
     shader ImageAtomicCompSwap3D {
         uimage3D volume @r32ui;
@@ -18509,7 +18505,6 @@ def test_image_atomics_compare_swap_on_3d_texture():
 
 
 def test_storage_image_load_store_3d_and_formats():
-    """Issue #477: Storage image load/store with 3D images and explicit formats."""
     code = """
     shader StorageImage3D {
         image3D volumeData @rgba32f;
@@ -18541,7 +18536,6 @@ def test_storage_image_load_store_3d_and_formats():
 
 
 def test_storage_image_load_store_1d_array():
-    """Issue #477: Storage image load/store on 1D array images."""
     code = """
     shader StorageImage1DArray {
         image1DArray layers @rgba32f;
@@ -18567,7 +18561,6 @@ def test_storage_image_load_store_1d_array():
 
 
 def test_texel_fetch_with_cube_and_3d_textures():
-    """Issue #457: texelFetch on 3D textures."""
     code = """
     shader TexelFetch3D {
         sampler3d volumeTex;
@@ -18595,7 +18588,6 @@ def test_texel_fetch_with_cube_and_3d_textures():
 
 
 def test_texture_query_operations_on_various_types():
-    """Issue #452: textureSize and textureQueryLevels on 2D, 3D, cube, and array textures."""
     code = """
     shader TextureQueries {
         sampler2d tex2d;
@@ -18638,7 +18630,6 @@ def test_texture_query_operations_on_various_types():
 
 
 def test_texture_query_image_size_on_storage_images():
-    """Issue #452: imageSize on storage image resources."""
     code = """
     shader ImageSizeQueries {
         image2D img2d @rgba32f;
@@ -18666,7 +18657,6 @@ def test_texture_query_image_size_on_storage_images():
 
 
 def test_basic_texture_sampling_with_bias_lod_grad():
-    """Issue #423: Basic texture sampling with bias, LOD, and gradient."""
     code = """
     shader TextureSampling {
         sampler2d diffuse;
@@ -18712,7 +18702,6 @@ def test_basic_texture_sampling_with_bias_lod_grad():
 
 
 def test_shadow_sampler_basic_compare_operations():
-    """Issue #423: Shadow sampler basic comparison operations."""
     code = """
     shader ShadowSampling {
         sampler2dshadow shadowMap;
@@ -18742,6 +18731,424 @@ def test_shadow_sampler_basic_compare_operations():
     assert "float shadowCube = cubeShadow.SampleCmp(dir, depth);" in generated_code
     assert "textureCompare(" not in generated_code
     assert "textureCompareLod(" not in generated_code
+
+
+def test_wave_intrinsics_with_vector_types_lower_to_native_slang():
+    code = """
+    shader SlangWaveVectors {
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                vec4 color = vec4(float(tid.x), 0.0, 0.0, 1.0);
+                ivec2 coord = ivec2(int(tid.x), int(tid.y));
+                vec4 colorSum = WaveActiveSum(color);
+                vec4 colorMin = WaveActiveMin(color);
+                vec4 colorMax = WaveActiveMax(color);
+                ivec2 coordSum = WaveActiveSum(coord);
+                vec4 colorBroadcast = WaveReadLaneAt(color, 0u);
+                vec4 colorFirst = WaveReadLaneFirst(colorSum);
+                ivec2 coordPrefix = WavePrefixSum(coord);
+                vec4 colorQuad = QuadReadAcrossX(color);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 colorSum = WaveActiveSum(color);" in generated_code
+    assert "float4 colorMin = WaveActiveMin(color);" in generated_code
+    assert "float4 colorMax = WaveActiveMax(color);" in generated_code
+    assert "int2 coordSum = WaveActiveSum(coord);" in generated_code
+    assert "float4 colorBroadcast = WaveReadLaneAt(color, 0u);" in generated_code
+    assert "float4 colorFirst = WaveReadLaneFirst(colorSum);" in generated_code
+    assert "int2 coordPrefix = WavePrefixSum(coord);" in generated_code
+    assert "float4 colorQuad = QuadReadAcrossX(color);" in generated_code
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_wave_ballot_and_read_lane_combined_patterns():
+    code = """
+    shader SlangWaveBallotPatterns {
+        compute {
+            @numthreads(32, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool isEven = (lane % 2u) == 0u;
+                uvec4 evenBallot = WaveActiveBallot(isEven);
+                uint firstEven = WaveReadLaneFirst(lane);
+                uint laneValue = lane * 2u;
+                uint readFromFour = WaveReadLaneAt(laneValue, 4u);
+                uvec4 matchResult = WaveMatch(laneValue);
+                uint multiPrefixResult = WaveMultiPrefixSum(laneValue, matchResult);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "uint count = WaveGetLaneCount();" in generated_code
+    assert "uint4 evenBallot = WaveActiveBallot(isEven);" in generated_code
+    assert "uint firstEven = WaveReadLaneFirst(lane);" in generated_code
+    assert "uint readFromFour = WaveReadLaneAt(laneValue, 4u);" in generated_code
+    assert "uint4 matchResult = WaveMatch(laneValue);" in generated_code
+    assert (
+        "uint multiPrefixResult = WaveMultiPrefixSum(laneValue, matchResult);"
+        in generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_texture_sampling_with_explicit_sampler_sample_level_and_grad():
+    code = """
+    shader TextureSamplerMethods {
+        sampler linearSampler;
+        sampler2d baseColor;
+        sampler3d volumeData;
+        samplercube skybox;
+
+        fragment {
+            vec4 sampleTextures(
+                sampler2d base,
+                sampler3d vol,
+                samplercube sky,
+                sampler samp,
+                vec2 uv,
+                vec3 uvw,
+                vec3 dir
+            ) {
+                vec4 baseLevel = textureLod(base, samp, uv, 3.0);
+                vec4 baseGrad = textureGrad(
+                    base, samp, uv,
+                    vec2(0.01, 0.0), vec2(0.0, 0.01)
+                );
+                vec4 volLevel = textureLod(vol, samp, uvw, 2.0);
+                vec4 volGrad = textureGrad(
+                    vol, samp, uvw,
+                    vec3(0.1, 0.0, 0.0), vec3(0.0, 0.1, 0.0)
+                );
+                vec4 skyLevel = textureLod(sky, samp, dir, 0.0);
+                vec4 skyGrad = textureGrad(
+                    sky, samp, dir,
+                    vec3(0.01, 0.0, 0.0), vec3(0.0, 0.01, 0.0)
+                );
+                return baseLevel + baseGrad + volLevel + volGrad + skyLevel + skyGrad;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 baseLevel = base.SampleLevel(uv, 3.0);" in generated_code
+    assert "float4 baseGrad = base.SampleGrad(uv," in generated_code
+    assert "float4 volLevel = vol.SampleLevel(uvw, 2.0);" in generated_code
+    assert "float4 volGrad = vol.SampleGrad(uvw," in generated_code
+    assert "float4 skyLevel = sky.SampleLevel(dir, 0.0);" in generated_code
+    assert "float4 skyGrad = sky.SampleGrad(dir," in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_shadow_sampler_compare_grad_operations():
+    code = """
+    shader ShadowGradSampling {
+        sampler2dshadow depthMap;
+        samplercubeshadow cubeDepth;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                float compareVal = 0.8;
+                float shadow2dGrad = textureCompareGrad(
+                    depthMap, uv, compareVal, vec2(0.01, 0.0), vec2(0.0, 0.01)
+                );
+                float shadowCubeGrad = textureCompareGrad(
+                    cubeDepth, dir, compareVal,
+                    vec3(0.01, 0.0, 0.0), vec3(0.0, 0.01, 0.0)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DShadow depthMap : register(t0);" in generated_code
+    assert "SamplerCubeShadow cubeDepth : register(t1);" in generated_code
+    assert (
+        "float shadow2dGrad = depthMap.SampleCmpGrad(uv, compareVal," in generated_code
+    )
+    assert (
+        "float shadowCubeGrad = cubeDepth.SampleCmpGrad(dir, compareVal,"
+        in generated_code
+    )
+    assert "textureCompareGrad(" not in generated_code
+
+
+def test_shadow_sampler_array_compare_operations():
+    code = """
+    shader ShadowArraySampling {
+        sampler2darrayshadow cascadeShadow;
+
+        fragment {
+            void main() {
+                vec3 uvLayer = vec3(0.5, 0.5, 2.0);
+                float compareVal = 0.9;
+                float cascadeResult = textureCompare(
+                    cascadeShadow, uvLayer, compareVal
+                );
+                float cascadeLod = textureCompareLod(
+                    cascadeShadow, uvLayer, compareVal, 0.0
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DArrayShadow cascadeShadow : register(t0);" in generated_code
+    assert (
+        "float cascadeResult = cascadeShadow.SampleCmp(uvLayer, compareVal);"
+        in generated_code
+    )
+    assert (
+        "float cascadeLod = cascadeShadow.SampleCmpLevel(uvLayer, compareVal, 0.0);"
+        in generated_code
+    )
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+
+
+def test_texture_sample_with_combined_sampler_basic_operations():
+    code = """
+    shader CombinedSamplerOps {
+        sampler2d albedo;
+        sampler2darray layeredTex;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+                vec4 basic = texture(albedo, uv);
+                vec4 biased = texture(albedo, uv, 1.0);
+                vec4 lod = textureLod(albedo, uv, 4.0);
+                vec4 grad = textureGrad(
+                    albedo, uv, vec2(0.02, 0.0), vec2(0.0, 0.02)
+                );
+                vec4 layered = texture(layeredTex, uvLayer);
+                vec4 layeredLod = textureLod(layeredTex, uvLayer, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> albedo : register(t0);" in generated_code
+    assert "Sampler2DArray<float4> layeredTex : register(t1);" in generated_code
+    assert "float4 basic = albedo.Sample(uv);" in generated_code
+    assert "float4 biased = albedo.SampleBias(uv, 1.0);" in generated_code
+    assert "float4 lod = albedo.SampleLevel(uv, 4.0);" in generated_code
+    assert "float4 grad = albedo.SampleGrad(uv," in generated_code
+    assert "float4 layered = layeredTex.Sample(uvLayer);" in generated_code
+    assert "float4 layeredLod = layeredTex.SampleLevel(uvLayer, 2.0);" in (
+        generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_image_load_emits_slang_rwtexture_subscript():
+    code = """
+    shader ImageLoadTest {
+        uimage2D inputImage @r32ui;
+        image2D colorImage;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint val = imageLoad(inputImage, ivec2(tid.x, tid.y));
+                vec4 color = imageLoad(colorImage, ivec2(tid.x, tid.y));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> inputImage" in generated_code
+    assert "RWTexture2D<float4> colorImage" in generated_code
+    assert "inputImage[int2(tid.x, tid.y)]" in generated_code
+    assert "colorImage[int2(tid.x, tid.y)]" in generated_code
+    assert "imageLoad(" not in generated_code
+
+
+def test_image_store_emits_slang_rwtexture_assignment():
+    code = """
+    shader ImageStoreTest {
+        uimage2D outputImage @r32ui;
+        image2D colorOutput;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                imageStore(outputImage, ivec2(tid.x, tid.y), 42u);
+                imageStore(colorOutput, ivec2(tid.x, tid.y), vec4(1.0, 0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> outputImage" in generated_code
+    assert "RWTexture2D<float4> colorOutput" in generated_code
+    assert "outputImage[int2(tid.x, tid.y)] = " in generated_code
+    assert "colorOutput[int2(tid.x, tid.y)] = " in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_image_load_store_combined_workflow():
+    code = """
+    shader ImageLoadStoreWorkflow {
+        uimage2D counters @r32ui;
+        image2D source;
+        image2D destination;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec4 pixel = imageLoad(source, ivec2(tid.x, tid.y));
+                vec4 modified = pixel * 2.0;
+                imageStore(destination, ivec2(tid.x, tid.y), modified);
+                uint count = imageLoad(counters, ivec2(0, 0));
+                imageStore(counters, ivec2(0, 0), count + 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "source[int2(tid.x, tid.y)]" in generated_code
+    assert "destination[int2(tid.x, tid.y)] = " in generated_code
+    assert "counters[int2(0, 0)]" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_image_atomic_add_emits_slang_interlocked_helper():
+    code = """
+    shader ImageAtomicAddTest {
+        uimage2D counters @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint oldValue = imageAtomicAdd(counters, ivec2(tid.x, tid.y), 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> counters" in generated_code
+    assert "InterlockedAdd" in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "uint oldValue = " in generated_code
+
+
+def test_image_atomic_all_operations_emit_slang_interlocked():
+    code = """
+    shader ImageAtomicAllOps {
+        uimage2D uImg @r32ui;
+        iimage2D iImg @r32i;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(tid.x, tid.y);
+                uint a = imageAtomicAdd(uImg, coord, 1u);
+                uint b = imageAtomicMin(uImg, coord, 5u);
+                uint c = imageAtomicMax(uImg, coord, 10u);
+                uint d = imageAtomicAnd(uImg, coord, 0xFFu);
+                uint e = imageAtomicOr(uImg, coord, 0x0Fu);
+                uint f = imageAtomicXor(uImg, coord, 0xA0u);
+                uint g = imageAtomicExchange(uImg, coord, 99u);
+                uint h = imageAtomicCompSwap(uImg, coord, 0u, 1u);
+                int i = imageAtomicAdd(iImg, coord, 1);
+                int j = imageAtomicMin(iImg, coord, -5);
+                int k = imageAtomicMax(iImg, coord, 10);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "InterlockedAdd" in generated_code
+    assert "InterlockedMin" in generated_code
+    assert "InterlockedMax" in generated_code
+    assert "InterlockedAnd" in generated_code
+    assert "InterlockedOr" in generated_code
+    assert "InterlockedXor" in generated_code
+    assert "InterlockedExchange" in generated_code
+    assert "InterlockedCompareExchange" in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "imageAtomicMin(" not in generated_code
+    assert "imageAtomicMax(" not in generated_code
+    assert "imageAtomicAnd(" not in generated_code
+    assert "imageAtomicOr(" not in generated_code
+    assert "imageAtomicXor(" not in generated_code
+    assert "imageAtomicExchange(" not in generated_code
+    assert "imageAtomicCompSwap(" not in generated_code
+
+
+def test_storage_image_access_qualifiers_affect_load_store():
+    code = """
+    shader ImageAccessQualifiers {
+        uimage2D readOnlyImg @r32ui @readonly;
+        uimage2D writeOnlyImg @r32ui @writeonly;
+        uimage2D readWriteImg @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(tid.x, tid.y);
+                uint val = imageLoad(readOnlyImg, coord);
+                imageStore(writeOnlyImg, coord, val);
+                uint rwVal = imageLoad(readWriteImg, coord);
+                imageStore(readWriteImg, coord, rwVal + 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "readOnlyImg[" in generated_code
+    assert "writeOnlyImg[" in generated_code
+    assert "readWriteImg[" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
 
 
 if __name__ == "__main__":

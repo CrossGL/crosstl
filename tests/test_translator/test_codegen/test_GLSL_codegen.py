@@ -25436,5 +25436,211 @@ def test_glsl_storage_image_access_rejects_incompatible_helper_calls(shader, mat
         GLSLCodeGen().generate(ast)
 
 
+def test_glsl_wave_subgroup_ballot_and_shuffle_in_fragment_shader():
+    code = """
+    shader SubgroupFragment {
+        struct FSInput {
+            float value @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                uint lane = WaveGetLaneIndex();
+                uvec4 ballot = WaveActiveBallot(input.value > 0.5);
+                float shuffled = WaveReadLaneAt(input.value, 0u);
+                float first = WaveReadLaneFirst(input.value);
+                return vec4(shuffled, first, float(lane), 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
+    assert "uint lane = gl_SubgroupInvocationID;" in generated
+    assert "uvec4 ballot = subgroupBallot((value > 0.5));" in generated
+    assert "float shuffled = subgroupBroadcast(value, 0u);" in generated
+    assert "float first = subgroupBroadcastFirst(value);" in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "WaveActiveBallot" not in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveReadLaneFirst" not in generated
+
+
+def test_glsl_texture_gather_basic_emits_texture_gather():
+    code = """
+    shader TextureGatherBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGather(colorMap, linearSampler, input.uv);
+                vec4 greenChannel = textureGather(colorMap, linearSampler, input.uv, 1);
+                return gathered + greenChannel;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGather(colorMap, uv)" in generated
+    assert "textureGather(colorMap, uv, 1)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_gather_offset_emits_texture_gather_offset():
+    code = """
+    shader TextureGatherOffsetBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGatherOffset(colorMap, linearSampler, input.uv, ivec2(1, 0));
+                return gathered;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGatherOffset(colorMap, uv, ivec2(1, 0))" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_proj_basic_emits_texture_proj():
+    code = """
+    shader TextureProjBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+            vec4 projCoord4 @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 proj2d = textureProj(colorMap, linearSampler, input.projCoord);
+                vec4 proj2d4 = textureProj(colorMap, linearSampler, input.projCoord4);
+                return proj2d + proj2d4;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureProj(colorMap, projCoord)" in generated
+    assert "textureProj(colorMap, projCoord4)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_proj_lod_emits_texture_proj_lod():
+    code = """
+    shader TextureProjLod {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projLod = textureProjLod(colorMap, linearSampler, input.projCoord, 2.0);
+                return projLod;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureProjLod(colorMap, projCoord, 2.0)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_wave_ops_with_active_variable_name_reservation():
+    code = """
+    shader WaveWithActiveVar {
+        compute {
+            void main() {
+                uint active = WaveGetLaneIndex();
+                uint sum = WaveActiveSum(active);
+                bool isActive = WaveActiveAnyTrue(sum > 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_vote : require" in generated
+    assert "uint active_ = gl_SubgroupInvocationID;" in generated
+    assert "uint sum = subgroupAdd(active_);" in generated
+    assert "bool isActive = subgroupAny((sum > 0u));" in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "WaveActiveSum" not in generated
+    assert "WaveActiveAnyTrue" not in generated
+
+
+def test_glsl_subgroup_ops_combined_with_texture_gather():
+    code = """
+    shader SubgroupTextureGather {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGather(colorMap, linearSampler, input.uv);
+                float avg = WaveActiveSum(gathered.r);
+                uint laneCount = WaveGetLaneCount();
+                float normalized = avg / float(laneCount);
+                return vec4(normalized, normalized, normalized, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGather(colorMap, uv)" in generated
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "float avg = subgroupAdd(gathered.r);" in generated
+    assert "uint laneCount = gl_SubgroupSize;" in generated
+    assert "linearSampler" not in generated
+    assert "WaveActiveSum" not in generated
+    assert "WaveGetLaneCount" not in generated
+
+
 if __name__ == "__main__":
     pytest.main()

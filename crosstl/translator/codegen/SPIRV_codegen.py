@@ -1316,6 +1316,21 @@ class VulkanSPIRVCodeGen:
             return params
         return self.function_storage_image_pointer_params.get(function_name, set())
 
+    def function_parameter_requires_storage_image_pointer(
+        self, function_name: str, arg_index: int
+    ) -> bool:
+        pointer_param_names = self.resolve_function_storage_image_pointer_params(
+            function_name
+        )
+        if not pointer_param_names:
+            return False
+
+        parameter_names = self.resolve_function_parameter_names(function_name)
+        return (
+            arg_index < len(parameter_names)
+            and parameter_names[arg_index] in pointer_param_names
+        )
+
     def resolve_inline_storage_buffer_function(self, function_name: str):
         function_node = self.stage_local_metadata(
             self.stage_local_inline_storage_buffer_functions, function_name
@@ -3990,6 +4005,13 @@ class VulkanSPIRVCodeGen:
                 return pointer_arg
 
         if function_name in self.buffer_function_names() and arg_index == 0:
+            pointer_arg = self.variable_pointer_from_expression(arg)
+            if pointer_arg is not None:
+                return pointer_arg
+
+        if self.function_parameter_requires_storage_image_pointer(
+            function_name, arg_index
+        ):
             pointer_arg = self.variable_pointer_from_expression(arg)
             if pointer_arg is not None:
                 return pointer_arg

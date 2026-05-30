@@ -4407,6 +4407,96 @@ class TestCudaCodeGen:
         assert "atomicCompSwap(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_structured_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
+        """Test CUDA preserves structured-buffer atomic metadata through references."""
+        source_code = """
+        shader StructuredBufferReferenceAtomicsCUDA {
+            struct Particle {
+                uint counter;
+                float weight;
+            };
+
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<uint> counterArrays[2];
+            RWStructuredBuffer<Particle> particles;
+            StructuredBuffer<uint> readonlyCounts;
+
+            uint bumpRef(
+                RWStructuredBuffer<uint>& valuesRef,
+                uint index,
+                uint value
+            ) {
+                uint old = atomicAdd(valuesRef[index], value);
+                uint exchanged = atomicExchange(&valuesRef[index], old);
+                return exchanged;
+            }
+
+            uint bumpParticleRef(
+                RWStructuredBuffer<Particle>& particleRef,
+                uint index,
+                uint value
+            ) {
+                return atomicAdd(particleRef[index].counter, value);
+            }
+
+            void rejectReadOnlyRef(
+                StructuredBuffer<uint>& readonlyRef,
+                uint index,
+                uint value
+            ) {
+                uint blocked = atomicAdd(readonlyRef[index], value);
+            }
+
+            compute {
+                void main(uint which, uint index, uint value) {
+                    uint first = bumpRef(counters, index, value);
+                    uint second = bumpRef(counterArrays[which], index, first);
+                    uint third = bumpParticleRef(particles, index, second);
+                    rejectReadOnlyRef(readonlyCounts, index, third);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint* counters;" in cuda_code
+        assert "uint* counterArrays[2];" in cuda_code
+        assert "Particle* particles;" in cuda_code
+        assert "const uint* readonlyCounts;" in cuda_code
+        assert (
+            "__device__ uint bumpRef(uint* const& valuesRef, " "uint index, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ uint bumpParticleRef(Particle* const& particleRef, "
+            "uint index, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ void rejectReadOnlyRef("
+            "const uint* const& readonlyRef, uint index, uint value)"
+        ) in cuda_code
+        assert "uint old = atomicAdd(&valuesRef[index], value);" in cuda_code
+        assert "uint exchanged = atomicExch(&valuesRef[index], old);" in cuda_code
+        assert "return atomicAdd(&particleRef[index].counter, value);" in cuda_code
+        assert "uint first = bumpRef(counters, index, value);" in cuda_code
+        assert "uint second = bumpRef(counterArrays[which], index, first);" in cuda_code
+        assert "uint third = bumpParticleRef(particles, index, second);" in cuda_code
+        assert "rejectReadOnlyRef(readonlyCounts, index, third);" in cuda_code
+        assert (
+            "uint blocked = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on const StructuredBuffer<uint>& requires "
+            "RWStructuredBuffer target */ 0u;" in cuda_code
+        )
+        assert "valuesRef.atomicAdd(" not in cuda_code
+        assert "atomicAdd(valuesRef[" not in cuda_code
+        assert "atomicExchange(" not in cuda_code
+        assert "atomicAdd(readonlyRef" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_float_structured_buffer_add_and_exchange_atomics_emit_cuda_atomics(
         self, tmp_path
     ):

@@ -28919,7 +28919,6 @@ def test_directx_feedback_texture_helpers_validate_resources_and_shapes(body, ma
 
 
 def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
-    """Issue #496: Wave/subgroup intrinsics - complex expression coverage."""
     code = """
     shader WaveExpressionCoverage {
         compute {
@@ -28968,7 +28967,6 @@ def test_directx_wave_active_sum_ballot_prefix_in_compute_expressions():
 
 
 def test_directx_wave_ballot_and_read_lane_at_in_conditional():
-    """Issue #496: WaveBallot and WaveReadLaneAt in control flow."""
     code = """
     shader WaveBallotConditional {
         compute {
@@ -29005,7 +29003,6 @@ def test_directx_wave_ballot_and_read_lane_at_in_conditional():
 
 
 def test_directx_wave_prefix_operations_accumulate():
-    """Issue #496: WavePrefixSum and WavePrefixProduct used for parallel prefix."""
     code = """
     shader WavePrefixAccumulate {
         compute {
@@ -29033,8 +29030,223 @@ def test_directx_wave_prefix_operations_accumulate():
     assert "uint inclusiveSum = (exclusiveSum + value);" in generated
 
 
+@pytest.mark.parametrize(
+    ("intrinsic", "shader_body", "expected_snippet"),
+    [
+        (
+            "WaveGetLaneCount",
+            "uint main() { uint count = WaveGetLaneCount(); return count; }",
+            "WaveGetLaneCount()",
+        ),
+        (
+            "WaveGetLaneIndex",
+            "uint main() { uint idx = WaveGetLaneIndex(); return idx; }",
+            "WaveGetLaneIndex()",
+        ),
+        (
+            "WaveIsFirstLane",
+            "uint main() { bool first = WaveIsFirstLane(); return first ? 1u : 0u; }",
+            "WaveIsFirstLane()",
+        ),
+        (
+            "WaveActiveSum",
+            "uint main(uint v) { uint s = WaveActiveSum(v); return s; }",
+            "WaveActiveSum(v)",
+        ),
+        (
+            "WaveActiveProduct",
+            "uint main(uint v) { uint p = WaveActiveProduct(v); return p; }",
+            "WaveActiveProduct(v)",
+        ),
+        (
+            "WaveActiveMin",
+            "uint main(uint v) { uint m = WaveActiveMin(v); return m; }",
+            "WaveActiveMin(v)",
+        ),
+        (
+            "WaveActiveMax",
+            "uint main(uint v) { uint m = WaveActiveMax(v); return m; }",
+            "WaveActiveMax(v)",
+        ),
+        (
+            "WaveActiveBitAnd",
+            "uint main(uint v) { uint r = WaveActiveBitAnd(v); return r; }",
+            "WaveActiveBitAnd(v)",
+        ),
+        (
+            "WaveActiveBitOr",
+            "uint main(uint v) { uint r = WaveActiveBitOr(v); return r; }",
+            "WaveActiveBitOr(v)",
+        ),
+        (
+            "WaveActiveBitXor",
+            "uint main(uint v) { uint r = WaveActiveBitXor(v); return r; }",
+            "WaveActiveBitXor(v)",
+        ),
+        (
+            "WaveActiveAnyTrue",
+            "uint main(bool p) { bool r = WaveActiveAnyTrue(p); return r ? 1u : 0u; }",
+            "WaveActiveAnyTrue(p)",
+        ),
+        (
+            "WaveActiveAllTrue",
+            "uint main(bool p) { bool r = WaveActiveAllTrue(p); return r ? 1u : 0u; }",
+            "WaveActiveAllTrue(p)",
+        ),
+        (
+            "WaveActiveAllEqual",
+            "uint main(uint v) { bool r = WaveActiveAllEqual(v); return r ? 1u : 0u; }",
+            "WaveActiveAllEqual(v)",
+        ),
+        (
+            "WaveActiveBallot",
+            "uint main(bool p) { uvec4 b = WaveActiveBallot(p); return b.x; }",
+            "WaveActiveBallot(p)",
+        ),
+        (
+            "WaveReadLaneAt",
+            "uint main(uint v, uint lane) { uint r = WaveReadLaneAt(v, lane); return r; }",
+            "WaveReadLaneAt(v, lane)",
+        ),
+        (
+            "WaveReadLaneFirst",
+            "uint main(uint v) { uint r = WaveReadLaneFirst(v); return r; }",
+            "WaveReadLaneFirst(v)",
+        ),
+        (
+            "WavePrefixSum",
+            "uint main(uint v) { uint r = WavePrefixSum(v); return r; }",
+            "WavePrefixSum(v)",
+        ),
+        (
+            "WavePrefixProduct",
+            "uint main(uint v) { uint r = WavePrefixProduct(v); return r; }",
+            "WavePrefixProduct(v)",
+        ),
+    ],
+    ids=lambda p: p if isinstance(p, str) and p.startswith("Wave") else "",
+)
+def test_directx_wave_intrinsic_individual_emission(
+    intrinsic, shader_body, expected_snippet
+):
+    code = f"""
+    shader WaveSingle{intrinsic} {{
+        compute {{
+            {shader_body}
+        }}
+    }}
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert (
+        expected_snippet in generated
+    ), f"{intrinsic} not found in generated HLSL output"
+
+
+def test_directx_wave_intrinsics_in_nested_expressions():
+    code = """
+    shader WaveNestedExpressions {
+        compute {
+            uint main(uint value, bool active, uint lane) {
+                uint result = WaveActiveSum(value) + WaveActiveProduct(value);
+                uint minMax = WaveActiveMin(value) * WaveActiveMax(value);
+                uint bits = WaveActiveBitAnd(value) | WaveActiveBitOr(value);
+                uint prefix = WavePrefixSum(value) + WavePrefixProduct(value);
+                uint broadcast = WaveReadLaneAt(value, lane) + WaveReadLaneFirst(value);
+                bool votes = WaveActiveAnyTrue(active) || WaveActiveAllTrue(active);
+                uint laneInfo = WaveGetLaneCount() + WaveGetLaneIndex();
+                return result + minMax + bits + prefix + broadcast + laneInfo
+                    + (votes ? 1u : 0u) + (WaveIsFirstLane() ? 1u : 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for snippet in [
+        "WaveActiveSum(value)",
+        "WaveActiveProduct(value)",
+        "WaveActiveMin(value)",
+        "WaveActiveMax(value)",
+        "WaveActiveBitAnd(value)",
+        "WaveActiveBitOr(value)",
+        "WavePrefixSum(value)",
+        "WavePrefixProduct(value)",
+        "WaveReadLaneAt(value, lane)",
+        "WaveReadLaneFirst(value)",
+        "WaveActiveAnyTrue(active)",
+        "WaveActiveAllTrue(active)",
+        "WaveGetLaneCount()",
+        "WaveGetLaneIndex()",
+        "WaveIsFirstLane()",
+    ]:
+        assert snippet in generated
+
+
+def test_directx_wave_intrinsics_return_type_correctness():
+    code = """
+    shader WaveReturnTypes {
+        compute {
+            uint main(uint value, bool predicate, uint lane) {
+                uint laneCount = WaveGetLaneCount();
+                uint laneIndex = WaveGetLaneIndex();
+                bool isFirst = WaveIsFirstLane();
+                uint sum = WaveActiveSum(value);
+                uint product = WaveActiveProduct(value);
+                uint minV = WaveActiveMin(value);
+                uint maxV = WaveActiveMax(value);
+                uint bitAnd = WaveActiveBitAnd(value);
+                uint bitOr = WaveActiveBitOr(value);
+                uint bitXor = WaveActiveBitXor(value);
+                bool anyT = WaveActiveAnyTrue(predicate);
+                bool allT = WaveActiveAllTrue(predicate);
+                bool allEq = WaveActiveAllEqual(value);
+                uvec4 ballot = WaveActiveBallot(predicate);
+                uint readAt = WaveReadLaneAt(value, lane);
+                uint readFirst = WaveReadLaneFirst(value);
+                uint prefSum = WavePrefixSum(value);
+                uint prefProd = WavePrefixProduct(value);
+                return laneCount + laneIndex + sum + product + minV + maxV
+                    + bitAnd + bitOr + bitXor + readAt + readFirst
+                    + prefSum + prefProd + ballot.x
+                    + (isFirst ? 1u : 0u) + (anyT ? 1u : 0u)
+                    + (allT ? 1u : 0u) + (allEq ? 1u : 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    for decl in [
+        "uint laneCount = WaveGetLaneCount();",
+        "uint laneIndex = WaveGetLaneIndex();",
+        "bool isFirst = WaveIsFirstLane();",
+        "uint sum = WaveActiveSum(value);",
+        "uint product = WaveActiveProduct(value);",
+        "uint minV = WaveActiveMin(value);",
+        "uint maxV = WaveActiveMax(value);",
+        "uint bitAnd = WaveActiveBitAnd(value);",
+        "uint bitOr = WaveActiveBitOr(value);",
+        "uint bitXor = WaveActiveBitXor(value);",
+        "bool anyT = WaveActiveAnyTrue(predicate);",
+        "bool allT = WaveActiveAllTrue(predicate);",
+        "bool allEq = WaveActiveAllEqual(value);",
+        "uint4 ballot = WaveActiveBallot(predicate);",
+        "uint readAt = WaveReadLaneAt(value, lane);",
+        "uint readFirst = WaveReadLaneFirst(value);",
+        "uint prefSum = WavePrefixSum(value);",
+        "uint prefProd = WavePrefixProduct(value);",
+    ]:
+        assert decl in generated
+
+
 def test_directx_texture_gather_with_component_and_offset():
-    """Issue #464: textureGather with component selection and offset."""
     code = """
     shader TextureGatherAdvanced {
         sampler2D colorMap;
@@ -29068,7 +29280,6 @@ def test_directx_texture_gather_with_component_and_offset():
 
 
 def test_directx_texture_gather_compare_with_shadow_sampler():
-    """Issue #464: textureGatherCompare for shadow/depth comparison."""
     code = """
     shader TextureGatherCompare {
         sampler2DShadow shadowMap;
@@ -29097,7 +29308,6 @@ def test_directx_texture_gather_compare_with_shadow_sampler():
 
 
 def test_directx_texture_projection_with_offset_and_bias():
-    """Issue #430: Projected texture operations with offset and bias."""
     code = """
     shader TextureProjAdvanced {
         sampler2D colorMap;
@@ -29135,7 +29345,6 @@ def test_directx_texture_projection_with_offset_and_bias():
 
 
 def test_directx_glsl_buffer_block_mixed_struct_lowering():
-    """Issue #404: GLSL buffer block lowering with mixed scalar/vector types."""
     code = """
     shader GlslBufferBlockMixed {
         struct ParticleData {
@@ -29172,7 +29381,6 @@ def test_directx_glsl_buffer_block_mixed_struct_lowering():
 
 
 def test_directx_glsl_buffer_block_with_array_members():
-    """Issue #404: GLSL buffer block with array member access."""
     code = """
     shader GlslBufferBlockArrays {
         struct LightData {
@@ -29198,7 +29406,6 @@ def test_directx_glsl_buffer_block_with_array_members():
 
 
 def test_directx_ray_generation_stage_with_trace_ray():
-    """Issue #351/#632: Ray generation stage with full TraceRay call."""
     code = """
     shader RayGenTest {
         struct RayPayload {
@@ -29234,7 +29441,6 @@ def test_directx_ray_generation_stage_with_trace_ray():
 
 
 def test_directx_closest_hit_stage_with_payload_and_attributes():
-    """Issue #351/#632: Closest hit stage with payload and hit attributes."""
     code = """
     shader ClosestHitTest {
         struct RayPayload {
@@ -29268,7 +29474,6 @@ def test_directx_closest_hit_stage_with_payload_and_attributes():
 
 
 def test_directx_miss_stage_sets_background_color():
-    """Issue #351/#632: Miss stage setting background color."""
     code = """
     shader MissTest {
         struct RayPayload {
@@ -29293,7 +29498,6 @@ def test_directx_miss_stage_sets_background_color():
 
 
 def test_directx_any_hit_stage_with_ignore_and_accept():
-    """Issue #351/#632: Any hit stage with IgnoreHit and AcceptHitAndEndSearch."""
     code = """
     shader AnyHitTest {
         struct RayPayload {
@@ -29329,7 +29533,6 @@ def test_directx_any_hit_stage_with_ignore_and_accept():
 
 
 def test_directx_intersection_stage_with_report_hit():
-    """Issue #351/#632: Intersection stage with ReportHit."""
     code = """
     shader IntersectionTest {
         struct SphereAttributes {
@@ -29356,7 +29559,6 @@ def test_directx_intersection_stage_with_report_hit():
 
 
 def test_directx_callable_stage_with_data_parameter():
-    """Issue #351/#632: Callable stage with callable data."""
     code = """
     shader CallableTest {
         struct ShadowData {
@@ -29383,7 +29585,6 @@ def test_directx_callable_stage_with_data_parameter():
 
 
 def test_directx_mesh_shader_with_vertices_and_indices():
-    """Issue #342: Mesh shader with vertex and index output."""
     code = """
     shader MeshShaderTest {
         struct MeshVertex {
@@ -29418,7 +29619,6 @@ def test_directx_mesh_shader_with_vertices_and_indices():
 
 
 def test_directx_amplification_task_stage_dispatches_mesh():
-    """Issue #342: Amplification/task stage dispatching mesh shader."""
     code = """
     shader AmplificationTest {
         struct MeshPayload {
@@ -29465,7 +29665,6 @@ def test_directx_amplification_task_stage_dispatches_mesh():
 
 
 def test_directx_ray_query_inline_tracing():
-    """Issue #351/#632: RayQuery inline tracing in compute shader."""
     code = """
     shader RayQueryInlineTest {
         compute {
@@ -29493,7 +29692,6 @@ def test_directx_ray_query_inline_tracing():
 
 
 def test_directx_ray_tracing_multi_stage_pipeline():
-    """Issue #351/#632: Complete ray tracing pipeline with multiple stages."""
     code = """
     shader RayTracingPipeline {
         struct RayPayload {
@@ -29570,7 +29768,6 @@ def test_directx_ray_tracing_multi_stage_pipeline():
 
 
 def test_directx_texture_gather_cube_array():
-    """Issue #464: Cube array texture gather operations."""
     code = """
     shader CubeArrayGather {
         samplerCubeArray cubeArray;
@@ -29592,6 +29789,313 @@ def test_directx_texture_gather_cube_array():
 
     assert "TextureCubeArray" in generated or "textureCubeArray" not in generated
     assert "textureGather(" not in generated
+
+
+def test_directx_ray_generation_shader_emits_attribute():
+    code = """
+    shader RayGenSmoke {
+        ray_generation {
+            void main() {
+                RaytracingAccelerationStructure scene;
+                RayDesc ray;
+                ray.Origin = float3(0.0, 0.0, 0.0);
+                ray.Direction = float3(0.0, 0.0, 1.0);
+                ray.TMin = 0.001;
+                ray.TMax = 1000.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_generation"
+    )
+    assert '[shader("raygeneration")]' in generated
+    assert "void RayGenMain()" in generated
+    assert "RaytracingAccelerationStructure scene;" in generated
+    assert "RayDesc ray;" in generated
+
+
+def test_directx_closest_hit_shader_emits_attribute():
+    code = """
+    shader ClosestHitSmoke {
+        struct HitPayload {
+            vec3 color;
+            float distance;
+        };
+
+        ray_closest_hit {
+            void main(
+                HitPayload payload @ payload,
+                BuiltInTriangleIntersectionAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec3(1.0, 1.0, 0.0);
+                payload.distance = RayTCurrent();
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "ray_closest_hit"
+    )
+    assert '[shader("closesthit")]' in generated
+    assert "void ClosestHitMain(" in generated
+    assert "inout HitPayload payload" in generated
+    assert "in BuiltInTriangleIntersectionAttributes attribs" in generated
+
+
+def test_directx_miss_shader_emits_attribute():
+    code = """
+    shader MissSmoke {
+        struct HitPayload {
+            vec3 color;
+            float distance;
+        };
+
+        ray_miss {
+            void main(HitPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+                payload.distance = -1.0;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "ray_miss")
+    assert '[shader("miss")]' in generated
+    assert "void MissMain(inout HitPayload payload)" in generated
+    assert "payload.color" in generated
+
+
+def test_directx_any_hit_and_intersection_shaders_emit_attributes():
+    any_hit_code = """
+    shader AnyHitSmoke {
+        struct HitPayload {
+            vec3 color;
+        };
+
+        ray_any_hit {
+            void main(
+                HitPayload payload @ payload,
+                BuiltInTriangleIntersectionAttributes attribs @ hit_attribute
+            ) {
+                IgnoreHit();
+            }
+        }
+    }
+    """
+    generated_any_hit = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(any_hit_code), "ray_any_hit"
+    )
+    assert '[shader("anyhit")]' in generated_any_hit
+    assert "void AnyHitMain(" in generated_any_hit
+    assert "inout HitPayload payload" in generated_any_hit
+    assert "in BuiltInTriangleIntersectionAttributes attribs" in generated_any_hit
+
+    intersection_code = """
+    shader IntersectionSmoke {
+        ray_intersection {
+            void main() {
+                float hitT = 0.5;
+                ReportHit(hitT, 0u);
+            }
+        }
+    }
+    """
+    generated_intersection = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(intersection_code), "ray_intersection"
+    )
+    assert '[shader("intersection")]' in generated_intersection
+    assert "void IntersectionMain()" in generated_intersection
+    assert "ReportHit(" in generated_intersection
+
+
+def test_directx_ray_query_trace_proceed_committed_status():
+    code = """
+    shader RayQueryFullWorkflow {
+        compute {
+            void main() {
+                RaytracingAccelerationStructure scene;
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                bool proceed = rq.Proceed();
+                uint status = rq.CommittedStatus();
+                float rayT = rq.CommittedRayT();
+                uint geoIdx = rq.CommittedGeometryIndex();
+                uint primIdx = rq.CommittedPrimitiveIndex();
+                uint instId = rq.CommittedInstanceID();
+                float3 origin = rq.CommittedObjectRayOrigin();
+                float3 direction = rq.CommittedObjectRayDirection();
+                float2 bary = rq.CommittedTriangleBarycentrics();
+                bool frontFace = rq.CommittedTriangleFrontFace();
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "compute")
+    assert "RayQuery<RAY_FLAG_NONE> rq;" in generated
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated
+    assert "bool proceed = rq.Proceed();" in generated
+    assert "uint status = rq.CommittedStatus();" in generated
+    assert "float rayT = rq.CommittedRayT();" in generated
+    assert "uint geoIdx = rq.CommittedGeometryIndex();" in generated
+    assert "uint primIdx = rq.CommittedPrimitiveIndex();" in generated
+    assert "uint instId = rq.CommittedInstanceID();" in generated
+    assert "float3 origin = rq.CommittedObjectRayOrigin();" in generated
+    assert "float3 direction = rq.CommittedObjectRayDirection();" in generated
+    assert "float2 bary = rq.CommittedTriangleBarycentrics();" in generated
+    assert "bool frontFace = rq.CommittedTriangleFrontFace();" in generated
+
+
+def test_directx_mesh_shader_output_topology_line():
+    code = """
+    shader MeshLineTopology {
+        struct LineVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out LineVertex verts[4],
+                @indices out uvec2 lines[2]
+            ) @numthreads(4, 1, 1) @outputtopology(line) {
+                SetMeshOutputCounts(4, 2);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+                verts[3].position = vec4(1.0, 1.0, 0.0, 1.0);
+                lines[0] = uvec2(0u, 1u);
+                lines[1] = uvec2(2u, 3u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "mesh")
+
+    assert '[outputtopology("line")]' in generated
+    assert "[numthreads(4, 1, 1)]" in generated
+    assert '[shader("mesh")]' in generated
+    assert "SetMeshOutputCounts(4, 2);" in generated
+    assert "out vertices LineVertex verts[4]" in generated
+    assert "out indices uint2 lines[2]" in generated
+
+
+def test_directx_mesh_shader_with_primitives_and_cull():
+    code = """
+    shader MeshPrimitiveCull {
+        struct MeshVert {
+            vec4 position @ SV_Position;
+            vec3 normal @ NORMAL;
+        };
+
+        struct MeshPrim {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        mesh {
+            void main(
+                uint gtid @ SV_GroupIndex,
+                @vertices out MeshVert verts[64],
+                @indices out uvec3 tris[126],
+                @primitives out MeshPrim prims[126]
+            ) @numthreads(128, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(64, 126);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[0].normal = vec3(0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].culled = false;
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "mesh")
+
+    assert "[numthreads(128, 1, 1)]" in generated
+    assert '[outputtopology("triangle")]' in generated
+    assert '[shader("mesh")]' in generated
+    assert "SetMeshOutputCounts(64, 126);" in generated
+    assert "out vertices MeshVert verts[64]" in generated
+    assert "out indices uint3 tris[126]" in generated
+    assert "out primitives MeshPrim prims[126]" in generated
+    assert "bool culled: SV_CullPrimitive;" in generated
+
+
+def test_directx_task_amplification_stage_with_payload_dispatch():
+    code = """
+    shader TaskAmplification {
+        struct MeshletPayload {
+            uint meshletIndices[32];
+            uint meshletCount;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        groupshared MeshletPayload s_payload;
+
+        task {
+            void main(
+                uvec3 groupId @ SV_GroupID,
+                uint groupIndex @ SV_GroupIndex
+            ) @numthreads(32, 1, 1) {
+                s_payload.meshletCount = 4u;
+                s_payload.meshletIndices[groupIndex] = groupIndex;
+                DispatchMesh(4, 1, 1, s_payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshletPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                verts[1].position = vec4(1.0, 0.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 1.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    generated = HLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert '[shader("amplification")]' in generated
+    assert '[shader("mesh")]' in generated
+    assert "[numthreads(32, 1, 1)]" in generated
+    assert "groupshared MeshletPayload s_payload;" in generated
+    assert "DispatchMesh(4, 1, 1, s_payload);" in generated
+    assert "in payload MeshletPayload payload" in generated
+    assert "uint3 groupId : SV_GroupID" in generated
+    assert "uint groupIndex : SV_GroupIndex" in generated
+    as_index = generated.index("void ASMain(")
+    ms_index = generated.index("void MSMain(")
+    assert as_index < ms_index
+
+
+def test_directx_dispatch_mesh_rejects_invalid_in_mesh_stage():
+    code = """
+    shader MeshWithDispatchMesh {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                DispatchMesh(1, 1, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh.*cannot call DispatchMesh"):
+        HLSLCodeGen().generate_stage(crosstl.translator.parse(code), "mesh")
 
 
 if __name__ == "__main__":

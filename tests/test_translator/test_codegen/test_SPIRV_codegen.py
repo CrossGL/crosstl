@@ -1936,6 +1936,195 @@ class TestVulkanSPIRVCodeGen:
         assert "OpCompositeInsert" not in spv_code
         assert "OpFAdd" not in spv_code
 
+    def test_bitwise_and_or_xor_emit_correct_opcodes(self):
+        source_code = """
+        shader BitwiseOps {
+            compute {
+                void main() {
+                    int a = 0xFF;
+                    int b = 0x0F;
+                    int andResult = a & b;
+                    int orResult = a | b;
+                    int xorResult = a ^ b;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        and_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseAnd")
+        or_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseOr")
+        xor_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseXor")
+
+        assert and_ids, "Missing OpBitwiseAnd"
+        assert or_ids, "Missing OpBitwiseOr"
+        assert xor_ids, "Missing OpBitwiseXor"
+
+        and_var = spirv_named_variable(spv_code, "andResult", storage_class="Function")
+        or_var = spirv_named_variable(spv_code, "orResult", storage_class="Function")
+        xor_var = spirv_named_variable(spv_code, "xorResult", storage_class="Function")
+
+        assert any(f"OpStore {and_var} {rid}" in spv_code for rid in and_ids)
+        assert any(f"OpStore {or_var} {rid}" in spv_code for rid in or_ids)
+        assert any(f"OpStore {xor_var} {rid}" in spv_code for rid in xor_ids)
+        assert "WARNING" not in spv_code
+
+    def test_bitwise_not_emits_op_not(self):
+        source_code = """
+        shader BitwiseNot {
+            compute {
+                void main() {
+                    int mask = 0xFF;
+                    int inverted = ~mask;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        not_ids = spirv_result_ids_for_opcode(spv_code, "OpNot")
+        assert not_ids, "Missing OpNot"
+
+        inverted_var = spirv_named_variable(
+            spv_code, "inverted", storage_class="Function"
+        )
+        assert any(f"OpStore {inverted_var} {rid}" in spv_code for rid in not_ids)
+        assert "WARNING" not in spv_code
+
+    def test_shift_left_right_emit_correct_opcodes(self):
+        source_code = """
+        shader ShiftOps {
+            compute {
+                void main() {
+                    int value = 1;
+                    int shifted_left = value << 3;
+                    int shifted_right = value >> 1;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        shl_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftLeftLogical")
+        shr_ids = spirv_result_ids_for_opcode(spv_code, "OpShiftRightLogical")
+
+        assert shl_ids, "Missing OpShiftLeftLogical"
+        assert shr_ids, "Missing OpShiftRightLogical"
+
+        left_var = spirv_named_variable(
+            spv_code, "shifted_left", storage_class="Function"
+        )
+        right_var = spirv_named_variable(
+            spv_code, "shifted_right", storage_class="Function"
+        )
+        assert any(f"OpStore {left_var} {rid}" in spv_code for rid in shl_ids)
+        assert any(f"OpStore {right_var} {rid}" in spv_code for rid in shr_ids)
+        assert "WARNING" not in spv_code
+
+    def test_vector_composite_construct_emits_scalar_components(self):
+        source_code = """
+        shader VectorConstruct {
+            compute {
+                void main() {
+                    float x = 1.0;
+                    float y = 2.0;
+                    float z = 3.0;
+                    vec3 position = vec3(x, y, z);
+                    vec4 extended = vec4(position, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec3_type = re.search(r"(%\d+) = OpTypeVector %\d+ 3", spv_code)
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        assert vec3_type is not None
+        assert vec4_type is not None
+
+        vec3_constructs = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec3_type.group(1))} "
+            rf"(%\d+) (%\d+) (%\d+)\b",
+            spv_code,
+        )
+        assert vec3_constructs, "Missing OpCompositeConstruct for vec3"
+
+        vec4_constructs = re.findall(
+            rf"(%\d+) = OpCompositeConstruct {re.escape(vec4_type.group(1))} "
+            rf"(%\d+) (%\d+) (%\d+) (%\d+)\b",
+            spv_code,
+        )
+        assert vec4_constructs, "Missing OpCompositeConstruct for vec4"
+        assert_vector_constructs_have_exact_scalar_operands(spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_vector_swizzle_operations_emit_vector_shuffle(self):
+        source_code = """
+        shader VectorSwizzleOps {
+            compute {
+                void main() {
+                    vec4 v = vec4(1.0, 2.0, 3.0, 4.0);
+                    vec2 xy = v.xy;
+                    vec3 zyx = v.zyx;
+                    vec4 xxxx = v.xxxx;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 1\b", spv_code)
+        assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 2 1 0\b", spv_code)
+        assert re.search(r"%\d+ = OpVectorShuffle %\d+ %\d+ %\d+ 0 0 0 0\b", spv_code)
+        assert "WARNING" not in spv_code
+
+    def test_composite_extract_for_vector_member_access(self):
+        source_code = """
+        shader CompositeExtract {
+            compute {
+                void main() {
+                    vec4 color = vec4(1.0, 0.5, 0.0, 1.0);
+                    float r = color.r;
+                    float g = color.g;
+                    float b = color.b;
+                    float a = color.a;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert float_type is not None
+
+        extract_ops = re.findall(
+            rf"%\d+ = OpCompositeExtract {re.escape(float_type.group(1))} %\d+ (\d+)",
+            spv_code,
+        )
+        assert "0" in extract_ops, "Missing extract for component 0 (r)"
+        assert "1" in extract_ops, "Missing extract for component 1 (g)"
+        assert "2" in extract_ops, "Missing extract for component 2 (b)"
+        assert "3" in extract_ops, "Missing extract for component 3 (a)"
+        assert "WARNING" not in spv_code
+
     def test_fmod_intrinsics_use_core_fmod_and_argument_result_type(self):
         source_code = """
         shader FmodIntrinsics {
@@ -13261,6 +13450,145 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_stage_local_mixed_resource_helpers_inline_metadata_isolated(
+        self, tmp_path
+    ):
+        source_code = """
+        shader StageLocalMixedResourceMetadata {
+            uimage2D counters @r32ui;
+            image2D colors @rgba32f @readonly;
+            RWStructuredBuffer<uint> values @writeonly;
+            StructuredBuffer<float> weights @readonly;
+            RWByteAddressBuffer rawOut;
+            ByteAddressBuffer rawIn @readonly;
+
+            compute {
+                uint mixLeaf(
+                    uimage2D image @r32ui,
+                    RWStructuredBuffer<uint> data,
+                    RWByteAddressBuffer raw,
+                    ivec2 pixel,
+                    uint index
+                ) {
+                    uint oldValue = imageAtomicAdd(image, pixel, 1u);
+                    data.Store(index, oldValue);
+                    raw.Store(index * 4u, oldValue);
+                    return oldValue;
+                }
+
+                uint mixForward(
+                    uimage2D image @r32ui,
+                    RWStructuredBuffer<uint> data,
+                    RWByteAddressBuffer raw,
+                    ivec2 pixel,
+                    uint index
+                ) {
+                    return mixLeaf(image, data, raw, pixel, index);
+                }
+
+                void main() {
+                    uint value =
+                        mixForward(counters, values, rawOut, ivec2(0, 1), 3u);
+                }
+            }
+
+            fragment {
+                vec4 mixLeaf(
+                    image2D image @rgba32f,
+                    StructuredBuffer<float> data,
+                    ByteAddressBuffer raw,
+                    ivec2 pixel,
+                    uint index
+                ) {
+                    float weight = data.Load(index);
+                    uint packed = raw.Load(index * 4u);
+                    return imageLoad(image, pixel);
+                }
+
+                vec4 mixForward(
+                    image2D image @rgba32f,
+                    StructuredBuffer<float> data,
+                    ByteAddressBuffer raw,
+                    ivec2 pixel,
+                    uint index
+                ) {
+                    return mixLeaf(image, data, raw, pixel, index);
+                }
+
+                void main() {
+                    vec4 color =
+                        mixForward(colors, weights, rawIn, ivec2(0, 1), 2u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING" not in spv_code
+        assert "Unknown type StructuredBuffer" not in spv_code
+        assert "Unknown type RWStructuredBuffer" not in spv_code
+        assert "Unknown type ByteAddressBuffer" not in spv_code
+        assert "Unknown type RWByteAddressBuffer" not in spv_code
+        assert "OpFunctionCall" not in spv_code
+        assert spv_code.count("OpAtomicIAdd") == 1
+        assert spv_code.count("OpImageRead") == 1
+        assert spv_code.count("OpImageTexelPointer") == 1
+        assert spv_code.count("OpAccessChain") == 4
+        assert "imageAtomicAdd(" not in spv_code
+        assert "imageLoad(" not in spv_code
+
+        buffer_ids = {
+            name: spirv_named_id(spv_code, name)
+            for name in ("valuesBuffer", "weightsBuffer", "rawOutBuffer", "rawInBuffer")
+        }
+        assert (
+            f"OpMemberDecorate {buffer_ids['valuesBuffer']} 0 NonReadable" in spv_code
+        )
+        assert (
+            f"OpMemberDecorate {buffer_ids['weightsBuffer']} 0 NonWritable" in spv_code
+        )
+        assert f"OpMemberDecorate {buffer_ids['rawInBuffer']} 0 NonWritable" in spv_code
+        assert (
+            f"OpMemberDecorate {buffer_ids['rawOutBuffer']} 0 NonReadable"
+            not in spv_code
+        )
+        assert (
+            f"OpMemberDecorate {buffer_ids['rawOutBuffer']} 0 NonWritable"
+            not in spv_code
+        )
+
+        texel_pointer = re.search(
+            r"(%\d+) = OpImageTexelPointer (%\d+) %\d+ %\d+ %\d+",
+            spv_code,
+        )
+        assert texel_pointer is not None
+        image_pointer_types = {
+            pointer_type
+            for pointer_type in re.findall(
+                r"(%\d+) = OpTypePointer Image %\d+\b", spv_code
+            )
+        }
+        assert texel_pointer.group(2) in image_pointer_types
+        assert re.search(
+            rf"OpAtomicIAdd %\d+ {re.escape(texel_pointer.group(1))}\b",
+            spv_code,
+        )
+
+        values_var = spirv_named_variable(spv_code, "values")
+        weights_var = spirv_named_variable(spv_code, "weights")
+        raw_out_var = spirv_named_variable(spv_code, "rawOut")
+        raw_in_var = spirv_named_variable(spv_code, "rawIn")
+        for variable_id in (values_var, weights_var, raw_out_var, raw_in_var):
+            assert re.search(
+                rf"OpAccessChain %\d+ {re.escape(variable_id)}\b", spv_code
+            )
+
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_stage_local_nested_resource_metadata_forwarding_is_isolated(
         self, tmp_path
     ):
@@ -21251,3 +21579,467 @@ class TestVulkanSPIRVCodeGen:
         assert "%4 = OpVariable %2 Output" in gen.code_lines
         assert 'OpName %4 "out_var2"' in gen.code_lines
         assert "OpDecorate %4 Location 1" in gen.decorations
+
+    def test_if_else_generates_selection_merge_and_branch_conditional(self):
+        source_code = """
+        shader IfElseControlFlow {
+            compute {
+                void main() {
+                    float value = 1.0;
+                    float result = 0.0;
+                    if (value > 0.5) {
+                        result = value * 2.0;
+                    } else {
+                        result = value * 0.5;
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        selection_merge = re.search(r"OpSelectionMerge (%\d+) None", spv_code)
+        assert selection_merge, "Missing OpSelectionMerge for if/else"
+        merge_label = selection_merge.group(1)
+
+        branch_cond = re.search(r"OpBranchConditional (%\d+) (%\d+) (%\d+)", spv_code)
+        assert branch_cond, "Missing OpBranchConditional for if/else"
+        true_label = branch_cond.group(2)
+        false_label = branch_cond.group(3)
+
+        assert f"{true_label} = OpLabel" in spv_code
+        assert f"{false_label} = OpLabel" in spv_code
+        assert f"{merge_label} = OpLabel" in spv_code
+
+        assert "OpFOrdGreaterThan" in spv_code or "OpFOrdGreaterThanEqual" in spv_code
+        assert spv_code.count("OpFMul") >= 2
+        assert f"OpBranch {merge_label}" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_for_loop_generates_loop_merge_and_branch_pattern(self):
+        source_code = """
+        shader ForLoopStructured {
+            compute {
+                void main() {
+                    float acc = 0.0;
+                    for (int i = 0; i < 8; i = i + 1) {
+                        acc = acc + 1.0;
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_merge = re.search(r"OpLoopMerge (%\d+) (%\d+) None", spv_code)
+        assert loop_merge, "Missing OpLoopMerge for for-loop"
+        merge_label = loop_merge.group(1)
+        continue_label = loop_merge.group(2)
+
+        assert f"{merge_label} = OpLabel" in spv_code
+        assert f"{continue_label} = OpLabel" in spv_code
+
+        assert "OpBranchConditional" in spv_code
+        assert "OpSLessThan" in spv_code
+        assert "OpIAdd" in spv_code
+        assert "OpFAdd" in spv_code
+
+        i_id = spirv_named_variable(spv_code, "i", storage_class="Function")
+        acc_id = spirv_named_variable(spv_code, "acc", storage_class="Function")
+        assert i_id
+        assert acc_id
+
+        assert f"OpBranch {continue_label}" in spv_code or (
+            f"OpBranch {merge_label}" in spv_code
+        )
+        assert "WARNING" not in spv_code
+
+    def test_while_loop_generates_structured_control_flow(self):
+        source_code = """
+        shader WhileStructured {
+            compute {
+                void main() {
+                    float energy = 100.0;
+                    int steps = 0;
+                    while (energy > 0.0) {
+                        energy = energy - 10.0;
+                        steps = steps + 1;
+                    }
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        loop_header = re.search(
+            r"(%\d+) = OpLabel\n"
+            r".*?"
+            r"OpLoopMerge (%\d+) (%\d+) None\n"
+            r"OpBranchConditional %\d+ (%\d+) (%\d+)",
+            spv_code,
+            re.S,
+        )
+        assert (
+            loop_header
+        ), "While loop must have header: OpLabel, OpLoopMerge, OpBranchConditional"
+        header_label, merge_label, continue_label, body_label, exit_label = (
+            loop_header.groups()
+        )
+
+        assert exit_label == merge_label
+        assert f"{body_label} = OpLabel" in spv_code
+        assert f"{merge_label} = OpLabel" in spv_code
+        assert f"{continue_label} = OpLabel" in spv_code
+
+        assert "OpFOrdGreaterThan" in spv_code or "OpFOrdGreaterThanEqual" in spv_code
+        assert "OpBranchConditional" in spv_code
+        assert "OpFSub" in spv_code
+        assert "OpIAdd" in spv_code
+
+        energy_id = spirv_named_variable(spv_code, "energy", storage_class="Function")
+        steps_id = spirv_named_variable(spv_code, "steps", storage_class="Function")
+        assert energy_id
+        assert steps_id
+        assert "WARNING" not in spv_code
+
+    def test_user_function_generates_opfunction_and_opfunctioncall(self):
+        source_code = """
+        shader UserFunctionCall {
+            float square(float x) {
+                return x * x;
+            }
+
+            float cube(float x) {
+                float sq = square(x);
+                return sq * x;
+            }
+
+            compute {
+                void main() {
+                    float a = 3.0;
+                    float result = cube(a);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        function_decls = re.findall(r"%\d+ = OpFunction %\d+ None %\d+", spv_code)
+        assert len(function_decls) >= 3, (
+            f"Expected at least 3 OpFunction (main + square + cube), "
+            f"got {len(function_decls)}"
+        )
+
+        function_calls = re.findall(r"%\d+ = OpFunctionCall %\d+ %\d+", spv_code)
+        assert len(function_calls) >= 2, (
+            f"Expected at least 2 OpFunctionCall (cube calls square, main calls cube), "
+            f"got {len(function_calls)}"
+        )
+
+        assert spv_code.count("OpFunctionEnd") >= 3
+        assert "OpReturnValue" in spv_code
+        assert "OpFMul" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_function_parameters_generate_opfunctionparameter(self):
+        source_code = """
+        shader FunctionParams {
+            vec4 blend(vec4 colorA, vec4 colorB, float factor) {
+                return colorA * (1.0 - factor) + colorB * factor;
+            }
+
+            compute {
+                void main() {
+                    vec4 c1 = vec4(1.0, 0.0, 0.0, 1.0);
+                    vec4 c2 = vec4(0.0, 0.0, 1.0, 1.0);
+                    vec4 mixed = blend(c1, c2, 0.5);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        param_declarations = re.findall(
+            r"(%\d+) = OpFunctionParameter (%\d+)", spv_code
+        )
+        assert len(param_declarations) >= 3, (
+            f"blend(vec4, vec4, float) needs at least 3 OpFunctionParameter, "
+            f"got {len(param_declarations)}"
+        )
+
+        [p[0] for p in param_declarations]
+        [p[1] for p in param_declarations]
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        assert vec4_type is not None
+        assert float_type is not None
+
+        assert "OpFunctionCall" in spv_code
+        assert "OpReturnValue" in spv_code
+        assert "OpFSub" in spv_code or "OpFNegate" in spv_code or "OpFMul" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_get_lane_count_emits_subgroup_size_builtin(self):
+        source_code = """
+        shader WaveLaneCountBuiltin {
+            compute {
+                void main() {
+                    uint count = WaveGetLaneCount();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniform" in spv_code
+        subgroup_size_var = spirv_named_variable(
+            spv_code, "gl_SubgroupSize", storage_class="Input"
+        )
+        assert subgroup_size_var
+        assert f"OpDecorate {subgroup_size_var} BuiltIn SubgroupSize" in spv_code
+        assert re.search(rf"OpLoad %\d+ {re.escape(subgroup_size_var)}", spv_code)
+        count_var = spirv_named_variable(spv_code, "count", storage_class="Function")
+        assert count_var
+        assert "WaveGetLaneCount" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_get_lane_index_emits_subgroup_invocation_id_builtin(self):
+        source_code = """
+        shader WaveLaneIndexBuiltin {
+            compute {
+                void main() {
+                    uint idx = WaveGetLaneIndex();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniform" in spv_code
+        subgroup_inv_var = spirv_named_variable(
+            spv_code, "gl_SubgroupInvocationID", storage_class="Input"
+        )
+        assert subgroup_inv_var
+        assert (
+            f"OpDecorate {subgroup_inv_var} BuiltIn SubgroupLocalInvocationId"
+            in spv_code
+        )
+        assert re.search(rf"OpLoad %\d+ {re.escape(subgroup_inv_var)}", spv_code)
+        idx_var = spirv_named_variable(spv_code, "idx", storage_class="Function")
+        assert idx_var
+        assert "WaveGetLaneIndex" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_ballot_emits_group_non_uniform_ballot_with_uvec4(self):
+        source_code = """
+        shader WaveBallotUvec4 {
+            compute {
+                void main() {
+                    bool active = true;
+                    uvec4 result = WaveActiveBallot(active);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniformBallot" in spv_code
+        ballot_ids = spirv_result_ids_for_opcode(spv_code, "OpGroupNonUniformBallot")
+        assert len(ballot_ids) == 1
+        ballot_line = re.search(
+            rf"{re.escape(ballot_ids[0])} = OpGroupNonUniformBallot (%\d+)",
+            spv_code,
+        )
+        assert ballot_line
+        result_type_id = ballot_line.group(1)
+        assert re.search(
+            rf"{re.escape(result_type_id)} = OpTypeVector %\d+ 4", spv_code
+        )
+        result_var = spirv_named_variable(spv_code, "result", storage_class="Function")
+        assert result_var
+        assert "WaveActiveBallot" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_read_lane_at_emits_shuffle_broadcast(self):
+        source_code = """
+        shader WaveShuffleBroadcast {
+            compute {
+                void main() {
+                    uint val = 42u;
+                    uint fromLane3 = WaveReadLaneAt(val, 3u);
+                    uint fromFirst = WaveReadLaneFirst(val);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniformShuffle" in spv_code
+        assert "OpCapability GroupNonUniformBallot" in spv_code
+
+        broadcast_ids = spirv_result_ids_for_opcode(
+            spv_code, "OpGroupNonUniformBroadcast"
+        )
+        assert len(broadcast_ids) == 1
+        assert re.search(
+            rf"{re.escape(broadcast_ids[0])} = OpGroupNonUniformBroadcast "
+            rf"%\d+ %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        broadcast_first_ids = spirv_result_ids_for_opcode(
+            spv_code, "OpGroupNonUniformBroadcastFirst"
+        )
+        assert len(broadcast_first_ids) == 1
+        assert re.search(
+            rf"{re.escape(broadcast_first_ids[0])} = OpGroupNonUniformBroadcastFirst "
+            rf"%\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        fromLane3_var = spirv_named_variable(
+            spv_code, "fromLane3", storage_class="Function"
+        )
+        fromFirst_var = spirv_named_variable(
+            spv_code, "fromFirst", storage_class="Function"
+        )
+        assert fromLane3_var
+        assert fromFirst_var
+        assert "WaveReadLane" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_prefix_sum_emits_exclusive_scan_for_int_and_float(self):
+        source_code = """
+        shader WavePrefixScanTypes {
+            compute {
+                void main() {
+                    uint uval = 10u;
+                    uint uprefixSum = WavePrefixSum(uval);
+                    float fval = 2.5;
+                    float fprefixSum = WavePrefixSum(fval);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniformArithmetic" in spv_code
+        assert "OpGroupNonUniformIAdd" in spv_code
+        assert "OpGroupNonUniformFAdd" in spv_code
+
+        iadd_match = re.search(r"OpGroupNonUniformIAdd %\d+ %\d+ (\w+) %\d+", spv_code)
+        assert iadd_match
+        assert iadd_match.group(1) == "ExclusiveScan"
+
+        fadd_match = re.search(r"OpGroupNonUniformFAdd %\d+ %\d+ (\w+) %\d+", spv_code)
+        assert fadd_match
+        assert fadd_match.group(1) == "ExclusiveScan"
+
+        uprefixSum_var = spirv_named_variable(
+            spv_code, "uprefixSum", storage_class="Function"
+        )
+        fprefixSum_var = spirv_named_variable(
+            spv_code, "fprefixSum", storage_class="Function"
+        )
+        assert uprefixSum_var
+        assert fprefixSum_var
+        assert "WavePrefixSum" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_active_all_any_true_emit_vote_operations(self):
+        source_code = """
+        shader WaveVoteOps {
+            compute {
+                void main() {
+                    bool cond = true;
+                    bool allResult = WaveActiveAllTrue(cond);
+                    bool anyResult = WaveActiveAnyTrue(cond);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability GroupNonUniformVote" in spv_code
+
+        all_ids = spirv_result_ids_for_opcode(spv_code, "OpGroupNonUniformAll")
+        assert len(all_ids) == 1
+        assert re.search(
+            rf"{re.escape(all_ids[0])} = OpGroupNonUniformAll %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        any_ids = spirv_result_ids_for_opcode(spv_code, "OpGroupNonUniformAny")
+        assert len(any_ids) == 1
+        assert re.search(
+            rf"{re.escape(any_ids[0])} = OpGroupNonUniformAny %\d+ %\d+ %\d+",
+            spv_code,
+        )
+
+        allResult_var = spirv_named_variable(
+            spv_code, "allResult", storage_class="Function"
+        )
+        anyResult_var = spirv_named_variable(
+            spv_code, "anyResult", storage_class="Function"
+        )
+        assert allResult_var
+        assert anyResult_var
+        assert "WaveActiveAllTrue" not in spv_code
+        assert "WaveActiveAnyTrue" not in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_wave_operations_diagnostics_on_wrong_argument_types(self):
+        source_code = """
+        shader WaveArgDiagnostics {
+            compute {
+                void main() {
+                    uint val = 1u;
+                    bool badAll = WaveActiveAllTrue(val);
+                    bool badAny = WaveActiveAnyTrue(val);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: WaveActiveAllTrue requires a scalar bool argument" in spv_code
+        assert "WARNING: WaveActiveAnyTrue requires a scalar bool argument" in spv_code
+        assert "OpGroupNonUniformAll" not in spv_code
+        assert "OpGroupNonUniformAny" not in spv_code

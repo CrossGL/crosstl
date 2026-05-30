@@ -25476,6 +25476,102 @@ def test_metal_resource_array_helper_element_aliases_preserve_metadata():
     )
 
 
+def test_metal_resource_array_helper_alias_texture_ops_preserve_metadata():
+    shader = """
+    shader ResourceArrayHelperAliasTextureOps {
+        sampler2D textures[4];
+        sampler samplers[4];
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+        };
+
+        vec4 inspectAlias(
+            sampler2D texs[4],
+            sampler samps[4],
+            int layer,
+            vec2 uv,
+            ivec2 offset,
+            vec2 ddx,
+            vec2 ddy
+        ) {
+            let texAlias = texs[layer];
+            let sampAlias = samps[layer];
+            ivec2 dims = textureSize(texAlias, 1);
+            int levels = textureQueryLevels(texAlias);
+            vec2 lod = textureQueryLod(texAlias, sampAlias, uv);
+            vec4 lodColor = textureLod(texAlias, sampAlias, uv, 1.0);
+            vec4 gradColor = textureGrad(texAlias, sampAlias, uv, ddx, ddy);
+            vec4 gathered = textureGatherOffset(
+                texAlias,
+                sampAlias,
+                uv,
+                offset,
+                layer
+            );
+            return lodColor + gradColor + gathered +
+                vec4(float(dims.x + dims.y + levels), lod.x, lod.y, 1.0);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return inspectAlias(
+                    textures,
+                    samplers,
+                    input.layer,
+                    input.uv,
+                    input.offset,
+                    input.ddx,
+                    input.ddy
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texture2d<float>, 4> texs" in generated_code
+    assert "array<sampler, 4> samps" in generated_code
+    assert "texture2d<float> texAlias = texs[layer];" in generated_code
+    assert "sampler sampAlias = samps[layer];" in generated_code
+    assert (
+        "int2 dims = int2(texAlias.get_width(uint(1)), "
+        "texAlias.get_height(uint(1)));"
+    ) in generated_code
+    assert "int levels = int(texAlias.get_num_mip_levels());" in generated_code
+    assert (
+        "float2 lod = float2(texAlias.calculate_unclamped_lod(sampAlias, uv), "
+        "texAlias.calculate_clamped_lod(sampAlias, uv));"
+    ) in generated_code
+    assert "float4 lodColor = texAlias.sample(sampAlias, uv, level(1.0));" in (
+        generated_code
+    )
+    assert (
+        "float4 gradColor = texAlias.sample(sampAlias, uv, " "gradient2d(ddx, ddy));"
+    ) in generated_code
+    assert (
+        "layer == 0 ? texAlias.gather(sampAlias, uv, offset, component::x)"
+        in generated_code
+    )
+    assert "texAlias.gather(sampAlias, uv, offset, component::w)" in generated_code
+    assert (
+        "inspectAlias(textures, samplers, input.layer, input.uv, input.offset, "
+        "input.ddx, input.ddy)"
+    ) in generated_code
+    assert "texture2d<float> texAlias = texs;" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+
+
 def test_metal_sampler_array_local_aliases_preserve_element_metadata():
     shader = """
     shader SamplerArrayLocalAliases {
@@ -27673,6 +27769,132 @@ def test_metal_generic_image_memory_attributes_do_not_become_semantics():
     )
     assert "[[coherent]]" not in generated_code
     assert "[[globallycoherent]]" not in generated_code
+
+
+def test_metal_geometry_stage_raises_with_diagnostic_message():
+    """Verify geometry stage produces a clear diagnostic explaining Metal lacks
+    traditional geometry shaders."""
+    code = """
+    shader GeometryExpansion {
+        struct GSInput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+        };
+
+        struct GSOutput {
+            vec4 position @ gl_Position;
+            vec3 color @ COLOR;
+        };
+
+        geometry {
+            void main(GSInput input) {
+                GSOutput output;
+                output.position = input.position;
+                output.color = input.normal;
+                emit output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="does not support stage.*geometry"):
+        MetalCodeGen().generate(ast)
+
+    with pytest.raises(ValueError, match="geometry"):
+        MetalCodeGen().generate_stage(ast, "geometry")
+
+
+def test_metal_tessellation_control_stage_raises_with_diagnostic_message():
+    """Verify tessellation_control (hull) stage is rejected with a clear message
+    ."""
+    code = """
+    shader TessControl {
+        struct PatchInput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_control {
+            void main(PatchInput input) {
+                vec3 pos = input.position;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="tessellation_control"):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_tessellation_evaluation_stage_raises_with_diagnostic_message():
+    """Verify tessellation_evaluation (domain) stage is rejected with a clear
+    message."""
+    code = """
+    shader TessEval {
+        struct DomainInput {
+            vec3 position @ POSITION;
+        };
+
+        tessellation_evaluation {
+            void main(DomainInput input) {
+                vec4 pos = vec4(input.position, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="tessellation_evaluation"):
+        MetalCodeGen().generate(ast)
+
+
+def test_metal_mixed_shader_with_geometry_only_rejects_geometry_stage():
+    """When a shader has both supported (vertex/fragment) and unsupported
+    (geometry) stages, Metal generate() rejects the geometry stage while
+    generate_stage() can still emit vertex/fragment independently."""
+    code = """
+    shader MixedPipeline {
+        struct VOut {
+            vec4 position @ gl_Position;
+        };
+
+        vertex {
+            VOut main() {
+                VOut o;
+                o.position = vec4(0.0, 0.0, 0.0, 1.0);
+                return o;
+            }
+        }
+
+        geometry {
+            void main(VOut input) {
+                emit input;
+            }
+        }
+
+        fragment {
+            vec4 main(VOut input) @ gl_FragColor {
+                return input.position;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+
+    with pytest.raises(ValueError, match="geometry"):
+        MetalCodeGen().generate(ast)
+
+    vertex_code = MetalCodeGen().generate_stage(ast, "vertex")
+    assert "vertex" in vertex_code
+    assert "geometry" not in vertex_code.lower().split("//")[0]
+
+    fragment_code = MetalCodeGen().generate_stage(ast, "fragment")
+    assert "fragment" in fragment_code
 
 
 if __name__ == "__main__":

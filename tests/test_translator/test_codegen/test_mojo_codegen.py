@@ -22147,7 +22147,6 @@ def test_match_guarded_literal_arm_lowers_for_mojo_codegen():
 
 
 def test_mojo_compute_shader_synchronization_barriers():
-    """Issue #494: Synchronization and memory barriers in compute shader context."""
     code = """
     shader BarrierCompute {
         compute {
@@ -22175,7 +22174,6 @@ def test_mojo_compute_shader_synchronization_barriers():
 
 
 def test_mojo_multisample_storage_image_load_store_in_compute():
-    """Issue #486: Multisample storage image handling in compute context."""
     code = """
     image2DMS msColor;
     uimage2DMS msCounter;
@@ -22222,7 +22220,6 @@ def test_mojo_multisample_storage_image_load_store_in_compute():
 
 
 def test_mojo_image_atomics_in_compute_shader():
-    """Issue #480: Image atomic operations in compute shader context."""
     code = """
     uimage2D counterImage;
 
@@ -22259,7 +22256,6 @@ def test_mojo_image_atomics_in_compute_shader():
 
 
 def test_mojo_storage_image_load_store_operations():
-    """Issue #475: RW image load/store operations."""
     code = """
     image2D colorImage;
     iimage2D signedImage;
@@ -22318,7 +22314,6 @@ def test_mojo_storage_image_load_store_operations():
 
 
 def test_mojo_advanced_texture_gather_operations():
-    """Issue #470: Advanced texture operations (textureGather, cube arrays)."""
     code = """
     sampler2D colorMap;
     samplerCubeArray cubeArrayMap;
@@ -22353,7 +22348,6 @@ def test_mojo_advanced_texture_gather_operations():
 
 
 def test_mojo_multisample_texture_operations():
-    """Issue #461: Multisample texture support."""
     code = """
     sampler2DMS msTexture;
     sampler2DMSArray msArrayTexture;
@@ -22390,7 +22384,6 @@ def test_mojo_multisample_texture_operations():
 
 
 def test_mojo_texel_fetch_operations():
-    """Issue #455: texelFetch/Load equivalents."""
     code = """
     sampler2D colorMap;
     sampler1D lineMap;
@@ -22425,7 +22418,6 @@ def test_mojo_texel_fetch_operations():
 
 
 def test_mojo_texture_query_operations():
-    """Issue #450: textureSize/GetDimensions."""
     code = """
     sampler1D strip;
     sampler2D colorMap;
@@ -22479,7 +22471,6 @@ def test_mojo_texture_query_operations():
 
 
 def test_mojo_image_size_query_for_storage_images():
-    """Issue #450: imageSize for storage images."""
     code = """
     image2D colorImage;
     iimage3D signedVolume;
@@ -22507,7 +22498,6 @@ def test_mojo_image_size_query_for_storage_images():
 
 
 def test_mojo_image_samples_query_for_multisample_images():
-    """Issue #486: imageSamples for multisample images."""
     code = """
     uimage2DMS msCounter;
     image2DMS msColor;
@@ -22525,6 +22515,95 @@ def test_mojo_image_samples_query_for_multisample_images():
     assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
     assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert "imageSamples" not in generated_code
+
+
+def test_mojo_texture_and_image_query_helpers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    code = """
+    sampler1D strip;
+    sampler2D colorMap;
+    sampler2DArray layers;
+    sampler3D volume;
+    samplerCube cubeMap;
+    image2D colorImage;
+    iimage3D signedVolume;
+    uimage2DArray counterLayers;
+    uimage2DMS msCounter;
+    image2DMS msColor;
+
+    int getStripWidth(sampler1D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec2 getMapSize(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec3 getLayerSize(sampler2DArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec3 getVolumeSize(sampler3D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec2 getCubeSize(samplerCube tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+
+    ivec2 getImgSize(image2D image) {
+        return imageSize(image);
+    }
+
+    ivec3 getSignedVolumeSize(iimage3D image) {
+        return imageSize(image);
+    }
+
+    ivec3 getCounterLayerSize(uimage2DArray image) {
+        return imageSize(image);
+    }
+
+    int getCounterSamples(uimage2DMS image) {
+        return imageSamples(image);
+    }
+
+    int getColorSamples(image2DMS image) {
+        return imageSamples(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(getStripWidth(Texture1D(), 0))
+    print(getMapSize(Texture2D(), 0))
+    print(getLayerSize(Texture2DArray(), 0))
+    print(getVolumeSize(Texture3D(), 0))
+    print(getCubeSize(TextureCube(), 0))
+    print(getLevelCount(Texture2D()))
+    print(getImgSize(Image2D()))
+    print(getSignedVolumeSize(IImage3D()))
+    print(getCounterLayerSize(UImage2DArray()))
+    print(getCounterSamples(UImage2DMS()))
+    print(getColorSamples(Image2DMS()))
+"""
+
+    source_path = tmp_path / "texture_and_image_query_helpers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0, 0]" in result.stdout
+    assert "[0, 0, 0, 0]" in result.stdout
+    assert result.stdout.count("1\n") >= 3
 
 
 def test_mojo_imports():
@@ -22547,6 +22626,301 @@ def test_mojo_imports():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo imports not generated")
+
+
+def test_barrier_emits_mojo_sync_primitive():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                barrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "barrier()" not in generated_code.replace("_crossgl_workgroup_barrier()", "")
+
+
+def test_memory_barrier_emits_mojo_memory_barrier():
+    code = """
+    shader ComputeMemSync {
+        compute {
+            void main() {
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_memory_barrier()" in generated_code
+    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "memoryBarrier()" not in generated_code
+
+
+def test_workgroup_barrier_emits_threadgroup_sync():
+    code = """
+    shader ComputeWorkgroup {
+        compute {
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "workgroupBarrier()" not in generated_code
+
+
+def test_texture_size_emits_dimension_query():
+    code = """
+    sampler2D myTexture;
+
+    ivec2 getDimensions(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_size(tex, lod)" in generated_code
+    assert "fn texture_size(" in generated_code
+    assert "-> SIMD[DType.int32, 2]:" in generated_code
+    assert "textureSize" not in generated_code
+
+
+def test_texture_query_levels_emits_level_count_query():
+    code = """
+    sampler2D myTexture;
+
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_query_levels(tex)" in generated_code
+    assert "fn texture_query_levels(" in generated_code
+    assert "-> Int32:" in generated_code
+    assert "textureQueryLevels" not in generated_code
+
+
+def test_texel_fetch_emits_direct_texel_read():
+    code = """
+    sampler2D myTexture;
+
+    vec4 readTexel(sampler2D tex, ivec2 coord, int lod) {
+        return texelFetch(tex, coord, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texel_fetch(tex, coord, lod)" in generated_code
+    assert "fn texel_fetch(" in generated_code
+    assert "SIMD[DType.int32, 2]" in generated_code
+    assert "texelFetch" not in generated_code
+
+
+def test_mojo_storage_image_load_on_1d_and_array_types():
+    code = """
+    image1D rowImage;
+    iimage1DArray signedRows;
+    uimage2DArray counterLayers;
+
+    shader StorageLoad1D {
+        compute {
+            void main() {
+                int coord1d = 0;
+                vec4 row = imageLoad(rowImage, coord1d);
+                ivec2 coord1dArr = ivec2(0, 0);
+                int signedRow = imageLoad(signedRows, coord1dArr);
+                ivec3 coordArr = ivec3(0, 0, 0);
+                uint layerCounter = imageLoad(counterLayers, coordArr);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1D:" in generated_code
+    assert "struct IImage1DArray:" in generated_code
+    assert "struct UImage2DArray:" in generated_code
+    assert "image_load(rowImage, coord1d)" in generated_code
+    assert "image_load(signedRows, coord1dArr)" in generated_code
+    assert "image_load(counterLayers, coordArr)" in generated_code
+    assert (
+        "fn image_load(image: Image1D, coord: Int32) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: IImage1DArray, coord: SIMD[DType.int32, 2]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2DArray, coord: SIMD[DType.int32, 4]) -> UInt32:"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+
+
+def test_mojo_storage_image_store_on_various_formats():
+    code = """
+    image1D rowImage;
+    iimage2D signedImage;
+    uimage3D volumeCounters;
+
+    shader StorageStoreFormats {
+        compute {
+            void main() {
+                int x = 0;
+                vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
+                imageStore(rowImage, x, color);
+                ivec2 pixel = ivec2(0, 0);
+                int signedVal = 42;
+                imageStore(signedImage, pixel, signedVal);
+                ivec3 voxel = ivec3(0, 0, 0);
+                uint counter = 1u;
+                imageStore(volumeCounters, voxel, counter);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage3D:" in generated_code
+    assert "image_store(rowImage, x, color)" in generated_code
+    assert "image_store(signedImage, pixel, signedVal)" in generated_code
+    assert "image_store(volumeCounters, voxel, counter)" in generated_code
+    assert (
+        "fn image_store(image: Image1D, coord: Int32, value: SIMD[DType.float32, 4]):"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2D, coord: SIMD[DType.int32, 2], value: Int32):"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
+        in generated_code
+    )
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_image_atomic_add_min_max_emit_helpers():
+    code = """
+    uimage2D counterImage;
+    iimage2D signedImage;
+
+    shader AtomicAddMinMax {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint added = imageAtomicAdd(counterImage, pixel, 5u);
+                uint minResult = imageAtomicMin(counterImage, pixel, 0u);
+                uint maxResult = imageAtomicMax(counterImage, pixel, 100u);
+                int signedAdd = imageAtomicAdd(signedImage, pixel, 1);
+                int lo = 0;
+                int signedMin = imageAtomicMin(signedImage, pixel, lo);
+                int hi = 50;
+                int signedMax = imageAtomicMax(signedImage, pixel, hi);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_add_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_IImage2D" in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMin" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+
+
+def test_mojo_image_atomic_exchange_and_comp_swap_emit_helpers():
+    code = """
+    uimage2D counterImage;
+    iimage2D signedImage;
+
+    shader AtomicExchangeCompSwap {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint exchanged = imageAtomicExchange(counterImage, pixel, 99u);
+                uint swapped = imageAtomicCompSwap(counterImage, pixel, 99u, 200u);
+                int replaceVal = 5;
+                int signedExch = imageAtomicExchange(signedImage, pixel, replaceVal);
+                int cmpVal = 5;
+                int newVal = 0;
+                int signedSwap = imageAtomicCompSwap(signedImage, pixel, cmpVal, newVal);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_IImage2D" in generated_code
+    assert "imageAtomicExchange" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+
+
+def test_mojo_storage_image_combined_load_store_and_atomics():
+    """Issues #475 and #480: Combined load/store with atomics on the same image."""
+    code = """
+    uimage2D counterImage;
+
+    shader CombinedOps {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint current = imageLoad(counterImage, pixel);
+                uint incremented = imageAtomicAdd(counterImage, pixel, 1u);
+                uint newMax = imageAtomicMax(counterImage, pixel, current);
+                uint exchanged = imageAtomicExchange(counterImage, pixel, 0u);
+                imageStore(counterImage, pixel, exchanged);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "image_load(counterImage, pixel)" in generated_code
+    assert "image_store(counterImage, pixel, exchanged)" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert (
+        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2D, coord: SIMD[DType.int32, 2], value: UInt32):"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
 
 
 if __name__ == "__main__":
