@@ -1094,6 +1094,27 @@ def test_ci_coverage_comparison_reports_workflow_policy_shrink():
     } in comparison["shrinks"]
 
 
+def test_ci_coverage_comparison_reports_full_suite_download_retry_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["full_tests"]["download_retries"]["dxc_linux"] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": False,
+        "shrink_count": 1,
+        "growth_count": 0,
+    }
+    assert {
+        "scope": "full-tests.yml",
+        "dimension": "download_retries",
+        "removed": ["dxc_linux"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
 def test_ci_coverage_comparison_reports_added_coverage_without_shrink():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -1129,6 +1150,38 @@ def test_ci_coverage_comparison_reports_support_matrix_policy_shrink():
             "added": [],
         }
     ]
+
+
+def test_ci_coverage_comparison_reports_support_summary_policy_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["support_issue_sync"][
+        "support_automation_summary_emits_annotations"
+    ] = False
+    current["workflows"]["support_issue_sync"][
+        "support_automation_summary_fails_on_attention"
+    ] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"] == {
+        "ok": False,
+        "shrink_count": 2,
+        "growth_count": 0,
+    }
+    assert {
+        "scope": "support-issue-sync.yml",
+        "dimension": "support_automation_summary_emits_annotations",
+        "removed": ["support_automation_summary_emits_annotations"],
+        "added": [],
+    } in comparison["shrinks"]
+    assert {
+        "scope": "support-issue-sync.yml",
+        "dimension": "support_automation_summary_fails_on_attention",
+        "removed": ["support_automation_summary_fails_on_attention"],
+        "added": [],
+    } in comparison["shrinks"]
 
 
 def test_ci_coverage_comparison_reports_translator_frontend_suite_shrink():

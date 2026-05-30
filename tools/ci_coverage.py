@@ -1703,6 +1703,12 @@ def build_ci_coverage_comparison(
         baseline_full["required_tools"],
         current_full["required_tools"],
     )
+    add_bool_map_change(
+        "full-tests.yml",
+        "download_retries",
+        baseline_full["download_retries"],
+        current_full["download_retries"],
+    )
     for summary_name in sorted(
         set(baseline_full["failure_summaries"]) | set(current_full["failure_summaries"])
     ):
@@ -1785,6 +1791,8 @@ def build_ci_coverage_comparison(
         "writes_support_automation_summary",
         "support_automation_summary_on_failure",
         "appends_support_automation_summary_to_step_summary",
+        "support_automation_summary_emits_annotations",
+        "support_automation_summary_fails_on_attention",
         "support_automation_summary_after_issue_sync",
         "dry_run_writes_issue_plan",
         "plans_issue_sync_before_mutation",
