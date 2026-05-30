@@ -94,12 +94,22 @@ jobs:
       - name: Validate support matrix artifacts
         run: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
 
+      - name: Audit support matrix evidence
+        if: always()
+        run: >
+          python tools/support_matrix.py evidence
+          --status supported
+          --evidence missing
+          --output support/generated/support-evidence-check.json
+
       - name: Upload support matrix check report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: support-matrix-check-report
-          path: support/generated/support-matrix-check.json
+          path: |
+            support/generated/support-matrix-check.json
+            support/generated/support-evidence-check.json
           if-no-files-found: ignore
           retention-days: 30
 
@@ -290,6 +300,7 @@ jobs:
           name: support-issue-sync-reports
           path: |
             support/generated/support-matrix-check.json
+            support/generated/support-evidence-check.json
             support/generated/support-issue-plan.json
             support/generated/support-issue-sync-summary.json
             support/generated/support-issue-ci-summary.md

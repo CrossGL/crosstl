@@ -658,6 +658,83 @@ def build_audit_report(matrix, rows, filters):
     }
 
 
+def filtered_support_rows(
+    matrix, backend_ids=None, categories=None, statuses=None, evidence="any"
+):
+    backend_filter = set(backend_ids or [])
+    category_filter = set(categories or [])
+    status_filter = set(statuses or [])
+    backend_names = {backend["id"]: backend["name"] for backend in matrix["backends"]}
+
+    rows = []
+    for feature in matrix["features"]:
+        if category_filter and feature["category"] not in category_filter:
+            continue
+        for backend_id, support in feature["support"].items():
+            if backend_filter and backend_id not in backend_filter:
+                continue
+            status = support["status"]
+            if status_filter and status not in status_filter:
+                continue
+
+            evidence_entries = support.get("evidence", [])
+            has_evidence = bool(evidence_entries)
+            if evidence == "missing" and has_evidence:
+                continue
+            if evidence == "present" and not has_evidence:
+                continue
+
+            rows.append(
+                {
+                    "backend": backend_names[backend_id],
+                    "backend_id": backend_id,
+                    "category": feature["category"],
+                    "feature": feature["name"],
+                    "feature_id": feature["id"],
+                    "status": status,
+                    "notes": support.get("notes", ""),
+                    "evidence_count": len(evidence_entries),
+                    "evidence": evidence_entries,
+                }
+            )
+    return rows
+
+
+def evidence_summary(rows):
+    summary = {
+        "row_count": len(rows),
+        "missing_evidence_count": 0,
+        "present_evidence_count": 0,
+        "by_backend": {},
+        "by_status": {status: 0 for status in STATUS_ORDER},
+    }
+    for item in rows:
+        backend_id = item["backend_id"]
+        status = item["status"]
+        backend_summary = summary["by_backend"].setdefault(
+            backend_id, {"rows": 0, "present": 0, "missing": 0}
+        )
+        backend_summary["rows"] += 1
+        summary["by_status"][status] = summary["by_status"].get(status, 0) + 1
+        if item["evidence_count"]:
+            summary["present_evidence_count"] += 1
+            backend_summary["present"] += 1
+        else:
+            summary["missing_evidence_count"] += 1
+            backend_summary["missing"] += 1
+    return summary
+
+
+def build_evidence_report(matrix, rows, filters):
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py evidence",
+        "filters": filters,
+        "summary": evidence_summary(rows),
+        "rows": rows,
+    }
+
+
 def build_backend_view(matrix, view_id, title, backend_ids):
     backend_id_set = set(backend_ids)
     backend_names = {
@@ -1181,6 +1258,93 @@ def audit(
     return 0
 
 
+def evidence_audit(
+    matrix,
+    backend_ids=None,
+    categories=None,
+    statuses=None,
+    evidence="any",
+    output=None,
+    fail_on_missing=False,
+):
+    backend_ids = split_filter_values(backend_ids)
+    categories = split_filter_values(categories)
+    statuses = split_filter_values(statuses)
+    if evidence not in {"any", "present", "missing"}:
+        raise SupportMatrixError(f"Unknown evidence filter: {evidence}")
+    validate_audit_filters(matrix, backend_ids, categories, statuses)
+
+    rows = filtered_support_rows(
+        matrix,
+        backend_ids=backend_ids,
+        categories=categories,
+        statuses=statuses,
+        evidence=evidence,
+    )
+    filters = {
+        "backend_ids": backend_ids,
+        "categories": categories,
+        "statuses": statuses,
+        "evidence": evidence,
+    }
+    report = build_evidence_report(matrix, rows, filters)
+
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(stable_json(report), encoding="utf-8")
+        print(f"Wrote {display_path(output)}")
+
+    print(
+        "Support matrix evidence: {} features across {} backends".format(
+            matrix["summary"]["feature_count"], matrix["summary"]["backend_count"]
+        )
+    )
+    print("Evidence rows: {}".format(report["summary"]["row_count"]))
+    print(
+        "Evidence coverage: present={}, missing={}".format(
+            report["summary"]["present_evidence_count"],
+            report["summary"]["missing_evidence_count"],
+        )
+    )
+    if backend_ids or categories or statuses or evidence != "any":
+        print(
+            "Filters: backend_ids={}, categories={}, statuses={}, evidence={}".format(
+                ",".join(backend_ids) or "*",
+                ",".join(categories) or "*",
+                ",".join(statuses) or "*",
+                evidence,
+            )
+        )
+    print("")
+
+    for backend in matrix["backends"]:
+        if backend_ids and backend["id"] not in backend_ids:
+            continue
+        matching_rows = [row for row in rows if row["backend_id"] == backend["id"]]
+        if not matching_rows:
+            continue
+        missing = sum(1 for row in matching_rows if row["evidence_count"] == 0)
+        present = len(matching_rows) - missing
+        print("{}: present={}, missing={}".format(backend["name"], present, missing))
+
+    if rows:
+        print("")
+        print("Evidence rows:")
+        for item in rows:
+            print(
+                "- {backend}: {feature} [{status}] evidence={evidence_count}".format(
+                    backend=item["backend"],
+                    feature=item["feature"],
+                    status=item["status"],
+                    evidence_count=item["evidence_count"],
+                )
+            )
+
+    if fail_on_missing and report["summary"]["missing_evidence_count"]:
+        return 1
+    return 0
+
+
 def fetch_url(url, timeout):
     started = time.time()
     request = urllib.request.Request(
@@ -1315,6 +1479,47 @@ def parse_args(argv):
         help="Optional JSON report output path for the filtered backlog.",
     )
 
+    evidence_parser = subparsers.add_parser(
+        "evidence", help="Audit support rows by evidence coverage"
+    )
+    evidence_parser.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        help="Filter support rows by backend id. Comma-separated values are accepted.",
+    )
+    evidence_parser.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help="Filter support rows by feature category. Comma-separated values are accepted.",
+    )
+    evidence_parser.add_argument(
+        "--status",
+        action="append",
+        default=[],
+        help=(
+            "Filter support rows by support status. Can be repeated; "
+            "comma-separated values are accepted."
+        ),
+    )
+    evidence_parser.add_argument(
+        "--evidence",
+        choices=("any", "present", "missing"),
+        default="any",
+        help="Filter rows by whether evidence is present.",
+    )
+    evidence_parser.add_argument(
+        "--fail-on-missing",
+        action="store_true",
+        help="Exit non-zero when the filtered rows include missing evidence.",
+    )
+    evidence_parser.add_argument(
+        "--output",
+        type=Path,
+        help="Optional JSON report output path for the filtered evidence rows.",
+    )
+
     docs_parser = subparsers.add_parser(
         "docs", help="Fetch official backend documentation URLs and write a report"
     )
@@ -1372,6 +1577,24 @@ def main(argv=None):
                 categories=args.category,
                 statuses=args.status,
                 output=output,
+            )
+        except SupportMatrixError as exc:
+            print(f"support matrix error: {exc}", file=sys.stderr)
+            return 2
+
+    if args.command == "evidence":
+        output = args.output
+        if output is not None and not output.is_absolute():
+            output = ROOT / output
+        try:
+            return evidence_audit(
+                matrix,
+                backend_ids=args.backend,
+                categories=args.category,
+                statuses=args.status,
+                evidence=args.evidence,
+                output=output,
+                fail_on_missing=args.fail_on_missing,
             )
         except SupportMatrixError as exc:
             print(f"support matrix error: {exc}", file=sys.stderr)
