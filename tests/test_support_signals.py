@@ -395,7 +395,7 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
                 "source": "HLSL reference",
                 "url": "https://example.com/hlsl",
                 "ok": True,
-                "candidate_terms": [{"term": "SV_Position", "count": 3}],
+                "candidate_terms": [{"term": "PipelineMagicState", "count": 3}],
             }
         ],
     }
@@ -411,7 +411,7 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
     }
     assert any(
         issue["kind"] == "documented_candidate_not_detected"
-        and issue["feature"] == "SV_Position"
+        and issue["feature"] == "PipelineMagicState"
         and issue["category"] == "docs"
         for issue in report["issues"]
     )
@@ -509,6 +509,174 @@ def test_build_report_maps_documented_semantic_candidates_to_stage_io_feature():
     assert not any(issue["feature"] == "SV_InstanceID" for issue in report["issues"])
 
 
+def test_build_report_maps_directx_surface_candidates_and_skips_spirv_noise():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": "Input parameter semantics.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "resources.structured_buffers",
+                "category": "resources",
+                "name": "Structured/storage buffers",
+                "description": "Structured and RW buffer resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "resources.texture_sampler_split",
+                "category": "resources",
+                "name": "Texture and sampler object model",
+                "description": "Texture and sampler resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "texture.sampling",
+                "category": "textures",
+                "name": "Texture sampling",
+                "description": "Sample texture resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "stage.ray_tracing",
+                "category": "stages",
+                "name": "Ray tracing stages",
+                "description": "Ray tracing shader stages.",
+                "support": {"directx": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "directx",
+                "backend": "DirectX / HLSL",
+                "source": "HLSL docs",
+                "url": "https://example.com/hlsl",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "SV_Target0", "count": 1},
+                    {"term": "RWBuffer", "count": 1},
+                    {"term": "sampler2D", "count": 1},
+                    {"term": "Texture2D", "count": 1},
+                    {"term": "Raytracing", "count": 1},
+                    {"term": "Atomically", "count": 1},
+                    {"term": "OpDecorate", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_keeps_spirv_op_candidates_for_vulkan():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "vulkan",
+                "name": "Vulkan SPIR-V",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "vulkan",
+                "backend": "Vulkan SPIR-V",
+                "source": "SPIR-V spec",
+                "url": "https://example.com/spirv",
+                "ok": True,
+                "candidate_terms": [{"term": "OpDecorate", "count": 1}],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert any(issue["feature"] == "OpDecorate" for issue in report["issues"])
+
+
+def test_build_report_maps_hip_texture_resource_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "hip",
+                "name": "HIP",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "resources.texture_sampler_split",
+                "category": "resources",
+                "name": "Texture and sampler object model",
+                "description": (
+                    "Represent combined and separate texture/sampler models."
+                ),
+                "support": {"hip": {"status": "partial"}},
+            },
+            {
+                "id": "resources.resource_arrays",
+                "category": "resources",
+                "name": "Resource arrays",
+                "description": "Fixed and unsized texture and sampler arrays.",
+                "support": {"hip": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "hip",
+                "backend": "HIP",
+                "source": "HIP docs",
+                "url": "https://example.com/hip",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "hipTexRefSetMipmappedArray", "count": 1},
+                    {"term": "hipTexObjectGetResourceDesc", "count": 1},
+                    {"term": "hipBindTexture2D", "count": 1},
+                    {"term": "hipGetChannelDesc", "count": 1},
+                    {"term": "hipMipmappedArrayGetLevel", "count": 1},
+                    {"term": "hipArray_t", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
 def test_build_report_ignores_non_surface_documented_noise_candidates():
     module = load_signals_module()
     backends = {
@@ -531,7 +699,12 @@ def test_build_report_ignores_non_surface_documented_noise_candidates():
                 "source": "Slang user guide",
                 "url": "https://example.com/slang",
                 "ok": True,
-                "candidate_terms": [{"term": "DescriptorHandle", "count": 1}],
+                "candidate_terms": [
+                    {"term": "DescriptorHandle", "count": 1},
+                    {"term": "hipDeviceptr_t", "count": 1},
+                    {"term": "hipSuccess", "count": 1},
+                    {"term": "cudaErrorNoDevice", "count": 1},
+                ],
             }
         ]
     }

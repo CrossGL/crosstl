@@ -216,10 +216,12 @@ LINK_KEYWORDS = {
     "wave",
 }
 DOC_CANDIDATE_NOISE = {
+    "atomically",
     "descriptorhandle",
     "fontdescriptor",
     "getimagetag",
     "gltf",
+    "hipdeviceptrt",
     "largeimage",
     "summarylargeimage",
 }
@@ -237,9 +239,36 @@ GENERIC_DOC_CANDIDATES = {
     "wave",
 }
 DOC_CANDIDATE_FEATURE_ALIASES = {
+    "raytracing": "stage.ray_tracing",
     "svinstanceid": "io.stage_parameters",
     "svvertexid": "io.stage_parameters",
 }
+DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS = (
+    (re.compile(r"^sv[a-z0-9]+"), "io.stage_parameters"),
+    (
+        re.compile(r"^rw(?:byteaddress|structured)?buffer"),
+        "resources.structured_buffers",
+    ),
+    (re.compile(r"^sampler[a-z0-9]*"), "resources.texture_sampler_split"),
+    (re.compile(r"^texture[a-z0-9]*"), "texture.sampling"),
+    (re.compile(r"^image[a-z0-9]*"), "image.storage"),
+    (
+        re.compile(
+            r"^hip(?:addressmode|bindtexture|channelformatdesc|filtermode|"
+            r"getchanneldesc|resource(?:view)?desc|tex(?:object|ref))"
+        ),
+        "resources.texture_sampler_split",
+    ),
+    (
+        re.compile(
+            r"^hip(?:array|extent|free)?mipmappedarray|"
+            r"^hip(?:array|arrayconst|arrayformat|extent|getmipmappedarraylevel|"
+            r"mallocmipmappedarray)"
+        ),
+        "resources.resource_arrays",
+    ),
+)
+DOC_CANDIDATE_NOISE_PATTERNS = (re.compile(r"^(?:cuda|hip)(?:error|success)"),)
 
 
 class DocumentHTMLParser(HTMLParser):
@@ -747,11 +776,15 @@ def candidate_parts(term: str) -> set[str]:
     return parts
 
 
-def actionable_doc_candidate(term: str) -> bool:
+def actionable_doc_candidate(term: str, backend_id: str | None = None) -> bool:
     normalized = normalize_identifier(term)
     if len(normalized) < 4:
         return False
     if normalized in DOC_CANDIDATE_NOISE:
+        return False
+    if any(pattern.search(normalized) for pattern in DOC_CANDIDATE_NOISE_PATTERNS):
+        return False
+    if backend_id != "vulkan" and term.startswith("Op"):
         return False
     parts = candidate_parts(term)
     if not parts:
@@ -781,7 +814,17 @@ def actionable_doc_candidate(term: str) -> bool:
 def candidate_feature_matches(
     term: str, features: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    alias_feature_id = DOC_CANDIDATE_FEATURE_ALIASES.get(normalize_identifier(term))
+    normalized = normalize_identifier(term)
+    alias_feature_id = DOC_CANDIDATE_FEATURE_ALIASES.get(normalized)
+    if not alias_feature_id:
+        alias_feature_id = next(
+            (
+                feature_id
+                for pattern, feature_id in DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS
+                if pattern.search(normalized)
+            ),
+            None,
+        )
     if alias_feature_id:
         for feature in features:
             if feature["id"] == alias_feature_id:
@@ -1070,7 +1113,7 @@ def docs_candidates_by_backend(
             continue
         for candidate in document.get("candidate_terms", []):
             term = candidate.get("term", "")
-            if not actionable_doc_candidate(term):
+            if not actionable_doc_candidate(term, backend_id):
                 continue
             key = normalize_identifier(term)
             row = candidates.setdefault(
