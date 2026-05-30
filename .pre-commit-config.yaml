@@ -1,12 +1,179 @@
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+fail_fast: false
+
+exclude: |
+  (?x)^(
+    \.agent-coordination/|
+    \.codex-notes/|
+    \.hypothesis/|
+    \.mypy_cache/|
+    \.pytest_cache/|
+    \.ruff_cache/|
+    \.venv/|
+    build/|
+    crosstl\.egg-info/|
+    dist/|
+    docs/_build/|
+    docs/doxygen/|
+    examples/output/
+  )
+
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=4096]
+      - id: check-ast
+      - id: check-builtin-literals
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-executables-have-shebangs
+      - id: check-illegal-windows-names
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: check-toml
+      - id: check-vcs-permalinks
+      - id: check-yaml
+      - id: destroyed-symlinks
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: fix-byte-order-marker
+      - id: forbid-new-submodules
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+        args:
+          - --markdown-linebreak-ext=md
+          - --markdown-linebreak-ext=rst
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      - id: ruff-check
+        name: ruff critical Python checks and fixes
+        args:
+          - --fix
+          - --exit-non-zero-on-fix
+          - --select=E9,F63,F7,F82
+          - --target-version=py38
+
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.21.2
+    hooks:
+      - id: pyupgrade
+        args: [--py38-plus]
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        args:
+          - --profile=black
+          - --filter-files
+
   - repo: https://github.com/psf/black-pre-commit-mirror
     rev: 26.5.1
     hooks:
       - id: black
-        language_version: python3
         args:
-          - "--preview"
+          - --preview
+          - --target-version=py38
+
   - repo: https://github.com/PyCQA/autoflake
     rev: v2.3.3
     hooks:
       - id: autoflake
+        args:
+          - --in-place
+          - --remove-all-unused-imports
+          - --remove-unused-variables
+          - --ignore-init-module-imports
+
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+
+  - repo: local
+    hooks:
+      - id: crosstl-support-matrix-current
+        name: CrossTL support matrix artifacts autofix
+        entry: python tools/support_matrix.py update
+        language: python
+        pass_filenames: false
+        files: ^(support/(backends|features)\.json|support/generated/(graphics-backend-roadmap|support-matrix)\.json|docs/source/support-matrix\.rst|tools/support_matrix\.py|tests/test_support_matrix\.py)$
+
+      - id: crosstl-support-signals-current
+        name: CrossTL support signal artifact autofix
+        entry: python tools/support_signals.py update --docs-report support/generated/backend-docs-report.json --output support/generated/support-signals.json
+        language: python
+        pass_filenames: false
+        files: ^(support/(backends|features)\.json|support/generated/(backend-docs-report|support-signals)\.json|tools/(pytest_failure_summary|support_signals)\.py|tests/(test_pytest_failure_summary|test_support_signals)\.py)$
+
+      - id: crosstl-support-automation-tests
+        name: CrossTL support automation tests
+        entry: python -m pytest -q tests/test_support_matrix.py tests/test_support_signals.py tests/test_support_ci_summary.py tests/test_support_issue_sync.py
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        files: ^(support/|tools/(support_matrix|support_signals|support_ci_summary|sync_support_issues)\.py|tests/test_support_(matrix|signals|ci_summary|issue_sync)\.py|\.github/workflows/support-(matrix|issue-sync)\.yml)$
+
+      - id: crosstl-ci-coverage-check
+        name: CrossTL CI coverage contract
+        entry: python tools/ci_coverage.py check
+        language: python
+        pass_filenames: false
+        files: ^(\.github/workflows/.*\.ya?ml|tools/ci_coverage\.py|tests/test_ci_workflows\.py)$
+
+      - id: crosstl-ci-workflow-tests
+        name: CrossTL CI workflow tests
+        entry: python -m pytest -q tests/test_ci_workflows.py tests/test_tool_cli.py
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        files: ^(\.github/workflows/.*\.ya?ml|tools/(ci_coverage|pytest_failure_summary|support_ci_summary|support_matrix|support_signals|sync_pr_issue_links|sync_support_issues)\.py|tests/(test_ci_workflows|test_tool_cli)\.py)$
+
+      - id: crosstl-pr-issue-link-tests
+        name: CrossTL PR issue link tests
+        entry: python -m pytest -q tests/test_pr_issue_links.py
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        files: ^(\.github/workflows/pr-issue-links\.yml|tools/sync_pr_issue_links\.py|tests/test_pr_issue_links\.py)$
+
+      - id: crosstl-pytest-failure-summary-tests
+        name: CrossTL pytest failure summary tests
+        entry: python -m pytest -q tests/test_pytest_failure_summary.py
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        files: ^(tools/pytest_failure_summary\.py|tests/test_pytest_failure_summary\.py)$
+
+      - id: crosstl-examples-script-tests
+        name: CrossTL examples script tests
+        entry: python -m pytest -q tests/test_examples_test_script.py
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        files: ^(examples/test\.py|tests/test_examples_test_script\.py|\.github/workflows/examples-test\.yml)$
+
+      - id: crosstl-docs-build
+        name: CrossTL documentation build
+        entry: make -C docs html
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
+
+      - id: crosstl-full-test-suite
+        name: CrossTL full pytest suite
+        entry: python -m pytest tests
+        language: python
+        additional_dependencies: [pytest, hypothesis, numpy, jinja2]
+        pass_filenames: false
+        always_run: true
+        stages: [manual]
