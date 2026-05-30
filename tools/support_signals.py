@@ -42,6 +42,7 @@ BACKLOG_STATUSES = {
     "unsupported",
     "unknown",
 }
+CATALOG_REVIEW_STATUSES = {"unsupported"}
 
 STOP_WORDS = {
     "and",
@@ -101,6 +102,57 @@ GENERIC_FEATURE_TOKENS = {
     "source",
     "target",
     "validation",
+}
+CATALOG_REVIEW_NOISE_TERMS = GENERIC_FEATURE_TOKENS | {
+    "acces",
+    "access",
+    "array",
+    "arrays",
+    "attribute",
+    "attributes",
+    "basic",
+    "block",
+    "blocks",
+    "buffer",
+    "buffers",
+    "coordinate",
+    "count",
+    "diagnostic",
+    "diagnostics",
+    "direct",
+    "docs",
+    "entry",
+    "fixed",
+    "for",
+    "from",
+    "handle",
+    "handling",
+    "input",
+    "level",
+    "levels",
+    "member",
+    "members",
+    "object",
+    "output",
+    "parameter",
+    "parameters",
+    "point",
+    "points",
+    "resource",
+    "resources",
+    "sample",
+    "sampler",
+    "semantic",
+    "semantics",
+    "shadow",
+    "size",
+    "style",
+    "texture",
+    "textures",
+    "unsupported",
+    "variant",
+    "variants",
+    "without",
 }
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
@@ -932,6 +984,52 @@ def extraction_issue(
     }
 
 
+def strong_catalog_review_terms(hits: list[dict[str, Any]]) -> set[str]:
+    return {
+        term
+        for hit in hits
+        for term in hit.get("matched_terms", [])
+        if term not in CATALOG_REVIEW_NOISE_TERMS
+    }
+
+
+def catalog_review_issue(
+    backend: dict[str, Any],
+    feature: dict[str, Any],
+    support: dict[str, Any],
+    state: str,
+    implementation_hits: list[dict[str, Any]],
+    test_hits: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    status = support.get("status")
+    if status not in CATALOG_REVIEW_STATUSES:
+        return None
+    if state != "tested":
+        return None
+
+    matched_terms = sorted(
+        strong_catalog_review_terms(implementation_hits)
+        & strong_catalog_review_terms(test_hits)
+    )
+    if len(matched_terms) < 2:
+        return None
+
+    kind = "catalog_unsupported_with_detected_tests"
+    return {
+        "key": "extracted:{}:{}:{}".format(backend["id"], feature["id"], kind),
+        "kind": kind,
+        "title": "Review unsupported catalog row with detected implementation/tests",
+        "backend_id": backend["id"],
+        "backend": backend["name"],
+        "feature_id": feature["id"],
+        "feature": feature["name"],
+        "category": feature["category"],
+        "status": status,
+        "state": state,
+        "matched_terms": matched_terms[:12],
+    }
+
+
 def docs_candidates_by_backend(
     docs_report: dict[str, Any] | None, backend_id: str
 ) -> list[dict[str, Any]]:
@@ -1065,6 +1163,16 @@ def build_report(
             state_counts[state] = state_counts.get(state, 0) + 1
             issue = extraction_issue(
                 backend, feature, support, state, test_hits, unsupported_hits
+            )
+            if issue:
+                issues.append(issue)
+            issue = catalog_review_issue(
+                backend,
+                feature,
+                support,
+                state,
+                implementation_hits,
+                test_hits,
             )
             if issue:
                 issues.append(issue)

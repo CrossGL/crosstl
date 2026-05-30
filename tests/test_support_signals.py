@@ -186,6 +186,99 @@ def test_build_report_scans_repo_implementation_and_tests():
     assert report["issues"] == []
 
 
+def test_build_report_flags_unsupported_catalog_rows_with_detected_tests():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "docs.candidate_terms",
+                "category": "validation",
+                "name": "Document candidate terms",
+                "description": (
+                    "Extract document candidate terms from backend API identifiers."
+                ),
+                "support": {"directx": {"status": "unsupported"}},
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["directx"]
+
+    assert support["state"] == "tested"
+    assert report["issues"] == [
+        {
+            "key": (
+                "extracted:directx:docs.candidate_terms:"
+                "catalog_unsupported_with_detected_tests"
+            ),
+            "kind": "catalog_unsupported_with_detected_tests",
+            "title": (
+                "Review unsupported catalog row with detected implementation/tests"
+            ),
+            "backend_id": "directx",
+            "backend": "DirectX / HLSL",
+            "feature_id": "docs.candidate_terms",
+            "feature": "Document candidate terms",
+            "category": "validation",
+            "status": "unsupported",
+            "state": "tested",
+            "matched_terms": [
+                "api",
+                "candidate",
+                "document",
+                "extract",
+                "identifier",
+                "identifiers",
+                "term",
+                "terms",
+            ],
+        }
+    ]
+
+
+def test_build_report_does_not_flag_weak_unsupported_catalog_matches():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "support.signals",
+                "category": "validation",
+                "name": "Support signals",
+                "description": "Extract generated support signal tests.",
+                "support": {"directx": {"status": "unsupported"}},
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+
+    assert report["features"][0]["support"]["directx"]["state"] == "tested"
+    assert report["issues"] == []
+
+
 def test_build_report_creates_issues_for_unmapped_documented_candidates():
     module = load_signals_module()
     backends = {

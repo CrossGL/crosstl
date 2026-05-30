@@ -114,6 +114,15 @@ SUPPORT_MATRIX_REQUIRED_POLICIES = {
     ),
     "docs_probe_artifact": "backend-docs-report",
 }
+PR_ISSUE_LINK_REQUIRED_POLICIES = {
+    "pull_request_target": "pull_request_target:",
+    "issues_write": "issues: write",
+    "pull_requests_write": "pull-requests: write",
+    "trusted_base_checkout": "Checkout trusted base",
+    "sync_command": "python tools/sync_pr_issue_links.py",
+    "support_traceability": "--check-support-traceability",
+    "support_closure_sync": "--sync-support-closures",
+}
 DOCS_REQUIRED_POLICIES = {
     "push_on_main": "push:",
     "pull_request_on_main": "pull_request:",
@@ -389,6 +398,23 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
     }
 
 
+def pr_issue_links_report(workflow: str) -> dict[str, Any]:
+    return {
+        "workflow": "pr-issue-links.yml",
+        "required_policies": (
+            {
+                name: marker in workflow
+                for name, marker in PR_ISSUE_LINK_REQUIRED_POLICIES.items()
+            }
+            | {
+                "support_traceability_not_enforced": (
+                    "--enforce-support-traceability" not in workflow
+                ),
+            }
+        ),
+    }
+
+
 def docs_report(workflow: str) -> dict[str, Any]:
     return {
         "workflow": "docs.yml",
@@ -447,6 +473,7 @@ def build_report() -> dict[str, Any]:
     full_workflow = workflow_text("full-tests.yml")
     support_matrix_workflow = workflow_text("support-matrix.yml")
     support_issue_workflow = workflow_text("support-issue-sync.yml")
+    pr_issue_links_workflow = workflow_text("pr-issue-links.yml")
 
     report = {
         "schema_version": 1,
@@ -473,6 +500,7 @@ def build_report() -> dict[str, Any]:
             "full_tests": full_suite_report(full_workflow),
             "support_matrix": support_matrix_report(support_matrix_workflow),
             "support_issue_sync": support_issue_sync_report(support_issue_workflow),
+            "pr_issue_links": pr_issue_links_report(pr_issue_links_workflow),
         },
     }
     report["summary"] = {
@@ -561,6 +589,11 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
             errors.append("support-matrix.yml missing policy: {}".format(policy))
     if not support_matrix["uploads_docs_probe_artifact"]:
         errors.append("support-matrix.yml missing docs probe artifact upload")
+
+    pr_issue_links = report["workflows"]["pr_issue_links"]
+    for policy, present in pr_issue_links["required_policies"].items():
+        if not present:
+            errors.append("pr-issue-links.yml missing policy: {}".format(policy))
 
     support_sync = report["workflows"]["support_issue_sync"]
     for field in (
@@ -785,6 +818,15 @@ def build_ci_coverage_comparison(
         current_matrix["uploads_docs_probe_artifact"],
     )
 
+    baseline_pr_links = baseline["workflows"]["pr_issue_links"]
+    current_pr_links = current["workflows"]["pr_issue_links"]
+    add_bool_map_change(
+        "pr-issue-links.yml",
+        "required_policies",
+        baseline_pr_links["required_policies"],
+        current_pr_links["required_policies"],
+    )
+
     baseline_support = baseline["workflows"]["support_issue_sync"]
     current_support = current["workflows"]["support_issue_sync"]
     for dimension in (
@@ -868,6 +910,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     examples = report["workflows"]["examples"]
     full_tests = report["workflows"]["full_tests"]
     support_matrix = report["workflows"]["support_matrix"]
+    pr_issue_links = report["workflows"]["pr_issue_links"]
     support_sync = report["workflows"]["support_issue_sync"]
 
     lines = [
@@ -1026,6 +1069,24 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Documentation probe artifact",
                     ok_text(support_matrix["uploads_docs_probe_artifact"]),
+                ],
+            ],
+        )
+    )
+    lines.extend(
+        [
+            "",
+            "## PR Issue Links",
+            "",
+        ]
+    )
+    lines.extend(
+        markdown_table(
+            ["Check", "Status"],
+            [
+                [
+                    "Required policies",
+                    ok_text(all(pr_issue_links["required_policies"].values())),
                 ],
             ],
         )

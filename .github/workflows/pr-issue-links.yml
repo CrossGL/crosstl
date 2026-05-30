@@ -43,4 +43,5 @@ jobs:
           python tools/sync_pr_issue_links.py
           --repo "$GITHUB_REPOSITORY"
           --event-path "$GITHUB_EVENT_PATH"
+          --sync-support-closures
           --check-support-traceability
