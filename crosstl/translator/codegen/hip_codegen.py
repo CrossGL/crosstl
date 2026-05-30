@@ -32,6 +32,7 @@ from ..ast import (
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
 from .resource_arrays import format_array_declarator
+from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
 
 
@@ -373,6 +374,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         """Generate complete HIP source for a CrossGL AST."""
         self.code_lines = []
         self.indent_level = 0
+        self.validate_supported_stage_types(node)
         self.variable_types = {}
         self.struct_member_types = {}
         self.function_return_types = self.collect_function_return_types(node)
@@ -399,6 +401,44 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
+
+    def unsupported_stage_types(self):
+        return {
+            "amplification",
+            "geometry",
+            "mesh",
+            "object",
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }
+
+    def validate_supported_stage_types(self, ast_node, target_stage=None):
+        unsupported_stages = set()
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast_node, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(f"HIP output does not support stage type(s): {stage_list}")
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""

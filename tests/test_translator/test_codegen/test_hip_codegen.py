@@ -23,6 +23,7 @@ from crosstl.translator.ast import (
     ParameterNode,
     PrimitiveType,
     ShaderNode,
+    ShaderStage,
     StructNode,
     VariableNode,
     WildcardPatternNode,
@@ -92,6 +93,66 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__global__ void main()" in hip_code
+
+    @pytest.mark.parametrize(
+        ("stage_name", "normalized_stage"),
+        [
+            ("amplification", "amplification"),
+            ("geometry", "geometry"),
+            ("mesh", "mesh"),
+            ("object", "object"),
+            ("task", "task"),
+            ("tessellation_control", "tessellation_control"),
+            ("tessellation_evaluation", "tessellation_evaluation"),
+            ("ray_any_hit", "ray_any_hit"),
+            ("ray_callable", "ray_callable"),
+            ("ray_closest_hit", "ray_closest_hit"),
+            ("ray_generation", "ray_generation"),
+            ("ray_intersection", "ray_intersection"),
+            ("ray_miss", "ray_miss"),
+        ],
+    )
+    def test_unsupported_shader_stages_are_rejected_for_hip_codegen(
+        self, stage_name, normalized_stage
+    ):
+        source_code = f"""
+        shader UnsupportedHipStage {{
+            {stage_name} {{
+                void main() {{
+                }}
+            }}
+        }}
+        """
+
+        with pytest.raises(
+            ValueError,
+            match=rf"HIP output does not support stage type\(s\): {normalized_stage}",
+        ):
+            HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_unsupported_function_stage_qualifiers_are_rejected_for_hip_codegen(self):
+        ast = ShaderNode(
+            name="UnsupportedQualifiedHipStage",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            functions=[
+                FunctionNode(
+                    name="main",
+                    return_type=PrimitiveType("void"),
+                    parameters=[],
+                    body=BlockNode([]),
+                    qualifiers=["hull", ShaderStage.MESH],
+                )
+            ],
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"HIP output does not support stage type\(s\): "
+                r"mesh, tessellation_control"
+            ),
+        ):
+            HipCodeGen().generate(ast)
 
     def test_generated_basic_compute_kernel_smoke_compiles_with_hipcc(self, tmp_path):
         """Smoke compile a generated HIP kernel when hipcc is available."""

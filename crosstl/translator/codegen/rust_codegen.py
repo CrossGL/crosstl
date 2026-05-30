@@ -47,6 +47,7 @@ from ..ast import (
     WildcardPatternNode,
 )
 from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
+from .stage_utils import normalize_stage_name, stage_matches
 
 
 class RustCodeGen:
@@ -441,6 +442,7 @@ class RustCodeGen:
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
+        self.validate_supported_stage_types(ast)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -574,6 +576,46 @@ class RustCodeGen:
 
         code += self.generate_required_generic_math_traits()
         return code
+
+    def unsupported_stage_types(self):
+        return {
+            "amplification",
+            "geometry",
+            "mesh",
+            "object",
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }
+
+    def validate_supported_stage_types(self, ast, target_stage=None):
+        unsupported_stages = set()
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(
+                f"Rust output does not support stage type(s): {stage_list}"
+            )
 
     def stage_entry_name_counts(self, stages):
         """Count entry-point names across shader stages."""

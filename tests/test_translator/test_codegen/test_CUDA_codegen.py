@@ -21,6 +21,7 @@ from crosstl.translator.ast import (
     PrimitiveType,
     ReturnNode,
     ShaderNode,
+    ShaderStage,
     UnaryOpNode,
     VariableNode,
 )
@@ -94,35 +95,64 @@ class TestCudaCodeGen:
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
 
-    def test_unsupported_graphics_pipeline_stages_raise_diagnostics(self):
+    @pytest.mark.parametrize(
+        ("stage_name", "normalized_stage"),
+        [
+            ("amplification", "amplification"),
+            ("geometry", "geometry"),
+            ("mesh", "mesh"),
+            ("object", "object"),
+            ("task", "task"),
+            ("tessellation_control", "tessellation_control"),
+            ("tessellation_evaluation", "tessellation_evaluation"),
+            ("ray_any_hit", "ray_any_hit"),
+            ("ray_callable", "ray_callable"),
+            ("ray_closest_hit", "ray_closest_hit"),
+            ("ray_generation", "ray_generation"),
+            ("ray_intersection", "ray_intersection"),
+            ("ray_miss", "ray_miss"),
+        ],
+    )
+    def test_unsupported_graphics_pipeline_stages_raise_diagnostics(
+        self, stage_name, normalized_stage
+    ):
         """CUDA rejects CrossGL stages that have no CUDA shader-stage equivalent."""
-        source_code = """
-        shader UnsupportedCudaStages {
-            geometry {
-                void main() { }
-            }
-
-            tessellation_control {
-                void main() { }
-            }
-
-            tessellation_evaluation {
-                void main() { }
-            }
-
-            mesh {
-                void main() { }
-            }
-        }
+        source_code = f"""
+        shader UnsupportedCudaStages {{
+            {stage_name} {{
+                void main() {{ }}
+            }}
+        }}
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
 
         with pytest.raises(
             ValueError,
+            match=rf"CUDA output does not support stage type\(s\): {normalized_stage}",
+        ):
+            CudaCodeGen().generate(ast)
+
+    def test_unsupported_function_stage_qualifiers_raise_diagnostics(self):
+        ast = ShaderNode(
+            name="UnsupportedQualifiedCudaStage",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            functions=[
+                FunctionNode(
+                    name="main",
+                    return_type=PrimitiveType("void"),
+                    parameters=[],
+                    body=BlockNode([]),
+                    qualifiers=["hull", ShaderStage.MESH],
+                )
+            ],
+        )
+
+        with pytest.raises(
+            ValueError,
             match=(
-                "CUDA output does not support stage type\\(s\\): "
-                "geometry, mesh, tessellation_control, tessellation_evaluation"
+                r"CUDA output does not support stage type\(s\): "
+                r"mesh, tessellation_control"
             ),
         ):
             CudaCodeGen().generate(ast)

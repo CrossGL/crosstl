@@ -41,6 +41,7 @@ from crosstl.translator.ast import (
     ReferenceType,
     ReturnNode,
     ShaderNode,
+    ShaderStage,
     StructMemberNode,
     StructPatternNode,
     StructNode,
@@ -22672,6 +22673,68 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
     assert "#[vertex_shader]" not in generated_code
     assert "#[fragment_shader]" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("stage_name", "normalized_stage"),
+    [
+        ("amplification", "amplification"),
+        ("geometry", "geometry"),
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "task"),
+        ("tessellation_control", "tessellation_control"),
+        ("tessellation_evaluation", "tessellation_evaluation"),
+        ("ray_any_hit", "ray_any_hit"),
+        ("ray_callable", "ray_callable"),
+        ("ray_closest_hit", "ray_closest_hit"),
+        ("ray_generation", "ray_generation"),
+        ("ray_intersection", "ray_intersection"),
+        ("ray_miss", "ray_miss"),
+    ],
+)
+def test_unsupported_shader_stages_are_rejected_for_rust_codegen(
+    stage_name, normalized_stage
+):
+    code = f"""
+    shader UnsupportedRustStage {{
+        {stage_name} {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Rust output does not support stage type\(s\): {normalized_stage}",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
+    ast = ShaderNode(
+        name="UnsupportedQualifiedRustStage",
+        execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+        functions=[
+            FunctionNode(
+                name="main",
+                return_type=PrimitiveType("void"),
+                parameters=[],
+                body=BlockNode([]),
+                qualifiers=["hull", ShaderStage.MESH],
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Rust output does not support stage type\(s\): "
+            r"mesh, tessellation_control"
+        ),
+    ):
+        generate_code(ast)
 
 
 def test_rust_stage_parameter_semantics_all_mappings(tmp_path):

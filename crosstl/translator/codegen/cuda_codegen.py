@@ -163,16 +163,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "task",
             "object",
             "amplification",
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
         }
 
     def validate_supported_stage_types(self, ast_node, target_stage=None):
-        unsupported_stages = []
+        unsupported_stages = set()
         for stage_type in getattr(ast_node, "stages", {}) or {}:
             stage_name = normalize_stage_name(stage_type)
             if stage_name in self.unsupported_stage_types() and stage_matches(
                 target_stage, stage_name
             ):
-                unsupported_stages.append(stage_name)
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast_node, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
 
         if unsupported_stages:
             stage_list = ", ".join(sorted(unsupported_stages))

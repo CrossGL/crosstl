@@ -205,13 +205,21 @@
           "notes": "CUDA codegen rejects geometry stages explicitly because CUDA has no geometry shader-stage equivalent.",
           "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
         },
-        "hip": {"status": "unsupported"},
+        "hip": {
+          "status": "unsupported",
+          "notes": "HIP codegen rejects geometry stages explicitly because HIP has no geometry shader-stage equivalent.",
+          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+        },
         "mojo": {
           "status": "unsupported",
           "notes": "Mojo codegen rejects geometry stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
-        "rust": {"status": "unknown"},
+        "rust": {
+          "status": "unsupported",
+          "notes": "Rust codegen rejects geometry stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
+          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+        },
         "slang": {
           "status": "partial",
           "notes": "Maps geometry blocks to Slang geometry entry points, lowers geometry system-value builtins, preserves semantic aliases, emits maxvertexcount attributes, and validates stage-attribute shapes. Full stream-output/emission semantics are still incomplete.",
@@ -239,13 +247,21 @@
           "notes": "CUDA codegen rejects tessellation control and evaluation stages explicitly because CUDA has no tessellation shader-stage equivalent.",
           "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
         },
-        "hip": {"status": "unsupported"},
+        "hip": {
+          "status": "unsupported",
+          "notes": "HIP codegen rejects tessellation control and evaluation stages explicitly because HIP has no tessellation shader-stage equivalent.",
+          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+        },
         "mojo": {
           "status": "unsupported",
           "notes": "Mojo codegen rejects tessellation stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
           "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
         },
-        "rust": {"status": "unknown"},
+        "rust": {
+          "status": "unsupported",
+          "notes": "Rust codegen rejects tessellation control and evaluation stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
+          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+        },
         "slang": {
           "status": "partial",
           "notes": "Maps tessellation_control and tessellation_evaluation to Slang hull/domain stages, lowers tessellation system values, tessellation-factor semantics, gl_in/gl_out patch rewrites, patch-constant functions, and validates hull/domain patch shapes and attributes. Full cross-stage compiler-backed tessellation coverage remains incomplete.",
@@ -317,7 +333,11 @@
           "notes": "CUDA codegen rejects mesh, task, object, and amplification-style stages explicitly because CUDA has no mesh shader-stage equivalent.",
           "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
         },
-        "hip": {"status": "unsupported"},
+        "hip": {
+          "status": "unsupported",
+          "notes": "HIP codegen rejects mesh, task, object, and amplification-style stages explicitly because HIP has no mesh shader-stage equivalent.",
+          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+        },
         "mojo": {
           "status": "unsupported",
           "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
@@ -326,7 +346,11 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen"
           ]
         },
-        "rust": {"status": "unknown"},
+        "rust": {
+          "status": "unsupported",
+          "notes": "Rust codegen rejects mesh, task, object, and amplification-style stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
+          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+        },
         "slang": {
           "status": "partial",
           "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes emit numthreads metadata, outputtopology emits quoted Slang attributes, and SetMeshOutputCounts/DispatchMesh lower to native Slang calls with arity and stage validation. Full mesh output signature/payload validation and slangc-backed mesh compilation remain incomplete.",
@@ -431,8 +455,16 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
           ]
         },
-        "cuda": {"status": "unknown"},
-        "hip": {"status": "unknown"},
+        "cuda": {
+          "status": "unsupported",
+          "notes": "CUDA codegen rejects ray tracing stages explicitly; no CUDA ray pipeline ABI is implemented in this repo.",
+          "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
+        },
+        "hip": {
+          "status": "unsupported",
+          "notes": "HIP codegen rejects ray tracing stages explicitly; no HIP ray pipeline ABI is implemented in this repo.",
+          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+        },
         "mojo": {
           "status": "unsupported",
           "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
@@ -442,7 +474,11 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
           ]
         },
-        "rust": {"status": "unknown"},
+        "rust": {
+          "status": "unsupported",
+          "notes": "Rust codegen rejects ray tracing stages explicitly; no Rust ray pipeline ABI is implemented in this repo.",
+          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+        },
         "slang": {
           "status": "partial",
           "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
@@ -2023,25 +2059,89 @@
         "opengl": {"status": "supported"},
         "metal": {"status": "supported"},
         "vulkan": {"status": "partial"},
-        "cuda": {"status": "partial"},
-        "hip": {"status": "partial"},
-        "mojo": {
+        "cuda": {
           "status": "partial",
-          "notes": "Mojo codegen validates unsupported payload enum shapes, payload constructor arity, parameter/return semantic, buffer access/member-method, image-atomic, and unsupported match pattern shapes with deterministic errors; broader stage/resource validation remains incomplete.",
+          "notes": "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_function_stage_qualifiers_raise_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_coordinate_shapes_emit_cuda_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_offset_argument_shapes_emit_cuda_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_grad_derivative_shapes_emit_cuda_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texel_fetch_coordinate_shapes_emit_cuda_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_image_coordinate_shapes_emit_cuda_surface_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_dynamic_resource_array_params_emit_cuda_pointer_shapes",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_image_atomic_coordinate_shapes_emit_cuda_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_resource_query_builtins_emit_cuda_metadata_helpers",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_invalid_sample_count_queries_emit_cuda_diagnostics"
+          ]
+        },
+        "hip": {
+          "status": "partial",
+          "notes": "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_function_stage_qualifiers_are_rejected_for_hip_codegen",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texel_fetch_coordinate_shapes_emit_hip_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_image_coordinate_shapes_emit_hip_surface_helpers_or_diagnostics",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_dynamic_resource_array_params_emit_hip_pointer_shapes",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_image_atomic_coordinate_shapes_emit_hip_diagnostics",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_storage_image_query_shapes_emit_hip_metadata_helpers"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "Mojo codegen validates unsupported payload enum shapes, payload constructor arity, parameter/return semantics, struct builtin semantics, unsupported stage and pipeline IR shapes, resource-size and expression target shapes, duplicate resource bindings, invalid texture/image/buffer operations, ray/mesh intrinsics, ray-query methods, buffer counter/atomic methods, and unsupported match pattern shapes with deterministic errors or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_invalid_shapes_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_constructor_arity_is_validated_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_size_target_shape_diagnostics_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_buffer_counter_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_byte_address_atomic_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen"
           ]
         },
-        "rust": {"status": "partial"},
-        "slang": {"status": "partial"}
+        "rust": {
+          "status": "supported",
+          "notes": "Rust codegen rejects unsupported geometry, tessellation, mesh/task, and ray stages with deterministic errors; odd-but-valid empty/no-stage shaders remain compile-safe, and stage parameter semantics are mapped through tested Rust attributes/comments.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_invalid_shader_completely_empty",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_invalid_shader_vertex_stage_no_body",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_invalid_shader_struct_only_no_stage",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_all_mappings",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_generate_param_attributes_unit"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Slang codegen validates invalid tessellation patch shapes, mesh payload parameters, ray intrinsic result shapes, stage semantic parameters, stage attributes, and return semantics with deterministic errors or compile-safe diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_patch_constant_invalid_input_patch_shape_raises",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_invalid_output_patch_shape_raises",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_payload_parameter_rejects_invalid_slang_shapes",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_validate_target_result_types",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang"
+          ]
+        }
       }
     }
   ]
