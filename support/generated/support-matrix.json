@@ -112,7 +112,7 @@
           "tests/test_translator/test_codegen/test_directx_codegen.py",
           "tests/test_backend/test_directx"
         ],
-        "test_count": 729
+        "test_count": 740
       },
       "translator_codegen": {
         "exists": true,
@@ -350,7 +350,7 @@
           "tests/test_translator/test_codegen/test_metal_codegen.py",
           "tests/test_backend/test_metal"
         ],
-        "test_count": 652
+        "test_count": 663
       },
       "translator_codegen": {
         "exists": true,
@@ -441,7 +441,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 611
+        "test_count": 637
       },
       "translator_codegen": {
         "exists": true,
@@ -555,7 +555,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 405
+        "test_count": 417
       },
       "translator_codegen": {
         "exists": true,
@@ -669,7 +669,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 450
+        "test_count": 463
       },
       "translator_codegen": {
         "exists": true,
@@ -783,7 +783,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 545
+        "test_count": 559
       },
       "translator_codegen": {
         "exists": true,
@@ -807,8 +807,16 @@
         "path": "crosstl/backend/Rust"
       },
       "signals": {
-        "unsupported_marker_count": 35,
+        "unsupported_marker_count": 37,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return f\"{indent_str}/* unsupported sync: {sync_type} */\\n\""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return f\"/* unsupported wave op: {operation} */\""
+          },
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(\"Unsupported match arm for Rust codegen\")"
@@ -880,14 +888,6 @@
           {
             "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
             "text": "return self.closure_body_contains_unsupported_helper_node(node.name) or any("
-          },
-          {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "self.closure_body_contains_unsupported_helper_node(arg)"
-          },
-          {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "return self.closure_body_contains_unsupported_helper_node(node.object)"
           }
         ]
       },
@@ -897,7 +897,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 619
+        "test_count": 626
       },
       "translator_codegen": {
         "exists": true,
@@ -1011,7 +1011,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 441
+        "test_count": 465
       },
       "translator_codegen": {
         "exists": true,

@@ -38,9 +38,11 @@ from ..ast import (
     StructNode,
     StructPatternNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
@@ -349,6 +351,51 @@ class RustCodeGen:
             "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
+            "barrier": "workgroup_barrier",
+            "workgroupBarrier": "workgroup_barrier",
+            "memoryBarrier": "memory_barrier",
+            "memoryBarrierShared": "memory_barrier_shared",
+            "memoryBarrierBuffer": "memory_barrier_buffer",
+            "memoryBarrierImage": "memory_barrier_image",
+            "groupMemoryBarrier": "group_memory_barrier",
+            "allMemoryBarrier": "all_memory_barrier",
+            "deviceMemoryBarrier": "device_memory_barrier",
+        }
+        self.wave_op_map = {
+            "WaveActiveSum": "subgroup_add",
+            "WaveActiveProduct": "subgroup_mul",
+            "WaveActiveMin": "subgroup_min",
+            "WaveActiveMax": "subgroup_max",
+            "WaveActiveAnyTrue": "subgroup_any",
+            "WaveActiveAllTrue": "subgroup_all",
+            "WaveActiveBallot": "subgroup_ballot",
+            "WaveActiveCountBits": "subgroup_ballot_bit_count",
+            "WaveActiveBitAnd": "subgroup_and",
+            "WaveActiveBitOr": "subgroup_or",
+            "WaveActiveBitXor": "subgroup_xor",
+            "WaveGetLaneCount": "subgroup_size",
+            "WaveGetLaneIndex": "subgroup_invocation_id",
+            "WaveIsFirstLane": "subgroup_elect",
+            "WaveReadLaneFirst": "subgroup_broadcast_first",
+            "WaveReadLaneAt": "subgroup_broadcast",
+            "WavePrefixSum": "subgroup_exclusive_add",
+            "WavePrefixProduct": "subgroup_exclusive_mul",
+            "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
+            "QuadReadAcrossY": "subgroup_quad_swap_vertical",
+            "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
+            "WaveShuffle": "subgroup_shuffle",
+            "WaveShuffleXor": "subgroup_shuffle_xor",
+        }
+        self.sync_map = {
+            "barrier": "workgroup_barrier",
+            "workgroupBarrier": "workgroup_barrier",
+            "memoryBarrier": "memory_barrier",
+            "memoryBarrierShared": "memory_barrier_shared",
+            "memoryBarrierBuffer": "memory_barrier_buffer",
+            "memoryBarrierImage": "memory_barrier_image",
+            "groupMemoryBarrier": "group_memory_barrier",
+            "allMemoryBarrier": "all_memory_barrier",
+            "deviceMemoryBarrier": "device_memory_barrier",
         }
         self.variable_types = {}
         self.local_variable_names = set()
@@ -2929,6 +2976,9 @@ class RustCodeGen:
             # ArrayAccessNode as statement - likely misclassified
             return f"{indent_str}// Unhandled ArrayAccessNode: {stmt}\n"
 
+        elif isinstance(stmt, SyncNode):
+            return self.generate_sync_statement(stmt, indent)
+
         else:
             # Try to generate as expression
             expr_result = self.generate_expression(stmt)
@@ -2936,6 +2986,24 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_sync_statement(self, stmt, indent):
+        """Render a SyncNode as a Rust synchronization call."""
+        indent_str = "    " * indent
+        sync_type = getattr(stmt, "sync_type", "")
+        rust_name = self.sync_map.get(sync_type)
+        if rust_name is None:
+            return f"{indent_str}/* unsupported sync: {sync_type} */\n"
+        return f"{indent_str}{rust_name}();\n"
+
+    def generate_wave_op_expression(self, expr):
+        """Render a WaveOpNode as a Rust subgroup intrinsic call."""
+        operation = getattr(expr, "operation", "")
+        rust_name = self.wave_op_map.get(operation)
+        if rust_name is None:
+            return f"/* unsupported wave op: {operation} */"
+        args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
+        return f"{rust_name}({args})"
 
     def local_let_keyword(self, stmt):
         """Return `let` or `let mut` for a generated local binding."""
@@ -5968,6 +6036,8 @@ class RustCodeGen:
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             return self.generate_ternary_expression(expr)
+        elif isinstance(expr, WaveOpNode):
+            return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
 

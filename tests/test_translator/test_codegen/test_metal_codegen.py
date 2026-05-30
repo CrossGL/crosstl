@@ -28544,5 +28544,383 @@ def test_metal_mesh_set_output_counts_without_output_parameter_passes_through():
     assert "SetMeshOutputCounts(8, 4)" in generated
 
 
+def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer():
+    code = """
+    shader CBufferAddressSpace {
+        cbuffer SceneData {
+            float time;
+            float deltaTime;
+        };
+
+        compute {
+            void main() {
+                float elapsed = time + deltaTime;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "struct SceneData" in generated_code
+    assert "float time;" in generated_code
+    assert "float deltaTime;" in generated_code
+    assert "constant SceneData& sceneData [[buffer(0)]]" in generated_code
+    assert "float elapsed = sceneData.time + sceneData.deltaTime;" in generated_code
+
+
+def test_metal_multiple_cbuffers_produce_sequential_buffer_indices():
+    code = """
+    shader MultipleCBuffers {
+        cbuffer Camera {
+            vec4 position;
+            mat4 viewMatrix;
+        };
+
+        cbuffer Lighting {
+            vec3 lightDir;
+            float intensity;
+        };
+
+        cbuffer Material {
+            vec4 albedo;
+            float roughness;
+        };
+
+        compute {
+            void main() {
+                vec3 dir = lightDir * intensity;
+                vec4 pos = position;
+                vec4 col = albedo * roughness;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "constant Camera& camera [[buffer(0)]]" in generated_code
+    assert "constant Lighting& lighting [[buffer(1)]]" in generated_code
+    assert "constant Material& material [[buffer(2)]]" in generated_code
+    assert "camera.position" in generated_code
+    assert "lighting.lightDir" in generated_code
+    assert "lighting.intensity" in generated_code
+    assert "material.albedo" in generated_code
+    assert "material.roughness" in generated_code
+
+
+def test_metal_cbuffer_struct_member_access_via_parameter():
+    code = """
+    shader CBufferMemberAccess {
+        cbuffer Transform {
+            mat4 modelMatrix;
+            mat4 viewProjection;
+            vec3 cameraPos;
+        };
+
+        vec3 worldToView(vec3 worldPos) {
+            return worldPos - cameraPos;
+        }
+
+        compute {
+            void main() {
+                vec3 viewDir = worldToView(vec3(1.0, 0.0, 0.0));
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "struct Transform" in generated_code
+    assert "float4x4 modelMatrix;" in generated_code
+    assert "float4x4 viewProjection;" in generated_code
+    assert "float3 cameraPos;" in generated_code
+    assert "constant Transform& transform [[buffer(0)]]" in generated_code
+    assert (
+        "float3 worldToView(float3 worldPos, constant Transform& transform)"
+        in generated_code
+    )
+    assert "return worldPos - transform.cameraPos;" in generated_code
+    assert (
+        "float3 viewDir = worldToView(float3(1.0, 0.0, 0.0), transform);"
+        in generated_code
+    )
+
+
+def test_metal_cbuffer_mixed_scalar_vector_matrix_members():
+    code = """
+    shader CBufferMixedTypes {
+        cbuffer PerFrame {
+            float time;
+            int frameIndex;
+            vec2 resolution;
+            vec3 ambient;
+            vec4 fogColor;
+            mat3 normalMatrix;
+            mat4 projection;
+        };
+
+        compute {
+            void main() {
+                float t = time;
+                int idx = frameIndex;
+                vec2 res = resolution;
+                vec3 amb = ambient;
+                vec4 fog = fogColor;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "struct PerFrame" in generated_code
+    assert "float time;" in generated_code
+    assert "int frameIndex;" in generated_code
+    assert "float2 resolution;" in generated_code
+    assert "float3 ambient;" in generated_code
+    assert "float4 fogColor;" in generated_code
+    assert "float3x3 normalMatrix;" in generated_code
+    assert "float4x4 projection;" in generated_code
+    assert "constant PerFrame& perFrame [[buffer(0)]]" in generated_code
+    assert "float t = perFrame.time;" in generated_code
+    assert "int idx = perFrame.frameIndex;" in generated_code
+    assert "float2 res = perFrame.resolution;" in generated_code
+    assert "float3 amb = perFrame.ambient;" in generated_code
+    assert "float4 fog = perFrame.fogColor;" in generated_code
+
+
+def test_metal_cbuffer_with_array_members():
+    code = """
+    shader CBufferArrayMembers {
+        cbuffer LightData {
+            vec4 lightPositions[4];
+            float lightRadii[4];
+            int activeLightCount;
+        };
+
+        compute {
+            void main() {
+                vec4 firstLight = lightPositions[0];
+                float radius = lightRadii[0];
+                int count = activeLightCount;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "struct LightData" in generated_code
+    assert "float4 lightPositions[4];" in generated_code
+    assert "float lightRadii[4];" in generated_code
+    assert "int activeLightCount;" in generated_code
+    assert "constant LightData& lightData [[buffer(0)]]" in generated_code
+    assert "float4 firstLight = lightData.lightPositions[0];" in generated_code
+    assert "float radius = lightData.lightRadii[0];" in generated_code
+    assert "int count = lightData.activeLightCount;" in generated_code
+
+
+def test_metal_cbuffer_with_explicit_register_binding():
+    code = """
+    shader CBufferExplicitBindings {
+        cbuffer PerObject @register(b3) {
+            mat4 worldMatrix;
+            vec4 color;
+        };
+
+        cbuffer PerFrame @register(b0) {
+            float time;
+            vec3 cameraPosition;
+        };
+
+        compute {
+            void main() {
+                float t = time;
+                vec4 c = color;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "constant PerObject& perObject [[buffer(3)]]" in generated_code
+    assert "constant PerFrame& perFrame [[buffer(0)]]" in generated_code
+    assert "perFrame.time" in generated_code
+    assert "perObject.color" in generated_code
+
+
+def test_metal_structured_buffer_maps_to_const_device_pointer():
+    code = """
+    shader StructuredBufferReadOnly {
+        StructuredBuffer<float> weights @ binding(0);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float w = buffer_load(weights, tid.x);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "const device float* weights [[buffer(0)]]" in generated_code
+    assert "float w = weights[tid.x];" in generated_code
+    assert "device float* weights" not in generated_code.replace(
+        "const device float*", ""
+    )
+
+
+def test_metal_rw_structured_buffer_maps_to_device_pointer():
+    code = """
+    shader RWStructuredBufferReadWrite {
+        RWStructuredBuffer<int> counters @ binding(0);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                int prev = buffer_load(counters, tid.x);
+                buffer_store(counters, tid.x, prev + 1);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "device int* counters [[buffer(0)]]" in generated_code
+    assert "const device" not in generated_code
+    assert "int prev = counters[tid.x];" in generated_code
+    assert "counters[tid.x] = prev + 1;" in generated_code
+
+
+def test_metal_multiple_cbuffers_produce_separate_buffer_arguments():
+    code = """
+    shader SeparateCBufferArgs {
+        cbuffer ViewConstants @register(b0) {
+            mat4 viewMatrix;
+            mat4 projMatrix;
+        };
+
+        cbuffer ObjectConstants @register(b1) {
+            mat4 worldMatrix;
+            vec4 objectColor;
+        };
+
+        cbuffer FrameConstants @register(b2) {
+            float deltaTime;
+            float totalTime;
+            uint frameNumber;
+        };
+
+        compute {
+            void main() {
+                mat4 mvp = projMatrix * viewMatrix * worldMatrix;
+                float t = totalTime;
+                uint frame = frameNumber;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "constant ViewConstants& viewConstants [[buffer(0)]]" in generated_code
+    assert "constant ObjectConstants& objectConstants [[buffer(1)]]" in generated_code
+    assert "constant FrameConstants& frameConstants [[buffer(2)]]" in generated_code
+    assert "struct ViewConstants" in generated_code
+    assert "struct ObjectConstants" in generated_code
+    assert "struct FrameConstants" in generated_code
+    assert "viewConstants.projMatrix" in generated_code
+    assert "viewConstants.viewMatrix" in generated_code
+    assert "objectConstants.worldMatrix" in generated_code
+    assert "frameConstants.totalTime" in generated_code
+    assert "frameConstants.frameNumber" in generated_code
+
+
+def test_metal_cbuffer_with_nested_array_members():
+    code = """
+    shader CBufferNestedArrays {
+        cbuffer ParticleConfig {
+            vec4 emitterPositions[8];
+            float emitterRadii[8];
+            vec3 velocityOffsets[4];
+            mat4 emitterTransforms[2];
+            int activeEmitterCount;
+        };
+
+        compute {
+            void main() {
+                vec4 pos = emitterPositions[2];
+                float r = emitterRadii[2];
+                vec3 vel = velocityOffsets[1];
+                mat4 xform = emitterTransforms[0];
+                int count = activeEmitterCount;
+            }
+        }
+    }
+    """
+
+    ast = parse_code(tokenize_code(code))
+    generated_code = MetalCodeGen().generate_stage(ast, "compute")
+
+    assert "struct ParticleConfig" in generated_code
+    assert "float4 emitterPositions[8];" in generated_code
+    assert "float emitterRadii[8];" in generated_code
+    assert "float3 velocityOffsets[4];" in generated_code
+    assert "float4x4 emitterTransforms[2];" in generated_code
+    assert "int activeEmitterCount;" in generated_code
+    assert "constant ParticleConfig& particleConfig [[buffer(0)]]" in generated_code
+    assert "float4 pos = particleConfig.emitterPositions[2];" in generated_code
+    assert "float r = particleConfig.emitterRadii[2];" in generated_code
+    assert "float3 vel = particleConfig.velocityOffsets[1];" in generated_code
+    assert "float4x4 xform = particleConfig.emitterTransforms[0];" in generated_code
+    assert "int count = particleConfig.activeEmitterCount;" in generated_code
+
+
+def test_metal_mixed_structured_buffer_and_cbuffer_address_spaces():
+    code = """
+    shader MixedBufferAddressSpaces {
+        cbuffer Config @register(b0) {
+            uint count;
+            float scale;
+        };
+
+        StructuredBuffer<float> inputs @ binding(1);
+        RWStructuredBuffer<float> outputs @ binding(2);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float value = buffer_load(inputs, tid.x);
+                buffer_store(outputs, tid.x, value * scale);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(code), "compute"
+    )
+
+    assert "constant Config& config [[buffer(0)]]" in generated_code
+    assert "const device float* inputs [[buffer(1)]]" in generated_code
+    assert "device float* outputs [[buffer(2)]]" in generated_code
+    assert "float value = inputs[tid.x];" in generated_code
+    assert "outputs[tid.x] = value * config.scale;" in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

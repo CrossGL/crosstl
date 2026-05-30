@@ -858,6 +858,68 @@ def test_vertex_fragment_shader_entries_compile_as_mojo_package(tmp_path):
     assert output_path.exists()
 
 
+def test_compute_non_executable_main_signatures_compile_as_mojo_package(tmp_path):
+    mojo = find_mojo_compiler()
+
+    cases = [
+        (
+            "compute_param_main",
+            """
+            shader ComputeParamMain {
+                compute {
+                    void main(uvec3 globalId @ gl_GlobalInvocationID) {
+                        uint x = globalId.x;
+                    }
+                }
+            }
+            """,
+            "fn compute_main(globalId: SIMD[DType.uint32, 4]) -> None:",
+            (
+                "# CrossGL parameter semantic: stage=compute name=globalId "
+                "semantic=global_invocation_id source=gl_GlobalInvocationID"
+            ),
+        ),
+        (
+            "compute_return_main",
+            """
+            shader ComputeReturnMain {
+                compute {
+                    float main() {
+                        return 1.0;
+                    }
+                }
+            }
+            """,
+            "fn compute_main() -> Float32:",
+            None,
+        ),
+    ]
+
+    for package_name, code, signature, semantic_comment in cases:
+        generated_code = generate_code(parse_code(tokenize_code(code)))
+
+        assert "# CrossGL shader stage: compute" in generated_code
+        assert signature in generated_code
+        assert "fn main(" not in generated_code
+        if semantic_comment is not None:
+            assert semantic_comment in generated_code
+            assert "globalId: SIMD[DType.uint32, 4]  #" not in generated_code
+
+        package_dir = tmp_path / package_name
+        package_dir.mkdir()
+        (package_dir / "__init__.mojo").write_text(generated_code)
+        output_path = tmp_path / f"{package_name}.mojopkg"
+        result = subprocess.run(
+            [mojo, "package", str(package_dir), "-o", str(output_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert output_path.exists()
+
+
 def test_return_semantic_metadata_and_validation_for_mojo_codegen():
     vertex_code = """
     shader ReturnPosition {
@@ -1054,10 +1116,27 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     vertex_output = generate_code(parse_code(tokenize_code(vertex_code)))
 
-    assert "vertexId: UInt32  # vertex_id" in vertex_output
-    assert "instanceId: UInt32  # instance_id" in vertex_output
-    assert "position: SIMD[DType.float32, 4]  # position" in vertex_output
-    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in vertex_output
+    assert "vertexId: UInt32" in vertex_output
+    assert "instanceId: UInt32" in vertex_output
+    assert "position: SIMD[DType.float32, 4]" in vertex_output
+    assert "uv: SIMD[DType.float32, 2]" in vertex_output
+    assert "vertexId: UInt32  #" not in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=vertexId "
+        "semantic=vertex_id source=gl_VertexID"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=instanceId "
+        "semantic=instance_id source=SV_InstanceID"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=position "
+        "semantic=position source=POSITION"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in vertex_output
 
     fragment_code = """
     shader FragmentParameterSemantics {
@@ -1075,10 +1154,27 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     fragment_output = generate_code(parse_code(tokenize_code(fragment_code)))
 
-    assert "coord: SIMD[DType.float32, 4]  # position" in fragment_output
-    assert "front: Bool  # front_facing" in fragment_output
-    assert "point: SIMD[DType.float32, 2]  # point_coord" in fragment_output
-    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in fragment_output
+    assert "coord: SIMD[DType.float32, 4]" in fragment_output
+    assert "front: Bool" in fragment_output
+    assert "point: SIMD[DType.float32, 2]" in fragment_output
+    assert "uv: SIMD[DType.float32, 2]" in fragment_output
+    assert "coord: SIMD[DType.float32, 4]  #" not in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=coord "
+        "semantic=position source=gl_FragCoord"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=front "
+        "semantic=front_facing source=gl_FrontFacing"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=point "
+        "semantic=point_coord source=gl_PointCoord"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=uv "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in fragment_output
 
     fragment_position_code = """
     shader FragmentPositionParameterSemantic {
@@ -1093,7 +1189,12 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
         parse_code(tokenize_code(fragment_position_code))
     )
 
-    assert "pos: SIMD[DType.float32, 4]  # position" in fragment_position_output
+    assert "pos: SIMD[DType.float32, 4]" in fragment_position_output
+    assert "pos: SIMD[DType.float32, 4]  #" not in fragment_position_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=pos "
+        "semantic=position source=gl_Position"
+    ) in fragment_position_output
 
     compute_code = """
     shader ComputeParameterSemantics {
@@ -1109,9 +1210,24 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     compute_output = generate_code(parse_code(tokenize_code(compute_code)))
 
-    assert "globalId: SIMD[DType.uint32, 4]  # global_invocation_id" in compute_output
-    assert "localId: SIMD[DType.uint32, 4]  # local_invocation_id" in compute_output
-    assert "groupIndex: UInt32  # group_index" in compute_output
+    assert "fn compute_main(" in compute_output
+    assert "fn main(" not in compute_output
+    assert "globalId: SIMD[DType.uint32, 4]" in compute_output
+    assert "localId: SIMD[DType.uint32, 4]" in compute_output
+    assert "groupIndex: UInt32" in compute_output
+    assert "globalId: SIMD[DType.uint32, 4]  #" not in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=globalId "
+        "semantic=global_invocation_id source=gl_GlobalInvocationID"
+    ) in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=localId "
+        "semantic=local_invocation_id source=SV_GroupThreadID"
+    ) in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=groupIndex "
+        "semantic=group_index source=SV_GroupIndex"
+    ) in compute_output
 
     invalid_cases = [
         (
@@ -1266,11 +1382,32 @@ def test_multiple_stage_parameters_with_different_semantics_all_handled():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "pos: SIMD[DType.float32, 4]  # position" in generated_code
-    assert "norm: SIMD[DType.float32, 4]  # normal" in generated_code
-    assert "uv0: SIMD[DType.float32, 2]  # texcoord0" in generated_code
-    assert "uv1: SIMD[DType.float32, 2]  # texcoord1" in generated_code
-    assert "vid: UInt32  # vertex_id" in generated_code
+    assert "pos: SIMD[DType.float32, 4]" in generated_code
+    assert "norm: SIMD[DType.float32, 4]" in generated_code
+    assert "uv0: SIMD[DType.float32, 2]" in generated_code
+    assert "uv1: SIMD[DType.float32, 2]" in generated_code
+    assert "vid: UInt32" in generated_code
+    assert "pos: SIMD[DType.float32, 4]  #" not in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=pos "
+        "semantic=position source=POSITION"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=norm "
+        "semantic=normal source=NORMAL"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv0 "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv1 "
+        "semantic=texcoord1 source=TEXCOORD1"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=vid "
+        "semantic=vertex_id source=gl_VertexID"
+    ) in generated_code
     assert (
         "# CrossGL return semantic: stage=vertex semantic=position "
         "source=gl_Position" in generated_code
@@ -23267,6 +23404,337 @@ def test_multisample_image_samples_query_for_mojo_codegen():
     assert "image_samples(msImage)" in generated_code
     assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
     assert "imageSamples" not in generated_code
+
+
+def test_mojo_texture_gather_with_component_selection():
+    code = """
+    sampler2D colorMap;
+    sampler2DArray layeredMap;
+
+    vec4 gatherRed(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 0);
+    }
+    vec4 gatherGreen(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 1);
+    }
+    vec4 gatherBlue(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 2);
+    }
+    vec4 gatherAlpha(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 3);
+    }
+    vec4 gatherLayeredComponent(sampler2DArray tex, vec3 uvLayer) {
+        return textureGather(tex, uvLayer, 2);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_Texture2DArray" in generated_code
+    assert "texture_gather" in generated_code
+    assert "(tex, uv, 0)" in generated_code
+    assert "(tex, uv, 1)" in generated_code
+    assert "(tex, uv, 2)" in generated_code
+    assert "(tex, uv, 3)" in generated_code
+    assert "(tex, uvLayer, 2)" in generated_code
+    assert "textureGather(" not in generated_code
+
+
+def test_mojo_texture_gather_offset_with_component_selection():
+    code = """
+    sampler2D colorMap;
+
+    vec4 gatherOffsetRed(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset, 0);
+    }
+    vec4 gatherOffsetGreen(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset, 1);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_offset_Texture2D" in generated_code
+    assert "(tex, uv, offset, 0)" in generated_code
+    assert "(tex, uv, offset, 1)" in generated_code
+    assert "textureGatherOffset(" not in generated_code
+
+
+def test_mojo_cube_array_texture_operations():
+    code = """
+    samplerCubeArray cubeArrayMap;
+    samplerCubeArrayShadow cubeArrayShadow;
+
+    vec4 sampleCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return texture(tex, dirLayer);
+    }
+    vec4 gatherCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return textureGather(tex, dirLayer);
+    }
+    vec4 gatherCubeArrayComponent(samplerCubeArray tex, vec4 dirLayer) {
+        return textureGather(tex, dirLayer, 1);
+    }
+    float compareCubeArray(samplerCubeArrayShadow tex, vec4 dirLayer, float depth) {
+        return textureCompare(tex, dirLayer, depth);
+    }
+    ivec3 cubeArraySize(samplerCubeArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct TextureCubeArray:" in generated_code
+    assert "struct TextureCubeArrayShadow:" in generated_code
+    assert "var cubeArrayMap: TextureCubeArray = TextureCubeArray()" in generated_code
+    assert (
+        "var cubeArrayShadow: TextureCubeArrayShadow = TextureCubeArrayShadow()"
+        in generated_code
+    )
+    assert "_crossgl_texture_gather_TextureCubeArray" in generated_code
+    assert "_crossgl_texture_compare_TextureCubeArrayShadow" in generated_code
+    assert "texture_size(tex, lod)" in generated_code
+    assert "samplerCubeArray" not in generated_code
+    assert "samplerCubeArrayShadow" not in generated_code
+
+
+def test_mojo_readonly_qualifier_on_storage_images():
+    code = """
+    readonly image2D inputImage;
+    readonly image2D inputImages[4];
+
+    vec4 readPixel(ivec2 pixel) {
+        return imageLoad(inputImage, pixel);
+    }
+    vec4 readArrayPixel(int slot, ivec2 pixel) {
+        return imageLoad(inputImages[slot], pixel);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "access=readonly" in generated_code
+    assert "image_load(inputImage, pixel)" in generated_code
+    assert "image_load(inputImages[int(slot)], pixel)" in generated_code
+
+    invalid_write = """
+    readonly image2D inputImage;
+
+    void invalidWrite(ivec2 pixel, vec4 color) {
+        imageStore(inputImage, pixel, color);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_write)))
+
+
+def test_mojo_writeonly_qualifier_on_storage_images():
+    code = """
+    writeonly image2D outputImage;
+    writeonly image2D outputImages[4];
+
+    void writePixel(ivec2 pixel, vec4 color) {
+        imageStore(outputImage, pixel, color);
+    }
+    void writeArrayPixel(int slot, ivec2 pixel, vec4 color) {
+        imageStore(outputImages[slot], pixel, color);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "access=writeonly" in generated_code
+    assert "image_store(outputImage, pixel, color)" in generated_code
+    assert "image_store(outputImages[int(slot)], pixel, color)" in generated_code
+
+    invalid_read = """
+    writeonly image2D outputImage;
+
+    vec4 invalidRead(ivec2 pixel) {
+        return imageLoad(outputImage, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="imageLoad.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_read)))
+
+
+def test_mojo_coherent_qualifier_produces_memory_annotation():
+    code = """
+    coherent image2D sharedImage;
+    coherent readonly image2D sharedReadonly;
+    coherent writeonly image2D sharedWriteonly;
+
+    vec4 loadShared(ivec2 pixel) {
+        return imageLoad(sharedImage, pixel);
+    }
+    vec4 loadSharedReadonly(ivec2 pixel) {
+        return imageLoad(sharedReadonly, pixel);
+    }
+    void storeSharedWriteonly(ivec2 pixel, vec4 color) {
+        imageStore(sharedWriteonly, pixel, color);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "memory=coherent" in generated_code
+    assert "image_load(sharedImage, pixel)" in generated_code
+    assert "image_load(sharedReadonly, pixel)" in generated_code
+    assert "image_store(sharedWriteonly, pixel, color)" in generated_code
+    assert "access=readonly" in generated_code and "memory=coherent" in generated_code
+
+    invalid_coherent_write = """
+    coherent readonly image2D sharedReadonly;
+
+    void invalidWrite(ivec2 pixel, vec4 color) {
+        imageStore(sharedReadonly, pixel, color);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_coherent_write)))
+
+
+def test_cbuffer_produces_mojo_struct_with_value_decorator():
+    code = """
+    cbuffer Transforms {
+        mat4 world;
+        mat4 viewProjection;
+        vec4 cameraPos;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Transforms:" in generated_code
+    assert "var world: CrossGLMatrixF32C4R4" in generated_code
+    assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
+    assert "var cameraPos: SIMD[DType.float32, 4]" in generated_code
+    assert "# Constant Buffers" in generated_code
+    assert "# CrossGL resource metadata: name=Transforms kind=cbuffer" in generated_code
+
+
+def test_multiple_cbuffers_in_one_shader():
+    code = """
+    cbuffer PerFrame {
+        mat4 viewProjection;
+        float time;
+    };
+
+    cbuffer PerObject {
+        mat4 world;
+        vec4 color;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct PerFrame:" in generated_code
+    assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
+    assert "var time: Float32" in generated_code
+    assert "@value\nstruct PerObject:" in generated_code
+    assert "var world: CrossGLMatrixF32C4R4" in generated_code
+    assert "var color: SIMD[DType.float32, 4]" in generated_code
+    assert "# CrossGL resource metadata: name=PerFrame kind=cbuffer" in generated_code
+    assert "# CrossGL resource metadata: name=PerObject kind=cbuffer" in generated_code
+
+
+def test_cbuffer_with_array_members():
+    code = """
+    cbuffer LightData {
+        vec4 lightPositions[8];
+        float intensities[8];
+        int activeLightCount;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct LightData:" in generated_code
+    assert (
+        "var lightPositions: InlineArray[SIMD[DType.float32, 4], 8]" in generated_code
+    )
+    assert "var intensities: InlineArray[Float32, 8]" in generated_code
+    assert "var activeLightCount: Int32" in generated_code
+    assert "# CrossGL resource metadata: name=LightData kind=cbuffer" in generated_code
+
+
+def test_texture2d_sampler2d_resource_declarations_produce_mojo_types():
+    code = """
+    sampler2D diffuseMap;
+    sampler2D normalMap;
+    samplerCube envMap;
+
+    vec4 sampleDiffuse(vec2 uv) {
+        return texture(diffuseMap, uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2D:" in generated_code
+    assert "struct TextureCube:" in generated_code
+    assert "var diffuseMap: Texture2D" in generated_code
+    assert "var normalMap: Texture2D" in generated_code
+    assert "var envMap: TextureCube" in generated_code
+    assert "sample(diffuseMap, uv)" in generated_code
+    assert "fn sample(tex: Texture2D" in generated_code
+
+
+def test_combined_texture_sampler_sampling_in_mojo():
+    codegen = MojoCodeGen()
+    tex = VariableNode("albedo", PrimitiveType("sampler2D"))
+    sampler = VariableNode("linearSampler", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    lod = VariableNode("lod", PrimitiveType("float"))
+
+    codegen.register_variable_type("albedo", "sampler2D")
+    codegen.register_variable_type("linearSampler", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("lod", "float")
+
+    combined_sample = codegen.generate_expression(TextureNode(tex, sampler, uv))
+    lod_sample = codegen.generate_expression(TextureNode(tex, sampler, uv, level=lod))
+
+    assert combined_sample == "sample(albedo, uv)"
+    assert lod_sample == "sample_lod(albedo, uv, lod)"
+    assert "Texture2D" in codegen.required_resource_sample_types
+    assert "Texture2D" in codegen.required_resource_lod_types
+    assert codegen.expression_result_type(TextureNode(tex, sampler, uv)) == "vec4"
+
+
+def test_separate_texture_and_sampler_objects_for_mojo():
+    codegen = MojoCodeGen()
+    tex = VariableNode("myTexture", PrimitiveType("sampler2D"))
+    sampler_a = VariableNode("samplerA", PrimitiveType("sampler"))
+    sampler_b = VariableNode("samplerB", PrimitiveType("SamplerState"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+
+    codegen.register_variable_type("myTexture", "sampler2D")
+    codegen.register_variable_type("samplerA", "sampler")
+    codegen.register_variable_type("samplerB", "SamplerState")
+    codegen.register_variable_type("uv", "vec2")
+
+    sample_a = codegen.generate_expression(TextureNode(tex, sampler_a, uv))
+    sample_b = codegen.generate_expression(TextureNode(tex, sampler_b, uv))
+    no_sampler = codegen.generate_expression(TextureNode(tex, None, uv))
+
+    assert sample_a == "sample(myTexture, uv)"
+    assert sample_b == "sample(myTexture, uv)"
+    assert no_sampler == "sample(myTexture, uv)"
+    assert "samplerA" not in sample_a
+    assert "samplerB" not in sample_b
+    assert codegen.expression_result_type(TextureNode(tex, sampler_a, uv)) == "vec4"
+
+
+def test_buffer_block_with_structured_buffer_resource():
+    codegen = MojoCodeGen()
+    buf = VariableNode("particles", PrimitiveType("StructuredBuffer<float>"))
+    idx = VariableNode("idx", PrimitiveType("uint"))
+    count = VariableNode("count", PrimitiveType("uint"))
+
+    codegen.register_variable_type("particles", "StructuredBuffer<float>")
+    codegen.register_variable_type("idx", "uint")
+    codegen.register_variable_type("count", "uint")
+
+    load_expr = codegen.generate_expression(BufferOpNode("Load", buf, [idx]))
+    dims_expr = codegen.generate_expression(BufferOpNode("GetDimensions", buf, [count]))
+
+    assert load_expr == "buffer_load(particles, idx)"
+    assert dims_expr == "buffer_dimensions(particles, count)"
+    assert ("StructuredBuffer", "float") in codegen.required_buffer_load_helpers
+    assert ("StructuredBuffer", "float") in codegen.required_buffer_dimensions_helpers
+    assert codegen.expression_result_type(BufferOpNode("Load", buf, [idx])) == "float"
 
 
 if __name__ == "__main__":

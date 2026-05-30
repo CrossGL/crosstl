@@ -1616,6 +1616,8 @@ class HLSLToCrossGLConverter:
         return None
 
     def expression_struct_member_key(self, expr, variable_types):
+        while isinstance(expr, ArrayAccessNode):
+            expr = expr.array
         if not isinstance(expr, MemberAccessNode):
             return None
         owner_type = self.expression_raw_type_from_map(expr.object, variable_types)

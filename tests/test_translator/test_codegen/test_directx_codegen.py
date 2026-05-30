@@ -1000,6 +1000,152 @@ def test_hlsl_fixed_width_nested_cbuffer_array_aliases_map_to_valid_types():
         assert invalid_token not in generated_code
 
 
+def test_hlsl_cbuffer_with_register_b0_binding():
+    shader = """
+    shader CbufferRegisterB0 {
+        cbuffer SceneConstants @register(b0) {
+            float4x4 viewProjection;
+            float3 cameraPosition;
+            float time;
+            int frameIndex;
+        };
+
+        float4 getPosition() {
+            return mul(viewProjection, float4(cameraPosition, 1.0));
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer SceneConstants : register(b0)" in generated_code
+    assert "float4x4 viewProjection;" in generated_code
+    assert "float3 cameraPosition;" in generated_code
+    assert "float time;" in generated_code
+    assert "int frameIndex;" in generated_code
+    assert "float4 getPosition()" in generated_code
+
+
+def test_hlsl_multiple_cbuffers_sequential_registers():
+    shader = """
+    shader MultipleCbuffers {
+        cbuffer PerFrame @register(b0) {
+            float4x4 view;
+            float4x4 projection;
+            float time;
+        };
+
+        cbuffer PerObject @register(b1) {
+            float4x4 world;
+            float3 objectColor;
+        };
+
+        cbuffer PerMaterial @register(b2) {
+            float roughness;
+            float metalness;
+            float3 emissive;
+        };
+
+        float3 computeWorldPosition(float3 localPos) {
+            return mul(world, float4(localPos, 1.0)).xyz;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer PerFrame : register(b0)" in generated_code
+    assert "cbuffer PerObject : register(b1)" in generated_code
+    assert "cbuffer PerMaterial : register(b2)" in generated_code
+    assert "float4x4 view;" in generated_code
+    assert "float4x4 projection;" in generated_code
+    assert "float4x4 world;" in generated_code
+    assert "float3 objectColor;" in generated_code
+    assert "float roughness;" in generated_code
+    assert "float metalness;" in generated_code
+    assert "float3 emissive;" in generated_code
+
+
+def test_hlsl_structured_buffer_register_t0_and_rw_register_u0():
+    shader = """
+    shader BufferRegisterBindings {
+        StructuredBuffer<float4> inputPositions @ binding(0);
+        RWStructuredBuffer<float4> outputPositions @ binding(0);
+
+        void transform(uint index) {
+            float4 pos = buffer_load(inputPositions, index);
+            pos.y = pos.y + 1.0;
+            buffer_store(outputPositions, index, pos);
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "StructuredBuffer<float4> inputPositions : register(t0);" in generated_code
+    assert (
+        "RWStructuredBuffer<float4> outputPositions : register(u0);" in generated_code
+    )
+    assert "float4 pos = inputPositions.Load(index);" in generated_code
+    assert "outputPositions.Store(index, pos);" in generated_code
+
+
+def test_hlsl_cbuffer_mixed_member_types():
+    shader = """
+    shader MixedCbufferMembers {
+        cbuffer LightConstants @register(b3) {
+            float4x4 lightViewProj;
+            float3 lightDirection;
+            float lightIntensity;
+            int shadowMapSize;
+            float4x4 cascadeViewProj[4];
+        };
+
+        float computeShadow(float3 worldPos) {
+            float4 lightSpacePos = mul(lightViewProj, float4(worldPos, 1.0));
+            return lightSpacePos.z * lightIntensity;
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer LightConstants : register(b3)" in generated_code
+    assert "float4x4 lightViewProj;" in generated_code
+    assert "float3 lightDirection;" in generated_code
+    assert "float lightIntensity;" in generated_code
+    assert "int shadowMapSize;" in generated_code
+    assert "float4x4 cascadeViewProj[4];" in generated_code
+    assert "float computeShadow(float3 worldPos)" in generated_code
+
+
+def test_hlsl_buffer_array_members_in_cbuffer():
+    shader = """
+    shader CbufferArrayMembers {
+        cbuffer AnimationData @register(b4) {
+            float4x4 boneMatrices[64];
+            float weights[4];
+            int boneIndices[4];
+            float3 morphTargetOffsets[8];
+        };
+
+        float4 skinVertex(float3 position) {
+            float4x4 skinMatrix = boneMatrices[boneIndices[0]];
+            return mul(skinMatrix, float4(position, 1.0)) * weights[0];
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer AnimationData : register(b4)" in generated_code
+    assert "float4x4 boneMatrices[64];" in generated_code
+    assert "float weights[4];" in generated_code
+    assert "int boneIndices[4];" in generated_code
+    assert "float3 morphTargetOffsets[8];" in generated_code
+    assert "float4 skinVertex(float3 position)" in generated_code
+
+
 def test_hlsl_structured_buffer_fixed_width_aliases_map_resource_generics():
     shader = """
     shader AliasStructuredBufferHLSL {
@@ -30359,6 +30505,200 @@ def test_directx_texture_proj_grad_emits_perspective_divide_and_sample_grad():
     )
     assert "textureProjGrad(" not in generated_code
     assert "textureProjGradOffset(" not in generated_code
+
+
+def test_glsl_buffer_block_lowers_to_cbuffer_with_register():
+    shader = """
+    shader GlslBufferBlockCbufferLowering {
+        struct SceneUniforms {
+            float4x4 viewMatrix;
+            float4x4 projMatrix;
+            float3 cameraPos;
+            float nearPlane;
+            float farPlane;
+        };
+
+        SceneUniforms scene @glsl_buffer_block(std140) @binding(0);
+
+        float getDepthRange() {
+            return scene.farPlane - scene.nearPlane;
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "register(" in generated_code
+    assert "glsl_buffer_block" not in generated_code
+    assert "std140" not in generated_code
+    assert "getDepthRange" in generated_code
+
+
+def test_structured_buffer_with_struct_element_type():
+    shader = """
+    shader StructuredBufferStructElement {
+        struct Particle {
+            float3 position;
+            float3 velocity;
+            float life;
+            float mass;
+        };
+
+        StructuredBuffer<Particle> particleInput @ binding(0);
+        RWStructuredBuffer<Particle> particleOutput @ binding(0);
+
+        void updateParticle(uint index, float dt) {
+            Particle p = buffer_load(particleInput, index);
+            p.position = p.position + p.velocity * dt;
+            p.life = p.life - dt;
+            buffer_store(particleOutput, index, p);
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "StructuredBuffer<Particle> particleInput : register(t0);" in generated_code
+    assert (
+        "RWStructuredBuffer<Particle> particleOutput : register(u0);" in generated_code
+    )
+    assert "Particle p = particleInput.Load(index);" in generated_code
+    assert "particleOutput.Store(index, p);" in generated_code
+    assert "struct Particle" in generated_code
+
+
+def test_rw_structured_buffer_with_atomic_operations():
+    shader = """
+    shader RWStructuredBufferAtomics {
+        RWStructuredBuffer<uint> histogram @ binding(0);
+        RWStructuredBuffer<int> signedBins @ binding(1);
+
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint bin = tid.x % 256u;
+                uint oldVal = atomicAdd(histogram[bin], 1u);
+                int signedOld = atomicMin(signedBins[bin], int(tid.x));
+                uint exchanged = atomicExchange(histogram[bin + 256u], oldVal);
+                uint casResult = atomicCompSwap(
+                    histogram[bin + 512u], exchanged, oldVal
+                );
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "RWStructuredBuffer<uint> histogram : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> signedBins : register(u1);" in generated_code
+    assert "InterlockedAdd(histogram[bin], 1u" in generated_code
+    assert "InterlockedMin(signedBins[bin]" in generated_code
+    assert "InterlockedExchange(histogram[(bin + 256u)]" in generated_code
+    assert "atomicAdd(" not in generated_code
+    assert "atomicMin(" not in generated_code
+    assert "atomicExchange(" not in generated_code
+    assert "atomicCompSwap(" not in generated_code
+
+
+def test_byte_address_buffer_load_store_patterns():
+    shader = """
+    shader ByteAddressLoadStorePatterns {
+        ByteAddressBuffer readOnlyRaw @register(t0);
+        RWByteAddressBuffer readWriteRaw @register(u0);
+
+        uint readScalar(uint byteOffset) {
+            return buffer_load(readOnlyRaw, byteOffset);
+        }
+
+        uvec2 readVec2(uint byteOffset) {
+            return buffer_load2(readOnlyRaw, byteOffset);
+        }
+
+        uvec4 readVec4(uint byteOffset) {
+            return buffer_load4(readOnlyRaw, byteOffset);
+        }
+
+        void writeScalar(uint byteOffset, uint value) {
+            buffer_store(readWriteRaw, byteOffset, value);
+        }
+
+        void writeVec3(uint byteOffset, uvec3 value) {
+            buffer_store3(readWriteRaw, byteOffset, value);
+        }
+
+        uvec4 roundTrip(uint offset) {
+            uvec4 data = readVec4(offset);
+            writeScalar(offset, data.x);
+            writeVec3(offset + 4u, data.yzw);
+            return data;
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "ByteAddressBuffer readOnlyRaw : register(t0);" in generated_code
+    assert "RWByteAddressBuffer readWriteRaw : register(u0);" in generated_code
+    assert "return readOnlyRaw.Load(byteOffset);" in generated_code
+    assert "return readOnlyRaw.Load2(byteOffset);" in generated_code
+    assert "return readOnlyRaw.Load4(byteOffset);" in generated_code
+    assert "readWriteRaw.Store(byteOffset, value);" in generated_code
+    assert "readWriteRaw.Store3(byteOffset, value);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_load2(" not in generated_code
+    assert "buffer_load4(" not in generated_code
+    assert "buffer_store(" not in generated_code
+    assert "buffer_store3(" not in generated_code
+
+
+def test_multiple_buffer_declarations_with_explicit_bindings():
+    shader = """
+    shader MultipleBufferBindings {
+        cbuffer FrameConstants @register(b0) {
+            float4x4 viewProj;
+            float time;
+        };
+
+        cbuffer MaterialConstants @register(b1) {
+            float4 albedo;
+            float roughness;
+        };
+
+        StructuredBuffer<float4> vertices @ binding(0);
+        StructuredBuffer<uint> indices @ binding(1);
+        RWStructuredBuffer<float4> results @ binding(0);
+        ByteAddressBuffer rawData @register(t5);
+        RWByteAddressBuffer rawOutput @register(u3);
+
+        float4 loadVertex(uint index) {
+            return buffer_load(vertices, index);
+        }
+
+        void storeResult(uint index, float4 value) {
+            buffer_store(results, index, value);
+        }
+
+        uint loadRawWord(uint offset) {
+            return buffer_load(rawData, offset);
+        }
+
+        void storeRawWord(uint offset, uint value) {
+            buffer_store(rawOutput, offset, value);
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "cbuffer FrameConstants : register(b0)" in generated_code
+    assert "cbuffer MaterialConstants : register(b1)" in generated_code
+    assert "StructuredBuffer<float4> vertices : register(t0);" in generated_code
+    assert "StructuredBuffer<uint> indices : register(t1);" in generated_code
+    assert "RWStructuredBuffer<float4> results : register(u0);" in generated_code
+    assert "ByteAddressBuffer rawData : register(t5);" in generated_code
+    assert "RWByteAddressBuffer rawOutput : register(u3);" in generated_code
+    assert "float4x4 viewProj;" in generated_code
+    assert "float4 albedo;" in generated_code
+    assert "vertices.Load(index)" in generated_code
+    assert "results.Store(index, value);" in generated_code
+    assert "rawData.Load(offset)" in generated_code
+    assert "rawOutput.Store(offset, value);" in generated_code
 
 
 if __name__ == "__main__":

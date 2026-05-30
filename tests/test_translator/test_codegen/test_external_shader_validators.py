@@ -548,6 +548,53 @@ shader SlangRayStageValidator {
 """
 
 
+SLANG_MESH_TASK_VALIDATOR_SHADER = """
+shader SlangMeshTaskValidator {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ SV_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct MeshPrimitive {
+        bool culled @ SV_CullPrimitive;
+    };
+
+    groupshared MeshPayload payload;
+
+    task {
+        void main(uvec3 groupId @ gl_WorkGroupID) @numthreads(1, 1, 1) {
+            payload.meshlet = groupId.x;
+            DispatchMesh(1, 1, 1, payload);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            uvec3 threadId @ gl_LocalInvocationID,
+            @vertices out MeshVertex verts[3],
+            @indices out uvec3 tris[1],
+            @primitives out MeshPrimitive prims[1]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            verts[1].position = vec4(float(threadId.x), 1.0, 0.0, 1.0);
+            verts[2].position = vec4(0.0, 0.0, 1.0, 1.0);
+            verts[0].uv = vec2(0.0, 0.0);
+            verts[1].uv = vec2(1.0, 0.0);
+            verts[2].uv = vec2(0.0, 1.0);
+            tris[0] = uvec3(0u, 1u, 2u);
+            prims[0].culled = false;
+        }
+    }
+}
+"""
+
+
 GLSL_MULTISAMPLE_STORAGE_COMPUTE_SHADER = """
 shader GLSLMultisampleStorageValidator {
     image2DMS colorImage @rgba16f;
@@ -2009,6 +2056,53 @@ def test_generated_hlsl_mesh_amplification_compile_with_dxc(tmp_path):
     )
     assert amplification_output.exists()
     assert mesh_output.exists()
+
+
+def test_generated_slang_mesh_task_pair_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_mesh_task_pair.slang"
+    amplification_output = tmp_path / "slang_mesh_task_pair_as.hlsl"
+    mesh_output = tmp_path / "slang_mesh_task_pair_ms.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_MESH_TASK_VALIDATOR_SHADER)
+    )
+    assert '[numthreads(1, 1, 1)]\n[shader("amplification")]' in code
+    assert "void ASMain(uint3 groupId : SV_GroupID)" in code
+    assert "groupshared MeshPayload payload;" in code
+    assert "payload.meshlet = groupId.x;" in code
+    assert "DispatchMesh(1, 1, 1, payload);" in code
+    assert '[numthreads(32, 1, 1)]\n[outputtopology("triangle")]' in code
+    assert '[shader("mesh")]' in code
+    assert (
+        "void MSMain(in payload MeshPayload payload, "
+        "uint3 threadId : SV_GroupThreadID, "
+        "out vertices MeshVertex verts[3], out indices uint3 tris[1], "
+        "out primitives MeshPrimitive prims[1])" in code
+    )
+    assert "float4 position : SV_Position;" in code
+    assert "float2 uv : TEXCOORD0;" in code
+    assert "bool culled : SV_CullPrimitive;" in code
+    assert "SetMeshOutputCounts(3, 1);" in code
+    assert "verts[0].position = float4(float(payload.meshlet), 0.0, 0.0, 1.0);" in code
+    assert "verts[1].position = float4(float(threadId.x), 1.0, 0.0, 1.0);" in code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in code
+    assert "prims[0].culled = false;" in code
+    assert ": gl_WorkGroupID" not in code
+    assert ": gl_LocalInvocationID" not in code
+    assert ": mesh_payload" not in code
+    assert ": vertices" not in code
+    assert ": indices" not in code
+    assert ": primitives" not in code
+    assert "unsupported Slang mesh intrinsic" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, amplification_output, "ASMain", "amplification", "as_6_5"
+    )
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, mesh_output, "MSMain", "mesh", "ms_6_5"
+    )
 
 
 def test_generated_hlsl_tessellation_pair_compile_with_dxc(tmp_path):

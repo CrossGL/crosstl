@@ -19824,5 +19824,753 @@ def test_texel_fetch_2d_array_emits_load_int4():
     assert "texelFetch(" not in generated_code
 
 
+def test_cbuffer_emits_slang_cbuffer_block():
+    code = """
+    shader CBufferBlock {
+        cbuffer SceneData {
+            mat4 viewMatrix;
+            mat4 projMatrix;
+            vec4 lightDir;
+            float time;
+        };
+
+        vertex {
+            void main() {
+                vec4 pos = projMatrix * viewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer SceneData" in generated_code
+    assert "float4x4 viewMatrix;" in generated_code
+    assert "float4x4 projMatrix;" in generated_code
+    assert "float4 lightDir;" in generated_code
+    assert "float time;" in generated_code
+    assert "{" in generated_code
+    assert "};" in generated_code
+
+
+def test_structured_buffer_and_rw_structured_buffer_declarations():
+    code = """
+    shader BufferDeclarations {
+        struct Vertex {
+            vec3 position;
+            vec3 normal;
+            vec2 texCoord;
+        };
+
+        StructuredBuffer<Vertex> vertexData @binding(0);
+        RWStructuredBuffer<Vertex> outputData @binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Vertex v = buffer_load(vertexData, tid.x);
+                v.position = v.position + v.normal * 0.1;
+                buffer_store(outputData, tid.x, v);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Vertex> vertexData "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<Vertex> outputData "
+        ": register(u1);" in generated_code
+    )
+    assert "Vertex v = vertexData.Load(tid.x);" in generated_code
+    assert "outputData.Store(tid.x, v);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_texture_resource_and_sampler_object_globals():
+    code = """
+    shader TextureAndSampler {
+        sampler2d diffuseMap;
+        sampler2d normalMap;
+        sampler linearSampler;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec4 diffuse = texture(diffuseMap, uv);
+                vec4 normal = texture(normalMap, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuseMap" in generated_code
+    assert "Sampler2D<float4> normalMap" in generated_code
+    assert "SamplerState linearSampler" in generated_code
+    assert "register(t" in generated_code
+    assert "register(s" in generated_code
+    assert "sampler2d" not in generated_code
+
+
+def test_combined_texture_sampler_with_register_bindings():
+    code = """
+    shader RegisterBindings {
+        cbuffer FrameData : register(b0) {
+            float deltaTime;
+            float totalTime;
+        };
+
+        sampler2d albedo @register(t0);
+        sampler2d roughness @register(t1);
+        sampler linearSampler @register(s0);
+        sampler pointSampler @register(s1);
+        uimage2D outputImage @r32ui @register(u0);
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec4 albedoVal = texture(albedo, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer FrameData : register(b0)" in generated_code
+    assert "float deltaTime;" in generated_code
+    assert "float totalTime;" in generated_code
+    assert "Sampler2D<float4> albedo : register(t0);" in generated_code
+    assert "Sampler2D<float4> roughness : register(t1);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "SamplerState pointSampler : register(s1);" in generated_code
+    assert "RWTexture2D<uint> outputImage : register(u0);" in generated_code
+    assert "sampler2d" not in generated_code
+
+
+def test_buffer_with_mixed_member_types():
+    code = """
+    shader MixedBuffer {
+        cbuffer MaterialData {
+            vec4 baseColor;
+            float metallic;
+            float roughness;
+            vec2 uvScale;
+            mat4 transform;
+            int flags;
+            uint mask;
+        };
+
+        fragment {
+            void main() {
+                vec4 color = baseColor * metallic;
+                vec2 scaledUV = vec2(0.5, 0.5) * uvScale;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer MaterialData" in generated_code
+    assert "float4 baseColor;" in generated_code
+    assert "float metallic;" in generated_code
+    assert "float roughness;" in generated_code
+    assert "float2 uvScale;" in generated_code
+    assert "float4x4 transform;" in generated_code
+    assert "int flags;" in generated_code
+    assert "uint mask;" in generated_code
+
+
+def test_buffer_resource_multiple_types_with_auto_bindings():
+    code = """
+    shader MultiResourceBuffers {
+        struct Light {
+            vec4 position;
+            vec4 color;
+            float intensity;
+        };
+
+        StructuredBuffer<Light> lights @binding(0);
+        RWStructuredBuffer<float> lightOutput @binding(1);
+        StructuredBuffer<vec4> positions;
+        RWStructuredBuffer<uint> counters;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Light l = buffer_load(lights, tid.x);
+                vec4 pos = buffer_load(positions, 0u);
+                buffer_store(lightOutput, tid.x, l.intensity);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Light> lights "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> lightOutput "
+        ": register(u1);" in generated_code
+    )
+    assert "StructuredBuffer<float4> positions" in generated_code
+    assert "RWStructuredBuffer<uint> counters" in generated_code
+    assert "register(t" in generated_code
+    assert "register(u" in generated_code
+    assert "Light l = lights.Load(tid.x);" in generated_code
+    assert "float4 pos = positions.Load(0u);" in generated_code
+    assert "lightOutput.Store(tid.x, l.intensity);" in generated_code
+
+
+def test_struct_member_semantics_produce_slang_annotations():
+    code = """
+    shader StructSemantics {
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+            vec2 texcoord @ TEXCOORD0;
+        };
+
+        vertex {
+            VertexOutput main() {
+                VertexOutput out;
+                out.position = vec4(0.0, 0.0, 0.0, 1.0);
+                out.normal = vec3(0.0, 1.0, 0.0);
+                out.texcoord = vec2(0.0, 0.0);
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float3 normal : NORMAL;" in generated_code
+    assert "float2 texcoord : TEXCOORD0;" in generated_code
+
+
+def test_stage_output_sv_position_semantic():
+    code = """
+    shader PositionOutput {
+        vertex {
+            vec4 main() @ gl_Position {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4" in generated_code
+    assert ": SV_Position" in generated_code
+    assert "return float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_function_return_sv_target_semantic():
+    code = """
+    shader FragOutput {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4" in generated_code
+    assert ": SV_Target" in generated_code
+    assert "return float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_stage_input_parameter_semantic_annotations():
+    code = """
+    shader InputSemantics {
+        compute {
+            void main(
+                uvec3 globalId @ gl_GlobalInvocationID,
+                uvec3 localId @ gl_LocalInvocationID,
+                uvec3 groupId @ gl_WorkGroupID
+            ) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 globalId : SV_DispatchThreadID" in generated_code
+    assert "uint3 localId : SV_GroupThreadID" in generated_code
+    assert "uint3 groupId : SV_GroupID" in generated_code
+
+
+def test_match_with_literal_patterns_lowers_to_switch():
+    code = """
+    shader MatchLiterals {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 10;
+                    }
+                    1 => {
+                        value = 20;
+                    }
+                    2 => {
+                        value = 30;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "value = 10;" in generated_code
+    assert "value = 20;" in generated_code
+    assert "value = 30;" in generated_code
+    assert "match " not in generated_code
+    assert "=>" not in generated_code
+
+
+def test_match_with_wildcard_default_case_lowers_to_switch_default():
+    code = """
+    shader MatchWildcard {
+        compute {
+            int main(int mode) {
+                int result = 0;
+                match mode {
+                    1 => {
+                        result = 100;
+                    }
+                    2 => {
+                        result = 200;
+                    }
+                    _ => {
+                        result = 999;
+                    }
+                }
+                return result;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (mode)" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "default:" in generated_code
+    assert "result = 100;" in generated_code
+    assert "result = 200;" in generated_code
+    assert "result = 999;" in generated_code
+    assert "match " not in generated_code
+    assert "_ =>" not in generated_code
+
+
+def test_match_multiple_literal_cases_without_wildcard():
+    code = """
+    shader MatchNoWildcard {
+        compute {
+            int main(int channel) {
+                int weight = 0;
+                match channel {
+                    0 => {
+                        weight = 1;
+                    }
+                    1 => {
+                        weight = 2;
+                    }
+                    2 => {
+                        weight = 4;
+                    }
+                    3 => {
+                        weight = 8;
+                    }
+                }
+                return weight;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (channel)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "case 3:" in generated_code
+    assert "weight = 1;" in generated_code
+    assert "weight = 2;" in generated_code
+    assert "weight = 4;" in generated_code
+    assert "weight = 8;" in generated_code
+    assert "default:" not in generated_code
+    assert generated_code.count("break;") >= 4
+
+
+def test_match_single_case_with_wildcard_fallthrough():
+    code = """
+    shader MatchSingleCase {
+        compute {
+            int main(int flag) {
+                int out_val = 0;
+                match flag {
+                    1 => {
+                        out_val = 42;
+                    }
+                    _ => {
+                        out_val = -1;
+                    }
+                }
+                return out_val;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (flag)" in generated_code
+    assert "case 1:" in generated_code
+    assert "out_val = 42;" in generated_code
+    assert "default:" in generated_code
+    assert "out_val = -1;" in generated_code
+
+
+def test_struct_multiple_semantics_position_normal_texcoord():
+    code = """
+    shader MultiSemantic {
+        struct VSInput {
+            vec4 pos @ POSITION;
+            vec3 norm @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+            vec4 color @ COLOR;
+        };
+
+        struct VSOutput {
+            vec4 sv_pos @ gl_Position;
+            vec3 world_normal @ NORMAL;
+            vec2 out_uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.sv_pos = input.pos;
+                output.world_normal = input.norm;
+                output.out_uv = input.uv;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 pos : POSITION;" in generated_code
+    assert "float3 norm : NORMAL;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 color : COLOR;" in generated_code
+    assert "float4 sv_pos : SV_Position;" in generated_code
+    assert "float3 world_normal : NORMAL;" in generated_code
+    assert "float2 out_uv : TEXCOORD0;" in generated_code
+
+
+def test_stage_param_vertex_input_semantics():
+    code = """
+    shader VertexInput {
+        vertex {
+            vec4 main(
+                vec4 pos @ POSITION,
+                vec3 normal @ NORMAL,
+                vec2 texcoord @ TEXCOORD0
+            ) @ gl_Position {
+                return pos;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 pos : POSITION" in generated_code
+    assert "float3 normal : NORMAL" in generated_code
+    assert "float2 texcoord : TEXCOORD0" in generated_code
+    assert ": SV_Position" in generated_code
+
+
+def test_stage_param_fragment_sv_target_output():
+    code = """
+    shader FragmentSemantic {
+        fragment {
+            vec4 main(vec4 fragPos @ gl_FragCoord) @ gl_FragColor {
+                return vec4(fragPos.x, fragPos.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 fragPos : SV_Position" in generated_code
+    assert ": SV_Target" in generated_code
+    assert "return float4(" in generated_code
+
+
+def test_match_break_auto_inserted_per_case():
+    code = """
+    shader MatchBreak {
+        compute {
+            int main(int selector) {
+                int x = 0;
+                match selector {
+                    10 => {
+                        x = 100;
+                    }
+                    20 => {
+                        x = 200;
+                    }
+                    _ => {
+                        x = 0;
+                    }
+                }
+                return x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (selector)" in generated_code
+    assert "case 10:" in generated_code
+    assert "case 20:" in generated_code
+    assert "default:" in generated_code
+    assert generated_code.count("break;") == 3
+
+
+def test_cbuffer_lowers_to_slang_cbuffer_with_typed_members():
+    code = """
+    shader CBufferLowering {
+        cbuffer SceneConstants {
+            mat4 viewMatrix;
+            mat4 projMatrix;
+            vec4 lightDir;
+            float time;
+        };
+
+        cbuffer MaterialParams : register(b1) {
+            vec4 albedo;
+            float roughness;
+            float metallic;
+        };
+
+        vertex {
+            vec4 main(vec3 pos @ POSITION) @ gl_Position {
+                return projMatrix * viewMatrix * vec4(pos, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer SceneConstants" in generated_code
+    assert "float4x4 viewMatrix;" in generated_code
+    assert "float4x4 projMatrix;" in generated_code
+    assert "float4 lightDir;" in generated_code
+    assert "float time;" in generated_code
+    assert "cbuffer MaterialParams" in generated_code
+    assert "float4 albedo;" in generated_code
+    assert "float roughness;" in generated_code
+    assert "float metallic;" in generated_code
+    assert "register(b1)" in generated_code
+    assert "mat4" not in generated_code
+    assert "vec4 lightDir" not in generated_code
+    assert "vec3" not in generated_code
+
+
+def test_structured_buffer_declarations_emit_slang_resource_types():
+    code = """
+    shader StructuredBufferDeclarations {
+        struct Light {
+            vec4 position;
+            vec4 color;
+            float intensity;
+        };
+
+        StructuredBuffer<Light> lights @binding(0);
+        RWStructuredBuffer<Light> outputLights @binding(1);
+        StructuredBuffer<float> weights @binding(2);
+        RWStructuredBuffer<uint> indices @binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Light light = buffer_load(lights, tid.x);
+                light.intensity = light.intensity * 2.0;
+                buffer_store(outputLights, tid.x, light);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Light> lights "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<Light> outputLights "
+        ": register(u1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> weights "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWStructuredBuffer<uint> indices "
+        ": register(u3);" in generated_code
+    )
+    assert "Light light = lights.Load(tid.x);" in generated_code
+    assert "outputLights.Store(tid.x, light);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_texture_resource_declarations_emit_slang_typed_textures():
+    code = """
+    shader TextureResources {
+        sampler2d diffuseMap;
+        sampler3d volumeMap;
+        samplercube envMap;
+        sampler2darray layeredMap;
+        image2D outputImage;
+        iimage3D signedVolume;
+        uimage2D counterImage;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuseMap" in generated_code
+    assert "Sampler3D<float4> volumeMap" in generated_code
+    assert "SamplerCube<float4> envMap" in generated_code
+    assert "Sampler2DArray<float4> layeredMap" in generated_code
+    assert "RWTexture2D<float4> outputImage" in generated_code
+    assert "RWTexture3D<int> signedVolume" in generated_code
+    assert "RWTexture2D<uint> counterImage" in generated_code
+    assert "sampler2d" not in generated_code
+    assert "sampler3d" not in generated_code
+    assert "samplercube" not in generated_code
+    assert "image2D" not in generated_code
+    assert "iimage3D" not in generated_code
+    assert "uimage2D" not in generated_code
+
+
+def test_sampler_state_declarations_emit_slang_sampler_types():
+    code = """
+    shader SamplerStateDeclarations {
+        sampler linearSampler;
+        sampler pointSampler @binding(1);
+        sampler2dshadow shadowMap;
+        samplercubeshadow shadowCube;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SamplerState linearSampler" in generated_code
+    assert "SamplerState pointSampler" in generated_code
+    assert "register(s" in generated_code
+    assert "Sampler2DShadow shadowMap" in generated_code
+    assert "SamplerCubeShadow shadowCube" in generated_code
+    assert "sampler " not in generated_code.split("SamplerState")[0]
+
+
+def test_combined_texture_sampler_sampling_patterns():
+    code = """
+    shader TextureSamplingPatterns {
+        sampler2d albedoMap;
+        sampler3d volumeData;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 albedo = texture(albedoMap, uv);
+                vec4 lod_sample = textureLod(albedoMap, uv, 2.0);
+                return albedo + lod_sample;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> albedoMap" in generated_code
+    assert "Sampler3D<float4> volumeData" in generated_code
+    assert "albedoMap.Sample(uv)" in generated_code
+    assert "albedoMap.SampleLevel(uv, 2.0)" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+
+
+def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
+    code = """
+    shader MixedResources {
+        cbuffer Transform {
+            mat4 worldViewProj;
+        };
+
+        sampler2d diffuse;
+        sampler linearSampler;
+        StructuredBuffer<float> weights @binding(0);
+        RWStructuredBuffer<float> results @binding(1);
+        uimage2D counterTex @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float w = buffer_load(weights, tid.x);
+                buffer_store(results, tid.x, w * 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Transform" in generated_code
+    assert "register(b" in generated_code
+    assert "Sampler2D<float4> diffuse" in generated_code
+    assert "register(t" in generated_code
+    assert "SamplerState linearSampler" in generated_code
+    assert "register(s" in generated_code
+    assert "StructuredBuffer<float> weights" in generated_code
+    assert "RWStructuredBuffer<float> results" in generated_code
+    assert "register(u" in generated_code
+    assert "RWTexture2D<uint> counterTex" in generated_code
+    assert "weights.Load(tid.x)" in generated_code
+    assert "results.Store(tid.x, w * 2.0)" in generated_code
+    assert "mat4" not in generated_code
+    assert "sampler2d" not in generated_code
+    assert "uimage2D" not in generated_code
+
+
 if __name__ == "__main__":
     pytest.main()

@@ -22795,3 +22795,119 @@ def test_rust_stage_parameter_generate_param_attributes_unit():
     assert "#[location(" in result_gl_fragcolor
     assert codegen.generate_param_attributes(MockParam(None)) == ""
     assert codegen.generate_param_attributes(MockParam("UNKNOWN_SEMANTIC")) == ""
+
+
+def test_wave_active_sum_emits_rust_subgroup_intrinsic():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint total = WaveActiveSum(lane);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+
+
+def test_wave_ballot_emits_rust_subgroup_ballot():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                bool active = true;
+                uvec4 ballot = WaveActiveBallot(active);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_ballot(active)" in generated_code
+
+
+def test_barrier_emits_rust_workgroup_barrier():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                barrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "workgroup_barrier()" in generated_code
+
+
+def test_memory_barrier_emits_rust_memory_barrier():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "memory_barrier()" in generated_code
+
+
+def test_workgroup_barrier_emits_rust_sync():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "workgroup_barrier()" in generated_code
+
+
+def test_multiple_wave_ops_in_one_function():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint sumVal = WaveActiveSum(lane);
+                bool anyTrue = WaveActiveAnyTrue(sumVal > 0u);
+                uvec4 ballot = WaveActiveBallot(anyTrue);
+                uint broadcast = WaveReadLaneAt(sumVal, 0u);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+    assert "subgroup_any(" in generated_code
+    assert "subgroup_ballot(" in generated_code
+    assert "subgroup_broadcast(" in generated_code
+
+
+def test_mixed_sync_and_wave_ops():
+    code = """
+    shader ComputeMixed {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                barrier();
+                uint total = WaveActiveSum(lane);
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "workgroup_barrier()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+    assert "memory_barrier()" in generated_code

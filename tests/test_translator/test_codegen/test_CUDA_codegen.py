@@ -3781,7 +3781,9 @@ class TestCudaCodeGen:
         assert "RWByteAddressBuffer" not in cuda_code
         assert "buffer_dimensions(" not in cuda_code
 
-    def test_append_consume_structured_buffers_emit_cuda_counter_helpers(self):
+    def test_append_consume_structured_buffers_emit_cuda_counter_helpers(
+        self, tmp_path
+    ):
         """Test CUDA lowers append/consume buffers through explicit counters."""
         source_code = """
         shader AppendConsumeCUDA {
@@ -3873,6 +3875,8 @@ class TestCudaCodeGen:
         assert ".Consume(" not in cuda_code
         assert "buffer_append(" not in cuda_code
         assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_append_consume_buffer_references_forward_cuda_counters(self, tmp_path):
         """Test append/consume reference parameters keep CUDA counter sidecars."""
@@ -15259,3 +15263,410 @@ class TestCudaCodeGen:
             "make_float3(4.0, 5.0, 6.0)};"
         ) in cuda_code
         assert "ArrayLiteralNode" not in cuda_code
+
+    def test_match_multiple_literal_arms_lower_to_switch(self):
+        """Test CUDA lowers match with multiple literal arms to switch/case."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int result = 0;
+                    match mode {
+                        0 => {
+                            result = 10;
+                        }
+                        1 => {
+                            result = 20;
+                        }
+                        2 => {
+                            result = 30;
+                        }
+                        _ => {
+                            result = -1;
+                        }
+                    }
+                    return result;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (mode) {" in cuda_code
+        assert "case 0:" in cuda_code
+        assert "result = 10;" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "result = 20;" in cuda_code
+        assert "case 2:" in cuda_code
+        assert "result = 30;" in cuda_code
+        assert "default:" in cuda_code
+        assert "result = -1;" in cuda_code
+
+    def test_match_wildcard_only_emits_default_case(self):
+        """Test CUDA match with only a wildcard arm emits a default-only switch."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int x) {
+                    int out = 0;
+                    match x {
+                        _ => {
+                            out = 99;
+                        }
+                    }
+                    return out;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (x) {" in cuda_code
+        assert "default:" in cuda_code
+        assert "out = 99;" in cuda_code
+        assert "case " not in cuda_code
+
+    def test_match_with_complex_body_expressions(self):
+        """Test CUDA match arms with multi-statement complex bodies."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int sel) {
+                    int a = 0;
+                    int b = 0;
+                    match sel {
+                        1 => {
+                            a = sel + 5;
+                            b = a * 2;
+                        }
+                        2 => {
+                            a = sel - 1;
+                            b = a + 10;
+                        }
+                        _ => {
+                            a = 0;
+                            b = 0;
+                        }
+                    }
+                    return a + b;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (sel) {" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "a = (sel + 5);" in cuda_code
+        assert "b = (a * 2);" in cuda_code
+        assert "case 2:" in cuda_code
+        assert "a = (sel - 1);" in cuda_code
+        assert "b = (a + 10);" in cuda_code
+        assert "default:" in cuda_code
+
+    def test_empty_shader_produces_valid_cuda_output(self):
+        """Test an empty shader still produces minimal valid CUDA includes."""
+        source_code = """
+        shader EmptyShader {
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "#include <cuda_runtime.h>" in cuda_code
+        assert "#include <device_launch_parameters.h>" in cuda_code
+
+    def test_struct_only_shader_without_compute_stage(self):
+        """Test shader containing only struct definitions and no compute stage."""
+        source_code = """
+        shader StructOnly {
+            struct Particle {
+                vec3 position;
+                vec3 velocity;
+                float mass;
+            };
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "#include <cuda_runtime.h>" in cuda_code
+        assert "struct Particle" in cuda_code
+        assert "float3 position;" in cuda_code
+        assert "float3 velocity;" in cuda_code
+        assert "float mass;" in cuda_code
+        assert "__global__" not in cuda_code
+
+    def test_match_arm_with_return_skips_break(self):
+        """Test CUDA match arms that terminate with return omit the break."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int code) {
+                    match code {
+                        0 => {
+                            return 100;
+                        }
+                        1 => {
+                            return 200;
+                        }
+                        _ => {
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (code) {" in cuda_code
+        assert "case 0:" in cuda_code
+        assert "return 100;" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "return 200;" in cuda_code
+        assert "default:" in cuda_code
+        assert "return 0;" in cuda_code
+        assert "break;" not in cuda_code
+
+    def test_texture_sampling_basic_tex2d_float4(self, tmp_path):
+        """Test basic texture sampling emits tex2D with float4 texture type."""
+        source_code = """
+        shader TextureSamplingBasic {
+            sampler2D diffuseMap;
+
+            fragment {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec4 sample = texture(diffuseMap, uv);
+                    float r = sample.x;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "texture<float4, 2> diffuseMap;" in cuda_code
+        assert "tex2D(diffuseMap, uv.x, uv.y)" in cuda_code
+        assert "sampler2D diffuseMap;" not in cuda_code
+        assert " = texture(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_texture_lod_emits_tex2dlod(self, tmp_path):
+        """Test textureLod maps to tex2DLod in CUDA output."""
+        source_code = """
+        shader TextureLodCUDA {
+            sampler2D mipMap;
+
+            fragment {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.5);
+                    vec4 mip0 = textureLod(mipMap, uv, 0.0);
+                    vec4 mip3 = textureLod(mipMap, uv, 3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "texture<float4, 2> mipMap;" in cuda_code
+        assert "float4 mip0 = tex2DLod(mipMap, uv.x, uv.y, 0.0);" in cuda_code
+        assert "float4 mip3 = tex2DLod(mipMap, uv.x, uv.y, 3.0);" in cuda_code
+        assert "textureLod(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cbuffer_members_lowered_to_constant_memory(self, tmp_path):
+        """Test cbuffer members emit __constant__ qualified declarations."""
+        source_code = """
+        shader CBufferConstantCUDA {
+            cbuffer SceneParams {
+                float4x4 viewProjection;
+                vec3 cameraPosition;
+                float time;
+                int frameCount;
+            };
+
+            compute {
+                void main() {
+                    float t = time;
+                    int f = frameCount;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__constant__" in cuda_code
+        assert "__constant__ float4x4 viewProjection;" in cuda_code
+        assert "__constant__ float3 cameraPosition;" in cuda_code
+        assert "__constant__ float time;" in cuda_code
+        assert "__constant__ int frameCount;" in cuda_code
+        assert "cbuffer" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cbuffer_multiple_buffers_all_constant(self, tmp_path):
+        """Test multiple cbuffers all produce __constant__ declarations."""
+        source_code = """
+        shader MultiCBufferCUDA {
+            cbuffer PerFrame {
+                float deltaTime;
+                float totalTime;
+            };
+
+            cbuffer PerObject {
+                vec3 objectPosition;
+                float scale;
+            };
+
+            compute {
+                void main() {
+                    float dt = deltaTime;
+                    float s = scale;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "// Constant buffer: PerFrame" in cuda_code
+        assert "// Constant buffer: PerObject" in cuda_code
+        assert "__constant__ float deltaTime;" in cuda_code
+        assert "__constant__ float totalTime;" in cuda_code
+        assert "__constant__ float3 objectPosition;" in cuda_code
+        assert "__constant__ float scale;" in cuda_code
+        assert "cbuffer" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_structured_buffer_maps_to_const_pointer_parameter(self, tmp_path):
+        """Test StructuredBuffer<T> maps to const T* in function parameters."""
+        source_code = """
+        shader StructuredBufferParamCUDA {
+            StructuredBuffer<float4> positions;
+
+            void readPositions(
+                StructuredBuffer<float4> inputData,
+                uint index
+            ) {
+                float4 pos = inputData.Load(index);
+                float4 globalPos = positions.Load(index);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "const float4* positions;" in cuda_code
+        assert "const float4* inputData" in cuda_code
+        assert "float4 pos = inputData[index];" in cuda_code
+        assert "float4 globalPos = positions[index];" in cuda_code
+        assert "StructuredBuffer<" not in cuda_code
+        assert ".Load(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self, tmp_path):
+        """Test RWStructuredBuffer<T> maps to T* with read/write access."""
+        source_code = """
+        shader RWStructuredBufferCUDA {
+            RWStructuredBuffer<float> output;
+
+            void writeValues(
+                RWStructuredBuffer<float> results,
+                StructuredBuffer<float> input,
+                uint index
+            ) {
+                float val = input.Load(index);
+                results.Store(index, val * 2.0);
+                output[index] = val + 1.0;
+                float readBack = results[index];
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "float* output;" in cuda_code
+        assert "float* results" in cuda_code
+        assert "const float* input" in cuda_code
+        assert "float val = input[index];" in cuda_code
+        assert "results[index] = (val * 2.0);" in cuda_code
+        assert "output[index] = (val + 1.0);" in cuda_code
+        assert "float readBack = results[index];" in cuda_code
+        assert "RWStructuredBuffer<" not in cuda_code
+        assert ".Store(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)

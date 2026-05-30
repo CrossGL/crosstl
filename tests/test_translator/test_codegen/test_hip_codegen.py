@@ -10,16 +10,22 @@ from crosstl.translator.ast import (
     AssignmentNode,
     ArrayAccessNode,
     BlockNode,
+    ConstructorPatternNode,
     ExecutionModel,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    LiteralPatternNode,
+    MatchArmNode,
+    MatchNode,
     MemberAccessNode,
     ParameterNode,
     PrimitiveType,
     ShaderNode,
+    StructNode,
     VariableNode,
+    WildcardPatternNode,
 )
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
 
@@ -2226,6 +2232,96 @@ class TestHipCodeGen:
         assert "gl_WorkGroupID" not in hip_code
         assert "gl_WorkGroupSize" not in hip_code
         assert "gl_NumWorkGroups" not in hip_code
+
+    def test_hlsl_compute_builtins_emit_hip_names(self):
+        """Test HIP maps HLSL compute built-in aliases to native indices."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int lx = SV_GroupThreadID.x;
+                    int gy = SV_DispatchThreadID.y;
+                    int wz = SV_GroupID.z;
+                    uint lane = SV_GroupIndex;
+                    uint localLane = gl_LocalInvocationIndex;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        linear_index = (
+            "(threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x)"
+        )
+        assert "int lx = threadIdx.x;" in hip_code
+        assert "int gy = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "int wz = blockIdx.z;" in hip_code
+        assert f"unsigned int lane = {linear_index};" in hip_code
+        assert f"unsigned int localLane = {linear_index};" in hip_code
+        assert "SV_GroupThreadID" not in hip_code
+        assert "SV_DispatchThreadID" not in hip_code
+        assert "SV_GroupID" not in hip_code
+        assert "SV_GroupIndex" not in hip_code
+        assert "gl_LocalInvocationIndex" not in hip_code
+
+    def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
+        """Test direct AST HLSL compute vector built-ins map to uint3 values."""
+        ast = ShaderNode(
+            name="DirectHlslBuiltins",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            functions=[
+                FunctionNode(
+                    "main",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "local",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_GroupThreadID"),
+                            ),
+                            VariableNode(
+                                "global",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_DispatchThreadID"),
+                            ),
+                            VariableNode(
+                                "group",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_GroupID"),
+                            ),
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert (
+            "uint3 local = make_uint3(threadIdx.x, threadIdx.y, threadIdx.z);"
+            in hip_code
+        )
+        assert (
+            "uint3 global = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in hip_code
+        assert (
+            "uint3 group = make_uint3(blockIdx.x, blockIdx.y, blockIdx.z);" in hip_code
+        )
+        assert "SV_GroupThreadID" not in hip_code
+        assert "SV_DispatchThreadID" not in hip_code
+        assert "SV_GroupID" not in hip_code
 
     def test_direct_builtin_identifier_nodes_emit_hip_names(self):
         """Test HIP maps direct AST built-in identifiers with component suffixes."""
@@ -9042,3 +9138,432 @@ class TestHipCodeGen:
         )
         assert " = texture(" not in hip_code
         assert " = textureLod(" not in hip_code
+
+    def test_match_multiple_literal_arms_emit_switch_cases(self):
+        """Test HIP emits multiple case labels for match with several literals."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int code) {
+                    int result = 0;
+                    match code {
+                        1 => {
+                            result = 10;
+                        }
+                        2 => {
+                            result = 20;
+                        }
+                        3 => {
+                            result = 30;
+                        }
+                        _ => {
+                            result = -1;
+                        }
+                    }
+                    return result;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (code)" in hip_code
+        assert "case 1:" in hip_code
+        assert "case 2:" in hip_code
+        assert "case 3:" in hip_code
+        assert "result = 10;" in hip_code
+        assert "result = 20;" in hip_code
+        assert "result = 30;" in hip_code
+        assert "default:" in hip_code
+        assert "result = -1;" in hip_code
+        assert hip_code.count("break;") == 4
+
+    def test_match_wildcard_only_emits_default_case(self):
+        """Test HIP emits only a default case when match has just a wildcard."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int x) {
+                    int out = 0;
+                    match x {
+                        _ => {
+                            out = 99;
+                        }
+                    }
+                    return out;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (x)" in hip_code
+        assert "default:" in hip_code
+        assert "out = 99;" in hip_code
+        assert "case " not in hip_code
+
+    def test_match_constructor_pattern_rejected_for_hip(self):
+        """Test HIP rejects constructor patterns that cannot lower to switch."""
+        match_ast = ShaderNode(
+            name="ConstructorMatch",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "main",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            MatchNode(
+                                expression=IdentifierNode("val"),
+                                arms=[
+                                    MatchArmNode(
+                                        pattern=ConstructorPatternNode(
+                                            "Some", [WildcardPatternNode()]
+                                        ),
+                                        guard=None,
+                                        body=[
+                                            AssignmentNode(
+                                                IdentifierNode("x"),
+                                                LiteralNode(1, PrimitiveType("int")),
+                                                "=",
+                                            )
+                                        ],
+                                    ),
+                                    MatchArmNode(
+                                        pattern=WildcardPatternNode(),
+                                        guard=None,
+                                        body=[
+                                            AssignmentNode(
+                                                IdentifierNode("x"),
+                                                LiteralNode(0, PrimitiveType("int")),
+                                                "=",
+                                            )
+                                        ],
+                                    ),
+                                ],
+                            )
+                        ]
+                    ),
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        codegen = HipCodeGen()
+        with pytest.raises(ValueError, match="Unsupported match arm for HIP"):
+            codegen.generate(match_ast)
+
+    def test_shader_with_only_structs_produces_valid_output(self):
+        """Test HIP generates struct definitions even without any kernel or function."""
+        struct_ast = ShaderNode(
+            name="StructsOnly",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            structs=[
+                StructNode(
+                    "Particle",
+                    [
+                        VariableNode("position", PrimitiveType("float3")),
+                        VariableNode("velocity", PrimitiveType("float3")),
+                        VariableNode("mass", PrimitiveType("float")),
+                    ],
+                ),
+            ],
+            functions=[],
+        )
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(struct_ast)
+
+        assert "#include <hip/hip_runtime.h>" in hip_code
+        assert "struct Particle" in hip_code
+        assert "float3 position;" in hip_code
+        assert "float3 velocity;" in hip_code
+        assert "float mass;" in hip_code
+        assert "__global__" not in hip_code
+
+    def test_invalid_mixed_stage_vertex_and_compute_still_generates(self):
+        """Test HIP handles shader with both vertex and compute stages."""
+        source_code = """
+        shader MixedStageShader {
+            vertex {
+                void main() {
+                    int a = 1;
+                }
+            }
+            compute {
+                void main() {
+                    int b = 2;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "__device__" in hip_code
+        assert "__global__" in hip_code
+        assert "int a = 1;" in hip_code
+        assert "int b = 2;" in hip_code
+
+    def test_match_literals_without_wildcard_emits_no_default(self):
+        """Test HIP match with only literal arms produces no default case."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int flag) {
+                    int r = 0;
+                    match flag {
+                        0 => {
+                            r = 100;
+                        }
+                        1 => {
+                            r = 200;
+                        }
+                    }
+                    return r;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (flag)" in hip_code
+        assert "case 0:" in hip_code
+        assert "case 1:" in hip_code
+        assert "r = 100;" in hip_code
+        assert "r = 200;" in hip_code
+        assert "default:" not in hip_code
+
+    def test_readonly_qualifier_on_buffer_produces_const_pointer(self):
+        """Test StructuredBuffer (readonly) generates const pointer in HIP."""
+        source_code = """
+        shader ReadonlyBufferShader {
+            StructuredBuffer<float> weights;
+            StructuredBuffer<int> indices[4];
+
+            float sumWeights(StructuredBuffer<float> input, uint count) {
+                float total = 0.0;
+                for (uint i = 0; i < count; i = i + 1) {
+                    total = total + input.Load(i);
+                }
+                return total;
+            }
+
+            compute {
+                void main() {
+                    float w = weights.Load(0);
+                    int idx = indices[0].Load(0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* weights;" in hip_code
+        assert "const int* indices[4];" in hip_code
+        assert "const float* input" in hip_code
+        assert "float w = weights[0];" in hip_code
+        assert "int idx = indices[0][0];" in hip_code
+        assert "float total = 0.0;" in hip_code
+        assert "total = (total + input[i]);" in hip_code
+        assert "StructuredBuffer" not in hip_code
+        assert "RWStructuredBuffer" not in hip_code
+
+    def test_writeonly_buffer_produces_mutable_pointer(self):
+        """Test RWStructuredBuffer (read-write) generates mutable pointer in HIP."""
+        source_code = """
+        shader WriteBufferShader {
+            struct Pixel {
+                float r;
+                float g;
+                float b;
+            };
+
+            RWStructuredBuffer<Pixel> output;
+            RWStructuredBuffer<int> counters;
+
+            void writePixel(RWStructuredBuffer<Pixel> dest, uint index, Pixel value) {
+                dest.Store(index, value);
+            }
+
+            compute {
+                void main() {
+                    Pixel p;
+                    p.r = 1.0;
+                    p.g = 0.5;
+                    p.b = 0.0;
+                    output.Store(0, p);
+                    counters[0] = 1;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "Pixel* output;" in hip_code
+        assert "int* counters;" in hip_code
+        assert "__device__ void writePixel(Pixel* dest," in hip_code
+        assert "dest[index] = value;" in hip_code
+        assert "output[0] = p;" in hip_code
+        assert "counters[0] = 1;" in hip_code
+
+    def test_explicit_binding_annotations_on_resources_parse_without_error(self):
+        """Test explicit @binding annotations on resources produce valid HIP code."""
+        source_code = """
+        shader ExplicitBindingShader {
+            sampler2D albedoTex @texture(0);
+            sampler2D normalTex @texture(1);
+            sampler2D roughnessTex @binding(2);
+            image2D outputImage @binding(3);
+
+            compute {
+                void main() {
+                    vec4 color = texelFetch(albedoTex, ivec2(0, 0), 0);
+                    vec4 normal = texelFetch(normalTex, ivec2(0, 0), 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t albedoTex;" in hip_code
+        assert "hipTextureObject_t normalTex;" in hip_code
+        assert "hipSurfaceObject_t outputImage;" in hip_code
+        assert "@binding" not in hip_code
+        assert "@texture" not in hip_code
+        assert "__global__ void main()" in hip_code
+
+    def test_automatic_sequential_binding_for_multiple_resources(self):
+        """Test multiple resources without explicit bindings all generate valid globals."""
+        source_code = """
+        shader MultiResourceShader {
+            StructuredBuffer<float> positionBuffer;
+            StructuredBuffer<float> normalBuffer;
+            StructuredBuffer<float> uvBuffer;
+            RWStructuredBuffer<float> outputBuffer;
+
+            void transformVertex(
+                StructuredBuffer<float> positions,
+                StructuredBuffer<float> normals,
+                RWStructuredBuffer<float> dest,
+                uint index
+            ) {
+                float pos = positions.Load(index);
+                float nrm = normals.Load(index);
+                dest.Store(index, pos + nrm);
+            }
+
+            compute {
+                void main() {
+                    float p = positionBuffer.Load(0);
+                    float n = normalBuffer.Load(0);
+                    float u = uvBuffer.Load(0);
+                    outputBuffer.Store(0, p + n + u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* positionBuffer;" in hip_code
+        assert "const float* normalBuffer;" in hip_code
+        assert "const float* uvBuffer;" in hip_code
+        assert "float* outputBuffer;" in hip_code
+        assert (
+            "__device__ void transformVertex("
+            "const float* positions, const float* normals, "
+            "float* dest, unsigned int index)"
+        ) in hip_code
+        assert "float pos = positions[index];" in hip_code
+        assert "float nrm = normals[index];" in hip_code
+        assert "dest[index] = (pos + nrm);" in hip_code
+
+        pos_idx = hip_code.index("const float* positionBuffer;")
+        norm_idx = hip_code.index("const float* normalBuffer;")
+        uv_idx = hip_code.index("const float* uvBuffer;")
+        out_idx = hip_code.index("float* outputBuffer;")
+        assert pos_idx < norm_idx < uv_idx < out_idx
+
+    def test_multiple_textures_with_explicit_binding_slots(self):
+        """Test multiple texture resources with explicit binding slots produce valid HIP."""
+        source_code = """
+        shader MultiTextureBindingShader {
+            sampler2D diffuse @texture(0);
+            sampler2D specular @texture(1);
+            sampler2D ambient @texture(2);
+            sampler samp @sampler(0);
+
+            vec4 sampleAll(vec2 uv) {
+                vec4 d = texture(diffuse, samp, uv);
+                vec4 s = texture(specular, samp, uv);
+                vec4 a = texture(ambient, samp, uv);
+                return d + s + a;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t diffuse;" in hip_code
+        assert "hipTextureObject_t specular;" in hip_code
+        assert "hipTextureObject_t ambient;" in hip_code
+        assert "@texture" not in hip_code
+        assert "@sampler" not in hip_code
+        assert "sampler2D" not in hip_code
+
+        diff_idx = hip_code.index("hipTextureObject_t diffuse;")
+        spec_idx = hip_code.index("hipTextureObject_t specular;")
+        amb_idx = hip_code.index("hipTextureObject_t ambient;")
+        assert diff_idx < spec_idx < amb_idx

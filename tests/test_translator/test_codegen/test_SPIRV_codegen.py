@@ -22693,3 +22693,894 @@ class TestVulkanSPIRVCodeGen:
             chained
         ), "Expected a second OpAccessChain using result of the first for nested access"
         assert "WARNING" not in spv_code
+
+    def test_multiple_cbuffers_get_sequential_binding_numbers(self):
+        source_code = """
+        shader MultiCBuffer {
+            cbuffer Globals {
+                float time;
+                float deltaTime;
+            }
+
+            cbuffer Material {
+                vec4 baseColor;
+                float roughness;
+            }
+
+            cbuffer Lighting {
+                vec4 lightDir;
+                float intensity;
+            }
+
+            compute {
+                void main() {
+                    float t = time;
+                    vec4 c = baseColor;
+                    vec4 l = lightDir;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        globals_var = spirv_named_variable(spv_code, "Globals", storage_class="Uniform")
+        material_var = spirv_named_variable(
+            spv_code, "Material", storage_class="Uniform"
+        )
+        lighting_var = spirv_named_variable(
+            spv_code, "Lighting", storage_class="Uniform"
+        )
+
+        globals_binding = re.search(
+            rf"OpDecorate {re.escape(globals_var)} Binding (\d+)", spv_code
+        )
+        material_binding = re.search(
+            rf"OpDecorate {re.escape(material_var)} Binding (\d+)", spv_code
+        )
+        lighting_binding = re.search(
+            rf"OpDecorate {re.escape(lighting_var)} Binding (\d+)", spv_code
+        )
+
+        assert globals_binding is not None
+        assert material_binding is not None
+        assert lighting_binding is not None
+
+        bindings = sorted(
+            [
+                int(globals_binding.group(1)),
+                int(material_binding.group(1)),
+                int(lighting_binding.group(1)),
+            ]
+        )
+        assert bindings == [0, 1, 2]
+
+        assert f"OpDecorate {globals_var} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {material_var} DescriptorSet 0" in spv_code
+        assert f"OpDecorate {lighting_var} DescriptorSet 0" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_cbuffer_auto_binding_emits_block_and_member_offsets(self):
+        source_code = """
+        shader AutoBindCBuffer {
+            cbuffer Transforms {
+                mat4 model;
+                mat4 view;
+                mat4 projection;
+            }
+
+            compute {
+                void main() {
+                    mat4 mvp = model;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        cbuffer_type = next(
+            (
+                type_id
+                for type_id in spirv_named_ids(spv_code, "Transforms")
+                if re.search(rf"{re.escape(type_id)} = OpTypeStruct\b", spv_code)
+            ),
+            None,
+        )
+        assert cbuffer_type is not None
+        cbuffer_var = spirv_named_variable(
+            spv_code, "Transforms", storage_class="Uniform"
+        )
+
+        assert f"OpDecorate {cbuffer_type} Block" in spv_code
+        assert f"OpDecorate {cbuffer_var} Binding 0" in spv_code
+        assert f"OpDecorate {cbuffer_var} DescriptorSet 0" in spv_code
+
+        assert f"OpMemberDecorate {cbuffer_type} 0 Offset 0" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 0 ColMajor" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 0 MatrixStride 16" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 1 Offset 64" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 1 ColMajor" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 2 Offset 128" in spv_code
+        assert f"OpMemberDecorate {cbuffer_type} 2 ColMajor" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_input_output_variables_decorated_with_locations(self):
+        source_code = """
+        shader IOLocations {
+            vec3 inPosition @input @location(0);
+            vec3 inNormal @input @location(1);
+            vec2 inUV @input @location(2);
+            vec4 outColor @output @location(0);
+
+            fragment {
+                void main() {
+                    outColor = vec4(inPosition + inNormal, inUV.x);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        pos_id = spirv_named_variable(spv_code, "inPosition", storage_class="Input")
+        normal_id = spirv_named_variable(spv_code, "inNormal", storage_class="Input")
+        uv_id = spirv_named_variable(spv_code, "inUV", storage_class="Input")
+        color_id = spirv_named_variable(spv_code, "outColor", storage_class="Output")
+
+        assert f"OpDecorate {pos_id} Location 0" in spv_code
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert f"OpDecorate {uv_id} Location 2" in spv_code
+        assert f"OpDecorate {color_id} Location 0" in spv_code
+        assert "WARNING" not in spv_code
+
+    def test_auto_assigned_locations_for_input_output_variables(self):
+        source_code = """
+        shader AutoLocations {
+            vec4 position @input;
+            vec4 color @input;
+            vec2 texCoord @input;
+            vec4 fragColor @output;
+            vec3 fragNormal @output;
+
+            fragment {
+                void main() {
+                    fragColor = position + color;
+                    fragNormal = vec3(texCoord, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        pos_id = spirv_named_variable(spv_code, "position", storage_class="Input")
+        color_id = spirv_named_variable(spv_code, "color", storage_class="Input")
+        tex_id = spirv_named_variable(spv_code, "texCoord", storage_class="Input")
+        frag_color_id = spirv_named_variable(
+            spv_code, "fragColor", storage_class="Output"
+        )
+        frag_normal_id = spirv_named_variable(
+            spv_code, "fragNormal", storage_class="Output"
+        )
+
+        pos_loc = re.search(rf"OpDecorate {re.escape(pos_id)} Location (\d+)", spv_code)
+        color_loc = re.search(
+            rf"OpDecorate {re.escape(color_id)} Location (\d+)", spv_code
+        )
+        tex_loc = re.search(rf"OpDecorate {re.escape(tex_id)} Location (\d+)", spv_code)
+        frag_color_loc = re.search(
+            rf"OpDecorate {re.escape(frag_color_id)} Location (\d+)", spv_code
+        )
+        frag_normal_loc = re.search(
+            rf"OpDecorate {re.escape(frag_normal_id)} Location (\d+)", spv_code
+        )
+
+        assert pos_loc is not None
+        assert color_loc is not None
+        assert tex_loc is not None
+        assert frag_color_loc is not None
+        assert frag_normal_loc is not None
+
+        input_locations = sorted(
+            [int(pos_loc.group(1)), int(color_loc.group(1)), int(tex_loc.group(1))]
+        )
+        assert input_locations == [0, 1, 2]
+
+        output_locations = sorted(
+            [int(frag_color_loc.group(1)), int(frag_normal_loc.group(1))]
+        )
+        assert output_locations == [0, 1]
+        assert "WARNING" not in spv_code
+
+    def test_mixed_explicit_and_auto_locations_no_conflicts(self):
+        source_code = """
+        shader MixedLocations {
+            vec4 position @input @location(0);
+            vec3 normal @input @location(2);
+            vec2 texCoord @input;
+            vec4 outColor @output @location(0);
+            float outDepth @output;
+
+            fragment {
+                void main() {
+                    outColor = position + vec4(normal, 1.0);
+                    outDepth = texCoord.x;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        pos_id = spirv_named_variable(spv_code, "position", storage_class="Input")
+        normal_id = spirv_named_variable(spv_code, "normal", storage_class="Input")
+        tex_id = spirv_named_variable(spv_code, "texCoord", storage_class="Input")
+        color_id = spirv_named_variable(spv_code, "outColor", storage_class="Output")
+        depth_id = spirv_named_variable(spv_code, "outDepth", storage_class="Output")
+
+        assert f"OpDecorate {pos_id} Location 0" in spv_code
+        assert f"OpDecorate {normal_id} Location 2" in spv_code
+        assert f"OpDecorate {color_id} Location 0" in spv_code
+
+        tex_loc = re.search(rf"OpDecorate {re.escape(tex_id)} Location (\d+)", spv_code)
+        depth_loc = re.search(
+            rf"OpDecorate {re.escape(depth_id)} Location (\d+)", spv_code
+        )
+        assert tex_loc is not None
+        assert depth_loc is not None
+        assert int(tex_loc.group(1)) not in (0, 2)
+        assert int(depth_loc.group(1)) != 0
+        assert "WARNING" not in spv_code
+
+
+class TestSpirvShaderValidation:
+    def test_empty_shader_produces_minimal_valid_spirv(self, tmp_path):
+        shader_node = ShaderNode(
+            name="EmptyShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={},
+            structs=[],
+            functions=[],
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability Shader" in spv_code
+        assert "OpMemoryModel Logical GLSL450" in spv_code
+
+    def test_shader_with_no_stages_emits_capability_and_memory_model_without_entry_points(
+        self, tmp_path
+    ):
+        shader_node = ShaderNode(
+            name="NoStageShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={},
+            structs=[],
+            functions=[],
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability Shader" in spv_code
+        assert "OpMemoryModel Logical GLSL450" in spv_code
+        assert "OpEntryPoint" not in spv_code
+        assert "; SPIR-V" in spv_code
+        assert "; Version: 1.0" in spv_code
+
+    def test_invalid_struct_only_shader_shape_emits_no_entry_points(self, tmp_path):
+        struct = StructNode(
+            name="MyData",
+            members=[VariableNode("value", PrimitiveType("float"))],
+        )
+        shader_node = ShaderNode(
+            name="StructOnlyShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={},
+            structs=[struct],
+            functions=[],
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability Shader" in spv_code
+        assert "OpMemoryModel Logical GLSL450" in spv_code
+        assert "OpEntryPoint" not in spv_code
+        assert "OpName" in spv_code
+        assert "MyData" in spv_code
+        assert "OpTypeStruct" in spv_code
+
+    def test_ray_generation_shader_emits_entry_point_ray_generation_khr(self, tmp_path):
+        void_type = PrimitiveType("void")
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode([ReturnNode(None)]),
+        )
+        shader_node = ShaderNode(
+            name="RayGenShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.RAY_GENERATION: StageNode(
+                    ShaderStage.RAY_GENERATION,
+                    entry_point,
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability Shader" in spv_code
+        assert "OpMemoryModel Logical GLSL450" in spv_code
+        assert "OpEntryPoint RayGenerationKHR" in spv_code
+
+    def test_ray_tracing_operations_emit_diagnostic_comments(self, tmp_path):
+        void_type = PrimitiveType("void")
+        uint_type = PrimitiveType("uint")
+        bool_type = PrimitiveType("bool")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode(
+                        "traceResult",
+                        uint_type,
+                        RayTracingOpNode("TraceRay", [1, 2, 3, 4, 5, 6, 7, 8]),
+                    ),
+                    VariableNode(
+                        "hitResult",
+                        bool_type,
+                        RayTracingOpNode("ReportHit", [1.0, 0]),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="RayTracingOpsShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.RAY_GENERATION: StageNode(
+                    ShaderStage.RAY_GENERATION,
+                    entry_point,
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "TraceRay yet; using a default uint value"
+        ) in spv_code
+        assert (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "ReportHit yet; using a default bool value"
+        ) in spv_code
+        assert "Unknown expression type RayTracingOpNode" not in spv_code
+
+    def test_ray_query_operations_emit_khr_instructions_or_diagnostics(self, tmp_path):
+        void_type = PrimitiveType("void")
+        bool_type = PrimitiveType("bool")
+        float_type = PrimitiveType("float")
+        ray_query_type = PrimitiveType("RayQuery")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode("rq", ray_query_type),
+                    VariableNode(
+                        "proceeded",
+                        bool_type,
+                        RayQueryOpNode("Proceed", "rq", []),
+                    ),
+                    VariableNode(
+                        "hitT",
+                        float_type,
+                        RayQueryOpNode("CommittedRayT", "rq", []),
+                    ),
+                    VariableNode(
+                        "unsupportedAttr",
+                        PrimitiveType("uint"),
+                        RayQueryOpNode("CommittedTriangleCustomAttribute", "rq", []),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="RayQueryOpsShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.COMPUTE: StageNode(
+                    ShaderStage.COMPUTE,
+                    entry_point,
+                    execution_config={"local_size": (1, 1, 1)},
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert "OpRayQueryGetIntersectionTKHR" in spv_code
+        assert (
+            "WARNING: SPIR-V backend does not lower ray query operation "
+            "CommittedTriangleCustomAttribute yet; using a default uint value"
+        ) in spv_code
+        assert "Unknown expression type RayQueryOpNode" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_tracing_trace_ray_emits_diagnostic_or_optraceraykhr(self, tmp_path):
+        void_type = PrimitiveType("void")
+        uint_type = PrimitiveType("uint")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode(
+                        "traceOut",
+                        uint_type,
+                        RayTracingOpNode("TraceRay", [1, 2, 3, 4, 5, 6, 7, 8]),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="TraceRayDiagnosticShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.RAY_GENERATION: StageNode(
+                    ShaderStage.RAY_GENERATION,
+                    entry_point,
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        has_diagnostic = (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "TraceRay yet; using a default uint value"
+        ) in spv_code
+        has_op = "OpTraceRayKHR" in spv_code
+        assert has_diagnostic or has_op
+        assert "Unknown expression type RayTracingOpNode" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_tracing_report_intersection_emits_diagnostic_or_op(self, tmp_path):
+        void_type = PrimitiveType("void")
+        bool_type = PrimitiveType("bool")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode(
+                        "hitAccepted",
+                        bool_type,
+                        RayTracingOpNode("ReportHit", [1.0, 0]),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="ReportIntersectionShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.RAY_GENERATION: StageNode(
+                    ShaderStage.RAY_GENERATION,
+                    entry_point,
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        has_diagnostic = (
+            "WARNING: SPIR-V backend does not lower ray tracing operation "
+            "ReportHit yet; using a default bool value"
+        ) in spv_code
+        has_op = "OpReportIntersectionKHR" in spv_code
+        assert has_diagnostic or has_op
+        assert "Unknown expression type RayTracingOpNode" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_proceed_emits_oprrayqueryproceedkhr(self, tmp_path):
+        void_type = PrimitiveType("void")
+        bool_type = PrimitiveType("bool")
+        ray_query_type = PrimitiveType("RayQuery")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode("rq", ray_query_type),
+                    VariableNode(
+                        "proceeded",
+                        bool_type,
+                        RayQueryOpNode("Proceed", "rq", []),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="RayQueryProceedShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.COMPUTE: StageNode(
+                    ShaderStage.COMPUTE,
+                    entry_point,
+                    execution_config={"local_size": (1, 1, 1)},
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert "OpRayQueryProceedKHR" in spv_code
+        assert re.search(r"%\d+ = OpRayQueryProceedKHR %\d+ %\d+", spv_code)
+        assert "Proceed yet; using a default" not in spv_code
+        assert "Unknown expression type RayQueryOpNode" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_ray_query_committed_type_emits_intersection_type_khr(self, tmp_path):
+        void_type = PrimitiveType("void")
+        uint_type = PrimitiveType("uint")
+        ray_query_type = PrimitiveType("RayQuery")
+
+        entry_point = FunctionNode(
+            name="main",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode(
+                [
+                    VariableNode("rq", ray_query_type),
+                    VariableNode(
+                        "status",
+                        uint_type,
+                        RayQueryOpNode("CommittedType", "rq", []),
+                    ),
+                ]
+            ),
+        )
+        shader_node = ShaderNode(
+            name="RayQueryCommittedStatusShader",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={
+                ShaderStage.COMPUTE: StageNode(
+                    ShaderStage.COMPUTE,
+                    entry_point,
+                    execution_config={"local_size": (1, 1, 1)},
+                )
+            },
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        assert "OpCapability RayQueryKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_query"' in spv_code
+        assert "OpRayQueryGetIntersectionTypeKHR" in spv_code
+        assert "CommittedType yet; using a default" not in spv_code
+        assert "Unknown expression type RayQueryOpNode" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_resource_memory_qualifier_readonly_emits_nonwritable(self, tmp_path):
+        source_code = """
+        shader ReadonlyQualifierShader {
+            struct DataBlock {
+                float values[];
+            };
+
+            DataBlock data @glsl_buffer_block(std430) @binding(0) @readonly;
+
+            compute {
+                void main() {
+                    float v = data.values[0];
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "NonWritable" in spv_code
+        assert re.search(r"OpMemberDecorate %\d+ 0 NonWritable", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_resource_memory_qualifier_writeonly_emits_nonreadable(self, tmp_path):
+        source_code = """
+        shader WriteonlyQualifierShader {
+            struct OutputBlock {
+                float values[];
+            };
+
+            OutputBlock output @glsl_buffer_block(std430) @binding(0) @writeonly;
+
+            compute {
+                void main() {
+                    output.values[0] = 1.0;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "NonReadable" in spv_code
+        assert re.search(r"OpMemberDecorate %\d+ 0 NonReadable", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_resource_memory_qualifier_coherent_emits_coherent_decoration(
+        self, tmp_path
+    ):
+        source_code = """
+        shader CoherentQualifierShader {
+            struct SharedBlock {
+                float values[];
+            };
+
+            SharedBlock dataBlock @glsl_buffer_block(std430) @binding(0) @coherent;
+
+            compute {
+                void main() {
+                    float v = dataBlock.values[0];
+                    dataBlock.values[1] = v;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "Coherent" in spv_code
+        assert re.search(r"OpMemberDecorate %\d+ 0 Coherent", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_resource_memory_qualifier_volatile_emits_volatile_decoration(
+        self, tmp_path
+    ):
+        source_code = """
+        shader VolatileQualifierShader {
+            struct VolBlock {
+                float values[];
+            };
+
+            VolBlock volData @glsl_buffer_block(std430) @binding(0) @volatile;
+
+            compute {
+                void main() {
+                    float v = volData.values[0];
+                    volData.values[1] = v;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert "Volatile" in spv_code
+        assert re.search(r"OpMemberDecorate %\d+ 0 Volatile", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_struct_members_with_semantics_get_location_decorations(self, tmp_path):
+        source_code = """
+        shader StructMemberSemantics {
+            struct MeshVertex {
+                vec4 position @ gl_Position;
+                vec2 uv @ TEXCOORD0;
+                vec3 normal @ NORMAL;
+            };
+
+            mesh {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+                void main(@vertices out MeshVertex verts[3], @indices out uvec3 tris[1]) {
+                    SetMeshOutputCounts(3, 1);
+                    SetVertex(0, vec3(0.0, 0.5, 0.0));
+                    tris[0] = uvec3(0u, 1u, 2u);
+                    verts[0].uv = vec2(0.5, 0.5);
+                    verts[0].normal = vec3(0.0, 1.0, 0.0);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        uv_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_uv")
+        normal_id = spirv_named_id(spv_code, "_CrossGLMesh_vertices_normal")
+
+        assert f"OpDecorate {uv_id} Location 5" in spv_code
+        assert f"OpDecorate {normal_id} Location 1" in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_position_semantic_maps_to_builtin_position(self, tmp_path):
+        source_code = """
+        shader PositionBuiltin {
+            struct VertexOut {
+                vec4 position @ gl_Position;
+            };
+
+            mesh {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+                void main(@vertices out VertexOut verts[3], @indices out uvec3 tris[1]) {
+                    SetMeshOutputCounts(3, 1);
+                    SetVertex(0, vec3(0.0, 0.5, 0.0));
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert re.search(r"OpMemberDecorate %\d+ 0 BuiltIn Position", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_sv_position_semantic_maps_to_builtin_position(self, tmp_path):
+        source_code = """
+        shader SVPositionBuiltin {
+            struct VertexOut {
+                vec4 pos @ SV_Position;
+            };
+
+            mesh {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                layout(triangles, max_vertices = 3, max_primitives = 1) out;
+
+                void main(@vertices out VertexOut verts[3], @indices out uvec3 tris[1]) {
+                    SetMeshOutputCounts(3, 1);
+                    SetVertex(0, vec3(0.0, 0.5, 0.0));
+                    tris[0] = uvec3(0u, 1u, 2u);
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        spv_code = VulkanSPIRVCodeGen().generate(ast)
+
+        assert re.search(r"OpMemberDecorate %\d+ 0 BuiltIn Position", spv_code)
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_multiple_struct_members_get_sequential_location_decorations(
+        self, tmp_path
+    ):
+        source_code = """
+        shader MultiLocationMembers {
+            float first @input @location(0);
+            float second @input @location(1);
+            float third @input @location(2);
+            float outVal @output @location(0);
+
+            fragment {
+                void main() {
+                    outVal = first + second + third;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        first_id = spirv_named_variable(spv_code, "first", storage_class="Input")
+        second_id = spirv_named_variable(spv_code, "second", storage_class="Input")
+        third_id = spirv_named_variable(spv_code, "third", storage_class="Input")
+        out_id = spirv_named_variable(spv_code, "outVal", storage_class="Output")
+
+        assert f"OpDecorate {first_id} Location 0" in spv_code
+        assert f"OpDecorate {second_id} Location 1" in spv_code
+        assert f"OpDecorate {third_id} Location 2" in spv_code
+        assert f"OpDecorate {out_id} Location 0" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_auto_location_assignment_produces_sequential_decorations(self, tmp_path):
+        source_code = """
+        shader AutoLocationSequential {
+            float a @input;
+            float b @input;
+            float c @input;
+            float result @output;
+
+            fragment {
+                void main() {
+                    result = a + b + c;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        a_id = spirv_named_variable(spv_code, "a", storage_class="Input")
+        b_id = spirv_named_variable(spv_code, "b", storage_class="Input")
+        c_id = spirv_named_variable(spv_code, "c", storage_class="Input")
+        result_id = spirv_named_variable(spv_code, "result", storage_class="Output")
+
+        assert f"OpDecorate {a_id} Location 0" in spv_code
+        assert f"OpDecorate {b_id} Location 1" in spv_code
+        assert f"OpDecorate {c_id} Location 2" in spv_code
+        assert f"OpDecorate {result_id} Location 0" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_invalid_duplicate_semantics_produce_diagnostics(self):
+        source_code = """
+        shader DuplicateLocationShader {
+            float first @input @location(0);
+            float second @input @location(0);
+        }
+        """
+
+        with pytest.raises(ValueError, match="Duplicate SPIR-V input location 0"):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_invalid_duplicate_output_locations_produce_diagnostics(self):
+        source_code = """
+        shader DuplicateOutputLocationShader {
+            float outA @output @location(2);
+            float outB @output @location(2);
+        }
+        """
+
+        with pytest.raises(ValueError, match="Duplicate SPIR-V output location 2"):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(source_code).tokens).parse())

@@ -16914,6 +16914,12 @@ class VulkanSPIRVCodeGen:
             "task": "TaskEXT",
             "object": "TaskEXT",
             "amplification": "TaskEXT",
+            "ray_generation": "RayGenerationKHR",
+            "ray_intersection": "IntersectionKHR",
+            "ray_closest_hit": "ClosestHitKHR",
+            "ray_miss": "MissKHR",
+            "ray_any_hit": "AnyHitKHR",
+            "ray_callable": "CallableKHR",
         }
         return stage_map.get(stage_name or "fragment", "Fragment")
 
@@ -17428,9 +17434,21 @@ class VulkanSPIRVCodeGen:
                     f"OpExecutionMode %{function_id.id} "
                     f"{self.mesh_stage_topology_mode(stage)}"
                 )
+        elif execution_model in {
+            "RayGenerationKHR",
+            "IntersectionKHR",
+            "AnyHitKHR",
+            "ClosestHitKHR",
+            "MissKHR",
+            "CallableKHR",
+        }:
+            self.require_capability("RayTracingKHR")
+            self.require_extension("SPV_KHR_ray_tracing")
 
     def spirv_module_version(self) -> str:
         if "MeshShadingEXT" in self.required_capabilities:
+            return "1.4"
+        if "RayTracingKHR" in self.required_capabilities:
             return "1.4"
         if any(
             capability.startswith("GroupNonUniform")

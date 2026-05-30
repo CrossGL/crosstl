@@ -3125,6 +3125,61 @@ def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
     assert "unsupported GLSL texture compare" not in glsl
 
 
+def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float> shadows[2];
+            Texture2D<float4> colors[2];
+        };
+
+        ResourceBundle resources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float readShadow(
+            Texture2D<float> source,
+            SamplerComparisonState cmpSampler,
+            float2 uv,
+            float depth
+        ) {
+            return source.SampleCmpLevelZero(cmpSampler, uv, depth);
+        }
+
+        float4 readColor(
+            Texture2D<float4> source,
+            SamplerState texSampler,
+            float2 uv
+        ) {
+            return source.Sample(texSampler, uv);
+        }
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1, uint index : TEXCOORD2) : SV_Target0 {
+            float sampled = readShadow(
+                resources.shadows[index], compareSampler, uv, depth
+            );
+            float4 color = readColor(resources.colors[index], linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadows[2];" in crossgl
+    assert "sampler2D colors[2];" in crossgl
+    assert "sampler2DShadow colors[2];" not in crossgl
+    assert "float readShadow(sampler2DShadow source" in crossgl
+    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "readShadow(resources.shadows[index], compareSampler, uv, depth)" in crossgl
+    assert "readColor(resources.colors[index], linearSampler, uv)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "sampler2DShadow shadows[2];" in glsl
+    assert "sampler2D colors[2];" in glsl
+    assert "readShadow(resources.shadows[index], uv, depth)" in glsl
+    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+
 def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():
     code = textwrap.dedent("""
         Texture2D<float4> tex : register(t0);

@@ -343,6 +343,30 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "gl_GlobalInvocationID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
             "gl_GlobalInvocationID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
             "gl_GlobalInvocationID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "gl_LocalInvocationIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
+            "SV_GroupThreadID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
+            "SV_GroupThreadID.x": "threadIdx.x",
+            "SV_GroupThreadID.y": "threadIdx.y",
+            "SV_GroupThreadID.z": "threadIdx.z",
+            "SV_GroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
+            "SV_GroupID.x": "blockIdx.x",
+            "SV_GroupID.y": "blockIdx.y",
+            "SV_GroupID.z": "blockIdx.z",
+            "SV_DispatchThreadID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
+            "SV_DispatchThreadID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "SV_DispatchThreadID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "SV_DispatchThreadID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "SV_GroupIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
         }
 
     def generate(self, node: ASTNode) -> str:
@@ -3301,6 +3325,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return f"{{{elements}}}"
 
     def visit_MemberAccessNode(self, node) -> str:
+        raw_object_name = getattr(node.object, "name", None)
+        if raw_object_name is not None:
+            raw_member_access = f"{raw_object_name}.{node.member}"
+            if raw_member_access in self.builtin_map:
+                return self.builtin_map[raw_member_access]
+
         object_expr = self.visit(node.object)
         member_access = f"{object_expr}.{node.member}"
         if member_access in self.builtin_map:

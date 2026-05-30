@@ -3696,6 +3696,14 @@ class MojoCodeGen:
             f"semantic={mapped_semantic} source={semantic}\n"
         )
 
+    def generate_parameter_semantic_comment(self, shader_type, param_name, semantic):
+        mapped_semantic = self.map_semantic(semantic)
+        return (
+            "# CrossGL parameter semantic: "
+            f"stage={shader_type or 'function'} "
+            f"name={param_name} semantic={mapped_semantic} source={semantic}\n"
+        )
+
     def semantic_parameter_kind(self, semantic):
         lower = str(semantic).lower()
         upper = str(semantic).upper()
@@ -4222,7 +4230,6 @@ class MojoCodeGen:
         """Render one CrossGL function or shader entry point as Mojo code."""
         code = ""
         "    " * indent
-        function_name = self.shader_entry_function_name(func, shader_type)
         previous_variable_types = self.variable_types.copy()
         previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
         previous_resource_access_qualifier_aliases = {
@@ -4252,6 +4259,7 @@ class MojoCodeGen:
             getattr(func, "body", []), param_names
         )
         params = []
+        parameter_semantic_comments = []
         used_parameter_semantics = {}
         for p, param_type in param_infos:
             semantic = self.node_semantic(p)
@@ -4265,11 +4273,14 @@ class MojoCodeGen:
 
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
-            param_semantic = f"  # {self.map_semantic(semantic)}" if semantic else ""
+            if semantic:
+                parameter_semantic_comments.append(
+                    self.generate_parameter_semantic_comment(
+                        shader_type, p.name, semantic
+                    )
+                )
             ownership = "owned " if p.name in mutated_params else ""
-            params.append(
-                f"{ownership}{p.name}: {self.map_type(param_type)}{param_semantic}"
-            )
+            params.append(f"{ownership}{p.name}: {self.map_type(param_type)}")
 
         params_str = ", ".join(params) if params else ""
 
@@ -4277,6 +4288,9 @@ class MojoCodeGen:
             return_type = self.convert_type_node_to_string(func.return_type)
         else:
             return_type = "void"
+        function_name = self.shader_entry_function_name(
+            func, shader_type, param_infos, return_type
+        )
         self.function_return_types[func.name] = return_type
         if function_name != func.name:
             self.function_return_types[function_name] = return_type
@@ -4288,6 +4302,8 @@ class MojoCodeGen:
 
         if shader_type in MOJO_SUPPORTED_STAGE_TYPES:
             code += f"# CrossGL shader stage: {shader_type}\n"
+        for comment in parameter_semantic_comments:
+            code += comment
         if return_semantic:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
@@ -4321,11 +4337,22 @@ class MojoCodeGen:
         self.current_return_type = previous_return_type
         return code
 
-    def shader_entry_function_name(self, func, shader_type):
+    def shader_entry_function_name(
+        self, func, shader_type, param_infos=None, return_type=None
+    ):
         name = getattr(func, "name", "main")
-        if shader_type in {"vertex", "fragment"} and name == "main":
+        if name != "main":
+            return name
+        if shader_type in {"vertex", "fragment"}:
             return f"{shader_type}_main"
+        if shader_type == "compute" and not self.compute_entry_can_remain_main(
+            param_infos, return_type
+        ):
+            return "compute_main"
         return name
+
+    def compute_entry_can_remain_main(self, param_infos, return_type):
+        return not (param_infos or []) and self.type_name(return_type) == "void"
 
     def collect_mutated_parameters(self, body, param_names):
         mutated = set()
