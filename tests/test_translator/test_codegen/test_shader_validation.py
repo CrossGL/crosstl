@@ -1358,6 +1358,65 @@ shader StructMemberTextureArrayLocalAliasValidation {
 """
 
 
+METAL_STRUCT_MEMBER_RESOURCE_ARRAY_ALIAS_TEXTURE_OPS_FRAGMENT_SHADER = """
+shader MetalStructMemberResourceArrayAliasTextureOpsValidation {
+    struct TexturePack {
+        sampler2D textures[4];
+        sampler texturesSampler[4];
+    };
+
+    struct FSInput {
+        int layer @ TEXCOORD0;
+        vec2 uv @ TEXCOORD1;
+        ivec2 offset @ TEXCOORD2;
+        vec2 ddx @ TEXCOORD3;
+        vec2 ddy @ TEXCOORD4;
+    };
+
+    vec4 inspectPack(
+        TexturePack pack,
+        int layer,
+        vec2 uv,
+        ivec2 offset,
+        vec2 ddx,
+        vec2 ddy
+    ) {
+        let texAlias = pack.textures[layer];
+        let sampAlias = pack.texturesSampler[layer];
+        vec4 implicitColor = texture(texAlias, uv);
+        ivec2 dims = textureSize(texAlias, 1);
+        int levels = textureQueryLevels(texAlias);
+        vec2 lod = textureQueryLod(texAlias, sampAlias, uv);
+        vec4 lodColor = textureLod(texAlias, sampAlias, uv, 1.0);
+        vec4 gradColor = textureGrad(texAlias, sampAlias, uv, ddx, ddy);
+        vec4 gathered = textureGatherOffset(
+            texAlias,
+            sampAlias,
+            uv,
+            offset,
+            layer
+        );
+        return implicitColor + lodColor + gradColor + gathered +
+            vec4(float(dims.x + dims.y + levels), lod.x, lod.y, 1.0);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            TexturePack pack;
+            return inspectPack(
+                pack,
+                input.layer,
+                input.uv,
+                input.offset,
+                input.ddx,
+                input.ddy
+            );
+        }
+    }
+}
+"""
+
+
 SAMPLED_TEXTURE_ARRAY_CONST_INDEX_FRAGMENT_SHADER = """
 shader SampledTextureArrayConstIndexValidation {
     const int COUNT = 4;
@@ -7019,6 +7078,35 @@ def test_generated_metal_struct_member_resource_array_local_aliases_compile_with
     assert "texture2d<float> layerAlias = pack.textures[layer];" in code
     assert "layerAlias.sample(pack.texturesSampler[layer], uv)" in code
     assert "sampler(mag_filter::linear, min_filter::linear)" not in code
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [xcrun, "-sdk", "macosx", "metal", "-c", str(source), "-o", str(output)]
+    )
+
+
+def test_generated_metal_struct_member_resource_array_alias_texture_ops_compile_with_metal(
+    tmp_path,
+):
+    xcrun = shutil.which("xcrun")
+    if xcrun is None:
+        pytest.skip("xcrun is not installed")
+
+    source = tmp_path / "fragment_struct_member_resource_array_alias_texture_ops.metal"
+    output = tmp_path / "fragment_struct_member_resource_array_alias_texture_ops.air"
+    code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(
+            METAL_STRUCT_MEMBER_RESOURCE_ARRAY_ALIAS_TEXTURE_OPS_FRAGMENT_SHADER
+        ),
+        "fragment",
+    )
+    assert "texture2d<float> texAlias = pack.textures[layer];" in code
+    assert "sampler sampAlias = pack.texturesSampler[layer];" in code
+    assert "texAlias.sample(pack.texturesSampler[layer], uv)" in code
+    assert "texAlias.calculate_unclamped_lod(sampAlias, uv)" in code
+    assert "texAlias.sample(sampAlias, uv, level(1.0))" in code
+    assert "texAlias.sample(sampAlias, uv, gradient2d(ddx, ddy))" in code
+    assert "texAlias.gather(sampAlias, uv, offset, component::w)" in code
     source.write_text(code, encoding="utf-8")
 
     run_validator(

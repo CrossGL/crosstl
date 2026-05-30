@@ -799,8 +799,10 @@ def test_basic_shader():
         generated_code = generate_code(ast)
         assert generated_code is not None
         assert "fn main(" in generated_code
-        assert "@vertex_shader" in generated_code
-        assert "@fragment_shader" in generated_code
+        assert "# CrossGL shader stage: vertex" in generated_code
+        assert "# CrossGL shader stage: fragment" in generated_code
+        assert "@vertex_shader" not in generated_code
+        assert "@fragment_shader" not in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo basic shader codegen not implemented.")
@@ -22168,9 +22170,46 @@ def test_mojo_compute_shader_synchronization_barriers():
     assert "_crossgl_memory_barrier()" in generated_code
     assert "fn _crossgl_workgroup_barrier():" in generated_code
     assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "# CrossGL shader stage: compute" in generated_code
+    assert "@compute_shader" not in generated_code
     assert "\n    barrier()" not in generated_code
     assert "memoryBarrier()" not in generated_code
     assert "workgroupBarrier()" not in generated_code
+
+
+def test_mojo_compute_shader_synchronization_barriers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader BarrierCompute {
+        compute {
+            void main() {
+                int sharedVal = 0;
+                sharedVal = 1;
+                barrier();
+                int result = sharedVal + 1;
+                memoryBarrier();
+                sharedVal = result;
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL shader stage: compute" in generated_code
+    assert "@compute_shader" not in generated_code
+
+    source_path = tmp_path / "compute_barrier_shader.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_mojo_multisample_storage_image_load_store_in_compute():

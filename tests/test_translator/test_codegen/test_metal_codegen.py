@@ -25700,6 +25700,109 @@ def test_metal_struct_member_resource_array_local_aliases_preserve_sampler_metad
     assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
 
 
+def test_metal_struct_member_resource_array_alias_texture_ops_preserve_metadata():
+    shader = """
+    shader StructMemberResourceArrayAliasTextureOps {
+        struct TexturePack {
+            sampler2D textures[4];
+            sampler texturesSampler[4];
+        };
+
+        struct FSInput {
+            int layer @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+            ivec2 offset @ TEXCOORD2;
+            vec2 ddx @ TEXCOORD3;
+            vec2 ddy @ TEXCOORD4;
+        };
+
+        vec4 inspectPack(
+            TexturePack pack,
+            int layer,
+            vec2 uv,
+            ivec2 offset,
+            vec2 ddx,
+            vec2 ddy
+        ) {
+            let texAlias = pack.textures[layer];
+            let sampAlias = pack.texturesSampler[layer];
+            vec4 implicitColor = texture(texAlias, uv);
+            ivec2 dims = textureSize(texAlias, 1);
+            int levels = textureQueryLevels(texAlias);
+            vec2 lod = textureQueryLod(texAlias, sampAlias, uv);
+            vec4 lodColor = textureLod(texAlias, sampAlias, uv, 1.0);
+            vec4 gradColor = textureGrad(texAlias, sampAlias, uv, ddx, ddy);
+            vec4 gathered = textureGatherOffset(
+                texAlias,
+                sampAlias,
+                uv,
+                offset,
+                layer
+            );
+            return implicitColor + lodColor + gradColor + gathered +
+                vec4(float(dims.x + dims.y + levels), lod.x, lod.y, 1.0);
+        }
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                TexturePack pack;
+                return inspectPack(
+                    pack,
+                    input.layer,
+                    input.uv,
+                    input.offset,
+                    input.ddx,
+                    input.ddy
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "array<texture2d<float>, 4> textures;" in generated_code
+    assert "array<sampler, 4> texturesSampler;" in generated_code
+    assert "texture2d<float> texAlias = pack.textures[layer];" in generated_code
+    assert "sampler sampAlias = pack.texturesSampler[layer];" in generated_code
+    assert (
+        "float4 implicitColor = texAlias.sample(pack.texturesSampler[layer], uv);"
+        in (generated_code)
+    )
+    assert (
+        "int2 dims = int2(texAlias.get_width(uint(1)), "
+        "texAlias.get_height(uint(1)));"
+    ) in generated_code
+    assert "int levels = int(texAlias.get_num_mip_levels());" in generated_code
+    assert (
+        "float2 lod = float2(texAlias.calculate_unclamped_lod(sampAlias, uv), "
+        "texAlias.calculate_clamped_lod(sampAlias, uv));"
+    ) in generated_code
+    assert "float4 lodColor = texAlias.sample(sampAlias, uv, level(1.0));" in (
+        generated_code
+    )
+    assert (
+        "float4 gradColor = texAlias.sample(sampAlias, uv, " "gradient2d(ddx, ddy));"
+    ) in generated_code
+    assert (
+        "layer == 0 ? texAlias.gather(sampAlias, uv, offset, component::x)"
+        in generated_code
+    )
+    assert "texAlias.gather(sampAlias, uv, offset, component::w)" in generated_code
+    assert (
+        "inspectPack(pack, input.layer, input.uv, input.offset, "
+        "input.ddx, input.ddy)"
+    ) in generated_code
+    assert "texture2d<float> texAlias = pack.textures;" not in generated_code
+    assert "sampler(mag_filter::linear, min_filter::linear)" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureQueryLod(" not in generated_code
+
+
 def test_metal_implicit_sampler_array_indexes_match_texture_array_elements():
     shader = """
     shader ImplicitSamplerArrayElements {

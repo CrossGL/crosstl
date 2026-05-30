@@ -3874,6 +3874,118 @@ class TestCudaCodeGen:
         assert "buffer_append(" not in cuda_code
         assert "buffer_consume(" not in cuda_code
 
+    def test_append_consume_buffer_references_forward_cuda_counters(self, tmp_path):
+        """Test append/consume reference parameters keep CUDA counter sidecars."""
+        source_code = """
+        shader AppendConsumeReferenceCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+            AppendStructuredBuffer<Particle> appendQueues[2];
+            ConsumeStructuredBuffer<Particle> consumeQueues[2];
+
+            void pushRef(AppendStructuredBuffer<Particle>& outRef, Particle p) {
+                outRef.Append(p);
+                buffer_append(outRef, p);
+            }
+
+            Particle popRef(ConsumeStructuredBuffer<Particle>& inRef) {
+                Particle a = inRef.Consume();
+                Particle b = buffer_consume(inRef);
+                return b;
+            }
+
+            Particle roundTrip(
+                AppendStructuredBuffer<Particle>& outRef,
+                ConsumeStructuredBuffer<Particle>& inRef,
+                Particle p
+            ) {
+                pushRef(outRef, p);
+                Particle consumed = popRef(inRef);
+                return consumed;
+            }
+
+            void process(uint which, Particle p) {
+                pushRef(appendParticles, p);
+                pushRef(appendQueues[which], p);
+                Particle a = popRef(consumeParticles);
+                Particle b = popRef(consumeQueues[which]);
+                Particle c = roundTrip(appendQueues[which], consumeQueues[which], b);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "Particle* appendParticles;" in cuda_code
+        assert "uint* appendParticles_counter;" in cuda_code
+        assert "const Particle* consumeParticles;" in cuda_code
+        assert "uint* consumeParticles_counter;" in cuda_code
+        assert "Particle* appendQueues[2];" in cuda_code
+        assert "uint* appendQueues_counter[2];" in cuda_code
+        assert "const Particle* consumeQueues[2];" in cuda_code
+        assert "uint* consumeQueues_counter[2];" in cuda_code
+        assert (
+            "__device__ void pushRef(Particle* const& outRef, "
+            "uint* outRef_counter, Particle p)"
+        ) in cuda_code
+        assert (
+            "__device__ Particle popRef(const Particle* const& inRef, "
+            "uint* inRef_counter)"
+        ) in cuda_code
+        assert (
+            "__device__ Particle roundTrip(Particle* const& outRef, "
+            "uint* outRef_counter, const Particle* const& inRef, "
+            "uint* inRef_counter, Particle p)"
+        ) in cuda_code
+        assert "cgl_append_structured_buffer(outRef, outRef_counter, p);" in cuda_code
+        assert (
+            "Particle a = cgl_consume_structured_buffer(inRef, inRef_counter);"
+            in cuda_code
+        )
+        assert (
+            "Particle b = cgl_consume_structured_buffer(inRef, inRef_counter);"
+            in cuda_code
+        )
+        assert "pushRef(outRef, outRef_counter, p);" in cuda_code
+        assert "Particle consumed = popRef(inRef, inRef_counter);" in cuda_code
+        assert "pushRef(appendParticles, appendParticles_counter, p);" in cuda_code
+        assert (
+            "pushRef(appendQueues[which], appendQueues_counter[which], p);" in cuda_code
+        )
+        assert (
+            "Particle a = popRef(consumeParticles, consumeParticles_counter);"
+            in cuda_code
+        )
+        assert (
+            "Particle b = popRef(consumeQueues[which], "
+            "consumeQueues_counter[which]);"
+        ) in cuda_code
+        assert (
+            "Particle c = roundTrip(appendQueues[which], "
+            "appendQueues_counter[which], consumeQueues[which], "
+            "consumeQueues_counter[which], b);"
+        ) in cuda_code
+        assert "AppendStructuredBuffer<" not in cuda_code
+        assert "ConsumeStructuredBuffer<" not in cuda_code
+        assert ".Append(" not in cuda_code
+        assert ".Consume(" not in cuda_code
+        assert "buffer_append(" not in cuda_code
+        assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_plain_shared_array_atomics_emit_cuda_pointer_atomics(self, tmp_path):
         """Test CUDA atomics on ordinary shared/array lvalues use pointer operands."""
         source_code = """

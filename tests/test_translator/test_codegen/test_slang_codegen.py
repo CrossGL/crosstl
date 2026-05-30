@@ -4983,6 +4983,234 @@ def test_slangc_smoke_compiles_generated_mesh_task_interfaces_if_available(
     )
 
 
+def test_slangc_smoke_compiles_generated_tessellation_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangTessellationCompileSmoke {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(
+                InputPatch<VSOut, 3> inputPatch,
+                uint patchID @ gl_PrimitiveID
+            ) {
+                PatchConstants patch;
+                VSOut first = gl_in[0];
+                patch.outer[0] = first.position.x + float(patchID);
+                patch.outer[1] = first.position.y;
+                patch.outer[2] = first.position.z;
+                patch.inner[0] = 1.0;
+                return patch;
+            }
+
+            HSOut main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOut output;
+                VSOut current = gl_in[gl_InvocationID];
+                output.position = current.position;
+                output.uv = current.uv;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOut, 3> patch,
+                vec3 domainCoord @ gl_TessCoord
+            ) @domain(tri) @ gl_Position {
+                vec4 p0 = patch[0].position * domainCoord.x;
+                vec4 p1 = patch[1].position * domainCoord.y;
+                vec4 p2 = patch[2].position * domainCoord.z;
+                return p0 + p1 + p2;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float outer[3] : SV_TessFactor;" in generated_code
+    assert "float inner[1] : SV_InsideTessFactor;" in generated_code
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint patchID : SV_PrimitiveID)" in generated_code
+    )
+    assert '[domain("tri")]' in generated_code
+    assert '[partitioning("integer")]' in generated_code
+    assert '[outputtopology("triangle_cw")]' in generated_code
+    assert "[outputcontrolpoints(3)]" in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert '[shader("hull")]' in generated_code
+    assert (
+        "HSOut HSMain(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "VSOut first = inputPatch[0];" in generated_code
+    assert "VSOut current = inputPatch[gl_InvocationID];" in generated_code
+    assert '[shader("domain")]' in generated_code
+    assert (
+        "float4 DSMain(OutputPatch<HSOut, 3> patch, "
+        "float3 domainCoord : SV_DomainLocation) : SV_Position" in generated_code
+    )
+    assert "return p0 + p1 + p2;" in generated_code
+    assert "gl_in" not in generated_code
+    assert ": gl_TessCoord" not in generated_code
+    assert ": gl_TessLevelOuter" not in generated_code
+    assert ": gl_TessLevelInner" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "hull",
+        profile="hs_6_0",
+        entry="HSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "domain",
+        profile="ds_6_0",
+        entry="DSMain",
+    )
+
+
+def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangRayCompileSmoke {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchSizeX = gl_LaunchSizeEXT.x;
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 0.5);
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                attributes.barycentrics = vec2(0.25, 0.75);
+                bool accepted = ReportHit(1.0, 0, attributes);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("raygeneration")]' in generated_code
+    assert "void RayGenMain()" in generated_code
+    assert "uint3 launch = DispatchRaysIndex();" in generated_code
+    assert "uint launchSizeX = DispatchRaysDimensions().x;" in generated_code
+    assert '[shader("closesthit")]' in generated_code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert '[shader("anyhit")]' in generated_code
+    assert (
+        "void AnyHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert "AcceptHitAndEndSearch();" in generated_code
+    assert '[shader("miss")]' in generated_code
+    assert "void MissMain(inout RayPayload payload)" in generated_code
+    assert '[shader("callable")]' in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert '[shader("intersection")]' in generated_code
+    assert "void IntersectionMain()" in generated_code
+    assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "payload.color = float3(attributes.barycentrics, 1.0);" in generated_code
+    assert "payload.color = float3(attributes.barycentrics, 0.5);" in generated_code
+    assert "payload.color = float3(0.0, 0.0, 0.0);" in generated_code
+    assert "data.value = data.value + 1u;" in generated_code
+    assert ": payload" not in generated_code
+    assert ": hit_attribute" not in generated_code
+    assert "rayPayloadInEXT" not in generated_code
+    assert "callableDataInEXT" not in generated_code
+    assert "gl_LaunchIDEXT" not in generated_code
+    assert "gl_LaunchSizeEXT" not in generated_code
+
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("anyhit", "AnyHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
+        ("intersection", "IntersectionMain"),
+    ]:
+        compile_generated_slang(
+            generated_code,
+            tmp_path,
+            stage,
+            profile="sm_6_3",
+            entry=entry,
+        )
+
+
 @pytest.mark.parametrize(
     ("shader_type", "semantic", "message"),
     [

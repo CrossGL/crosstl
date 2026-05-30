@@ -2981,6 +2981,85 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     assert "localShadow.sample_compare(localSampler, uv, depth)" in metal
 
 
+def test_codegen_sample_cmp_infers_shadow_struct_members():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float> shadow;
+            Texture2D<float4> color;
+        };
+
+        ResourceBundle resources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1) : SV_Target0 {
+            float sampled = resources.shadow.SampleCmpLevelZero(
+                compareSampler, uv, depth
+            );
+            float4 color = resources.color.Sample(linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadow;" in crossgl
+    assert "sampler2D color;" in crossgl
+    assert "sampler2DShadow color;" not in crossgl
+    assert "textureCompare(resources.shadow, compareSampler, uv, depth)" in crossgl
+    assert "texture(resources.color, linearSampler, uv)" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "sampler2DShadow shadow;" in glsl
+    assert "sampler2D color;" in glsl
+    assert "texture(resources.shadow, vec3(uv, depth))" in glsl
+    assert "texture(resources.color, uv)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture2D shadow" in hlsl
+    assert "Texture2D color" in hlsl
+    assert "resources.shadow.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "resources.color.Sample(linearSampler, uv)" in hlsl
+    assert "textureCompare(" not in hlsl
+
+
+def test_codegen_shadow_struct_member_inference_is_scoped_by_struct_type():
+    code = textwrap.dedent("""
+        struct ShadowBundle {
+            Texture2D<float> texture;
+        };
+
+        struct ColorBundle {
+            Texture2D<float4> texture;
+        };
+
+        ShadowBundle shadowResources;
+        ColorBundle colorResources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1) : SV_Target0 {
+            float sampled = shadowResources.texture.SampleCmpLevelZero(
+                compareSampler, uv, depth
+            );
+            float4 color = colorResources.texture.Sample(linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "struct ShadowBundle {\n        sampler2DShadow texture;" in crossgl
+    assert "struct ColorBundle {\n        sampler2D texture;" in crossgl
+    assert "struct ColorBundle {\n        sampler2DShadow texture;" not in crossgl
+    assert "textureCompare(shadowResources.texture, compareSampler, uv, depth)" in (
+        crossgl
+    )
+    assert "texture(colorResources.texture, linearSampler, uv)" in crossgl
+
+
 def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():
     code = textwrap.dedent("""
         Texture2D<float4> tex : register(t0);

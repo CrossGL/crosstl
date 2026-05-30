@@ -4283,12 +4283,8 @@ class MojoCodeGen:
             self.validate_return_semantic(shader_type, return_type, return_semantic)
         self.validate_struct_return_semantics(shader_type, return_type)
 
-        if shader_type == "vertex":
-            code += f"@vertex_shader\n"
-        elif shader_type == "fragment":
-            code += f"@fragment_shader\n"
-        elif shader_type == "compute":
-            code += f"@compute_shader\n"
+        if shader_type in MOJO_SUPPORTED_STAGE_TYPES:
+            code += f"# CrossGL shader stage: {shader_type}\n"
         if return_semantic:
             code += self.generate_return_semantic_comment(shader_type, return_semantic)
 
