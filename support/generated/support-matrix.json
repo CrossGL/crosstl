@@ -379,8 +379,56 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 13,
+        "unsupported_marker_count": 25,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(op, result_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(op, result_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(op, result_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(op, result_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "def unsupported_matrix_operation(self, op: str, fallback_type: SpirvId) -> SpirvId:"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "self.emit(f\"; WARNING: matrix operation '{op}' is not supported for operands\")"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(op, left_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(\"*\", matrix_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(\"/\", matrix_type)"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(\"*\", matrix_info[\"column_type\"])"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(\"*\", matrix_info[\"column_type\"])"
+          },
+          {
+            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
+            "text": "return self.unsupported_matrix_operation(\"*\", fallback_type)"
+          },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "def unsupported_lambda_default_value("
@@ -412,26 +460,6 @@
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
             "text": "raise ValueError(f\"SPIR-V match pattern unsupported: {detail}\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"; WARNING: Unsupported constructor {self.convert_type_node_to_string(expr.constructor_type)}\""
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "return self.unsupported_lambda_default_value(\"lambda expression\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "return self.unsupported_lambda_default_value("
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "# Non-identifier callee (e.g., function table call) not supported in SPIR-V path"
-          },
-          {
-            "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(\"; WARNING: Unsupported callee expression in SPIR-V backend\")"
           }
         ]
       },
@@ -441,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 637
+        "test_count": 638
       },
       "translator_codegen": {
         "exists": true,
@@ -2773,51 +2801,6 @@
       "feature": "Match/pattern lowering",
       "feature_id": "language.match",
       "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "language",
-      "feature": "Vector and matrix expressions",
-      "feature_id": "language.vector_matrix",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "language",
-      "feature": "Bitwise operations",
-      "feature_id": "language.bitwise",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "validation",
-      "feature": "Invalid shader shape validation",
-      "feature_id": "validation.invalid_shapes",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "validation",
-      "feature": "Invalid shader shape validation",
-      "feature_id": "validation.invalid_shapes",
-      "notes": "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
-      "status": "partial"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "validation",
-      "feature": "Invalid shader shape validation",
-      "feature_id": "validation.invalid_shapes",
-      "notes": "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
       "status": "partial"
     }
   ],
@@ -5836,9 +5819,27 @@
           "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_scalar_vector_constructors_splat_spirv_components",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_constructors_flatten_vector_and_swizzle_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_matrix_constructors_flatten_scalar_vector_and_matrix_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_double_matrix_constructors_use_double_columns",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_matrix_constructors_convert_between_float_and_double_matrices",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_matrix_arithmetic_operations_lower_to_valid_spirv",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_scalar_arithmetic_splats_scalar_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_arithmetic_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_swizzle_reads_emit_vector_shuffle",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_swizzle_assignment_inserts_each_written_component",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_swizzle_compound_assignments_update_masked_components",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_atan2_intrinsics_use_argument_result_type",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vector_math_builtins_lower_valid_operand_shapes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_metric_math_builtins_lower_valid_operand_shapes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_dot_uses_vector_component_result_type",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_float_min_max_clamp_builtins_use_typed_spirv_extinsts",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_numeric_mix_builtins_use_spirv_operand_result_type"
+          ],
+          "notes": "SPIR-V codegen lowers scalar/vector/bool constructors, vector constructor flattening and arity diagnostics, matrix constructors including double and mixed-precision conversions, vector arithmetic and swizzle reads/writes/compound assignments, matrix add/subtract/scalar multiply/scalar divide/matrix multiply/matrix-vector/vector-matrix arithmetic, and vector helper intrinsics with validator-backed coverage.",
+          "status": "supported"
         }
       }
     },
@@ -5889,9 +5890,17 @@
           "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_bitwise_and_or_xor_emit_correct_opcodes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_bitwise_not_emits_op_not",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_shift_left_right_emit_correct_opcodes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_bitwise_and_or_xor_shift_operations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_bitwise_not_unary_operation",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_bitwise_compound_assignments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compound_assignments_load_apply_op_and_store_result"
+          ],
+          "notes": "SPIR-V codegen lowers integer bitwise &, |, ^, shifts, unary bitwise not, and bitwise compound assignments to validated SPIR-V bitwise/shift opcodes.",
+          "status": "supported"
         }
       }
     },
@@ -5917,7 +5926,7 @@
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_invalid_sample_count_queries_emit_cuda_diagnostics"
           ],
           "notes": "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
-          "status": "partial"
+          "status": "supported"
         },
         "directx": {
           "evidence": [],
@@ -5936,7 +5945,7 @@
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_storage_image_query_shapes_emit_hip_metadata_helpers"
           ],
           "notes": "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
-          "status": "partial"
+          "status": "supported"
         },
         "metal": {
           "evidence": [],
@@ -6000,9 +6009,33 @@
           "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_atan2_operand_shapes_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_malformed_std450_math_builtins_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_min_max_clamp_mix_operand_shapes_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_vector_math_operand_shapes_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_metric_math_operand_shapes_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_compute_local_size_invalid_dimensions_warn_and_validate",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_tessellation_execution_modes_reject_invalid_metadata",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_patch_builtins_reject_invalid_contexts",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_patch_parameters_reject_invalid_contexts",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_stream_builtins_reject_invalid_stage_and_arity",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_set_mesh_output_counts_rejects_bad_arity",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_set_mesh_output_counts_rejects_non_scalar_counts",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_set_mesh_output_counts_rejects_declared_limit_overflow",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_whole_element_compound_assignments_reject_cleanly",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_direct_member_assignments_reject_unknown_members",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_global_interface_variables_reject_invalid_components",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_globals_reject_duplicate_explicit_spirv_bindings",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_storage_image_operations_reject_malformed_operand_shapes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_sampled_texture_operations_reject_malformed_operands",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_dynamic_resource_array_parameters_reject_incompatible_shapes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_texture_query_shapes_for_array_cube_and_multisample_samplers",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_resource_queries_reject_malformed_operands"
+          ],
+          "notes": "SPIR-V codegen emits deterministic diagnostics or validated fallback modules for invalid builtin operand shapes, compute/stage metadata, tessellation patch contexts, geometry stream calls, mesh output counts and member/index targets, ray-query argument shapes, interface locations/components, duplicate resource bindings, malformed buffer/image/texture/resource-query operands, and dynamic resource-array shape conflicts.",
+          "status": "supported"
         }
       }
     }
@@ -6027,13 +6060,13 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 200,
+    "backlog_count": 195,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
-        "partial": 12,
-        "supported": 11,
+        "partial": 11,
+        "supported": 12,
         "unknown": 16,
         "unsupported": 4,
         "validated_rejection": 0
@@ -6048,8 +6081,8 @@
       },
       "hip": {
         "diagnostic": 0,
-        "partial": 12,
-        "supported": 10,
+        "partial": 11,
+        "supported": 11,
         "unknown": 17,
         "unsupported": 4,
         "validated_rejection": 0
@@ -6096,8 +6129,8 @@
       },
       "vulkan": {
         "diagnostic": 1,
-        "partial": 17,
-        "supported": 17,
+        "partial": 14,
+        "supported": 20,
         "unknown": 8,
         "unsupported": 0,
         "validated_rejection": 0

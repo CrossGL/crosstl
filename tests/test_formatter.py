@@ -1,6 +1,5 @@
 from unittest import mock
 
-
 from crosstl.formatter import (
     CodeFormatter,
     ShaderLanguage,

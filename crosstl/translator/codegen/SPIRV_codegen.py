@@ -1370,6 +1370,10 @@ class VulkanSPIRVCodeGen:
         self, op: str, result_type: SpirvId, left: SpirvId, right: SpirvId
     ) -> SpirvId:
         """Create a binary operation."""
+        matrix_result = self.matrix_binary_operation(op, result_type, left, right)
+        if matrix_result is not None:
+            return matrix_result
+
         arithmetic_ops = {
             "+": ("OpFAdd", "OpIAdd", "OpIAdd"),
             "-": ("OpFSub", "OpISub", "OpISub"),
@@ -1435,6 +1439,238 @@ class VulkanSPIRVCodeGen:
         self.value_types[id_value] = result_type
         return spirv_id
 
+    def matrix_binary_operation(
+        self, op: str, result_type: SpirvId, left: SpirvId, right: SpirvId
+    ) -> Optional[SpirvId]:
+        """Lower matrix arithmetic to SPIR-V matrix or column-vector operations."""
+        left_type = self.registered_value_type(left)
+        right_type = self.registered_value_type(right)
+        left_matrix = self.matrix_operand_info(left_type)
+        right_matrix = self.matrix_operand_info(right_type)
+        if left_matrix is None and right_matrix is None:
+            return None
+
+        if op not in {"+", "-", "*", "/"}:
+            return self.unsupported_matrix_operation(op, result_type)
+
+        if left_matrix is not None and right_matrix is not None:
+            if op in {"+", "-"}:
+                return self.componentwise_matrix_operation(
+                    op, left, left_type, left_matrix, right, right_type, right_matrix
+                )
+            if op == "*":
+                return self.matrix_times_matrix(
+                    left, left_matrix, right, right_matrix, result_type
+                )
+            return self.unsupported_matrix_operation(op, result_type)
+
+        if left_matrix is not None:
+            right_vector = self.vector_type_info_from_type(right_type)
+            if op == "*" and right_vector is not None:
+                return self.matrix_times_vector(left, left_matrix, right, right_vector)
+            if right_vector is None:
+                if op == "*":
+                    return self.matrix_times_scalar(left, left_type, left_matrix, right)
+                if op == "/":
+                    return self.matrix_divided_by_scalar(
+                        left, left_type, left_matrix, right
+                    )
+            return self.unsupported_matrix_operation(op, result_type)
+
+        left_vector = self.vector_type_info_from_type(left_type)
+        if op == "*" and left_vector is not None and right_matrix is not None:
+            return self.vector_times_matrix(left, left_vector, right, right_matrix)
+        if op == "*" and left_vector is None and right_matrix is not None:
+            return self.matrix_times_scalar(right, right_type, right_matrix, left)
+
+        return self.unsupported_matrix_operation(op, result_type)
+
+    def matrix_operand_info(self, type_id: SpirvId):
+        matrix_info = self.matrix_type_info_from_type(type_id)
+        if matrix_info is None:
+            return None
+
+        column_type, column_count = matrix_info
+        column_info = self.vector_type_info_from_type(column_type)
+        if column_info is None:
+            return None
+
+        component_type, row_count = column_info
+        return {
+            "type": type_id,
+            "column_type": column_type,
+            "column_count": column_count,
+            "component_type": component_type,
+            "row_count": row_count,
+        }
+
+    def matrix_shapes_match(self, left_info, right_info) -> bool:
+        return (
+            left_info["column_count"] == right_info["column_count"]
+            and left_info["row_count"] == right_info["row_count"]
+            and left_info["component_type"].id == right_info["component_type"].id
+        )
+
+    def matrix_scalar_operand(self, value: SpirvId, component_type: SpirvId):
+        value_type = self.registered_value_type(value)
+        if value_type is not None:
+            if self.vector_type_info_from_type(value_type) is not None:
+                return None
+            if self.matrix_type_info_from_type(value_type) is not None:
+                return None
+
+        converted = self.convert_scalar_to_type(value, component_type)
+        if self.normalize_primitive_name(
+            converted.type.base_type
+        ) != self.normalize_primitive_name(component_type.type.base_type):
+            return None
+        return converted
+
+    def unsupported_matrix_operation(self, op: str, fallback_type: SpirvId) -> SpirvId:
+        self.emit(f"; WARNING: matrix operation '{op}' is not supported for operands")
+        return self.default_value_for_type(self.ensure_registered_type(fallback_type))
+
+    def componentwise_matrix_operation(
+        self,
+        op: str,
+        left: SpirvId,
+        left_type: SpirvId,
+        left_info,
+        right: SpirvId,
+        right_type: SpirvId,
+        right_info,
+    ) -> SpirvId:
+        if not self.matrix_shapes_match(left_info, right_info):
+            return self.unsupported_matrix_operation(op, left_type)
+
+        columns = []
+        for index in range(left_info["column_count"]):
+            left_column = self.composite_extract(left, left_info["column_type"], index)
+            right_column = self.composite_extract(
+                right, right_info["column_type"], index
+            )
+            columns.append(
+                self.binary_operation(
+                    op, left_info["column_type"], left_column, right_column
+                )
+            )
+        return self.composite_construct(left_type, columns)
+
+    def matrix_times_scalar(
+        self, matrix: SpirvId, matrix_type: SpirvId, matrix_info, scalar: SpirvId
+    ) -> SpirvId:
+        scalar = self.matrix_scalar_operand(scalar, matrix_info["component_type"])
+        if scalar is None:
+            return self.unsupported_matrix_operation("*", matrix_type)
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpMatrixTimesScalar %{matrix_type.id} "
+            f"%{matrix.id} %{scalar.id}"
+        )
+
+        spirv_id = SpirvId(id_value, matrix_type.type)
+        self.value_types[id_value] = matrix_type
+        self.decorate_no_contraction_result(
+            id_value, "OpMatrixTimesScalar", matrix_type
+        )
+        return spirv_id
+
+    def matrix_divided_by_scalar(
+        self, matrix: SpirvId, matrix_type: SpirvId, matrix_info, scalar: SpirvId
+    ) -> SpirvId:
+        scalar = self.matrix_scalar_operand(scalar, matrix_info["component_type"])
+        if scalar is None:
+            return self.unsupported_matrix_operation("/", matrix_type)
+
+        columns = []
+        for index in range(matrix_info["column_count"]):
+            column = self.composite_extract(matrix, matrix_info["column_type"], index)
+            columns.append(
+                self.binary_operation("/", matrix_info["column_type"], column, scalar)
+            )
+        return self.composite_construct(matrix_type, columns)
+
+    def matrix_times_vector(
+        self, matrix: SpirvId, matrix_info, vector: SpirvId, vector_info
+    ) -> SpirvId:
+        if (
+            vector_info[0].id != matrix_info["component_type"].id
+            or vector_info[1] != matrix_info["column_count"]
+        ):
+            return self.unsupported_matrix_operation("*", matrix_info["column_type"])
+
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpMatrixTimesVector %{matrix_info['column_type'].id} "
+            f"%{matrix.id} %{vector.id}"
+        )
+
+        spirv_id = SpirvId(id_value, matrix_info["column_type"].type)
+        self.value_types[id_value] = matrix_info["column_type"]
+        self.decorate_no_contraction_result(
+            id_value, "OpMatrixTimesVector", matrix_info["column_type"]
+        )
+        return spirv_id
+
+    def vector_times_matrix(
+        self, vector: SpirvId, vector_info, matrix: SpirvId, matrix_info
+    ) -> SpirvId:
+        if (
+            vector_info[0].id != matrix_info["component_type"].id
+            or vector_info[1] != matrix_info["row_count"]
+        ):
+            return self.unsupported_matrix_operation("*", matrix_info["column_type"])
+
+        result_type = self.register_vector_type(
+            matrix_info["component_type"], matrix_info["column_count"]
+        )
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpVectorTimesMatrix %{result_type.id} "
+            f"%{vector.id} %{matrix.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        self.decorate_no_contraction_result(
+            id_value, "OpVectorTimesMatrix", result_type
+        )
+        return spirv_id
+
+    def matrix_times_matrix(
+        self,
+        left: SpirvId,
+        left_info,
+        right: SpirvId,
+        right_info,
+        fallback_type: SpirvId,
+    ) -> SpirvId:
+        if (
+            left_info["component_type"].id != right_info["component_type"].id
+            or left_info["column_count"] != right_info["row_count"]
+        ):
+            return self.unsupported_matrix_operation("*", fallback_type)
+
+        result_column_type = self.register_vector_type(
+            left_info["component_type"], left_info["row_count"]
+        )
+        result_type = self.register_matrix_type(
+            result_column_type, right_info["column_count"]
+        )
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpMatrixTimesMatrix %{result_type.id} "
+            f"%{left.id} %{right.id}"
+        )
+
+        spirv_id = SpirvId(id_value, result_type.type)
+        self.value_types[id_value] = result_type
+        self.decorate_no_contraction_result(
+            id_value, "OpMatrixTimesMatrix", result_type
+        )
+        return spirv_id
+
     def decorate_no_contraction_result(
         self, id_value: int, opcode: str, result_type: SpirvId
     ):
@@ -1448,6 +1684,10 @@ class VulkanSPIRVCodeGen:
             "OpFMod",
             "OpFNegate",
             "OpDot",
+            "OpMatrixTimesScalar",
+            "OpMatrixTimesVector",
+            "OpVectorTimesMatrix",
+            "OpMatrixTimesMatrix",
         }:
             return
         if not self.is_float_like_type_id(result_type):

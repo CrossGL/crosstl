@@ -1,6 +1,5 @@
 """Test CUDA Lexer"""
 
-
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
 
 

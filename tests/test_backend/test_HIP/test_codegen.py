@@ -1,6 +1,5 @@
 """Test HIP Code Generation"""
 
-
 from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer

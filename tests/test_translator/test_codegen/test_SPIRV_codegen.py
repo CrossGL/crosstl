@@ -940,6 +940,42 @@ class TestVulkanSPIRVCodeGen:
         assert_matrix_constructs_have_exact_column_operands(spv_code)
         assert "WARNING" not in spv_code
 
+    def test_matrix_arithmetic_operations_lower_to_valid_spirv(self, tmp_path):
+        source_code = """
+        shader MatrixArithmetic {
+            compute {
+                void main() {
+                    mat2 a = mat2(1.0, 0.0, 0.0, 1.0);
+                    mat2 b = mat2(2.0, 0.0, 0.0, 2.0);
+                    vec2 v = vec2(1.0, 2.0);
+
+                    mat2 sum = a + b;
+                    mat2 diff = a - b;
+                    mat2 scaled = a * 2.0;
+                    mat2 leftScaled = 2.0 * a;
+                    mat2 divided = a / 2.0;
+                    mat2 product = a * b;
+                    vec2 matrixVector = a * v;
+                    vec2 vectorMatrix = v * a;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpFAdd" in spv_code
+        assert "OpFSub" in spv_code
+        assert "OpFDiv" in spv_code
+        assert spv_code.count("OpMatrixTimesScalar") >= 2
+        assert "OpMatrixTimesMatrix" in spv_code
+        assert "OpMatrixTimesVector" in spv_code
+        assert "OpVectorTimesMatrix" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_scalar_condition_vector_ternary_uses_selection_flow(self):
         source_code = """
         shader VectorSelect {
@@ -20897,7 +20933,7 @@ class TestVulkanSPIRVCodeGen:
         assert f"OpImageRead {uint_type.group(1)}" in spv_code
         assert "WARNING" not in spv_code
 
-    def test_bitwise_and_or_xor_shift_operations(self):
+    def test_bitwise_and_or_xor_shift_operations(self, tmp_path):
         source_code = """
         shader BitwiseOps {
             compute {
@@ -20936,8 +20972,9 @@ class TestVulkanSPIRVCodeGen:
         assert f_id
         assert g_id
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_bitwise_not_unary_operation(self):
+    def test_bitwise_not_unary_operation(self, tmp_path):
         source_code = """
         shader BitwiseNot {
             compute {
@@ -20957,8 +20994,9 @@ class TestVulkanSPIRVCodeGen:
         b_id = spirv_named_variable(spv_code, "b", storage_class="Function")
         assert b_id
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_bitwise_compound_assignments(self):
+    def test_bitwise_compound_assignments(self, tmp_path):
         source_code = """
         shader BitwiseCompound {
             compute {
@@ -20988,6 +21026,7 @@ class TestVulkanSPIRVCodeGen:
         and_ids = spirv_result_ids_for_opcode(spv_code, "OpBitwiseAnd")
         assert any(f"OpStore {mask_id} {r}" in spv_code for r in and_ids)
         assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_vector_arithmetic_operations(self):
         source_code = """

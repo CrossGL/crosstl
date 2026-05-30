@@ -25,7 +25,7 @@ implicitly supported.
    "DirectX / HLSL", ".hlsl", "crosstl/translator/codegen/directx_codegen.py", "crosstl/backend/DirectX", "tests/test_translator/test_codegen/test_directx_codegen.py, tests/test_backend/test_directx", "740", "285", "Microsoft Learn HLSL reference; HLSL specification project"
    "OpenGL / GLSL", ".glsl", "crosstl/translator/codegen/GLSL_codegen.py", "crosstl/backend/GLSL", "tests/test_translator/test_codegen/test_GLSL_codegen.py, tests/test_backend/test_GLSL", "889", "176", "GLSL 4.60 specification; OpenGL registry"
    "Metal", ".metal", "crosstl/translator/codegen/metal_codegen.py", "crosstl/backend/Metal", "tests/test_translator/test_codegen/test_metal_codegen.py, tests/test_backend/test_metal", "663", "465", "Apple Metal resources; Metal Shading Language specification"
-   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "637", "13", "SPIR-V unified specification; Khronos SPIR-V registry"
+   "Vulkan SPIR-V", ".spirv", "crosstl/translator/codegen/SPIRV_codegen.py", "crosstl/backend/SPIRV", "tests/test_translator/test_codegen/test_SPIRV_codegen.py, tests/test_backend/test_SPIRV", "638", "25", "SPIR-V unified specification; Khronos SPIR-V registry"
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "419", "105", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "465", "49", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "559", "87", "Mojo manual"
@@ -38,9 +38,9 @@ implicitly supported.
    "DirectX / HLSL", "37", "6", "0", "0", "0", "0"
    "OpenGL / GLSL", "38", "5", "0", "0", "0", "0"
    "Metal", "36", "5", "0", "0", "2", "0"
-   "Vulkan SPIR-V", "17", "17", "1", "0", "0", "8"
-   "CUDA", "11", "12", "0", "0", "4", "16"
-   "HIP", "10", "12", "0", "0", "4", "17"
+   "Vulkan SPIR-V", "20", "14", "1", "0", "0", "8"
+   "CUDA", "12", "11", "0", "0", "4", "16"
+   "HIP", "11", "11", "0", "0", "4", "17"
    "Mojo", "11", "26", "0", "1", "5", "0"
    "Rust", "12", "5", "0", "0", "4", "22"
    "Slang", "15", "20", "0", "0", "0", "8"
@@ -156,13 +156,13 @@ Each category below uses the status codes from the legend.
    "Synchronization and memory barriers", "Y", "Y", "Y", "Y", "Y", "P", "P", "?", "Y"
    "Wave/subgroup intrinsics", "P", "P", "Y", "P", "?", "?", "R", "?", "P"
    "Match/pattern lowering", "Y", "Y", "Y", "?", "P", "P", "P", "Y", "P"
-   "Vector and matrix expressions", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
-   "Bitwise operations", "Y", "Y", "Y", "P", "Y", "Y", "Y", "Y", "Y"
+   "Vector and matrix expressions", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Bitwise operations", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: validation
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
-   "Invalid shader shape validation", "Y", "Y", "Y", "P", "P", "P", "Y", "Y", "Y"
+   "Invalid shader shape validation", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 Backlog
 -------
@@ -368,11 +368,6 @@ need an audit before implementation work can be scoped accurately.
    "HIP", "language", "Match/pattern lowering", "partial", ""
    "Mojo", "language", "Match/pattern lowering", "partial", "Lowers literal/wildcard condition chains, guarded literal arms, guarded identifier bindings, enum identifier patterns, final struct destructuring arms, and qualified non-generic payload enum destructuring patterns. Generic enum wrappers, unqualified constructor patterns, incompatible struct patterns, and range-style patterns remain diagnostic-only."
    "Slang", "language", "Match/pattern lowering", "partial", ""
-   "Vulkan SPIR-V", "language", "Vector and matrix expressions", "partial", ""
-   "Vulkan SPIR-V", "language", "Bitwise operations", "partial", ""
-   "Vulkan SPIR-V", "validation", "Invalid shader shape validation", "partial", ""
-   "CUDA", "validation", "Invalid shader shape validation", "partial", "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics."
-   "HIP", "validation", "Invalid shader shape validation", "partial", "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics."
 
 Documentation Sources
 ---------------------

@@ -1,7 +1,37 @@
 """Rust AST Node definitions"""
 
 from ..common_ast import (
+    ArrayAccessNode,
+    AssignmentNode,
     ASTNode,
+    AttributeNode,
+    BinaryOpNode,
+    CastNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+)
+
+_COMMON_NODES = (
+    ASTNode,
+    ArrayAccessNode,
+    AssignmentNode,
+    AttributeNode,
+    BinaryOpNode,
+    CastNode,
+    FunctionCallNode,
+    IfNode,
+    MemberAccessNode,
+    ReturnNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
 )
 
 

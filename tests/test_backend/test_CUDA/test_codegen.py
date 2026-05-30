@@ -1,6 +1,5 @@
 """Test CUDA Code Generation"""
 
-
 from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer

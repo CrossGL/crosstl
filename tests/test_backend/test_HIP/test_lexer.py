@@ -5,7 +5,6 @@ This module contains tests for the HIP lexer functionality,
 ensuring proper tokenization of HIP code constructs.
 """
 
-
 from crosstl.backend.HIP.HipLexer import HipLexer
 
 
