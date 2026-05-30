@@ -223,6 +223,15 @@ DOC_CANDIDATE_NOISE = {
     "gltf",
     "hipdeviceptrt",
     "largeimage",
+    "opline",
+    "opname",
+    "opnoline",
+    "opstring",
+    "optypedeviceevent",
+    "optypepipe",
+    "optypequeue",
+    "optypereserveid",
+    "optypexxx",
     "pipelines",
     "summarylargeimage",
 }
@@ -246,7 +255,44 @@ DOC_CANDIDATE_FEATURE_ALIASES = {
     "svvertexid": "io.stage_parameters",
 }
 DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS = (
+    (re.compile(r"^descriptorheap"), "resources.bindings"),
     (re.compile(r"^gl[a-z0-9]+"), "io.stage_parameters"),
+    (re.compile(r"^op(?:arraylength|typearray|typeruntimearray)$"), "language.arrays"),
+    (
+        re.compile(
+            r"^op(?:branch|branchconditional|label|loopmerge|phi|"
+            r"selectionmerge|switch)$"
+        ),
+        "language.control_flow",
+    ),
+    (
+        re.compile(r"^op(?:functioncall|functionparameter|typevoid)$"),
+        "language.functions",
+    ),
+    (
+        re.compile(
+            r"^op(?:constant|constantcomposite|constantnull|copyobject|"
+            r"specconstantop|typebool|typefloat|typeint|typematrix|typevector|"
+            r"undef)$"
+        ),
+        "language.vector_matrix",
+    ),
+    (
+        re.compile(
+            r"^op(?:decorate|decorationgroup|executionmode|executionmodeid|"
+            r"memberdecorate|variable)$"
+        ),
+        "resources.bindings",
+    ),
+    (
+        re.compile(
+            r"^op(?:load|ptr(?:not)?equal|store|typeforwardpointer|typepointer)$"
+        ),
+        "resources.memory_qualifiers",
+    ),
+    (re.compile(r"^op(?:extinst|extinstimport)$"), "target.codegen"),
+    (re.compile(r"^op(?:membername|typestruct)$"), "language.structs"),
+    (re.compile(r"^structured$"), "resources.structured_buffers"),
     (re.compile(r"^sv[a-z0-9]+"), "io.stage_parameters"),
     (
         re.compile(r"^rw(?:byteaddress|structured)?buffer"),

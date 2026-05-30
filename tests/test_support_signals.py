@@ -673,6 +673,118 @@ def test_build_report_keeps_spirv_op_candidates_for_vulkan():
     assert any(issue["feature"] == "OpDecorate" for issue in report["issues"])
 
 
+def test_build_report_maps_vulkan_spirv_opcode_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "vulkan",
+                "name": "Vulkan SPIR-V",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "language.control_flow",
+                "category": "language",
+                "name": "Control flow",
+                "description": "Branch, loop, and selection control flow.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.arrays",
+                "category": "language",
+                "name": "Array declarations and access",
+                "description": "Array declarations and access.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.functions",
+                "category": "language",
+                "name": "Function declarations and calls",
+                "description": "Function calls and parameters.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.vector_matrix",
+                "category": "language",
+                "name": "Vector and matrix expressions",
+                "description": "Scalar, vector, and matrix expressions.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.structs",
+                "category": "language",
+                "name": "Struct declarations and construction",
+                "description": "Struct types and members.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.bindings",
+                "category": "resources",
+                "name": "Explicit and automatic resource bindings",
+                "description": "SPIR-V decorations and bindings.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.memory_qualifiers",
+                "category": "resources",
+                "name": "Resource memory qualifiers",
+                "description": "Pointer, load, and store memory semantics.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.structured_buffers",
+                "category": "resources",
+                "name": "Structured/storage buffers",
+                "description": "Structured buffer resources.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "CrossGL to target code generation",
+                "description": "Target code generation helpers.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "vulkan",
+                "backend": "Vulkan SPIR-V",
+                "source": "SPIR-V spec",
+                "url": "https://example.com/spirv",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "OpBranchConditional", "count": 1},
+                    {"term": "OpTypeArray", "count": 1},
+                    {"term": "OpFunctionCall", "count": 1},
+                    {"term": "OpTypeFloat", "count": 1},
+                    {"term": "OpTypeStruct", "count": 1},
+                    {"term": "OpDecorate", "count": 1},
+                    {"term": "OpTypePointer", "count": 1},
+                    {"term": "OpExtInstImport", "count": 1},
+                    {"term": "DescriptorHeapEXT", "count": 1},
+                    {"term": "Structured", "count": 1},
+                    {"term": "OpLine", "count": 1},
+                    {"term": "OpName", "count": 1},
+                    {"term": "OpTypePipe", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
 def test_build_report_ignores_cuda_runtime_doc_candidates():
     module = load_signals_module()
     backends = {
