@@ -910,6 +910,8 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "python tools/support_ci_summary.py" in summary_step
             and "--matrix-check support/generated/support-matrix-check.json"
             in summary_step
+            and "--support-evidence support/generated/support-evidence-check.json"
+            in summary_step
             and "--issue-plan support/generated/support-issue-plan.json" in summary_step
             and "--sync-summary support/generated/support-issue-sync-summary.json"
             in summary_step

@@ -286,6 +286,7 @@ jobs:
         run: |
           python tools/support_ci_summary.py \
             --matrix-check support/generated/support-matrix-check.json \
+            --support-evidence support/generated/support-evidence-check.json \
             --issue-plan support/generated/support-issue-plan.json \
             --sync-summary support/generated/support-issue-sync-summary.json \
             --output support/generated/support-issue-ci-summary.md \

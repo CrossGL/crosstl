@@ -42,6 +42,87 @@ def matrix_check_report(ok=True):
     }
 
 
+def evidence_check_report(missing=2):
+    rows = [
+        {
+            "backend": "DirectX / HLSL",
+            "backend_id": "directx",
+            "category": "stages",
+            "feature": "Vertex stage",
+            "feature_id": "stage.vertex",
+            "status": "supported",
+            "notes": "",
+            "evidence_count": 0,
+            "evidence": [],
+        },
+        {
+            "backend": "Metal",
+            "backend_id": "metal",
+            "category": "resources",
+            "feature": "Texture sampling",
+            "feature_id": "resources.texture_sampling",
+            "status": "supported",
+            "notes": "",
+            "evidence_count": 0,
+            "evidence": [],
+        },
+        {
+            "backend": "Slang",
+            "backend_id": "slang",
+            "category": "types",
+            "feature": "Struct declarations and construction",
+            "feature_id": "types.structs",
+            "status": "supported",
+            "notes": "",
+            "evidence_count": 1,
+            "evidence": [
+                {
+                    "path": "tests/test_translator/test_codegen/test_slang_codegen.py",
+                    "pattern": "test_struct_constructor",
+                }
+            ],
+        },
+    ]
+    if missing == 0:
+        for row in rows:
+            row["evidence_count"] = 1
+            row["evidence"] = [{"path": "tests/test_support_matrix.py"}]
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py evidence",
+        "filters": {
+            "backend_ids": [],
+            "categories": [],
+            "statuses": ["supported"],
+            "evidence": "missing",
+        },
+        "summary": {
+            "row_count": len(rows),
+            "missing_evidence_count": missing,
+            "present_evidence_count": len(rows) - missing,
+            "by_backend": {
+                "directx": {
+                    "rows": 1,
+                    "present": 0 if missing else 1,
+                    "missing": 1 if missing else 0,
+                },
+                "metal": {
+                    "rows": 1,
+                    "present": 0 if missing else 1,
+                    "missing": 1 if missing else 0,
+                },
+                "slang": {
+                    "rows": 1,
+                    "present": 1,
+                    "missing": 0,
+                },
+            },
+            "by_status": {"supported": len(rows)},
+        },
+        "rows": rows,
+    }
+
+
 def issue_plan_report():
     return {
         "schema_version": 1,
@@ -323,6 +404,21 @@ def clean_issue_plan_report():
     }
 
 
+def clean_sync_summary_report():
+    return {
+        "schema_version": 1,
+        "generator": "tools/sync_support_issues.py",
+        "mode": "sync",
+        "sync_summary": {
+            "created": 0,
+            "updated": 0,
+            "closed": 0,
+            "attached": 0,
+            "unchanged": 3,
+        },
+    }
+
+
 def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     module = load_summary_module()
 
@@ -448,6 +544,54 @@ def test_render_summary_handles_stale_matrix_with_missing_plan_and_sync():
     )
     assert (
         "Report: not available at `support/generated/support-issue-sync-summary.json`."
+        in text
+    )
+
+
+def test_render_summary_includes_support_evidence_gaps():
+    module = load_summary_module()
+
+    text = module.render_summary(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        clean_issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        clean_sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+        evidence_check=evidence_check_report(),
+        evidence_check_path=Path("support/generated/support-evidence-check.json"),
+    )
+
+    assert "| Overall | pass |" in text
+    assert "| Support evidence | warning |" in text
+    assert "## Support Evidence" in text
+    assert "| Report | `support/generated/support-evidence-check.json` |" in text
+    assert "| Rows missing evidence | 2 |" in text
+    assert "Missing evidence by backend:" in text
+    assert "| directx | 1 | 0 | 1 |" in text
+    assert "Missing evidence samples:" in text
+    assert "- DirectX / HLSL: Vertex stage [supported]" in text
+    assert "- Metal: Texture sampling [supported]" in text
+
+
+def test_render_summary_marks_explicit_missing_evidence_report_incomplete():
+    module = load_summary_module()
+
+    text = module.render_summary(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        clean_issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        clean_sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+        evidence_check=None,
+        evidence_check_path=Path("support/generated/support-evidence-check.json"),
+    )
+
+    assert "| Overall | incomplete |" in text
+    assert "| Support evidence | missing |" in text
+    assert (
+        "Report: not available at `support/generated/support-evidence-check.json`."
         in text
     )
 
@@ -616,6 +760,28 @@ def test_github_annotations_include_actionable_support_failures():
     assert "title=Support issue sync failure" in text
     assert "title=Support issue sync exceeded planned actions" in text
     assert "attached: 3 > planned 2" in text
+
+
+def test_github_annotations_warn_on_support_evidence_gaps():
+    module = load_summary_module()
+
+    lines = module.github_annotation_lines(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        clean_issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        None,
+        Path("support/generated/support-issue-sync-summary.json"),
+        evidence_check=evidence_check_report(),
+        evidence_check_path=Path("support/generated/support-evidence-check.json"),
+    )
+
+    text = "\n".join(lines)
+    assert "::warning" in text
+    assert "title=Support matrix evidence gaps" in text
+    assert "file=support/generated/support-evidence-check.json" in text
+    assert "2 supported support-matrix rows are missing evidence" in text
+    assert "directx=1" in text
 
 
 def test_render_summary_fails_when_sync_operations_exceed_plan():
@@ -822,6 +988,27 @@ def test_load_optional_json_reports_invalid_matrix_check_contract(tmp_path):
         "path": str(matrix_path),
         "type": "InvalidReportField",
         "message": "summary.stale_count must be int, got str",
+    }
+
+
+def test_load_optional_json_reports_invalid_evidence_check_contract(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["summary"]["by_backend"]["directx"]["missing"] = "one"
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "summary.by_backend.directx.missing must be int, got str",
     }
 
 
@@ -1182,10 +1369,12 @@ def test_render_summary_reports_pass_when_all_sections_are_clean():
 
 def test_support_ci_summary_cli_writes_markdown(tmp_path):
     matrix_path = tmp_path / "support-matrix-check.json"
+    evidence_path = tmp_path / "support-evidence-check.json"
     plan_path = tmp_path / "support-issue-plan.json"
     sync_path = tmp_path / "support-issue-sync-summary.json"
     output_path = tmp_path / "support-issue-ci-summary.md"
     matrix_path.write_text(json.dumps(matrix_check_report(ok=True)), encoding="utf-8")
+    evidence_path.write_text(json.dumps(evidence_check_report()), encoding="utf-8")
     plan_path.write_text(json.dumps(issue_plan_report()), encoding="utf-8")
     sync_path.write_text(json.dumps(sync_summary_report()), encoding="utf-8")
 
@@ -1195,6 +1384,8 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
             "tools/support_ci_summary.py",
             "--matrix-check",
             str(matrix_path),
+            "--support-evidence",
+            str(evidence_path),
             "--issue-plan",
             str(plan_path),
             "--sync-summary",
@@ -1210,5 +1401,7 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
 
     text = output_path.read_text(encoding="utf-8")
     assert "Wrote" in result.stdout
+    assert "## Support Evidence" in text
+    assert "| Rows missing evidence | 2 |" in text
     assert "| Status | pass |" in text
     assert "| Sync updated | 2 |" in text

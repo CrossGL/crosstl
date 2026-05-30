@@ -1526,6 +1526,9 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "name: support-matrix-check-report" in issue_sync
     assert "support/generated/support-matrix-check.json" in issue_sync
     assert "support/generated/support-evidence-check.json" in issue_sync
+    assert "--support-evidence support/generated/support-evidence-check.json" in (
+        issue_sync
+    )
     assert (
         "python tools/ci_coverage.py report --output "
         "support/generated/ci-coverage-report.json"
