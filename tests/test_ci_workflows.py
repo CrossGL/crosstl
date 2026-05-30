@@ -128,6 +128,16 @@ def test_full_suite_keeps_required_compiler_smoke_coverage():
     assert "shader-validators-failure-summary.json" in full_suite
     assert "compiler-smoke-linux-failure-summary.json" in full_suite
     assert "compiler-smoke-macos-failure-summary.json" in full_suite
+    assert "--retry 5 --retry-all-errors --retry-delay 10" in full_suite
+    assert 'Write-Warning "DXC download failed on attempt $attempt; retrying."' in (
+        full_suite
+    )
+    shader_job = full_suite[
+        full_suite.index("  shader-validators:") : full_suite.index(
+            "  compiler-smoke-linux:"
+        )
+    ]
+    assert "shell: bash" in shader_job
 
 
 def test_ci_coverage_report_summarizes_required_workflow_dimensions():
@@ -567,6 +577,10 @@ def test_ci_coverage_reports_missing_compiler_smoke_tooling():
     report["workflows"]["full_tests"]["failure_summaries"]["compiler_smoke_linux"][
         "writes_failure_summary"
     ] = False
+    report["workflows"]["full_tests"]["download_retries"]["dxc_linux"] = False
+    report["workflows"]["full_tests"]["failure_summaries"]["shader_validators"][
+        "run_shell_bash"
+    ] = False
 
     errors = module.validation_errors(report)
 
@@ -578,6 +592,11 @@ def test_ci_coverage_reports_missing_compiler_smoke_tooling():
     assert (
         "full-tests.yml missing pytest failure summary for compiler_smoke_linux: "
         "writes_failure_summary"
+    ) in errors
+    assert "full-tests.yml missing external download retry: dxc_linux" in errors
+    assert (
+        "full-tests.yml missing pytest failure summary for shader_validators: "
+        "run_shell_bash"
     ) in errors
 
 

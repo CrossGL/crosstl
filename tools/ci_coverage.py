@@ -69,6 +69,7 @@ FULL_SUITE_FAILURE_SUMMARIES = {
         "json": "support/generated/shader-validators-failure-summary.json",
         "markdown": "support/generated/shader-validators-failure-summary.md",
         "artifact": "shader-validator-failure-summary-${{ matrix.os }}",
+        "requires_bash_shell": True,
     },
     "compiler_smoke_linux": {
         "job": "compiler-smoke-linux",
@@ -689,9 +690,15 @@ def full_suite_failure_summary_report(workflow: str) -> dict[str, dict[str, bool
         summary_step = workflow_job_step_section(workflow, job, config["summary_step"])
         upload_step = workflow_job_step_section(workflow, job, config["upload_step"])
         summaries[name] = {
+            "run_shell_bash": (
+                not config.get("requires_bash_shell") or "shell: bash" in run_step
+            ),
             "writes_junit": (
                 "--junitxml {}".format(config["junit"]) in run_step
                 or "--junitxml\n          {}".format(config["junit"]) in run_step
+            ),
+            "summary_shell_bash": (
+                not config.get("requires_bash_shell") or "shell: bash" in summary_step
             ),
             "writes_failure_summary": (
                 "python tools/pytest_failure_summary.py" in summary_step
@@ -735,6 +742,20 @@ def full_suite_report(workflow: str) -> dict[str, Any]:
         marker: marker in workflow for marker in FULL_SUITE_REQUIRED_MARKERS
     }
     required_tools = {tool: tool in workflow for tool in FULL_SUITE_REQUIRED_TOOLS}
+    download_retries = {
+        "dxc_linux": (
+            "curl -fsSL --retry 5 --retry-all-errors --retry-delay 10" in workflow
+            and "linux_dxc_2026_02_20.x86_64.tar.gz" in workflow
+        ),
+        "dxc_windows": (
+            "$dxcUri = "
+            '"https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"'
+            in workflow
+            and "for ($attempt = 1; $attempt -le 5; $attempt++)" in workflow
+            and 'Write-Warning "DXC download failed on attempt $attempt; retrying."'
+            in workflow
+        ),
+    }
     return {
         "workflow": "full-tests.yml",
         "pytest_all_tests": (
@@ -746,6 +767,7 @@ def full_suite_report(workflow: str) -> dict[str, Any]:
         ),
         "required_markers": required_markers,
         "required_tools": required_tools,
+        "download_retries": download_retries,
         "failure_summaries": full_suite_failure_summary_report(workflow),
     }
 
@@ -1282,6 +1304,11 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         if not present:
             errors.append(
                 "full-tests.yml missing compiler tool coverage: {}".format(tool)
+            )
+    for download, present in full_tests["download_retries"].items():
+        if not present:
+            errors.append(
+                "full-tests.yml missing external download retry: {}".format(download)
             )
     for summary_name, summary_fields in full_tests["failure_summaries"].items():
         for field, present in summary_fields.items():
