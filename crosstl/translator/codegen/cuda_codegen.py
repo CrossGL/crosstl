@@ -15,8 +15,6 @@ from ..ast import (
     MemberAccessNode,
     PointerAccessNode,
     RangeNode,
-    RayQueryOpNode,
-    RayTracingOpNode,
     ReturnNode,
     TernaryOpNode,
     UnaryOpNode,
