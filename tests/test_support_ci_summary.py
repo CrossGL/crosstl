@@ -158,6 +158,7 @@ def issue_plan_report():
                 {
                     "key": "parent:frontend",
                     "title": "[Support Matrix] Frontend / IR / Parser coverage",
+                    "reason": "missing_parent_issue",
                 }
             ],
             "updated": [
@@ -293,6 +294,7 @@ def sync_summary_report():
                 "number": 17,
                 "title": "DirectX parent",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["body", "labels"],
             },
             {
@@ -301,6 +303,7 @@ def sync_summary_report():
                 "number": 18,
                 "title": "Metal parent",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["body"],
             },
             {
@@ -309,6 +312,7 @@ def sync_summary_report():
                 "parent_number": 17,
                 "child_key": "backlog:directx:textures.gather",
                 "child_number": 22,
+                "reason": "missing_sub_issue_relationship",
             },
             {
                 "action": "attached",
@@ -316,6 +320,7 @@ def sync_summary_report():
                 "parent_number": 17,
                 "child_key": "backlog:directx:resources.buffers",
                 "child_number": 23,
+                "reason": "missing_sub_issue_relationship",
             },
             {
                 "action": "attached",
@@ -323,6 +328,7 @@ def sync_summary_report():
                 "parent_number": 18,
                 "child_key": "backlog:metal:resources.buffers",
                 "child_number": 24,
+                "reason": "missing_sub_issue_relationship",
             },
         ],
         "operation_reconciliation": {
@@ -340,6 +346,16 @@ def sync_summary_report():
                 "updated": 2,
                 "closed": 0,
                 "attached": 3,
+            },
+            "actual_action_reasons": {
+                "created": {},
+                "updated": {
+                    "desired_issue_drift": 2,
+                },
+                "closed": {},
+                "attached": {
+                    "missing_sub_issue_relationship": 3,
+                },
             },
             "action_overruns": [
                 {
@@ -397,6 +413,7 @@ def sync_summary_report():
                     "number": 17,
                     "title": "DirectX parent",
                     "state": "open",
+                    "reason": "desired_issue_drift",
                     "reasons": ["body", "labels"],
                 }
             ],
@@ -458,6 +475,38 @@ def clean_sync_summary_report():
     }
 
 
+def managed_issue_audit_bucket(
+    *,
+    total=0,
+    open_count=0,
+    closed=0,
+    samples=None,
+):
+    return {
+        "total": total,
+        "open": open_count,
+        "closed": closed,
+        "samples": samples or [],
+    }
+
+
+def managed_issue_audit_report(
+    *,
+    sample_limit=12,
+    stale=None,
+    duplicates=None,
+    preserved_extracted=None,
+    ignored_unknown=None,
+):
+    return {
+        "sample_limit": sample_limit,
+        "stale": stale or managed_issue_audit_bucket(),
+        "duplicates": duplicates or managed_issue_audit_bucket(),
+        "preserved_extracted": preserved_extracted or managed_issue_audit_bucket(),
+        "ignored_unknown": ignored_unknown or managed_issue_audit_bucket(),
+    }
+
+
 def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     module = load_summary_module()
 
@@ -515,9 +564,15 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Operation closure overruns | 0 |" in text
     assert "| Operation closure shortfalls | 0 |" in text
     assert "Operation reconciliation differences:" in text
-    assert "- action attached: 3 > planned 2" in text
-    assert "- action updated: 2 > planned 1" in text
-    assert "- action created: 0 < planned 1" in text
+    assert (
+        "- action attached: 3 > planned 2 (actual reasons: "
+        "missing_sub_issue_relationship=3)"
+    ) in text
+    assert (
+        "- action updated: 2 > planned 1 (actual reasons: desired_issue_drift=2)"
+        in text
+    )
+    assert "- action created: 0 < planned 1 (actual reasons: none)" in text
     assert "| Sync failure phase | create_issue |" in text
     assert "| Sync failure error | RuntimeError |" in text
     assert "| Sync recovery rerun safe | True |" in text
@@ -527,10 +582,14 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     )
     assert "- key: `parent:frontend`" in text
     assert "Operation ledger:" in text
-    assert "- updated: `parent:directx` (#17) (reasons=body,labels)" in text
+    assert (
+        "- updated: `parent:directx` (#17) "
+        "(reason=desired_issue_drift, reasons=body,labels)"
+    ) in text
     assert (
         "- attached: `backlog:directx:textures.gather` (#22) "
-        "(parent=parent:directx, parent_number=17)"
+        "(reason=missing_sub_issue_relationship, parent=parent:directx, "
+        "parent_number=17)"
     ) in text
 
 
@@ -702,13 +761,12 @@ def test_render_issue_plan_reports_support_input_failures():
 def test_render_issue_plan_reports_managed_issue_audit():
     module = load_summary_module()
     plan = clean_issue_plan_report()
-    plan["managed_issue_audit"] = {
-        "sample_limit": 12,
-        "stale": {
-            "total": 2,
-            "open": 1,
-            "closed": 1,
-            "samples": [
+    plan["managed_issue_audit"] = managed_issue_audit_report(
+        stale=managed_issue_audit_bucket(
+            total=2,
+            open_count=1,
+            closed=1,
+            samples=[
                 {
                     "key": "backlog:directx:old.feature",
                     "number": 18,
@@ -718,12 +776,11 @@ def test_render_issue_plan_reports_managed_issue_audit():
                     "category": "stale_backlog",
                 }
             ],
-        },
-        "duplicates": {
-            "total": 1,
-            "open": 1,
-            "closed": 0,
-            "samples": [
+        ),
+        duplicates=managed_issue_audit_bucket(
+            total=1,
+            open_count=1,
+            samples=[
                 {
                     "key": "parent:directx",
                     "number": 19,
@@ -732,20 +789,10 @@ def test_render_issue_plan_reports_managed_issue_audit():
                     "reason": "duplicate_managed_marker",
                 }
             ],
-        },
-        "preserved_extracted": {
-            "total": 1,
-            "open": 1,
-            "closed": 0,
-            "samples": [],
-        },
-        "ignored_unknown": {
-            "total": 1,
-            "open": 1,
-            "closed": 0,
-            "samples": [],
-        },
-    }
+        ),
+        preserved_extracted=managed_issue_audit_bucket(total=1, open_count=1),
+        ignored_unknown=managed_issue_audit_bucket(total=1, open_count=1),
+    )
 
     text = module.render_summary(
         matrix_check_report(ok=True),
@@ -756,6 +803,8 @@ def test_render_issue_plan_reports_managed_issue_audit():
         Path("support/generated/support-issue-sync-summary.json"),
     )
 
+    assert "| Overall | attention |" in text
+    assert "| Issue plan | fail |" in text
     assert "| Audit stale managed | 2 |" in text
     assert "| Audit duplicate markers | 1 |" in text
     assert "| Audit preserved extracted | 1 |" in text
@@ -768,6 +817,44 @@ def test_render_issue_plan_reports_managed_issue_audit():
     ) in text
     assert "- Duplicate markers: total=1, open=1, closed=0" in text
     assert "  - `parent:directx` (#19) (reason=duplicate_managed_marker)" in text
+
+
+def test_github_annotations_include_unknown_managed_issue_markers():
+    module = load_summary_module()
+    plan = clean_issue_plan_report()
+    plan["managed_issue_audit"] = managed_issue_audit_report(
+        ignored_unknown=managed_issue_audit_bucket(
+            total=1,
+            open_count=1,
+            samples=[
+                {
+                    "key": "unknown:legacy-marker",
+                    "number": 404,
+                    "title": "legacy support marker",
+                    "state": "open",
+                    "reason": "unknown_managed_marker",
+                }
+            ],
+        )
+    )
+
+    lines = module.github_annotation_lines(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        plan,
+        Path("support/generated/support-issue-plan.json"),
+        clean_sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+
+    text = "\n".join(lines)
+    assert "::error" in text
+    assert "title=Unknown managed support issue markers" in text
+    assert "file=support/generated/support-issue-plan.json" in text
+    assert (
+        "1 open managed support issues have sync markers this tool does not "
+        "understand."
+    ) in text
 
 
 def test_github_annotations_include_actionable_support_failures():
@@ -1786,6 +1873,68 @@ def test_load_optional_json_reports_invalid_issue_plan_budget_violation_contract
     }
 
 
+def test_load_optional_json_allows_unprovided_budget_with_null_status(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["planned_action_budget"] = {
+        "provided": False,
+        "mode": "fail",
+        "evaluated": True,
+        "ok": None,
+        "limits": {},
+        "violations": [],
+    }
+    report["planned_closure_budget"] = {
+        "provided": False,
+        "mode": "fail",
+        "evaluated": True,
+        "ok": None,
+        "limits": {},
+        "violations": [],
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert "load_error" not in loaded
+
+
+def test_load_optional_json_rejects_evaluated_budget_with_null_status(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["planned_action_budget"] = {
+        "provided": True,
+        "mode": "fail",
+        "evaluated": True,
+        "ok": None,
+        "limits": {
+            "created": 10,
+        },
+        "violations": [],
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "planned_action_budget.ok must be bool, got null",
+    }
+
+
 def test_load_optional_json_reports_invalid_managed_issue_audit_bucket(tmp_path):
     module = load_summary_module()
     plan_path = tmp_path / "support-issue-plan.json"
@@ -1830,6 +1979,67 @@ def test_load_optional_json_reports_invalid_managed_issue_audit_bucket(tmp_path)
         "path": str(plan_path),
         "type": "InvalidReportField",
         "message": "managed_issue_audit.stale.total must be int, got str",
+    }
+
+
+def test_load_optional_json_rejects_inconsistent_managed_issue_audit_counts(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["managed_issue_audit"] = managed_issue_audit_report(
+        stale=managed_issue_audit_bucket(total=3, open_count=1, closed=1)
+    )
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "managed_issue_audit.stale.total must match open + closed: 3 != 2",
+    }
+
+
+def test_load_optional_json_rejects_oversized_managed_issue_audit_samples(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["managed_issue_audit"] = managed_issue_audit_report(
+        sample_limit=0,
+        stale=managed_issue_audit_bucket(
+            total=1,
+            open_count=1,
+            samples=[
+                {
+                    "key": "backlog:directx:old.feature",
+                    "number": 18,
+                    "title": "old backlog",
+                    "state": "open",
+                    "reason": "stale_managed_marker",
+                }
+            ],
+        ),
+    )
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": (
+            "managed_issue_audit.stale.samples must not exceed sample_limit: 1 > 0"
+        ),
     }
 
 
@@ -1927,6 +2137,27 @@ def test_load_optional_json_reports_invalid_operation_ledger_contract(tmp_path):
         "path": str(sync_path),
         "type": "InvalidReportField",
         "message": "operation_ledger[0].reasons[1] must be str, got int",
+    }
+
+
+def test_load_optional_json_rejects_operation_ledger_missing_reason(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    del report["operation_ledger"][0]["reason"]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "MissingReportFields",
+        "message": "operation_ledger[0] missing required fields: reason",
     }
 
 
@@ -2125,6 +2356,32 @@ def test_load_optional_json_rejects_reconciliation_ledger_mismatch(tmp_path):
             "operation_reconciliation.actual_actions must match operation ledger: "
             "{'created': 0, 'updated': 99, 'closed': 0, 'attached': 3} != "
             "{'created': 0, 'updated': 2, 'closed': 0, 'attached': 3}"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_reason_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["actual_action_reasons"]["updated"] = {
+        "unexpected_reason": 2,
+    }
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "operation_reconciliation.actual_action_reasons must match "
+            "operation ledger"
         ),
     }
 

@@ -508,23 +508,47 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(
     assert summary["support_closures"] == 1
     assert summary["support_references"] == 1
     assert summary["traceability_satisfied"] == 1
-    assert summary["support_link_audit"] == {
-        "inspection_failed": False,
-        "closure_links": [
-            {
-                "key": "backlog:metal:language.wave_intrinsics",
-                "issues": [498],
-            }
-        ],
-        "reference_links": [
-            {
-                "key": "backlog:metal:texture.projected",
-                "issues": [432],
-            }
-        ],
-        "missing_closure_keys": [],
-        "missing_reference_keys": [],
-    }
+    assert summary["support_link_audit"]["inspection_failed"] is False
+    assert summary["support_link_audit"]["missing_closure_keys"] == []
+    assert summary["support_link_audit"]["missing_reference_keys"] == []
+    assert summary["support_link_audit"]["closure_links"] == [
+        {
+            "key": "backlog:metal:language.wave_intrinsics",
+            "issues": [498],
+            "reason": "removed_from_backlog",
+            "base_row": {
+                "backend_id": "metal",
+                "feature_id": "language.wave_intrinsics",
+                "status": "partial",
+                "notes": "Wave active ops are missing.",
+                "evidence": ["tests/old.py::test_wave_active"],
+            },
+        }
+    ]
+    assert summary["support_link_audit"]["reference_links"] == [
+        {
+            "key": "backlog:metal:texture.projected",
+            "issues": [432],
+            "reason": "backlog_row_changed",
+            "base_row": {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar projection is supported.",
+                "evidence": ["tests/old.py::test_planar_projection"],
+            },
+            "head_row": {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar and cube-shadow projection are supported.",
+                "evidence": [
+                    "tests/new.py::test_cube_shadow_projection",
+                    "tests/old.py::test_planar_projection",
+                ],
+            },
+        }
+    ]
     assert client.updated_bodies == [
         (
             5,
@@ -546,8 +570,14 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(
     captured = capsys.readouterr()
     assert "Support link audit: closure_candidates=1" in captured.out
     assert "reference_candidates=1" in captured.out
-    assert "#498 (backlog:metal:language.wave_intrinsics)" in captured.out
-    assert "#432 (backlog:metal:texture.projected)" in captured.out
+    assert (
+        "#498 (backlog:metal:language.wave_intrinsics; "
+        "reason=removed_from_backlog; row removed)"
+    ) in captured.out
+    assert (
+        "#432 (backlog:metal:texture.projected; reason=backlog_row_changed; "
+        "notes changed; evidence: 1 -> 2)"
+    ) in captured.out
 
 
 def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
@@ -596,10 +626,21 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
     assert summary["traceability_failed"] == 1
     assert summary["support_link_audit"] == {
         "inspection_failed": False,
+        "matrix_delta": {
+            "base_backlog_rows": 1,
+            "head_backlog_rows": 0,
+            "removed_backlog_rows": 1,
+            "changed_backlog_rows": 0,
+            "has_delta": True,
+        },
         "closure_links": [],
         "reference_links": [],
         "missing_closure_keys": ["backlog:metal:language.wave_intrinsics"],
         "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 1,
+        },
     }
 
     module.emit_support_link_audit(summary)
@@ -610,6 +651,96 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
         in captured.out
     )
     assert "backlog:metal:language.wave_intrinsics" in captured.out
+
+
+def test_sync_audit_reports_no_matrix_delta_for_support_relevant_pr(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix = {
+        "features": [
+            {
+                "id": "language.wave_intrinsics",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Wave active ops are missing.",
+                        "evidence": ["tests/old.py::test_wave_active"],
+                    }
+                },
+            }
+        ],
+        "backlog": [
+            {
+                "backend_id": "metal",
+                "feature_id": "language.wave_intrinsics",
+                "status": "partial",
+                "notes": "Wave active ops are missing.",
+            }
+        ],
+    }
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal wave support implementation",
+        body="No linked issue.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("crosstl/translator/codegen/metal_codegen.py",),
+    )
+    client = FakeClient(
+        module,
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): matrix
+        },
+        support_issues=[],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        sync_support_references=True,
+        check_support_traceability=True,
+    )
+
+    assert summary["traceability_failed"] == 1
+    assert summary["support_link_audit"] == {
+        "inspection_failed": False,
+        "matrix_delta": {
+            "base_backlog_rows": 1,
+            "head_backlog_rows": 1,
+            "removed_backlog_rows": 0,
+            "changed_backlog_rows": 0,
+            "has_delta": False,
+        },
+        "closure_links": [],
+        "reference_links": [],
+        "missing_closure_keys": [],
+        "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 0,
+        },
+    }
+
+    module.emit_support_link_audit(summary)
+    captured = capsys.readouterr()
+    assert "Support matrix delta: base_backlog_rows=1" in captured.out
+    assert "matrix_delta_detected=0" in captured.out
+    assert (
+        "::warning::No support matrix backlog delta detected for support-relevant "
+        "PR files"
+    ) in captured.out
+    assert "support/generated/support-matrix.json was not changed" in captured.out
 
 
 def test_support_link_audit_writes_step_summary(tmp_path, monkeypatch):
@@ -646,6 +777,99 @@ def test_support_link_audit_writes_step_summary(tmp_path, monkeypatch):
     assert "#498 (backlog:metal:language.wave_intrinsics)" in text
     assert "#432 (backlog:metal:texture.projected)" in text
     assert "backlog:metal:texture.gather" in text
+
+
+def test_support_link_step_summary_includes_change_reasons(tmp_path, monkeypatch):
+    module = load_sync_module()
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    summary = {
+        "support_link_audit": {
+            "inspection_failed": False,
+            "closure_links": [
+                {
+                    "key": "backlog:metal:language.wave_intrinsics",
+                    "issues": [498],
+                    "reason": "removed_from_backlog",
+                    "base_row": {
+                        "status": "partial",
+                        "notes": "Wave active ops are missing.",
+                        "evidence": ["tests/old.py::test_wave_active"],
+                    },
+                }
+            ],
+            "reference_links": [
+                {
+                    "key": "backlog:metal:texture.projected",
+                    "issues": [432],
+                    "reason": "backlog_row_changed",
+                    "base_row": {
+                        "status": "partial",
+                        "notes": "Planar projection is supported.",
+                        "evidence": ["tests/old.py::test_planar_projection"],
+                    },
+                    "head_row": {
+                        "status": "partial",
+                        "notes": "Planar and cube projection are supported.",
+                        "evidence": [
+                            "tests/new.py::test_cube_projection",
+                            "tests/old.py::test_planar_projection",
+                        ],
+                    },
+                }
+            ],
+            "missing_closure_keys": [],
+            "missing_reference_keys": [],
+        }
+    }
+
+    module.write_support_link_step_summary(summary)
+
+    text = summary_path.read_text(encoding="utf-8")
+    assert (
+        "#498 (backlog:metal:language.wave_intrinsics; "
+        "reason=removed_from_backlog; row removed)"
+    ) in text
+    assert (
+        "#432 (backlog:metal:texture.projected; reason=backlog_row_changed; "
+        "notes changed; evidence: 1 -> 2)"
+    ) in text
+
+
+def test_support_link_step_summary_reports_no_matrix_delta(tmp_path, monkeypatch):
+    module = load_sync_module()
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    summary = {
+        "support_link_audit": {
+            "inspection_failed": False,
+            "matrix_delta": {
+                "base_backlog_rows": 1,
+                "head_backlog_rows": 1,
+                "removed_backlog_rows": 0,
+                "changed_backlog_rows": 0,
+                "has_delta": False,
+            },
+            "closure_links": [],
+            "reference_links": [],
+            "missing_closure_keys": [],
+            "missing_reference_keys": [],
+            "changed_files": {
+                "support_relevant": 2,
+                "support_matrix_artifact": 0,
+            },
+        }
+    }
+
+    module.write_support_link_step_summary(summary)
+
+    text = summary_path.read_text(encoding="utf-8")
+    assert (
+        "- Matrix delta: removed 0, changed 0, base backlog 1, head backlog 1" in text
+    )
+    assert "- Support-relevant files: 2" in text
+    assert "- Support matrix artifact changed: no" in text
+    assert "no support matrix backlog delta was detected" in text
 
 
 def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
@@ -712,6 +936,10 @@ def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
         "reference_links": [],
         "missing_closure_keys": [],
         "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 1,
+        },
     }
     assert client.updated_bodies == []
 
@@ -808,6 +1036,23 @@ def test_traceability_policy_passes_with_valid_closing_issue_for_support_files()
     assert summary["traceability_satisfied"] == 1
     assert summary["traceability_failed"] == 0
     assert summary["support_relevant_files"] == 1
+    assert summary["traceability_audit"] == {
+        "required": True,
+        "satisfied": True,
+        "satisfaction_sources": ["same_repo_closing_issue"],
+        "failure_reason": None,
+        "support_relevant_files": [
+            {
+                "path": "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py",
+                "reason": "prefix",
+                "matched": "crosstl/backend/",
+            }
+        ],
+        "support_relevant_count": 1,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [10],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_policy_passes_with_explicit_no_issue_marker():
@@ -831,6 +1076,8 @@ def test_traceability_policy_passes_with_explicit_no_issue_marker():
     assert summary["traceability_required"] == 1
     assert summary["traceability_satisfied"] == 1
     assert summary["traceability_failed"] == 0
+    assert summary["traceability_audit"]["satisfaction_sources"] == ["explicit_opt_out"]
+    assert summary["traceability_audit"]["failure_reason"] is None
 
 
 def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
@@ -854,6 +1101,23 @@ def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
     assert summary["traceability_required"] == 1
     assert summary["traceability_satisfied"] == 0
     assert summary["traceability_failed"] == 1
+    assert summary["traceability_audit"] == {
+        "required": True,
+        "satisfied": False,
+        "satisfaction_sources": [],
+        "failure_reason": "missing_issue_or_opt_out",
+        "support_relevant_files": [
+            {
+                "path": "tests/test_translator/test_codegen/test_metal_codegen.py",
+                "reason": "prefix",
+                "matched": "tests/test_translator/test_codegen/",
+            }
+        ],
+        "support_relevant_count": 1,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
@@ -882,6 +1146,28 @@ def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
     assert summary["traceability_required"] == 1
     assert summary["traceability_failed"] == 1
     assert summary["support_relevant_files"] == 4
+    assert summary["traceability_audit"]["support_relevant_files"] == [
+        {
+            "path": "crosstl/translator/parser.py",
+            "reason": "exact_path",
+            "matched": "crosstl/translator/parser.py",
+        },
+        {
+            "path": "tests/test_translator/test_frontend_parser_property_contracts.py",
+            "reason": "prefix",
+            "matched": "tests/test_translator/test_frontend_",
+        },
+        {
+            "path": "docs/source/support-matrix.rst",
+            "reason": "exact_path",
+            "matched": "docs/source/support-matrix.rst",
+        },
+        {
+            "path": "examples/test.py",
+            "reason": "exact_path",
+            "matched": "examples/test.py",
+        },
+    ]
 
 
 def test_traceability_policy_ignores_non_support_paths():
@@ -905,6 +1191,17 @@ def test_traceability_policy_ignores_non_support_paths():
     assert summary["traceability_required"] == 0
     assert summary["traceability_satisfied"] == 0
     assert summary["traceability_failed"] == 0
+    assert summary["traceability_audit"] == {
+        "required": False,
+        "satisfied": False,
+        "satisfaction_sources": [],
+        "failure_reason": "no_support_relevant_files",
+        "support_relevant_files": [],
+        "support_relevant_count": 0,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, capsys):
@@ -943,8 +1240,24 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
     captured = capsys.readouterr()
     assert result == 0
     assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert (
+        "Support traceability audit: status=failed, sources=none, "
+        "failure_reason=missing_issue_or_opt_out"
+    ) in captured.out
+    assert (
+        "Support traceability files: "
+        "tests/test_translator/test_codegen/test_metal_codegen.py "
+        "(prefix:tests/test_translator/test_codegen/)"
+    ) in captured.out
     assert "::warning::Support-relevant PR changes" in captured.out
-    assert "Support Traceability" in summary_path.read_text(encoding="utf-8")
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "Support Traceability" in summary_text
+    assert "- Status: failed" in summary_text
+    assert "- Failure reason: missing_issue_or_opt_out" in summary_text
+    assert (
+        "- `tests/test_translator/test_codegen/test_metal_codegen.py` "
+        "(prefix: `tests/test_translator/test_codegen/`)"
+    ) in summary_text
 
 
 def test_traceability_enforcement_cli_fails_when_opted_in(
@@ -983,4 +1296,5 @@ def test_traceability_enforcement_cli_fails_when_opted_in(
     captured = capsys.readouterr()
     assert result == 1
     assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert "Support traceability audit: status=failed" in captured.out
     assert "Support-relevant PR changes must include" in captured.err
