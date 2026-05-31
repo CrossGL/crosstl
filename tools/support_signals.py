@@ -33,6 +33,14 @@ FEATURES_PATH = SUPPORT_DIR / "features.json"
 DEFAULT_OUTPUT_PATH = SUPPORT_DIR / "generated" / "support-signals.json"
 DEFAULT_DOCS_REPORT_PATH = SUPPORT_DIR / "generated" / "backend-docs-report.json"
 PYTEST_FAILURE_SUMMARY_GENERATOR = "tools/pytest_failure_summary.py"
+DOCS_REPORT_GENERATOR = "tools/support_signals.py docs"
+DOCS_REPORT_SCHEMA_VERSION = 1
+DOCS_REPORT_REQUIRED_FIELDS = (
+    "schema_version",
+    "generator",
+    "summary",
+    "documents",
+)
 FRONTEND_ID = "frontend"
 FRONTEND_NAME = "Frontend / IR / Parser"
 
@@ -359,6 +367,127 @@ def stable_json(data: Any) -> str:
 
 def relpath(path: Path) -> str:
     return os.path.relpath(str(path), str(ROOT)).replace(os.sep, "/")
+
+
+def json_load_error(path: Path | None, error_type: str, message: str) -> dict[str, Any]:
+    return {
+        "load_error": {
+            "path": relpath(path) if path is not None else None,
+            "type": error_type,
+            "message": message,
+        }
+    }
+
+
+def value_type_label(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "list"
+    return type(value).__name__
+
+
+def type_label(expected_type: type | tuple[type, ...]) -> str:
+    if isinstance(expected_type, tuple):
+        return " or ".join(type_label(item) for item in expected_type)
+    if expected_type is dict:
+        return "object"
+    if expected_type is list:
+        return "list"
+    if expected_type is bool:
+        return "bool"
+    if expected_type is int:
+        return "int"
+    if expected_type is str:
+        return "str"
+    return expected_type.__name__
+
+
+def value_matches_type(value: Any, expected_type: type | tuple[type, ...]) -> bool:
+    if isinstance(expected_type, tuple):
+        return any(value_matches_type(value, item) for item in expected_type)
+    if expected_type is bool:
+        return type(value) is bool
+    if expected_type is int:
+        return type(value) is int
+    return isinstance(value, expected_type)
+
+
+def invalid_report_field(
+    path: Path | None,
+    field: str,
+    expected_type: type | tuple[type, ...],
+    value: Any,
+) -> dict[str, Any]:
+    return json_load_error(
+        path,
+        "InvalidReportField",
+        "{} must be {}, got {}".format(
+            field,
+            type_label(expected_type),
+            value_type_label(value),
+        ),
+    )["load_error"]
+
+
+def missing_report_fields(
+    path: Path | None,
+    field: str,
+    fields: list[str],
+) -> dict[str, Any]:
+    return json_load_error(
+        path,
+        "MissingReportFields",
+        "{} missing required fields: {}".format(field, ", ".join(fields)),
+    )["load_error"]
+
+
+def validate_required_fields(
+    value: dict[str, Any],
+    path: Path | None,
+    field: str,
+    required_fields: tuple[str, ...],
+) -> dict[str, Any] | None:
+    missing = [required for required in required_fields if required not in value]
+    if missing:
+        return missing_report_fields(path, field, missing)
+    return None
+
+
+def validate_nested_field_types(
+    value: dict[str, Any],
+    path: Path | None,
+    field: str,
+    fields: dict[str, type | tuple[type, ...]],
+) -> dict[str, Any] | None:
+    for key, expected_type in fields.items():
+        if key not in value:
+            continue
+        if not value_matches_type(value[key], expected_type):
+            return invalid_report_field(
+                path,
+                f"{field}.{key}",
+                expected_type,
+                value[key],
+            )
+    return None
+
+
+def validate_string_list(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_report_field(path, field, list, value)
+    for index, item in enumerate(value):
+        if not value_matches_type(item, str):
+            return invalid_report_field(path, f"{field}[{index}]", str, item)
+    return None
 
 
 def read_text(path: Path) -> str:
@@ -1467,7 +1596,6 @@ def build_report(
     issues.sort(
         key=lambda item: (item["backend_id"], item["category"], item["feature_id"])
     )
-    docs_summary = (docs_report or {}).get("summary", {})
     pytest_failure_summary = summarize_pytest_failure_reports(pytest_failure_reports)
     return {
         "schema_version": 1,
@@ -1475,9 +1603,7 @@ def build_report(
         "source": {
             "backends": "support/backends.json",
             "features": "support/features.json",
-            "docs_report": (
-                relpath(DEFAULT_DOCS_REPORT_PATH) if docs_report is not None else None
-            ),
+            "docs_report": docs_report_source(docs_report),
             "pytest_failure_summaries": [
                 report.get("path")
                 for report in pytest_failure_reports
@@ -1490,13 +1616,7 @@ def build_report(
             "state_counts": dict(sorted(state_counts.items())),
             "issue_count": len(issues),
             "pytest_failures": pytest_failure_summary,
-            "docs_probe": {
-                "provided": docs_report is not None,
-                "total": int(docs_summary.get("total", 0)),
-                "ok": int(docs_summary.get("ok", 0)),
-                "failed": int(docs_summary.get("failed", 0)),
-                "linked_documents": int(docs_summary.get("linked_documents", 0)),
-            },
+            "docs_probe": docs_probe_summary(docs_report),
         },
         "backends": [
             {
@@ -1527,12 +1647,357 @@ def compare_file(path: Path, expected: str) -> list[str]:
     )
 
 
+def load_optional_json_report(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        report = load_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return json_load_error(path, type(exc).__name__, str(exc))
+    if not isinstance(report, dict):
+        return json_load_error(
+            path,
+            "InvalidReportType",
+            f"expected JSON object, got {type(report).__name__}",
+        )
+    return report
+
+
+def json_report_schema_error(
+    report: dict[str, Any],
+    path: Path | None,
+    *,
+    expected_generator: str,
+    required_fields: tuple[str, ...],
+    schema_version: int,
+) -> dict[str, Any] | None:
+    missing_fields = [field for field in required_fields if field not in report]
+    if missing_fields:
+        return json_load_error(
+            path,
+            "MissingReportFields",
+            "missing required fields: {}".format(", ".join(missing_fields)),
+        )["load_error"]
+    if report.get("schema_version") != schema_version:
+        return json_load_error(
+            path,
+            "UnsupportedSchemaVersion",
+            "expected schema_version {}, got {}".format(
+                schema_version,
+                report.get("schema_version"),
+            ),
+        )["load_error"]
+    if report.get("generator") != expected_generator:
+        return json_load_error(
+            path,
+            "UnexpectedReportGenerator",
+            "expected generator {}, got {}".format(
+                expected_generator,
+                report.get("generator"),
+            ),
+        )["load_error"]
+    return None
+
+
+def validate_docs_counter_summary(
+    summary: Any,
+    path: Path | None,
+) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return invalid_report_field(path, "summary", dict, summary)
+    counters = (
+        "total",
+        "ok",
+        "failed",
+        "feature_hits",
+        "candidate_terms",
+        "linked_documents",
+    )
+    error = validate_required_fields(summary, path, "summary", counters)
+    if error is not None:
+        return error
+    error = validate_nested_field_types(
+        summary,
+        path,
+        "summary",
+        {counter: int for counter in counters},
+    )
+    if error is not None:
+        return error
+    if summary["ok"] + summary["failed"] != summary["total"]:
+        return json_load_error(
+            path,
+            "InvalidReportField",
+            "summary.total must match ok + failed: {} != {}".format(
+                summary["total"],
+                summary["ok"] + summary["failed"],
+            ),
+        )["load_error"]
+    return None
+
+
+def validate_docs_feature_hits(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_report_field(path, field, list, value)
+    for index, hit in enumerate(value):
+        hit_field = f"{field}[{index}]"
+        if not isinstance(hit, dict):
+            return invalid_report_field(path, hit_field, dict, hit)
+        error = validate_required_fields(
+            hit,
+            path,
+            hit_field,
+            ("feature_id", "category", "name", "matched_terms", "score"),
+        )
+        if error is not None:
+            return error
+        error = validate_nested_field_types(
+            hit,
+            path,
+            hit_field,
+            {
+                "feature_id": str,
+                "category": str,
+                "name": str,
+                "matched_terms": list,
+                "score": int,
+            },
+        )
+        if error is not None:
+            return error
+        error = validate_string_list(
+            hit["matched_terms"],
+            path,
+            f"{hit_field}.matched_terms",
+        )
+        if error is not None:
+            return error
+    return None
+
+
+def validate_docs_candidate_terms(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_report_field(path, field, list, value)
+    for index, candidate in enumerate(value):
+        candidate_field = f"{field}[{index}]"
+        if not isinstance(candidate, dict):
+            return invalid_report_field(path, candidate_field, dict, candidate)
+        error = validate_required_fields(
+            candidate,
+            path,
+            candidate_field,
+            ("term", "count"),
+        )
+        if error is not None:
+            return error
+        error = validate_nested_field_types(
+            candidate,
+            path,
+            candidate_field,
+            {
+                "term": str,
+                "count": int,
+            },
+        )
+        if error is not None:
+            return error
+    return None
+
+
+def validate_docs_report_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    error = validate_docs_counter_summary(report.get("summary"), path)
+    if error is not None:
+        return error
+    documents = report.get("documents")
+    if not isinstance(documents, list):
+        return invalid_report_field(path, "documents", list, documents)
+
+    actual_ok = 0
+    actual_failed = 0
+    actual_feature_hits = 0
+    actual_candidate_terms = 0
+    actual_linked = 0
+    for index, document in enumerate(documents):
+        document_field = f"documents[{index}]"
+        if not isinstance(document, dict):
+            return invalid_report_field(path, document_field, dict, document)
+        error = validate_required_fields(
+            document,
+            path,
+            document_field,
+            (
+                "backend_id",
+                "backend",
+                "source",
+                "url",
+                "ok",
+                "feature_hits",
+                "candidate_terms",
+            ),
+        )
+        if error is not None:
+            return error
+        error = validate_nested_field_types(
+            document,
+            path,
+            document_field,
+            {
+                "backend_id": str,
+                "backend": str,
+                "source": str,
+                "url": str,
+                "final_url": str,
+                "content_type": str,
+                "content_length": int,
+                "sha256": str,
+                "elapsed_ms": int,
+                "ok": bool,
+                "status": int,
+                "error": str,
+                "text_extraction": dict,
+                "linked_from": str,
+                "feature_hits": list,
+                "candidate_terms": list,
+            },
+        )
+        if error is not None:
+            return error
+        text_extraction = document.get("text_extraction")
+        if text_extraction is not None:
+            error = validate_nested_field_types(
+                text_extraction,
+                path,
+                f"{document_field}.text_extraction",
+                {
+                    "kind": str,
+                    "parser": (str, type(None)),
+                    "error": str,
+                    "links": list,
+                    "text_length": int,
+                    "page_count": int,
+                },
+            )
+            if error is not None:
+                return error
+            if "links" in text_extraction:
+                error = validate_string_list(
+                    text_extraction["links"],
+                    path,
+                    f"{document_field}.text_extraction.links",
+                )
+                if error is not None:
+                    return error
+        error = validate_docs_feature_hits(
+            document["feature_hits"],
+            path,
+            f"{document_field}.feature_hits",
+        )
+        if error is not None:
+            return error
+        error = validate_docs_candidate_terms(
+            document["candidate_terms"],
+            path,
+            f"{document_field}.candidate_terms",
+        )
+        if error is not None:
+            return error
+        if document["ok"]:
+            actual_ok += 1
+        else:
+            actual_failed += 1
+        actual_feature_hits += len(document["feature_hits"])
+        actual_candidate_terms += len(document["candidate_terms"])
+        if document.get("linked_from"):
+            actual_linked += 1
+
+    summary = report["summary"]
+    expected = {
+        "total": len(documents),
+        "ok": actual_ok,
+        "failed": actual_failed,
+        "feature_hits": actual_feature_hits,
+        "candidate_terms": actual_candidate_terms,
+        "linked_documents": actual_linked,
+    }
+    for counter, expected_value in expected.items():
+        if summary[counter] != expected_value:
+            return json_load_error(
+                path,
+                "InvalidReportField",
+                "summary.{} must match documents: {} != {}".format(
+                    counter,
+                    summary[counter],
+                    expected_value,
+                ),
+            )["load_error"]
+    return None
+
+
 def load_docs_report(path: Path | None) -> dict[str, Any] | None:
-    if path is None:
+    report = load_optional_json_report(path)
+    if report is None or report.get("load_error"):
+        return report
+    schema_error = json_report_schema_error(
+        report,
+        path,
+        expected_generator=DOCS_REPORT_GENERATOR,
+        required_fields=DOCS_REPORT_REQUIRED_FIELDS,
+        schema_version=DOCS_REPORT_SCHEMA_VERSION,
+    )
+    if schema_error is not None:
+        return {"load_error": schema_error}
+    contract_error = validate_docs_report_contract(report, path)
+    if contract_error is not None:
+        return {"load_error": contract_error}
+    if path is not None:
+        report.setdefault("path", relpath(path))
+    return report
+
+
+def docs_probe_summary(docs_report: dict[str, Any] | None) -> dict[str, Any]:
+    if docs_report is None:
+        return {
+            "provided": False,
+            "total": 0,
+            "ok": 0,
+            "failed": 0,
+            "linked_documents": 0,
+        }
+    load_error = docs_report.get("load_error")
+    if load_error:
+        return {
+            "provided": True,
+            "total": 1,
+            "ok": 0,
+            "failed": 1,
+            "linked_documents": 0,
+            "load_error": load_error,
+        }
+    summary = docs_report.get("summary", {})
+    return {
+        "provided": True,
+        "total": int(summary.get("total", 0)),
+        "ok": int(summary.get("ok", 0)),
+        "failed": int(summary.get("failed", 0)),
+        "linked_documents": int(summary.get("linked_documents", 0)),
+    }
+
+
+def docs_report_source(docs_report: dict[str, Any] | None) -> str | None:
+    if docs_report is None:
         return None
-    if not path.exists():
-        return None
-    return load_json(path)
+    return docs_report.get("path") or relpath(DEFAULT_DOCS_REPORT_PATH)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

@@ -16,6 +16,60 @@ def load_signals_module():
     return module
 
 
+def valid_docs_report():
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_signals.py docs",
+        "source": {
+            "backends": "support/backends.json",
+            "features": "support/features.json",
+        },
+        "summary": {
+            "total": 1,
+            "ok": 1,
+            "failed": 0,
+            "feature_hits": 1,
+            "candidate_terms": 1,
+            "linked_documents": 0,
+        },
+        "documents": [
+            {
+                "backend_id": "directx",
+                "backend": "DirectX / HLSL",
+                "source": "HLSL reference",
+                "url": "https://example.com/hlsl",
+                "final_url": "https://example.com/hlsl",
+                "content_type": "text/html",
+                "content_length": 64,
+                "sha256": "abc123",
+                "elapsed_ms": 12,
+                "ok": True,
+                "status": 200,
+                "text_extraction": {
+                    "kind": "html",
+                    "links": [],
+                    "text_length": 32,
+                },
+                "feature_hits": [
+                    {
+                        "feature_id": "texture.gather",
+                        "category": "textures",
+                        "name": "Texture gather",
+                        "matched_terms": ["gather"],
+                        "score": 1,
+                    }
+                ],
+                "candidate_terms": [
+                    {
+                        "term": "Texture2D",
+                        "count": 1,
+                    }
+                ],
+            }
+        ],
+    }
+
+
 def test_document_feature_hits_extracts_feature_matches_without_storing_text():
     module = load_signals_module()
     feature = {
@@ -151,6 +205,126 @@ def test_build_docs_report_crawls_relevant_same_site_links(monkeypatch):
     assert (
         report["documents"][1]["linked_from"] == "https://example.com/hlsl/index.html"
     )
+
+
+def test_load_docs_report_accepts_valid_contract(tmp_path):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_path.write_text(json.dumps(valid_docs_report()), encoding="utf-8")
+
+    report = module.load_docs_report(docs_path)
+
+    assert "load_error" not in report
+    assert report["path"] == module.relpath(docs_path)
+
+
+def test_load_docs_report_reports_malformed_json(tmp_path):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_path.write_text("{not json", encoding="utf-8")
+
+    report = module.load_docs_report(docs_path)
+
+    assert report["load_error"]["path"] == module.relpath(docs_path)
+    assert report["load_error"]["type"] == "JSONDecodeError"
+    assert "Expecting property name" in report["load_error"]["message"]
+
+
+def test_load_docs_report_reports_missing_required_fields(tmp_path):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "tools/support_signals.py docs",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = module.load_docs_report(docs_path)
+
+    assert report["load_error"] == {
+        "path": module.relpath(docs_path),
+        "type": "MissingReportFields",
+        "message": "missing required fields: summary, documents",
+    }
+
+
+def test_load_docs_report_reports_invalid_document_candidate_type(tmp_path):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_report = valid_docs_report()
+    docs_report["documents"][0]["candidate_terms"][0]["count"] = "one"
+    docs_path.write_text(json.dumps(docs_report), encoding="utf-8")
+
+    report = module.load_docs_report(docs_path)
+
+    assert report["load_error"] == {
+        "path": module.relpath(docs_path),
+        "type": "InvalidReportField",
+        "message": "documents[0].candidate_terms[0].count must be int, got str",
+    }
+
+
+def test_load_docs_report_reports_summary_mismatch(tmp_path):
+    module = load_signals_module()
+    docs_path = tmp_path / "backend-docs-report.json"
+    docs_report = valid_docs_report()
+    docs_report["summary"]["candidate_terms"] = 2
+    docs_path.write_text(json.dumps(docs_report), encoding="utf-8")
+
+    report = module.load_docs_report(docs_path)
+
+    assert report["load_error"] == {
+        "path": module.relpath(docs_path),
+        "type": "InvalidReportField",
+        "message": "summary.candidate_terms must match documents: 2 != 1",
+    }
+
+
+def test_build_report_summarizes_docs_probe_load_error():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "path": "support/generated/backend-docs-report.json",
+        "load_error": {
+            "path": "support/generated/backend-docs-report.json",
+            "type": "JSONDecodeError",
+            "message": "Expecting property name",
+        },
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert (
+        report["source"]["docs_report"] == "support/generated/backend-docs-report.json"
+    )
+    assert report["summary"]["docs_probe"] == {
+        "provided": True,
+        "total": 1,
+        "ok": 0,
+        "failed": 1,
+        "linked_documents": 0,
+        "load_error": {
+            "path": "support/generated/backend-docs-report.json",
+            "type": "JSONDecodeError",
+            "message": "Expecting property name",
+        },
+    }
+    assert report["issues"] == []
 
 
 def test_build_report_scans_repo_implementation_and_tests():
