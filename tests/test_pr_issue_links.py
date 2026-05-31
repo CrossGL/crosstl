@@ -24,6 +24,7 @@ class FakeClient:
         assign_errors=None,
         pull_files=None,
         json_files=None,
+        json_errors=None,
         support_issues=None,
     ):
         self.module = module
@@ -31,6 +32,7 @@ class FakeClient:
         self.assign_errors = dict(assign_errors or {})
         self.pull_files = list(pull_files or [])
         self.json_files = dict(json_files or {})
+        self.json_errors = dict(json_errors or {})
         self.support_issues = list(support_issues or [])
         self.assigned = []
         self.updated_bodies = []
@@ -57,6 +59,9 @@ class FakeClient:
         return list(self.pull_files)
 
     def read_json_file(self, repo, path, ref):
+        error = self.json_errors.get((repo, path, ref))
+        if error is not None:
+            raise error
         return self.json_files[(repo, path, ref)]
 
     def list_open_support_issues(self):
@@ -378,6 +383,206 @@ def test_sync_adds_support_matrix_refs_from_changed_backlog_rows(tmp_path, monke
             ),
         )
     ]
+
+
+def test_sync_adds_mixed_support_matrix_closures_and_refs(tmp_path, monkeypatch):
+    module = load_sync_module()
+    base_matrix = {
+        "features": [
+            {
+                "id": "language.wave_intrinsics",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Wave active ops are missing.",
+                        "evidence": ["tests/old.py::test_wave_active"],
+                    }
+                },
+            },
+            {
+                "id": "texture.projected",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Planar projection is supported.",
+                        "evidence": ["tests/old.py::test_planar_projection"],
+                    }
+                },
+            },
+            {
+                "id": "texture.gather",
+                "support": {
+                    "metal": {
+                        "status": "unsupported",
+                        "notes": "Gather is missing.",
+                        "evidence": [],
+                    }
+                },
+            },
+        ],
+        "backlog": [
+            {"backend_id": "metal", "feature_id": "language.wave_intrinsics"},
+            {"backend_id": "metal", "feature_id": "texture.projected"},
+            {"backend_id": "metal", "feature_id": "texture.gather"},
+        ],
+    }
+    head_matrix = {
+        "features": [
+            {
+                "id": "texture.projected",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Planar and cube-shadow projection are supported.",
+                        "evidence": [
+                            "tests/old.py::test_planar_projection",
+                            "tests/new.py::test_cube_shadow_projection",
+                        ],
+                    }
+                },
+            },
+            {
+                "id": "texture.gather",
+                "support": {
+                    "metal": {
+                        "status": "unsupported",
+                        "notes": "Gather is missing.",
+                        "evidence": [],
+                    }
+                },
+            },
+        ],
+        "backlog": [
+            {"backend_id": "metal", "feature_id": "texture.projected"},
+            {"backend_id": "metal", "feature_id": "texture.gather"},
+        ],
+    }
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(base_matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    wave_marker = (
+        "<!-- crossgl-support-issue-sync: backlog:metal:language.wave_intrinsics -->"
+    )
+    projected_marker = (
+        "<!-- crossgl-support-issue-sync: backlog:metal:texture.projected -->"
+    )
+    gather_marker = "<!-- crossgl-support-issue-sync: backlog:metal:texture.gather -->"
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal support",
+        body="Support matrix update.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("support/generated/support-matrix.json",),
+    )
+    client = FakeClient(
+        module,
+        issues={498: issue(498)},
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): head_matrix
+        },
+        support_issues=[
+            issue(498, body=wave_marker),
+            issue(432, body=projected_marker),
+            issue(353, body=gather_marker),
+        ],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        sync_support_references=True,
+        enforce_support_traceability=True,
+    )
+
+    assert summary["linked"] == 1
+    assert summary["support_closures"] == 1
+    assert summary["support_references"] == 1
+    assert summary["traceability_satisfied"] == 1
+    assert client.updated_bodies == [
+        (
+            5,
+            "\n".join(
+                [
+                    "Support matrix update.",
+                    "",
+                    "<!-- crossgl-pr-issue-links:start -->",
+                    "Closes #498",
+                    "Refs #432",
+                    "<!-- crossgl-pr-issue-links:end -->",
+                ]
+            ),
+        )
+    ]
+    assert "#353" not in client.updated_bodies[0][1]
+
+
+def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    base_matrix = {
+        "backlog": [{"backend_id": "metal", "feature_id": "language.wave_intrinsics"}]
+    }
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(base_matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    body = "\n".join(
+        [
+            "Support matrix update.",
+            "",
+            "<!-- crossgl-pr-issue-links:start -->",
+            "Closes #498",
+            "Refs #432",
+            "<!-- crossgl-pr-issue-links:end -->",
+        ]
+    )
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal support",
+        body=body,
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("support/generated/support-matrix.json",),
+    )
+    client = FakeClient(
+        module,
+        json_errors={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): module.GitHubApiError(
+                "GET",
+                "/repos/CrossGL/crosstl/contents/support/generated/support-matrix.json",
+                502,
+                "upstream unavailable",
+            )
+        },
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        sync_support_references=True,
+        enforce_support_traceability=True,
+    )
+
+    captured = capsys.readouterr()
+    assert "::warning::Could not inspect PR support matrix links" in captured.out
+    assert summary["body_updated"] == 0
+    assert summary["traceability_failed"] == 1
+    assert client.updated_bodies == []
 
 
 def test_sync_skips_pull_request_refs_and_non_assignable_authors():
