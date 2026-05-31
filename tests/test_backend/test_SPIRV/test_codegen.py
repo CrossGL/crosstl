@@ -256,7 +256,9 @@ def test_translate_api_accepts_spirv_source(tmp_path):
 
     assert "#[fragment_shader]" in generated_code
     assert "pub fn main()" in generated_code
-    assert "let color: float4 = float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+    assert (
+        "let color: Vec4<f32> = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
+    )
 
 
 def test_vulkan_layout_blocks_emit_crossgl_resources():
@@ -1152,8 +1154,12 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
     )
     assert (
-        "static POSITION: std::sync::LazyLock<float3> = "
+        "static POSITION: std::sync::LazyLock<Vec3<f32>> = "
         "std::sync::LazyLock::new(|| Default::default());" in generated_code
+    )
+    assert (
+        "gl_Position = Vec4::<f32>::new((*POSITION).x, (*POSITION).y, "
+        "(*POSITION).z, 1.0);" in generated_code
     )
     assert "#[vertex_shader]" in generated_code
 

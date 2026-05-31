@@ -30,6 +30,7 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     PointerAccessNode,
     RangeNode,
     RayQueryOpNode,
@@ -40,6 +41,8 @@ from ..ast import (
     SwitchNode,
     SyncNode,
     TernaryOpNode,
+    TextureNode,
+    TextureOpNode,
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
@@ -57,6 +60,7 @@ class RustCodeGen:
     def __init__(self):
         """Initialize Rust type maps and expression-generation state."""
         self.current_shader = None
+        self.current_shader_type = None
         self.type_mapping = {
             # Scalar Types
             "void": "()",
@@ -107,6 +111,15 @@ class RustCodeGen:
             "bool2": "Vec2<bool>",
             "bool3": "Vec3<bool>",
             "bool4": "Vec4<bool>",
+            "float2": "Vec2<f32>",
+            "float3": "Vec3<f32>",
+            "float4": "Vec4<f32>",
+            "int2": "Vec2<i32>",
+            "int3": "Vec3<i32>",
+            "int4": "Vec4<i32>",
+            "uint2": "Vec2<u32>",
+            "uint3": "Vec3<u32>",
+            "uint4": "Vec4<u32>",
             # Matrix Types
             "mat2": "Mat2<f32>",
             "mat3": "Mat3<f32>",
@@ -147,6 +160,21 @@ class RustCodeGen:
             "samplerCubeShadow": "DepthTextureCube<f32>",
             "samplerCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "sampler": "Sampler",
+            "SamplerState": "Sampler",
+            "SamplerComparisonState": "Sampler",
+            "Texture1D": "Texture1D<f32>",
+            "Texture1DArray": "Texture1DArray<f32>",
+            "Texture2D": "Texture2D<f32>",
+            "Texture2DArray": "Texture2DArray<f32>",
+            "Texture3D": "Texture3D<f32>",
+            "TextureCube": "TextureCube<f32>",
+            "TextureCubeArray": "TextureCubeArray<f32>",
+            "Texture2DMS": "Texture2DMS<f32>",
+            "Texture2DMSArray": "Texture2DMSArray<f32>",
+            "Texture2DShadow": "DepthTexture2D<f32>",
+            "Texture2DArrayShadow": "DepthTexture2DArray<f32>",
+            "TextureCubeShadow": "DepthTextureCube<f32>",
+            "TextureCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "image1D": "Image1D<Vec4<f32>>",
             "image1DArray": "Image1DArray<Vec4<f32>>",
             "image2D": "Image2D<Vec4<f32>>",
@@ -175,6 +203,11 @@ class RustCodeGen:
             "ConsumeStructuredBuffer": "ConsumeStructuredBuffer",
             "ByteAddressBuffer": "ByteAddressBuffer",
             "RWByteAddressBuffer": "RwByteAddressBuffer",
+            "PointStream": "CglRustPointStream",
+            "LineStream": "CglRustLineStream",
+            "TriangleStream": "CglRustTriangleStream",
+            "InputPatch": "CglRustInputPatch",
+            "OutputPatch": "CglRustOutputPatch",
             "accelerationStructureEXT": "RayTracingAccelerationStructure",
             "AccelerationStructure": "RayTracingAccelerationStructure",
             "acceleration_structure": "RayTracingAccelerationStructure",
@@ -237,6 +270,12 @@ class RustCodeGen:
             "SV_GroupThreadID": "local_invocation_id",
             "SV_DispatchThreadID": "global_invocation_id",
             "SV_GroupIndex": "local_invocation_index",
+            # Tessellation attributes
+            "gl_InvocationID": "output_control_point_id",
+            "gl_PrimitiveIDIn": "primitive_id",
+            "gl_TessCoord": "domain_location",
+            "SV_OutputControlPointID": "output_control_point_id",
+            "SV_DomainLocation": "domain_location",
             # Ray tracing attributes
             "payload": "ray_payload",
             "rayPayloadEXT": "ray_payload",
@@ -425,6 +464,14 @@ class RustCodeGen:
             "groupMemoryBarrier": "group_memory_barrier",
             "allMemoryBarrier": "all_memory_barrier",
             "deviceMemoryBarrier": "device_memory_barrier",
+            "GroupMemoryBarrier": "group_memory_barrier",
+            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
+            "DeviceMemoryBarrier": "device_memory_barrier",
+            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
+            "AllMemoryBarrier": "all_memory_barrier",
+            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
+            "WaveShuffle": "subgroup_shuffle",
+            "WaveShuffleXor": "subgroup_shuffle_xor",
         }
         self.wave_op_map = {
             "WaveActiveSum": "subgroup_add",
@@ -458,6 +505,8 @@ class RustCodeGen:
             "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
             "QuadReadAcrossY": "subgroup_quad_swap_vertical",
             "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
+            "QuadAny": "subgroup_quad_any",
+            "QuadAll": "subgroup_quad_all",
             "WaveShuffle": "subgroup_shuffle",
             "WaveShuffleXor": "subgroup_shuffle_xor",
         }
@@ -471,6 +520,12 @@ class RustCodeGen:
             "groupMemoryBarrier": "group_memory_barrier",
             "allMemoryBarrier": "all_memory_barrier",
             "deviceMemoryBarrier": "device_memory_barrier",
+            "GroupMemoryBarrier": "group_memory_barrier",
+            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
+            "DeviceMemoryBarrier": "device_memory_barrier",
+            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
+            "AllMemoryBarrier": "all_memory_barrier",
+            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
         }
         self.variable_types = {}
         self.local_variable_names = set()
@@ -486,6 +541,7 @@ class RustCodeGen:
         self.static_symbol_names = {}
         self.runtime_type_collisions = set()
         self.current_return_type = None
+        self.current_shader_type = None
         self.do_while_contexts = []
         self.for_contexts = []
         self.loop_depth = 0
@@ -506,6 +562,7 @@ class RustCodeGen:
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
+        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -560,6 +617,7 @@ class RustCodeGen:
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
+        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -576,6 +634,10 @@ class RustCodeGen:
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
+        if self.has_geometry_stage(ast):
+            code += self.generate_rust_geometry_stream_helpers()
+        if self.has_tessellation_stage(ast):
+            code += self.generate_rust_tessellation_patch_helpers()
 
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -609,16 +671,47 @@ class RustCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
+            qualifier_name = normalize_stage_name(qualifier)
 
-            if qualifier == "vertex":
+            if qualifier_name == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif qualifier == "fragment":
+            elif qualifier_name == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif qualifier == "compute":
+            elif qualifier_name == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
+            elif qualifier_name == "geometry":
+                code += "// Geometry Shader\n"
+                code += self.generate_function(func, shader_type="geometry")
+            elif qualifier_name == "tessellation_control":
+                code += "// Tessellation Control Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type="tessellation_control",
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
+            elif qualifier_name == "tessellation_evaluation":
+                code += "// Tessellation Evaluation Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type="tessellation_evaluation",
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
+            elif qualifier_name in self.rust_mesh_stage_names():
+                code += f"// {qualifier_name.title()} Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type=qualifier_name,
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
             else:
                 code += self.generate_function(func)
 
@@ -652,6 +745,7 @@ class RustCodeGen:
                         stage.entry_point,
                         shader_type=stage_name,
                         function_name=function_name,
+                        stage_node=stage,
                     )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
@@ -659,19 +753,158 @@ class RustCodeGen:
 
                 self.variable_types = saved_variable_types
 
+        code += self.generate_required_rust_mesh_helpers()
         code += self.generate_required_generic_math_traits()
         return code
 
     def unsupported_stage_types(self):
-        return {
-            "amplification",
-            "geometry",
-            "mesh",
-            "object",
-            "task",
-            "tessellation_control",
-            "tessellation_evaluation",
-        }
+        return set()
+
+    def has_geometry_stage(self, ast_node, target_stage=None):
+        """Return whether the AST contains a geometry stage to emit."""
+        if not stage_matches(target_stage, "geometry"):
+            return False
+
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) == "geometry":
+                return True
+
+        for func in getattr(ast_node, "functions", []) or []:
+            qualifiers = list(getattr(func, "qualifiers", []) or [])
+            qualifier = getattr(func, "qualifier", None)
+            if qualifier:
+                qualifiers.append(qualifier)
+            if any(
+                normalize_stage_name(qualifier) == "geometry"
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_rust_geometry_stream_helpers(self):
+        """Emit compile-oriented placeholders for CrossGL geometry streams."""
+        return (
+            "pub struct CglRustPointStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustPointStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustPointStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+            "pub struct CglRustLineStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustLineStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustLineStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+            "pub struct CglRustTriangleStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustTriangleStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustTriangleStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+        )
+
+    def has_tessellation_stage(self, ast_node, target_stage=None):
+        """Return whether the AST contains a tessellation stage to emit."""
+        tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
+        if not any(
+            stage_matches(target_stage, stage_name)
+            for stage_name in tessellation_stages
+        ):
+            return False
+
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) in tessellation_stages:
+                return True
+
+        for func in getattr(ast_node, "functions", []) or []:
+            qualifiers = list(getattr(func, "qualifiers", []) or [])
+            qualifier = getattr(func, "qualifier", None)
+            if qualifier:
+                qualifiers.append(qualifier)
+            if any(
+                normalize_stage_name(qualifier) in tessellation_stages
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_rust_tessellation_patch_helpers(self):
+        """Emit compile-oriented placeholders for CrossGL tessellation patches."""
+        return (
+            "pub struct CglRustInputPatch<T, const N: usize> {\n"
+            "    control_points: [T; N],\n"
+            "}\n\n"
+            "impl<T: Default, const N: usize> Default for "
+            "CglRustInputPatch<T, N> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { control_points: std::array::from_fn(|_| "
+            "T::default()) }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::Index<usize> for "
+            "CglRustInputPatch<T, N> {\n"
+            "    type Output = T;\n\n"
+            "    fn index(&self, index: usize) -> &Self::Output {\n"
+            "        &self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::IndexMut<usize> for "
+            "CglRustInputPatch<T, N> {\n"
+            "    fn index_mut(&mut self, index: usize) -> &mut Self::Output {\n"
+            "        &mut self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "pub struct CglRustOutputPatch<T, const N: usize> {\n"
+            "    control_points: [T; N],\n"
+            "}\n\n"
+            "impl<T: Default, const N: usize> Default for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { control_points: std::array::from_fn(|_| "
+            "T::default()) }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::Index<usize> for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    type Output = T;\n\n"
+            "    fn index(&self, index: usize) -> &Self::Output {\n"
+            "        &self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::IndexMut<usize> for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    fn index_mut(&mut self, index: usize) -> &mut Self::Output {\n"
+            "        &mut self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+        )
 
     def rust_ray_stage_names(self):
         return {
@@ -692,6 +925,990 @@ class RustCodeGen:
             "ray_intersection": "intersection",
             "ray_miss": "miss",
         }.get(shader_type, shader_type)
+
+    def rust_mesh_stage_names(self):
+        return {"amplification", "mesh", "object", "task"}
+
+    def rust_mesh_stage_attribute_arguments(self, func, *attribute_names):
+        for attribute_name in attribute_names:
+            arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+            if arguments:
+                return arguments
+        return []
+
+    def rust_mesh_stage_attribute_value(self, func, stage_name, *attribute_names):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_argument_text(arguments[0])
+
+    def rust_mesh_stage_positive_attribute(self, func, stage_name, *attribute_names):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} requires exactly one "
+                "argument"
+            )
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} ({value}) must be positive"
+            )
+        return value_text
+
+    def rust_mesh_stage_numthreads(self, func, stage_name):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, "numthreads")
+        if not arguments:
+            return None
+        if len(arguments) > 3:
+            raise ValueError(
+                f"Rust {stage_name} stage numthreads requires at most three "
+                "arguments"
+            )
+        values = [self.attribute_argument_text(arg) for arg in arguments]
+        for index, argument in enumerate(arguments):
+            value = self.literal_int_value(argument)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"Rust {stage_name} stage numthreads value {index + 1} "
+                    "must be positive"
+                )
+        while len(values) < 3:
+            values.append("1")
+        return tuple(values[:3])
+
+    def rust_mesh_stage_layout_local_size(self, stage_node, stage_name):
+        if stage_node is None:
+            return None
+        sizes = {"local_size_x": None, "local_size_y": None, "local_size_z": None}
+        for layout in getattr(stage_node, "layout_qualifiers", []) or []:
+            for entry in getattr(layout, "entries", []) or []:
+                name = getattr(entry, "name", None)
+                if name not in sizes:
+                    continue
+                arguments = (
+                    getattr(entry, "arguments", getattr(entry, "args", [])) or []
+                )
+                if len(arguments) != 1:
+                    raise ValueError(
+                        f"Rust {stage_name} stage {name} requires exactly one "
+                        "argument"
+                    )
+                value = self.literal_int_value(arguments[0])
+                if value is not None and value <= 0:
+                    raise ValueError(f"Rust {stage_name} stage {name} must be positive")
+                sizes[name] = self.attribute_argument_text(arguments[0])
+        if all(value is None for value in sizes.values()):
+            return None
+        return (
+            sizes["local_size_x"] or "1",
+            sizes["local_size_y"] or "1",
+            sizes["local_size_z"] or "1",
+        )
+
+    def canonical_rust_mesh_output_topology(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().strip("\"'").lower()
+        return {
+            "point": "point",
+            "points": "point",
+            "line": "line",
+            "lines": "line",
+            "triangle": "triangle",
+            "triangles": "triangle",
+            "triangle_cw": "triangle_cw",
+            "triangle_ccw": "triangle_ccw",
+        }.get(normalized)
+
+    def rust_mesh_output_topology(self, func, stage_name, required=False):
+        value = self.rust_mesh_stage_attribute_value(func, stage_name, "outputtopology")
+        if value is None:
+            if required:
+                raise ValueError(
+                    f"Rust {stage_name} stage requires outputtopology attribute"
+                )
+            return None
+        topology = self.canonical_rust_mesh_output_topology(value)
+        if topology is None:
+            raise ValueError(
+                f"Rust {stage_name} stage outputtopology '{value}' must be point, "
+                "line, triangle, triangle_cw, or triangle_ccw"
+            )
+        return topology
+
+    def rust_mesh_parameter_role(self, parameter):
+        role_aliases = {
+            "mesh_payload": "mesh_payload",
+            "meshpayload": "mesh_payload",
+            "payload": "mesh_payload",
+            "vertices": "vertices",
+            "vertex": "vertices",
+            "indices": "indices",
+            "index": "indices",
+            "primitives": "primitives",
+            "primitive": "primitives",
+        }
+        for attr in getattr(parameter, "attributes", []) or []:
+            name = getattr(attr, "name", None)
+            if name is None:
+                continue
+            normalized = str(name).strip().lower().replace("-", "_")
+            role = role_aliases.get(normalized)
+            if role is not None:
+                return role
+        return None
+
+    def rust_mesh_parameter_base_type(self, param_type):
+        if self.is_array_type_name(param_type):
+            base_type, _sizes = self.c_array_type_parts(param_type)
+            return base_type
+        return param_type
+
+    def rust_mesh_param_infos(self, parameters):
+        return [
+            (parameter, self.function_parameter_type(parameter))
+            for parameter in parameters
+        ]
+
+    def validate_rust_mesh_parameter_roles(self, stage_name, param_infos):
+        seen_roles = {}
+        for parameter, param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            seen_roles.setdefault(role, []).append(parameter.name)
+
+            if role == "mesh_payload" and stage_name != "mesh":
+                raise ValueError(
+                    "Rust mesh payload parameters are only valid on mesh stages"
+                )
+            if role in {"vertices", "indices", "primitives"}:
+                if stage_name != "mesh":
+                    raise ValueError(
+                        f"Rust mesh output parameter role {role} is only valid "
+                        "on mesh stages"
+                    )
+                if not self.rust_parameter_is_array(parameter):
+                    raise ValueError(
+                        f"Rust mesh {role} parameter '{parameter.name}' must be "
+                        "an array"
+                    )
+
+        if len(seen_roles.get("mesh_payload", [])) > 1:
+            raise ValueError(
+                "Rust mesh stage accepts at most one mesh_payload parameter"
+            )
+
+    def validate_rust_mesh_output_parameter_bounds(self, func, stage_name, param_infos):
+        if stage_name != "mesh":
+            return
+        max_vertices = self.literal_int_value(
+            self.rust_mesh_stage_positive_attribute(
+                func, stage_name, "maxvertices", "max_vertices"
+            )
+        )
+        max_primitives = self.literal_int_value(
+            self.rust_mesh_stage_positive_attribute(
+                func, stage_name, "maxprimitives", "max_primitives"
+            )
+        )
+        for parameter, _param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role not in {"vertices", "indices", "primitives"}:
+                continue
+            array_count = self.rust_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if (
+                role == "vertices"
+                and max_vertices is not None
+                and array_count > max_vertices
+            ):
+                raise ValueError(
+                    f"Rust mesh vertices parameter '{parameter.name}' count "
+                    f"({array_count}) exceeds maxvertices ({max_vertices})"
+                )
+            if (
+                role in {"indices", "primitives"}
+                and max_primitives is not None
+                and array_count > max_primitives
+            ):
+                raise ValueError(
+                    f"Rust mesh {role} parameter '{parameter.name}' count "
+                    f"({array_count}) exceeds maxprimitives ({max_primitives})"
+                )
+
+    def walk_rust_mesh_ops(self, node, visited=None):
+        if visited is None:
+            visited = set()
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, list):
+            for item in node:
+                yield from self.walk_rust_mesh_ops(item, visited)
+            return
+        node_id = id(node)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        if isinstance(node, MeshOpNode):
+            yield node
+            for argument in getattr(node, "arguments", []) or []:
+                yield from self.walk_rust_mesh_ops(argument, visited)
+            return
+
+        for attribute_name in (
+            "statements",
+            "body",
+            "expression",
+            "value",
+            "left",
+            "right",
+            "condition",
+            "then_branch",
+            "else_branch",
+            "if_body",
+            "args",
+            "arguments",
+        ):
+            if hasattr(node, attribute_name):
+                yield from self.walk_rust_mesh_ops(
+                    getattr(node, attribute_name), visited
+                )
+
+    def validate_rust_mesh_op_stage(self, operation, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if stage_name != "mesh":
+                raise ValueError(
+                    f"Rust {stage_name or 'function'} stage cannot call "
+                    "SetMeshOutputCounts; SetMeshOutputCounts is only valid in "
+                    "mesh stages"
+                )
+            return
+        if operation == "DispatchMesh":
+            if stage_name not in {"task", "amplification", "object"}:
+                raise ValueError(
+                    f"Rust {stage_name or 'function'} stage cannot call "
+                    "DispatchMesh; DispatchMesh is only valid in task, "
+                    "amplification, or object stages"
+                )
+            return
+        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+
+    def rust_mesh_count_argument_is_integer_scalar(self, argument):
+        if isinstance(argument, bool) or isinstance(argument, float):
+            return False
+        if isinstance(argument, int) and not isinstance(argument, bool):
+            return True
+        if self.literal_int_value(argument) is not None:
+            return True
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return True
+        return self.normalize_scalar_type(argument_type) in {
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "i64",
+            "u64",
+        }
+
+    def validate_rust_mesh_op_arguments(self, operation, arguments, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if len(arguments) != 2:
+                raise ValueError(
+                    "Rust mesh SetMeshOutputCounts requires exactly two arguments"
+                )
+            labels = ("vertex count", "primitive count")
+        elif operation == "DispatchMesh":
+            if len(arguments) not in {3, 4}:
+                raise ValueError(
+                    "Rust mesh DispatchMesh requires three group counts and an "
+                    "optional payload argument"
+                )
+            labels = ("x count", "y count", "z count")
+        else:
+            return
+
+        for label, argument in zip(labels, arguments):
+            if not self.rust_mesh_count_argument_is_integer_scalar(argument):
+                raise ValueError(
+                    f"Rust {stage_name} {operation} {label} argument must be an "
+                    "integer scalar"
+                )
+            value = self.literal_int_value(argument)
+            if value is not None and value < 0:
+                raise ValueError(
+                    f"Rust {stage_name} {operation} {label} argument must be "
+                    "non-negative"
+                )
+
+    def validate_rust_mesh_stage(self, func, parameters, shader_type, stage_node=None):
+        self.rust_mesh_stage_numthreads(func, shader_type)
+        self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
+        param_infos = self.rust_mesh_param_infos(parameters)
+        if shader_type == "mesh":
+            self.rust_mesh_output_topology(func, shader_type, required=True)
+            self.rust_mesh_stage_positive_attribute(
+                func, shader_type, "maxvertices", "max_vertices"
+            )
+            self.rust_mesh_stage_positive_attribute(
+                func, shader_type, "maxprimitives", "max_primitives"
+            )
+        self.validate_rust_mesh_parameter_roles(shader_type, param_infos)
+        self.validate_rust_mesh_output_parameter_bounds(func, shader_type, param_infos)
+
+        for mesh_op in self.walk_rust_mesh_ops(getattr(func, "body", [])):
+            operation = getattr(mesh_op, "operation", None)
+            arguments = list(getattr(mesh_op, "arguments", []) or [])
+            self.validate_rust_mesh_op_stage(operation, shader_type)
+            self.validate_rust_mesh_op_arguments(operation, arguments, shader_type)
+
+    def generate_rust_mesh_parameter_role_comments(self, param_infos):
+        descriptions = []
+        for parameter, param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            base_type = self.rust_mesh_parameter_base_type(param_type)
+            array_count = self.rust_parameter_array_count(parameter)
+            suffix = f"[{array_count}]" if array_count is not None else ""
+            descriptions.append(f"{role}:{parameter.name}->{base_type}{suffix}")
+        if not descriptions:
+            return ""
+        return "// CrossGL mesh parameter role: " f"{', '.join(descriptions)}\n"
+
+    def generate_rust_mesh_stage_comments(
+        self, func, parameters, shader_type, stage_node=None
+    ):
+        lines = [f"// CrossGL mesh/task stage: stage={shader_type}\n"]
+        numthreads = self.rust_mesh_stage_numthreads(func, shader_type)
+        if numthreads is not None:
+            lines.append(
+                "// CrossGL mesh/task numthreads: " f"{', '.join(numthreads)}\n"
+            )
+        local_size = self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
+        if local_size is not None:
+            lines.append(
+                "// CrossGL mesh/task local size: " f"{', '.join(local_size)}\n"
+            )
+
+        if shader_type == "mesh":
+            topology = self.rust_mesh_output_topology(func, shader_type, required=True)
+            lines.append(f"// CrossGL mesh output topology: {topology}\n")
+        max_vertices = self.rust_mesh_stage_positive_attribute(
+            func, shader_type, "maxvertices", "max_vertices"
+        )
+        if max_vertices is not None:
+            lines.append(f"// CrossGL mesh max vertices: {max_vertices}\n")
+        max_primitives = self.rust_mesh_stage_positive_attribute(
+            func, shader_type, "maxprimitives", "max_primitives"
+        )
+        if max_primitives is not None:
+            lines.append(f"// CrossGL mesh max primitives: {max_primitives}\n")
+
+        role_comments = self.generate_rust_mesh_parameter_role_comments(
+            self.rust_mesh_param_infos(parameters)
+        )
+        if role_comments:
+            lines.append(role_comments)
+        return "".join(lines)
+
+    def generate_rust_mesh_op_expression(self, expr):
+        operation = getattr(expr, "operation", "mesh intrinsic")
+        arguments = list(getattr(expr, "arguments", []) or [])
+        stage_name = self.current_shader_type
+        self.validate_rust_mesh_op_stage(operation, stage_name)
+        self.validate_rust_mesh_op_arguments(operation, arguments, stage_name)
+
+        args = [self.generate_expression(argument) for argument in arguments]
+        if operation == "SetMeshOutputCounts":
+            self.required_mesh_helpers.add("set_mesh_output_counts")
+            return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
+        if operation == "DispatchMesh":
+            self.required_mesh_helpers.add("dispatch_mesh")
+            if len(args) == 3:
+                return "_crossgl_dispatch_mesh_without_payload(" f"{', '.join(args)})"
+            return f"_crossgl_dispatch_mesh({', '.join(args)})"
+
+        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+
+    def generate_required_rust_mesh_helpers(self):
+        if not self.required_mesh_helpers:
+            return ""
+        code = "// CrossGL mesh/task placeholders\n"
+        if "set_mesh_output_counts" in self.required_mesh_helpers:
+            code += (
+                "pub fn _crossgl_set_mesh_output_counts("
+                "vertices: u32, primitives: u32) {\n"
+                "    let _ = (vertices, primitives);\n"
+                "}\n\n"
+            )
+        if "dispatch_mesh" in self.required_mesh_helpers:
+            code += (
+                "pub fn _crossgl_dispatch_mesh<T>("
+                "x: u32, y: u32, z: u32, payload: T) {\n"
+                "    let _ = (x, y, z, payload);\n"
+                "}\n\n"
+                "pub fn _crossgl_dispatch_mesh_without_payload("
+                "x: u32, y: u32, z: u32) {\n"
+                "    let _ = (x, y, z);\n"
+                "}\n\n"
+            )
+        return code
+
+    def rust_stage_attribute_arguments(self, func, attribute_name):
+        """Return arguments for a Rust-relevant stage control attribute."""
+        expected = str(attribute_name).strip().lower().replace("-", "_")
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized == expected:
+                return self.attribute_arguments(attr)
+        return []
+
+    def rust_geometry_maxvertexcount(self, func):
+        arguments = self.rust_stage_attribute_arguments(func, "maxvertexcount")
+        if not arguments:
+            raise ValueError("Rust geometry stage requires maxvertexcount attribute")
+        if len(arguments) != 1:
+            raise ValueError(
+                "Rust geometry stage maxvertexcount requires exactly one argument"
+            )
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Rust geometry stage maxvertexcount ({value}) must be positive"
+            )
+        return value_text
+
+    def parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return parameter.param_type
+        if hasattr(parameter, "vtype"):
+            return parameter.vtype
+        return "void"
+
+    def rust_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            primitive = self.attribute_argument_text(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+        return qualifiers
+
+    def rust_geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.rust_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def rust_parameter_is_array(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if getattr(raw_type, "__class__", None).__name__ == "ArrayType":
+            return True
+        type_name = self.type_name_string(raw_type)
+        return bool(type_name and "[" in type_name and "]" in type_name)
+
+    def rust_parameter_array_count(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if getattr(raw_type, "__class__", None).__name__ == "ArrayType":
+            size = getattr(raw_type, "size", None)
+            if size is None:
+                return None
+            return self.literal_int_value(size)
+
+        type_name = self.type_name_string(raw_type)
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return None
+        _base_type, sizes = self.c_array_type_parts(type_name)
+        return sizes[0] if sizes else None
+
+    def validate_rust_geometry_input_primitive_arity(self, parameters):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter in parameters:
+            primitive = self.rust_geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.rust_parameter_is_array(parameter):
+                raise ValueError(
+                    "Rust geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.rust_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "Rust geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def validate_rust_geometry_stage(self, func, parameters):
+        self.rust_geometry_maxvertexcount(func)
+
+        if not any(
+            self.rust_geometry_stream_info(self.parameter_raw_type(param))
+            for param in parameters
+        ):
+            raise ValueError(
+                "Rust geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+
+        if not any(
+            self.rust_geometry_input_primitive_qualifier(param) for param in parameters
+        ):
+            raise ValueError(
+                "Rust geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
+            )
+
+        self.validate_rust_geometry_input_primitive_arity(parameters)
+
+    def generate_rust_geometry_stage_comments(self, func, parameters):
+        maxvertexcount = self.rust_geometry_maxvertexcount(func)
+        input_descriptions = []
+        stream_descriptions = []
+
+        for parameter in parameters:
+            primitive = self.rust_geometry_input_primitive_qualifier(parameter)
+            if primitive is not None:
+                input_descriptions.append(f"{primitive}:{parameter.name}")
+
+            stream_info = self.rust_geometry_stream_info(
+                self.parameter_raw_type(parameter)
+            )
+            if stream_info is not None:
+                stream_name, output_type = stream_info
+                stream_descriptions.append(
+                    f"{stream_name}:{parameter.name}->{output_type}"
+                )
+
+        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
+        if input_descriptions:
+            lines.append(
+                "// CrossGL geometry input primitive: "
+                f"{', '.join(input_descriptions)}\n"
+            )
+        if stream_descriptions:
+            lines.append(
+                "// CrossGL geometry output stream: "
+                f"{', '.join(stream_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def rust_geometry_stream_info(self, type_name):
+        if type_name is None:
+            return None
+
+        stream_names = {"PointStream", "LineStream", "TriangleStream"}
+        if hasattr(type_name, "pointee_type") or hasattr(type_name, "referenced_type"):
+            return None
+
+        name = getattr(type_name, "name", None)
+        generic_args = getattr(type_name, "generic_args", []) or []
+        if name in stream_names and generic_args:
+            return name, self.map_type(generic_args[0])
+
+        type_text = self.type_name_string(type_name)
+        if not type_text or "<" not in type_text or not type_text.endswith(">"):
+            return None
+
+        base_name, args_text = type_text.split("<", 1)
+        base_name = base_name.strip()
+        if base_name not in stream_names:
+            return None
+
+        generic_args = self.split_top_level_generic_args(args_text[:-1])
+        if len(generic_args) != 1:
+            return None
+        output_type = generic_args[0].strip()
+        if not output_type:
+            return None
+        return base_name, self.map_type(output_type)
+
+    def rust_geometry_stream_mapped_type(self, type_name):
+        stream_info = self.rust_geometry_stream_info(type_name)
+        if stream_info is None:
+            return None
+        stream_name, output_type = stream_info
+        return f"CglRust{stream_name}<{output_type}>"
+
+    def rust_stage_entry_function_name(self, stage_name, func):
+        """Return the deterministic Rust entry name for special stages."""
+        name = getattr(func, "name", None)
+        if (
+            normalize_stage_name(stage_name)
+            in {
+                "amplification",
+                "mesh",
+                "object",
+                "task",
+                "tessellation_control",
+                "tessellation_evaluation",
+            }
+            and name == "main"
+        ):
+            return f"{normalize_stage_name(stage_name)}_{name}"
+        return name
+
+    def rust_tessellation_stage_attribute_value(self, func, attribute_name, stage_name):
+        arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {attribute_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_argument_text(arguments[0])
+
+    def rust_tessellation_output_control_points(self, func):
+        attribute_name = "outputcontrolpoints"
+        arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            arguments = self.rust_stage_attribute_arguments(func, "vertices")
+        if not arguments:
+            raise ValueError(
+                "Rust tessellation_control stage requires outputcontrolpoints "
+                "attribute"
+            )
+        if len(arguments) != 1:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints requires "
+                "exactly one argument"
+            )
+
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is None:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"'{value_text}' must be an integer literal"
+            )
+        if value <= 0:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"({value}) must be positive"
+            )
+        if value > 32:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"({value}) must be at most 32"
+            )
+        return value_text, value
+
+    def canonical_rust_tessellation_domain(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().strip("\"'").lower()
+        return {
+            "tri": "tri",
+            "triangle": "tri",
+            "triangles": "tri",
+            "quad": "quad",
+            "quads": "quad",
+            "isoline": "isoline",
+            "isolines": "isoline",
+        }.get(normalized)
+
+    def rust_tessellation_domain(self, func, stage_name, required=False):
+        value = self.rust_tessellation_stage_attribute_value(func, "domain", stage_name)
+        if value is None:
+            if required:
+                raise ValueError(f"Rust {stage_name} stage requires domain attribute")
+            return None
+
+        domain = self.canonical_rust_tessellation_domain(value)
+        if domain is None:
+            raise ValueError(
+                f"Rust {stage_name} stage domain '{value}' must be one of: "
+                "isoline, quad, tri"
+            )
+        return domain
+
+    def rust_tessellation_partitioning(self, func, stage_name, required=False):
+        value = self.rust_tessellation_stage_attribute_value(
+            func, "partitioning", stage_name
+        )
+        if value is None:
+            if required:
+                raise ValueError(
+                    f"Rust {stage_name} stage requires partitioning attribute"
+                )
+            return None
+
+        normalized = str(value).strip().strip("\"'").lower()
+        partitioning = {
+            "integer": "integer",
+            "equal": "integer",
+            "equal_spacing": "integer",
+            "fractional_even": "fractional_even",
+            "fractional_even_spacing": "fractional_even",
+            "fractional_odd": "fractional_odd",
+            "fractional_odd_spacing": "fractional_odd",
+            "pow2": "pow2",
+        }.get(normalized)
+        if partitioning is None:
+            raise ValueError(
+                f"Rust {stage_name} stage partitioning '{value}' must be one of: "
+                "fractional_even, fractional_odd, integer, pow2"
+            )
+        return partitioning
+
+    def rust_tessellation_patch_info(self, type_name):
+        base_name, args = self.generic_type_parts(type_name)
+        patch_kinds = {
+            "InputPatch": "InputPatch",
+            "OutputPatch": "OutputPatch",
+            "CglRustInputPatch": "InputPatch",
+            "CglRustOutputPatch": "OutputPatch",
+        }
+        kind = patch_kinds.get(base_name)
+        if kind is None:
+            return None
+
+        info = {
+            "kind": kind,
+            "valid": len(args) == 2,
+            "element_type": None,
+            "mapped_element_type": None,
+            "count_text": None,
+            "count_value": None,
+        }
+        if len(args) >= 1:
+            element_type = args[0].strip()
+            if element_type:
+                info["element_type"] = element_type
+                info["mapped_element_type"] = self.map_type(element_type)
+        if len(args) >= 2:
+            count_text = args[1].strip()
+            info["count_text"] = count_text
+            info["count_value"] = self.literal_int_value(count_text)
+        return info
+
+    def rust_tessellation_patch_parameters(self, parameters, patch_type):
+        for parameter in parameters:
+            info = self.rust_tessellation_patch_info(self.parameter_raw_type(parameter))
+            if info is not None and info["kind"] == patch_type:
+                yield parameter, info
+
+    def validate_rust_tessellation_patch_parameter_signature(
+        self, parameter, info, stage_name
+    ):
+        patch_type = info["kind"]
+        parameter_name = getattr(parameter, "name", None)
+        name_clause = (
+            f" parameter '{parameter_name}'" if parameter_name else " parameter"
+        )
+        type_name = self.type_name_string(self.parameter_raw_type(parameter))
+
+        if not info["valid"]:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} must use "
+                f"{patch_type}<T, N>; found '{type_name or patch_type}'"
+            )
+        if info["element_type"] is None:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} must include "
+                "an element type"
+            )
+
+        control_points = info["count_value"]
+        if control_points is None:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                f"point count '{info['count_text']}' must be an integer literal"
+            )
+        if control_points <= 0:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                f"point count ({control_points}) must be positive"
+            )
+        if control_points > 32:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                "point count "
+                f"({control_points}) must be at most 32"
+            )
+
+    def validate_rust_tessellation_patch_parameter_signatures(
+        self, parameters, patch_type, stage_name
+    ):
+        for parameter, info in self.rust_tessellation_patch_parameters(
+            parameters, patch_type
+        ):
+            self.validate_rust_tessellation_patch_parameter_signature(
+                parameter,
+                info,
+                stage_name,
+            )
+
+    def validate_rust_tessellation_control_stage(self, func, parameters):
+        stage_name = "tessellation_control"
+        self.rust_tessellation_domain(func, stage_name, required=True)
+        self.rust_tessellation_partitioning(func, stage_name, required=True)
+        self.rust_tessellation_output_control_points(func)
+
+        input_patch_parameters = list(
+            self.rust_tessellation_patch_parameters(parameters, "InputPatch")
+        )
+        if not input_patch_parameters:
+            raise ValueError(
+                "Rust tessellation_control stage parameters must include an "
+                "InputPatch<T, N> parameter"
+            )
+        self.validate_rust_tessellation_patch_parameter_signatures(
+            parameters,
+            "InputPatch",
+            stage_name,
+        )
+
+    def validate_rust_tessellation_evaluation_stage(self, func, parameters):
+        stage_name = "tessellation_evaluation"
+        self.rust_tessellation_domain(func, stage_name, required=True)
+        self.rust_tessellation_partitioning(func, stage_name)
+
+        output_patch_parameters = list(
+            self.rust_tessellation_patch_parameters(parameters, "OutputPatch")
+        )
+        if not output_patch_parameters:
+            raise ValueError(
+                "Rust tessellation_evaluation stage parameters must include an "
+                "OutputPatch<T, N> parameter"
+            )
+        self.validate_rust_tessellation_patch_parameter_signatures(
+            parameters,
+            "OutputPatch",
+            stage_name,
+        )
+
+    def validate_rust_tessellation_stage(self, func, parameters, shader_type):
+        if shader_type == "tessellation_control":
+            self.validate_rust_tessellation_control_stage(func, parameters)
+        elif shader_type == "tessellation_evaluation":
+            self.validate_rust_tessellation_evaluation_stage(func, parameters)
+
+    def generate_rust_tessellation_stage_comments(self, func, parameters, shader_type):
+        metadata = []
+        domain = self.rust_tessellation_domain(
+            func,
+            shader_type,
+            required=shader_type == "tessellation_evaluation",
+        )
+        if domain is not None:
+            metadata.append(f"domain={domain}")
+        partitioning = self.rust_tessellation_partitioning(func, shader_type)
+        if partitioning is not None:
+            metadata.append(f"partitioning={partitioning}")
+        output_topology = self.rust_tessellation_stage_attribute_value(
+            func,
+            "outputtopology",
+            shader_type,
+        )
+        if output_topology is not None:
+            metadata.append(f"outputtopology={output_topology}")
+        if shader_type == "tessellation_control":
+            output_control_points, _value = (
+                self.rust_tessellation_output_control_points(func)
+            )
+            metadata.append(f"outputcontrolpoints={output_control_points}")
+        patch_constant_function = self.rust_tessellation_stage_attribute_value(
+            func,
+            "patchconstantfunc",
+            shader_type,
+        )
+        if patch_constant_function is not None:
+            metadata.append(f"patchconstantfunc={patch_constant_function}")
+
+        lines = [
+            f"// CrossGL {shader_type} stage"
+            f"{': ' + ', '.join(metadata) if metadata else ''}\n"
+        ]
+
+        patch_descriptions = []
+        for parameter in parameters:
+            info = self.rust_tessellation_patch_info(self.parameter_raw_type(parameter))
+            if info is None or not info["valid"]:
+                continue
+            patch_descriptions.append(
+                f"{info['kind']}:{parameter.name}->{info['mapped_element_type']}"
+                f"[{info['count_text']}]"
+            )
+        if patch_descriptions:
+            lines.append(
+                "// CrossGL tessellation patch parameters: "
+                f"{', '.join(patch_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def rust_tessellation_patch_mapped_type(self, type_name):
+        info = self.rust_tessellation_patch_info(type_name)
+        if info is None or not info["valid"]:
+            return None
+        helper_name = {
+            "InputPatch": "CglRustInputPatch",
+            "OutputPatch": "CglRustOutputPatch",
+        }[info["kind"]]
+        return f"{helper_name}<{info['mapped_element_type']}, " f"{info['count_text']}>"
 
     def validate_supported_stage_types(self, ast, target_stage=None):
         unsupported_stages = set()
@@ -731,6 +1948,19 @@ class RustCodeGen:
         name = getattr(entry_point, "name", None)
         if not name:
             return name
+        if (
+            normalize_stage_name(stage_name)
+            in {
+                "amplification",
+                "mesh",
+                "object",
+                "task",
+                "tessellation_control",
+                "tessellation_evaluation",
+            }
+            and name == "main"
+        ):
+            return f"{normalize_stage_name(stage_name)}_{name}"
         if name_counts.get(name, 0) > 1:
             return f"{stage_name}_{name}"
         return name
@@ -1771,6 +3001,10 @@ class RustCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "value") and getattr(type_node, "name", None) is None:
+            value = type_node.value
+            return str(value).lower() if isinstance(value, bool) else str(value)
+
         type_class = type_node.__class__.__name__
         if type_class == "ReferenceType":
             referenced_type = self.convert_type_node_to_string(
@@ -1795,7 +3029,7 @@ class RustCodeGen:
             return (
                 f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
             )
-        if hasattr(type_node, "name"):
+        if getattr(type_node, "name", None) is not None:
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(
@@ -2398,7 +3632,9 @@ class RustCodeGen:
             )
         ) and str(rust_type).endswith(">")
 
-    def generate_function(self, func, indent=0, shader_type=None, function_name=None):
+    def generate_function(
+        self, func, indent=0, shader_type=None, function_name=None, stage_node=None
+    ):
         """Render one CrossGL function or shader entry point as Rust code."""
         code = ""
         code += "  " * indent
@@ -2408,10 +3644,12 @@ class RustCodeGen:
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         self.local_variable_names = set()
         saved_return_type = self.current_return_type
+        saved_shader_type = self.current_shader_type
         saved_generic_param_names = self.current_generic_param_names
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         self.current_generic_param_names = set(self.generic_param_names(func))
+        self.current_shader_type = shader_type
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         for p in param_list:
             self.register_glsl_buffer_block_metadata(p)
@@ -2433,6 +3671,12 @@ class RustCodeGen:
             return_type = "void"
         self.current_return_type = return_type
         return_semantic = self.node_semantic(func)
+        if shader_type == "geometry":
+            self.validate_rust_geometry_stage(func, param_list)
+        if shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            self.validate_rust_tessellation_stage(func, param_list, shader_type)
+        if shader_type in self.rust_mesh_stage_names():
+            self.validate_rust_mesh_stage(func, param_list, shader_type, stage_node)
         self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
         self.validate_rust_struct_return_semantics(shader_type, return_type)
         self.validate_rust_stage_parameter_semantics(shader_type, param_list)
@@ -2469,6 +3713,19 @@ class RustCodeGen:
             code += f"#[fragment_shader]\n"
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
+        elif shader_type == "geometry":
+            code += self.generate_rust_geometry_stage_comments(func, param_list)
+        elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            code += self.generate_rust_tessellation_stage_comments(
+                func,
+                param_list,
+                shader_type,
+            )
+        elif shader_type in self.rust_mesh_stage_names():
+            code += "// CrossGL shader stage: " f"{shader_type}\n"
+            code += self.generate_rust_mesh_stage_comments(
+                func, param_list, shader_type, stage_node
+            )
         elif shader_type in self.rust_ray_stage_names():
             code += (
                 "// CrossGL ray stage: "
@@ -2512,6 +3769,7 @@ class RustCodeGen:
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_return_type = saved_return_type
+        self.current_shader_type = saved_shader_type
         self.current_generic_param_names = saved_generic_param_names
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
@@ -3431,6 +4689,60 @@ class RustCodeGen:
             return f"/* unsupported wave op: {operation} */"
         args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
         return f"{rust_name}({args})"
+
+    def wave_op_result_type(self, operation, arguments):
+        """Infer the CrossGL result type for a Rust subgroup helper."""
+        helper_name = self.wave_op_map.get(operation, operation)
+        arg_types = [self.expression_result_type(arg) for arg in arguments or []]
+        return self.wave_helper_result_type(helper_name, arg_types)
+
+    def wave_helper_result_type(self, helper_name, arg_types):
+        helper_name = str(helper_name or "")
+        if helper_name in {
+            "subgroup_size",
+            "subgroup_invocation_id",
+            "subgroup_ballot_bit_count",
+            "subgroup_exclusive_ballot_bit_count",
+            "subgroup_partitioned_ballot_bit_count",
+        }:
+            return "uint"
+        if helper_name in {
+            "subgroup_elect",
+            "subgroup_any",
+            "subgroup_all",
+            "subgroup_all_equal",
+            "subgroup_quad_any",
+            "subgroup_quad_all",
+        }:
+            return "bool"
+        if helper_name in {"subgroup_ballot", "subgroup_match"}:
+            return "uvec4"
+        if helper_name in {
+            "subgroup_add",
+            "subgroup_mul",
+            "subgroup_min",
+            "subgroup_max",
+            "subgroup_and",
+            "subgroup_or",
+            "subgroup_xor",
+            "subgroup_broadcast_first",
+            "subgroup_broadcast",
+            "subgroup_exclusive_add",
+            "subgroup_exclusive_mul",
+            "subgroup_partitioned_add",
+            "subgroup_partitioned_mul",
+            "subgroup_partitioned_and",
+            "subgroup_partitioned_or",
+            "subgroup_partitioned_xor",
+            "subgroup_quad_broadcast",
+            "subgroup_quad_swap_horizontal",
+            "subgroup_quad_swap_vertical",
+            "subgroup_quad_swap_diagonal",
+            "subgroup_shuffle",
+            "subgroup_shuffle_xor",
+        }:
+            return arg_types[0] if arg_types else None
+        return None
 
     def local_let_keyword(self, stmt):
         """Return `let` or `let mut` for a generated local binding."""
@@ -6375,12 +7687,18 @@ class RustCodeGen:
             return self.generate_array_literal_expression(expr)
         elif isinstance(expr, ConstructorNode):
             return self.generate_constructor_expression(expr)
+        elif isinstance(expr, TextureNode):
+            return self.generate_texture_node_expression(expr)
+        elif isinstance(expr, TextureOpNode):
+            return self.generate_texture_op_node_expression(expr)
         elif isinstance(expr, BlockNode):
             return self.generate_block_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, RayQueryOpNode):
             return self.generate_ray_query_op_expression(expr)
+        elif isinstance(expr, MeshOpNode):
+            return self.generate_rust_mesh_op_expression(expr)
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
@@ -6425,6 +7743,14 @@ class RustCodeGen:
                 callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
+            if isinstance(func_expr, MemberAccessNode):
+                texture_call = self.generate_texture_member_function_call(
+                    func_expr,
+                    args,
+                )
+                if texture_call is not None:
+                    return texture_call
+
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,
                 args,
@@ -6461,6 +7787,7 @@ class RustCodeGen:
                     return bool_mix
 
             func_name = self.mapped_function_name(func_name, len(args), args)
+            self.validate_rust_texture_helper_call(func_name, args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
@@ -6584,6 +7911,349 @@ class RustCodeGen:
         func_name = f"ray_query_{self.rust_snake_case_name(operation)}"
         return f"{func_name}({', '.join(args)})"
 
+    def generate_texture_node_expression(self, expr):
+        args = [expr.texture_expr]
+        if getattr(expr, "sampler_expr", None) is not None:
+            args.append(expr.sampler_expr)
+        args.append(expr.coordinates)
+        operation = "texture"
+        if getattr(expr, "level", None) is not None:
+            args.append(expr.level)
+            operation = "textureLod"
+        if getattr(expr, "offset", None) is not None:
+            args.append(expr.offset)
+            operation = (
+                "textureLodOffset" if operation == "textureLod" else "textureOffset"
+            )
+        return self.generate_texture_operation_call(operation, args)
+
+    def generate_texture_op_node_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        sampler_expr = getattr(expr, "sampler_expr", None)
+        arguments = getattr(expr, "arguments", []) or []
+        if operation in self.rust_hlsl_texture_member_operations():
+            member_args = []
+            if sampler_expr is not None:
+                member_args.append(sampler_expr)
+            member_args.extend(arguments)
+            call = self.generate_hlsl_texture_member_call(
+                operation,
+                expr.texture_expr,
+                member_args,
+            )
+            if call is not None:
+                return call
+
+        args = [expr.texture_expr]
+        if sampler_expr is not None:
+            args.append(sampler_expr)
+        args.extend(arguments)
+        call = self.generate_texture_operation_call(operation, args)
+        if call is not None:
+            return call
+        raise ValueError(f"Unsupported Rust texture operation {operation}")
+
+    def generate_texture_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        if not self.is_texture_resource_type(self.expression_result_type(obj_expr)):
+            return None
+        call = self.generate_hlsl_texture_member_call(member, obj_expr, args or [])
+        if call is not None:
+            return call
+        raise ValueError(f"Unsupported Rust texture member operation {member}")
+
+    def generate_texture_operation_call(self, operation, args):
+        if operation in self.rust_hlsl_texture_member_operations():
+            if not args:
+                raise ValueError(f"Unsupported Rust texture operation {operation}")
+            call = self.generate_hlsl_texture_member_call(
+                operation,
+                args[0],
+                list(args[1:]),
+            )
+            if call is not None:
+                return call
+        if operation in {"Sample", "sample", "texture"}:
+            helper_name = self.texture_sample_helper_name(args)
+            return self.generate_texture_helper_call(helper_name, args)
+        if operation == "SampleCmp":
+            helper_name = (
+                "texture_compare_sampler"
+                if self.call_has_explicit_sampler_argument(args)
+                else "texture_compare"
+            )
+            return self.generate_texture_helper_call(helper_name, args)
+        if operation in self.function_map or str(operation).startswith("texture"):
+            helper_name = self.mapped_function_name(operation, len(args or []), args)
+            if helper_name != operation:
+                return self.generate_texture_helper_call(helper_name, args)
+        return None
+
+    def texture_sample_helper_name(self, args):
+        has_sampler = self.call_has_explicit_sampler_argument(args)
+        shadow = self.call_uses_shadow_texture(args)
+        if shadow:
+            return "sample_shadow_sampler" if has_sampler else "sample_shadow"
+        return "sample_sampler" if has_sampler else "sample"
+
+    def texture_member_function_result_type(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        texture_type = self.expression_result_type(obj_expr)
+        if not self.is_texture_resource_type(texture_type):
+            return None
+        if member == "SampleCmp":
+            return "float"
+        if member in {
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+            "CalculateLevelOfDetail",
+            "CalculateLevelOfDetailUnclamped",
+        }:
+            return "float"
+        if member == "GetDimensions":
+            return "void"
+        if member in {"Sample", "sample", "texture"}:
+            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+        if member in self.rust_hlsl_texture_member_operations():
+            return "vec4"
+        return None
+
+    def generate_texture_helper_call(self, helper_name, args):
+        self.validate_rust_texture_helper_call(helper_name, args)
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args or [])
+        return f"{helper_name}({generated_args})"
+
+    def rust_hlsl_texture_member_operations(self):
+        return {
+            "Sample",
+            "SampleLevel",
+            "SampleLOD",
+            "SampleGrad",
+            "SampleBias",
+            "SampleCmp",
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+            "Gather",
+            "GatherRed",
+            "GatherGreen",
+            "GatherBlue",
+            "GatherAlpha",
+            "GatherCmp",
+            "GatherCmpRed",
+            "GatherCmpGreen",
+            "GatherCmpBlue",
+            "GatherCmpAlpha",
+            "Load",
+            "GetDimensions",
+            "CalculateLevelOfDetail",
+            "CalculateLevelOfDetailUnclamped",
+        }
+
+    def generate_hlsl_texture_member_call(self, operation, texture_expr, member_args):
+        member_args = list(member_args or [])
+        texture_type = self.expression_result_type(texture_expr)
+
+        def helper(helper_name, args):
+            return self.generate_texture_helper_call(helper_name, args)
+
+        if operation == "Sample":
+            self.require_rust_texture_member_arg_count(operation, member_args, {2, 3})
+            helper_name = (
+                "sample_shadow_sampler"
+                if self.is_shadow_texture_type(texture_type)
+                else "sample_sampler"
+            )
+            if len(member_args) == 3:
+                helper_name = "sample_offset_sampler"
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation in {"SampleLevel", "SampleLOD"}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "sample_lod_offset_sampler"
+                if len(member_args) == 4
+                else "sample_lod_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleGrad":
+            self.require_rust_texture_member_arg_count(operation, member_args, {4, 5})
+            helper_name = (
+                "sample_grad_offset_sampler"
+                if len(member_args) == 5
+                else "sample_grad_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleBias":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            sampler, coord, bias = member_args[:3]
+            if len(member_args) == 4:
+                offset = member_args[3]
+                return helper(
+                    "sample_offset_bias_sampler",
+                    [texture_expr, sampler, coord, offset, bias],
+                )
+            return helper("sample_bias_sampler", [texture_expr, sampler, coord, bias])
+
+        if operation == "SampleCmp":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpLevel":
+            self.require_rust_texture_member_arg_count(operation, member_args, {4, 5})
+            helper_name = (
+                "texture_compare_lod_offset_sampler"
+                if len(member_args) == 5
+                else "texture_compare_lod_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpLevelZero":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpGrad":
+            self.require_rust_texture_member_arg_count(operation, member_args, {5, 6})
+            helper_name = (
+                "texture_compare_grad_offset_sampler"
+                if len(member_args) == 6
+                else "texture_compare_grad_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        gather_components = {
+            "GatherRed": "0",
+            "GatherGreen": "1",
+            "GatherBlue": "2",
+            "GatherAlpha": "3",
+        }
+        if operation in {"Gather", *gather_components}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {2, 3})
+            if operation == "Gather":
+                helper_name = (
+                    "texture_gather_offset_sampler"
+                    if len(member_args) == 3
+                    else "texture_gather_sampler"
+                )
+                return helper(helper_name, [texture_expr, *member_args])
+
+            component = gather_components[operation]
+            sampler, coord = member_args[:2]
+            if len(member_args) == 3:
+                offset = member_args[2]
+                return helper(
+                    "texture_gather_offset_component_sampler",
+                    [texture_expr, sampler, coord, offset, component],
+                )
+            return helper(
+                "texture_gather_component_sampler",
+                [texture_expr, sampler, coord, component],
+            )
+
+        if operation in {
+            "GatherCmp",
+            "GatherCmpRed",
+            "GatherCmpGreen",
+            "GatherCmpBlue",
+            "GatherCmpAlpha",
+        }:
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_gather_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_gather_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "Load":
+            self.require_rust_texture_member_arg_count(operation, member_args, {1, 2})
+            if len(member_args) == 2 and not self.is_multisample_texture_type(
+                texture_type
+            ):
+                return helper(
+                    "texel_fetch_offset",
+                    [texture_expr, member_args[0], "0", member_args[1]],
+                )
+            lod_or_sample = member_args[1] if len(member_args) == 2 else "0"
+            return helper("texel_fetch", [texture_expr, member_args[0], lod_or_sample])
+
+        if operation == "GetDimensions":
+            generated_args = ", ".join(
+                self.generate_expression(arg) for arg in member_args
+            )
+            if len(member_args) == 1:
+                generated_args += ","
+            return (
+                f"texture_dimensions({self.generate_expression(texture_expr)}, "
+                f"({generated_args}))"
+            )
+
+        if operation in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {2})
+            return helper("texture_calculate_lod", [texture_expr, *member_args])
+
+        return None
+
+    def require_rust_texture_member_arg_count(self, operation, args, expected_counts):
+        if len(args) not in expected_counts:
+            expected = ", ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"Unsupported Rust texture member operation {operation}; "
+                f"expected {expected} argument(s), got {len(args)}"
+            )
+
+    def validate_rust_texture_helper_call(self, helper_name, args):
+        if not args:
+            return
+        if not self.is_rust_texture_helper_name(helper_name):
+            return
+
+        texture_type = self.expression_result_type(args[0])
+        if texture_type is not None and not self.is_texture_resource_type(texture_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Rust codegen; texture resource "
+                f"required: {self.map_type(texture_type)}"
+            )
+
+        if helper_name.startswith(
+            ("texture_compare", "texture_gather_compare")
+        ) and not self.is_shadow_texture_type(texture_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Rust codegen; shadow texture "
+                f"required: {self.map_type(texture_type)}"
+            )
+
+    def is_rust_texture_helper_name(self, helper_name):
+        helper_name = str(helper_name)
+        return helper_name.startswith(
+            (
+                "sample",
+                "texel_fetch",
+                "texture_size",
+                "texture_query",
+                "texture_samples",
+                "texture_gather",
+                "texture_compare",
+                "texture_dimensions",
+                "texture_calculate_lod",
+            )
+        )
+
     def rust_snake_case_name(self, name):
         name = str(name)
         name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
@@ -6599,6 +8269,18 @@ class RustCodeGen:
         if func_name == "textureSize":
             return "texture_size" if arg_count == 1 else "texture_size_lod"
         if func_name == "texture":
+            if self.call_uses_shadow_texture(arguments):
+                if has_sampler:
+                    return (
+                        "sample_shadow_bias_sampler"
+                        if arg_count and arg_count >= 4
+                        else "sample_shadow_sampler"
+                    )
+                return (
+                    "sample_shadow_bias"
+                    if arg_count and arg_count >= 3
+                    else "sample_shadow"
+                )
             if has_sampler:
                 return (
                     "sample_bias_sampler"
@@ -6744,6 +8426,11 @@ class RustCodeGen:
             return False
         return self.is_sampler_type(self.expression_result_type(arguments[1]))
 
+    def call_uses_shadow_texture(self, arguments):
+        if not arguments:
+            return False
+        return self.is_shadow_texture_type(self.expression_result_type(arguments[0]))
+
     def is_sampler_type(self, type_name):
         if type_name is None:
             return False
@@ -6751,6 +8438,30 @@ class RustCodeGen:
         return (
             type_name in {"sampler", "Sampler"} or self.map_type(type_name) == "Sampler"
         )
+
+    def is_texture_resource_type(self, type_name):
+        if type_name is None:
+            return False
+        mapped_type = self.map_type(type_name)
+        base_type, _generic_args = self.generic_type_parts(mapped_type)
+        base_name = base_type.rsplit("::", 1)[-1]
+        return base_name.startswith(("Texture", "DepthTexture"))
+
+    def is_shadow_texture_type(self, type_name):
+        if type_name is None:
+            return False
+        source_type = str(type_name)
+        mapped_type = self.map_type(source_type)
+        names = {source_type, mapped_type}
+        return any("Shadow" in name or "DepthTexture" in name for name in names)
+
+    def is_multisample_texture_type(self, type_name):
+        if type_name is None:
+            return False
+        source_type = str(type_name)
+        mapped_type = self.map_type(source_type)
+        names = {source_type, mapped_type}
+        return any("MS" in name for name in names)
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
@@ -7582,6 +9293,7 @@ class RustCodeGen:
             object_value = self.generate_vector_lane_source(
                 object_expr, self.generate_expression(object_expr), temp_bindings
             )
+            object_value = self.rust_member_base_expression(object_value)
             return [
                 self.normalize_constructor_scalar_lane(
                     None,
@@ -7594,6 +9306,7 @@ class RustCodeGen:
 
         arg_expr = self.generate_expression(arg)
         arg_expr = self.generate_vector_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
         components = ("x", "y", "z", "w")[: arg_info["size"]]
         return [
             self.normalize_constructor_scalar_lane(
@@ -7626,6 +9339,7 @@ class RustCodeGen:
     ):
         arg_expr = self.generate_expression(arg)
         arg_expr = self.generate_matrix_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
         target_component_type = target_component_type or matrix_info["component_type"]
         components = ("x", "y", "z", "w")[: matrix_info["rows"]]
         lanes = []
@@ -7654,6 +9368,12 @@ class RustCodeGen:
         temp_name = self.next_vector_arg_temp_name()
         temp_bindings.append((temp_name, generated_expr))
         return temp_name
+
+    def rust_member_base_expression(self, generated_expr):
+        generated_expr = str(generated_expr)
+        if generated_expr.startswith("*") and not generated_expr.startswith("(*"):
+            return f"({generated_expr})"
+        return generated_expr
 
     def generate_member_access_expression(self, expr):
         access = self.glsl_buffer_block_access(expr)
@@ -8434,11 +10154,64 @@ class RustCodeGen:
             return self.block_expression_result_type(expr)
         if isinstance(expr, ConstructorNode):
             return self.constructor_result_type(expr)
+        if isinstance(expr, TextureNode):
+            texture_type = self.expression_result_type(expr.texture_expr)
+            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            if operation in {
+                "SampleCmp",
+                "SampleCmpLevel",
+                "SampleCmpLevelZero",
+                "SampleCmpGrad",
+                "CalculateLevelOfDetail",
+                "CalculateLevelOfDetailUnclamped",
+                "textureCompare",
+                "textureCompareOffset",
+                "textureCompareLod",
+                "textureCompareLodOffset",
+                "textureCompareGrad",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
+            }:
+                return "float"
+            if operation in {"textureQueryLod"}:
+                return "vec2"
+            if operation in {"textureQueryLevels", "textureSamples"}:
+                return "int"
+            if operation in {"GetDimensions"}:
+                return "void"
+            if operation in {"textureSize"}:
+                texture_type = self.expression_result_type(expr.texture_expr)
+                return self.texture_size_result_type(texture_type)
+            texture_type = self.expression_result_type(expr.texture_expr)
+            if operation in {"Sample", "sample", "texture"} and (
+                self.is_shadow_texture_type(texture_type)
+            ):
+                return "float"
+            return "vec4"
+        if isinstance(expr, WaveOpNode):
+            return self.wave_op_result_type(
+                getattr(expr, "operation", ""),
+                getattr(expr, "arguments", []),
+            )
         if isinstance(expr, MatchNode):
             return self.match_expression_result_type(expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
             if isinstance(func_expr, MemberAccessNode):
+                texture_member_type = self.texture_member_function_result_type(
+                    func_expr,
+                    arguments,
+                )
+                if texture_member_type is not None:
+                    return texture_member_type
                 receiver_type = self.expression_result_type(
                     getattr(
                         func_expr, "object_expr", getattr(func_expr, "object", None)
@@ -8453,7 +10226,6 @@ class RustCodeGen:
                 }:
                     return receiver_type
             func_name = getattr(func_expr, "name", func_expr)
-            arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
             if isinstance(func_name, str) and self.vector_type_info(func_name):
                 return func_name
             if isinstance(func_name, str) and self.matrix_type_info(func_name):
@@ -8580,6 +10352,10 @@ class RustCodeGen:
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
 
+        wave_type = self.wave_helper_result_type(mapped_name, arg_types)
+        if wave_type is not None:
+            return wave_type
+
         if mapped_name in {
             "sample",
             "sample_bias",
@@ -8629,6 +10405,9 @@ class RustCodeGen:
             "texture_gather_offsets_component_sampler",
         }:
             return "vec4"
+
+        if mapped_name.startswith("sample_shadow"):
+            return "float"
 
         if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
             return self.texture_size_result_type(arg_types[0])
@@ -9163,6 +10942,36 @@ class RustCodeGen:
             if self.storage_image_format_element_type(name) is not None:
                 return name
         return None
+
+    def literal_int_value(self, value):
+        """Return an integer value for literal integer AST nodes/text."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and not getattr(value, "is_postfix", False):
+            operator = getattr(value, "operator", getattr(value, "op", None))
+            if operator not in {"+", "-"}:
+                return None
+            operand_value = self.literal_int_value(value.operand)
+            if operand_value is None:
+                return None
+            return -operand_value if operator == "-" else operand_value
+        if hasattr(value, "value"):
+            return self.literal_int_value(value.value)
+        if hasattr(value, "name"):
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+        text = re.sub(r"[uUlL]+$", "", text)
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
 
     def attribute_argument_text(self, argument):
         if hasattr(argument, "value"):
@@ -9791,6 +11600,9 @@ class RustCodeGen:
         else:
             array_type = str(array_type)
         if "[" not in array_type or "]" not in array_type:
+            patch_info = self.rust_tessellation_patch_info(array_type)
+            if patch_info is not None and patch_info["valid"]:
+                return patch_info["element_type"]
             return None
         element_type, _size = self.c_array_outer_element_type_and_size(array_type)
         return element_type or None
@@ -9964,6 +11776,10 @@ class RustCodeGen:
         if self.callable_signature_parts(vtype_str) is not None:
             return vtype_str
 
+        patch_type = self.rust_tessellation_patch_mapped_type(vtype_str)
+        if patch_type is not None:
+            return patch_type
+
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)
             base_mapped = self.map_type(base_type)
@@ -10079,6 +11895,8 @@ class RustCodeGen:
             return None
 
         mapped_base = self.type_mapping.get(base_type, base_type)
+        if "<" in mapped_base:
+            mapped_base = mapped_base.split("<", 1)[0]
         return f"{mapped_base}<{', '.join(mapped_args)}>"
 
     def split_top_level_generic_args(self, args_text):

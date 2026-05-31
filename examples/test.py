@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import crosstl
 
-KNOWN_FAILURE_BUDGET = 6
+KNOWN_FAILURE_BUDGET = 2
 MIN_SUCCESS_RATE = 90.0
 
 

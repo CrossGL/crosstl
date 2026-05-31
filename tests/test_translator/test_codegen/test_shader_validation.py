@@ -470,6 +470,81 @@ shader SpirvWaveValidation {
             uvec4 ballot = WaveActiveBallot(anyLane);
             uint broadcast = WaveReadLaneAt(prefixSum, 0u);
             uint firstValue = WaveReadLaneFirst(broadcast + count);
+            uvec4 matchMask = WaveMatch(firstValue);
+            uint multiSum = WaveMultiPrefixSum(firstValue, matchMask);
+            uint multiAnd = WaveMultiPrefixBitAnd(multiSum, matchMask);
+            uint quadX = QuadReadAcrossX(multiAnd);
+            uint quadLane = QuadReadLaneAt(quadX, 0u);
+            uint folded = firstValue + matchMask.x + multiSum + multiAnd + quadLane;
+        }
+    }
+}
+"""
+
+
+SPIRV_LANGUAGE_FEATURES_COMPUTE_SHADER = """
+shader SpirvLanguageFeaturesValidation {
+    struct Payload {
+        float values[3];
+        float bias;
+    };
+
+    float[3] makeArray(float seed) {
+        return {seed, seed + 1.0, seed + 2.0};
+    }
+
+    Payload makePayload(float a, float b, float c) {
+        Payload payload;
+        payload.values[0] = a;
+        payload.values[1] = b;
+        payload.values[2] = c;
+        payload.bias = a + b;
+        return payload;
+    }
+
+    float reduceValues(float values[3], int mode) {
+        float total = 0.0;
+        for (int i = 0; i < 3; i = i + 1) {
+            if (i == 1) {
+                continue;
+            }
+            total = total + values[i];
+        }
+
+        int slot = 0;
+        while (slot < 3) {
+            total = total + values[slot];
+            if (slot == 2) {
+                break;
+            }
+            slot = slot + 1;
+        }
+
+        switch (mode) {
+            case 0:
+                total = total + 1.0;
+                break;
+            default:
+                total = total + 2.0;
+        }
+
+        match mode {
+            2 => {
+                total = total + values[2];
+            }
+            _ => {
+                total = total + 0.5;
+            }
+        }
+
+        return total;
+    }
+
+    compute {
+        void main() {
+            Payload payload = makePayload(1.0, 2.0, 3.0);
+            float values[3] = makeArray(payload.bias);
+            float result = reduceValues(values, 2) + payload.values[1];
         }
     }
 }
@@ -801,6 +876,108 @@ shader SpirvImageAtomicForwardingValidation {
             ivec2 pixel = ivec2(1, 2);
             uint previous = atomicForward(counters, pixel, 1u);
             imageStore(counters, pixel, previous);
+        }
+    }
+}
+"""
+
+
+SPIRV_MULTISAMPLE_STORAGE_IMAGE_COMPUTE_SHADER = """
+shader SpirvMultisampleStorageImagesValidation {
+    image2DMS colorSamples @rgba16f;
+    image2DMSArray layerSamples @rgba16f;
+    uimage2DMS counters @r32ui;
+    uimage2DMSArray layerCounters @r32ui;
+
+    compute {
+        void main() {
+            ivec2 pixel = ivec2(1, 2);
+            ivec3 pixelLayer = ivec3(1, 2, 0);
+            int sampleIndex = 0;
+            uint unsignedSample = 0u;
+            vec4 color = imageLoad(colorSamples, pixel, sampleIndex);
+            vec4 layerColor = imageLoad(layerSamples, pixelLayer, sampleIndex);
+            imageStore(colorSamples, pixel, sampleIndex, color + layerColor);
+            imageStore(layerSamples, pixelLayer, sampleIndex, layerColor);
+            uint count = imageLoad(counters, pixel, unsignedSample);
+            uint layerCount = imageLoad(layerCounters, pixelLayer, sampleIndex);
+            uint previous = imageAtomicAdd(
+                counters,
+                pixel,
+                unsignedSample,
+                count + 1u
+            );
+            uint layerPrevious = imageAtomicAdd(
+                layerCounters,
+                pixelLayer,
+                sampleIndex,
+                layerCount + previous
+            );
+            imageStore(counters, pixel, unsignedSample, previous + count);
+            imageStore(layerCounters, pixelLayer, sampleIndex, layerPrevious);
+            int colorSampleCount = imageSamples(colorSamples);
+            int layerSampleCount = imageSamples(layerSamples);
+        }
+    }
+}
+"""
+
+
+SPIRV_BASIC_TEXTURE_SAMPLING_FRAGMENT_SHADER = """
+shader SpirvBasicTextureSamplingValidation {
+    sampler2D colorMap;
+    sampler2DArray layerMap;
+    sampler3D volumeMap;
+    samplerCube envMap;
+    samplerCubeArray cubeArrayMap;
+    sampler2DShadow shadowMap;
+    sampler2DArrayShadow shadowArray;
+    samplerCubeShadow shadowCube;
+    samplerCubeArrayShadow shadowCubeArray;
+    sampler linearSampler;
+    sampler compareSampler;
+
+    fragment {
+        output vec4 fragColor;
+
+        void main() {
+            vec2 uv = vec2(0.25, 0.75);
+            vec3 uvLayer = vec3(uv, 1.0);
+            vec3 volumeUv = vec3(uv, 0.5);
+            vec3 cubeCoord = vec3(1.0, 0.0, 0.0);
+            vec4 cubeLayer = vec4(cubeCoord, 1.0);
+            float depth = 0.5;
+            vec4 color = texture(colorMap, uv);
+            vec4 layer = texture(layerMap, linearSampler, uvLayer);
+            vec4 volume = texture(volumeMap, volumeUv);
+            vec4 cube = texture(envMap, linearSampler, cubeCoord);
+            vec4 cubeArray = texture(cubeArrayMap, cubeLayer);
+            float shadow = textureCompare(shadowMap, uv, depth);
+            float shadowLayer = textureCompare(
+                shadowArray,
+                compareSampler,
+                uvLayer,
+                depth
+            );
+            float shadowCubeValue = textureCompare(
+                shadowCube,
+                compareSampler,
+                cubeCoord,
+                depth
+            );
+            float shadowCubeArrayValue = textureCompare(
+                shadowCubeArray,
+                compareSampler,
+                cubeLayer,
+                depth
+            );
+            fragColor = color + layer + volume + cube + cubeArray
+                + vec4(
+                    shadow
+                    + shadowLayer
+                    + shadowCubeValue
+                    + shadowCubeArrayValue
+                );
         }
     }
 }
@@ -6578,6 +6755,16 @@ def test_generated_spirv_wave_intrinsics_compute_validates_with_spirv_tools(
     )
 
 
+def test_generated_spirv_language_features_compute_validates_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "language_features_compute",
+        SPIRV_LANGUAGE_FEATURES_COMPUTE_SHADER,
+    )
+
+
 def test_generated_spirv_uniform_buffer_compute_validates_with_spirv_tools(
     tmp_path,
 ):
@@ -6689,9 +6876,23 @@ def test_generated_spirv_forwarded_image_atomic_validates_with_spirv_tools(
     run_validator([spirv_val, str(output)])
 
 
+def test_generated_spirv_multisample_storage_images_validate_with_spirv_tools(
+    tmp_path,
+):
+    validate_spirv_shader_source(
+        tmp_path,
+        "multisample_storage_images_compute",
+        SPIRV_MULTISAMPLE_STORAGE_IMAGE_COMPUTE_SHADER,
+    )
+
+
 @pytest.mark.parametrize(
     ("stem", "shader_source"),
     [
+        (
+            "basic_texture_sampling_fragment",
+            SPIRV_BASIC_TEXTURE_SAMPLING_FRAGMENT_SHADER,
+        ),
         ("advanced_texture_compute", SPIRV_ADVANCED_TEXTURE_COMPUTE_SHADER),
         ("texture_query_compute", SPIRV_TEXTURE_QUERY_COMPUTE_SHADER),
         ("shadow_texture_compute", SPIRV_SHADOW_TEXTURE_COMPUTE_SHADER),

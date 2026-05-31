@@ -2,7 +2,9 @@
 
 import re
 from enum import Enum, auto
-from typing import Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
+
+from .preprocessor import CudaPreprocessor
 
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
 
@@ -448,8 +450,25 @@ class TokenType(Enum):
 class CudaLexer:
     """Tokenize CUDA source for the CUDA backend parser."""
 
-    def __init__(self, code: str):
-        """Initialize the lexer with raw CUDA source text."""
+    def __init__(
+        self,
+        code: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        max_expansion_depth: int = 64,
+        file_path: Optional[str] = None,
+    ):
+        """Initialize the lexer and optionally preprocess CUDA source text."""
+        if preprocess:
+            preprocessor = CudaPreprocessor(
+                include_paths=include_paths,
+                defines=defines,
+                strict=strict_preprocessor,
+                max_expansion_depth=max_expansion_depth,
+            )
+            code = preprocessor.preprocess(code, file_path=file_path)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -489,10 +508,26 @@ class CudaLexer:
         return None
 
     @classmethod
-    def from_file(cls, filepath: str) -> "CudaLexer":
+    def from_file(
+        cls,
+        filepath: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        max_expansion_depth: int = 64,
+    ) -> "CudaLexer":
         """Create a lexer instance from a file"""
-        with open(filepath) as f:
-            return cls(f.read())
+        with open(filepath, encoding="utf-8") as f:
+            return cls(
+                f.read(),
+                preprocess=preprocess,
+                include_paths=include_paths,
+                defines=defines,
+                strict_preprocessor=strict_preprocessor,
+                max_expansion_depth=max_expansion_depth,
+                file_path=filepath,
+            )
 
 
 # Compatibility wrapper

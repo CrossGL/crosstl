@@ -5,12 +5,14 @@ import subprocess
 import pytest
 
 from crosstl.translator.ast import (
+    AttributeNode,
     BinaryOpNode,
     BlockNode,
     EnumNode,
     ExecutionModel,
     ExpressionStatementNode,
     FunctionNode,
+    IdentifierNode,
     MeshOpNode,
     PrimitiveType,
     RayQueryOpNode,
@@ -4700,6 +4702,59 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_tessellation_qualified_entries_use_function_metadata(self, tmp_path):
+        void_type = PrimitiveType("void")
+        control_entry = FunctionNode(
+            name="HullMain",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode([]),
+            attributes=[
+                AttributeNode("domain", [IdentifierNode("quad")]),
+                AttributeNode("partitioning", [IdentifierNode("fractional_even")]),
+                AttributeNode("outputtopology", [IdentifierNode("triangle_cw")]),
+                AttributeNode("outputcontrolpoints", [4]),
+            ],
+            qualifiers=["tessellation_control"],
+        )
+        evaluation_entry = FunctionNode(
+            name="DomainMain",
+            return_type=void_type,
+            parameters=[],
+            body=BlockNode([]),
+            attributes=[
+                AttributeNode("domain", [IdentifierNode("quad")]),
+            ],
+            qualifiers=["tessellation_evaluation"],
+        )
+        shader_node = ShaderNode(
+            name="QualifiedTessellationEntries",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            stages={},
+            functions=[control_entry, evaluation_entry],
+        )
+
+        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
+
+        control_match = re.search(
+            r'OpEntryPoint TessellationControl %(\d+) "HullMain"', spv_code
+        )
+        eval_match = re.search(
+            r'OpEntryPoint TessellationEvaluation %(\d+) "DomainMain"', spv_code
+        )
+        assert control_match is not None
+        assert eval_match is not None
+        control_id = control_match.group(1)
+        eval_id = eval_match.group(1)
+
+        assert "OpCapability Tessellation" in spv_code
+        assert f"OpExecutionMode %{control_id} OutputVertices 4" in spv_code
+        assert f"OpExecutionMode %{eval_id} Quads" in spv_code
+        assert f"OpExecutionMode %{eval_id} SpacingFractionalEven" in spv_code
+        assert f"OpExecutionMode %{eval_id} VertexOrderCw" in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_geometry_tessellation_execution_modes_reject_invalid_metadata(
         self, tmp_path
     ):
@@ -6178,12 +6233,12 @@ class TestVulkanSPIRVCodeGen:
         assert unsupported_query_result.type.base_type == "uint"
         assert mesh_result.type.base_type == "uint"
         assert (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "TraceRay yet; using a default uint value"
+            "WARNING: SPIR-V ray tracing operation TraceRay requires "
+            "a ray tracing stage context"
         ) in spv_code
         assert (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "ReportHit yet; using a default bool value"
+            "WARNING: SPIR-V ray tracing operation ReportHit requires "
+            "a ray tracing stage context"
         ) in spv_code
         assert (
             "WARNING: SPIR-V backend does not lower ray query operation "
@@ -6251,7 +6306,10 @@ class TestVulkanSPIRVCodeGen:
 
         assert "OpEntryPoint GLCompute" in spv_code
         assert "OpExecutionMode" in spv_code
-        assert "ReportHit yet; using a default bool value" in spv_code
+        assert (
+            "SPIR-V ray tracing operation ReportHit is only valid in "
+            "IntersectionKHR stages"
+        ) in spv_code
         assert "Proceed yet; using a default bool value" in spv_code
         assert "CandidateRayT yet; using a default float value" in spv_code
         assert (
@@ -6259,7 +6317,10 @@ class TestVulkanSPIRVCodeGen:
             in spv_code
         )
         assert "SetMeshOutputCounts yet; using a default uint value" in spv_code
-        assert "TraceRay yet; using a default uint value" in spv_code
+        assert (
+            "SPIR-V ray tracing operation TraceRay is only valid in "
+            "ClosestHitKHR, MissKHR, RayGenerationKHR stages"
+        ) in spv_code
         assert "Unknown expression type" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
@@ -11029,6 +11090,92 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_structured_buffer_dimensions_emit_spirv_array_length(self, tmp_path):
+        source_code = """
+        shader StructuredBufferDimensions {
+            RWStructuredBuffer<float> values @set(4) @binding(0);
+            StructuredBuffer<uint> counters[2] @set(4) @binding(1);
+            ByteAddressBuffer rawInput @set(4) @binding(3);
+            RWByteAddressBuffer rawOutput @set(4) @binding(4);
+
+            compute {
+                void main() {
+                    uint valuesLen = buffer_dimensions(values);
+                    uint counterLen;
+                    buffer_dimensions(counters[1], counterLen);
+                    uint memberLen;
+                    values.GetDimensions(memberLen);
+                    uint rawBytes = rawInput.GetDimensions();
+                    uint rawOutBytes;
+                    rawOutput.GetDimensions(rawOutBytes);
+                    buffer_store(values, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpArrayLength") == 5
+        assert "OpIMul" in spv_code
+        assert "buffer_dimensions" not in spv_code
+        assert "GetDimensions" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_dimensions_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidStructuredBufferDimensions {
+            RWStructuredBuffer<float> values;
+            ByteAddressBuffer rawInput;
+            uint notBuffer;
+            float floatTarget;
+
+            compute {
+                void main() {
+                    uint len;
+                    uint missing = buffer_dimensions();
+                    uint excess = buffer_dimensions(values, len, len);
+                    uint invalid = buffer_dimensions(notBuffer);
+                    values.GetDimensions(len, len);
+                    values.GetDimensions(floatTarget);
+                    rawInput.GetDimensions(1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: buffer_dimensions requires a buffer operand" in spv_code
+        assert (
+            "WARNING: buffer_dimensions accepts only buffer and optional output operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_dimensions requires a structured or byte-address "
+            "buffer operand"
+        ) in spv_code
+        assert (
+            "WARNING: StructuredBuffer.GetDimensions accepts only an optional output "
+            "operand"
+        ) in spv_code
+        assert (
+            "WARNING: StructuredBuffer.GetDimensions output operand must be an "
+            "integer target"
+        ) in spv_code
+        assert (
+            "WARNING: ByteAddressBuffer.GetDimensions output operand must be an "
+            "assignable integer target"
+        ) in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_append_consume_structured_buffers_emit_counter_sidecars(self, tmp_path):
         source_code = """
         shader AppendConsumeStorageBuffers {
@@ -14292,6 +14439,103 @@ class TestVulkanSPIRVCodeGen:
         assert "imageLoad" not in spv_code
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_spirv_texture_sampling_supports_regular_and_shadow_samplers(
+        self, tmp_path
+    ):
+        source_code = """
+        shader BasicTextureSampling {
+            sampler2d colorMap;
+            sampler2darray layerMap;
+            sampler3D volumeMap;
+            samplerCube envMap;
+            samplerCubeArray cubeArrayMap;
+            sampler2dshadow shadowMap;
+            sampler2darrayshadow shadowArray;
+            samplerCubeShadow shadowCube;
+            samplerCubeArrayShadow shadowCubeArray;
+            sampler linearSampler;
+            sampler compareSampler;
+
+            fragment {
+                output vec4 fragColor;
+
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 uvLayer = vec3(uv, 1.0);
+                    vec3 volumeUv = vec3(uv, 0.5);
+                    vec3 cubeCoord = vec3(1.0, 0.0, 0.0);
+                    vec4 cubeLayer = vec4(cubeCoord, 1.0);
+                    float depth = 0.5;
+                    vec4 color = texture(colorMap, uv);
+                    vec4 layer = texture(layerMap, linearSampler, uvLayer);
+                    vec4 volume = texture(volumeMap, volumeUv);
+                    vec4 cube = texture(envMap, linearSampler, cubeCoord);
+                    vec4 cubeArray = texture(cubeArrayMap, cubeLayer);
+                    float shadow = textureCompare(shadowMap, uv, depth);
+                    float shadowLayer = textureCompare(
+                        shadowArray,
+                        compareSampler,
+                        uvLayer,
+                        depth
+                    );
+                    float shadowCubeValue = textureCompare(
+                        shadowCube,
+                        compareSampler,
+                        cubeCoord,
+                        depth
+                    );
+                    float shadowCubeArrayValue = textureCompare(
+                        shadowCubeArray,
+                        compareSampler,
+                        cubeLayer,
+                        depth
+                    );
+                    fragColor = color + layer + volume + cube + cubeArray
+                        + vec4(
+                            shadow
+                            + shadowLayer
+                            + shadowCubeValue
+                            + shadowCubeArrayValue
+                        );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        sampler_type = re.search(r"(%\d+) = OpTypeSampler", spv_code)
+        assert vec4_type is not None
+        assert float_type is not None
+        assert sampler_type is not None
+
+        for image_signature in [
+            "2D 0 0 0 1 Unknown",
+            "2D 0 1 0 1 Unknown",
+            "3D 0 0 0 1 Unknown",
+            "Cube 0 0 0 1 Unknown",
+            "Cube 0 1 0 1 Unknown",
+            "2D 1 0 0 1 Unknown",
+            "2D 1 1 0 1 Unknown",
+            "Cube 1 0 0 1 Unknown",
+            "Cube 1 1 0 1 Unknown",
+        ]:
+            assert image_signature in spv_code
+
+        assert spv_code.count("OpImageSampleImplicitLod") == 5
+        assert spv_code.count("OpImageSampleDrefImplicitLod") == 4
+        assert "OpImageSampleExplicitLod" not in spv_code
+        assert "OpImageSampleDrefExplicitLod" not in spv_code
+        assert f"OpImageSampleImplicitLod {vec4_type.group(1)}" in spv_code
+        assert f"OpImageSampleDrefImplicitLod {float_type.group(1)}" in spv_code
+        assert "textureCompare" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_texture_lod_and_grad_emit_explicit_lod_sampling(self, tmp_path):
         source_code = """
@@ -23207,6 +23451,100 @@ class TestSpirvShaderValidation:
         assert "OpMemoryModel Logical GLSL450" in spv_code
         assert "OpEntryPoint RayGenerationKHR" in spv_code
 
+    def test_ray_tracing_stages_emit_khr_entrypoints_intrinsics_and_builtins(
+        self, tmp_path
+    ):
+        source_code = """
+        shader VulkanRayTracingStages {
+            struct RayPayload {
+                vec3 color;
+            };
+
+            struct HitAttributes {
+                vec2 barycentrics;
+            };
+
+            struct CallableData {
+                uint value;
+            };
+
+            accelerationStructureEXT scene @binding(3) @set(2);
+
+            ray_generation {
+                void main() {
+                    uvec3 launch = gl_LaunchIDEXT;
+                    uvec3 launchSize = gl_LaunchSizeEXT;
+                    RayPayload payload;
+                    CallableData data;
+                    TraceRay(
+                        scene,
+                        0u,
+                        255u,
+                        0u,
+                        1u,
+                        0u,
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0,
+                        payload
+                    );
+                    CallShader(0u, data);
+                }
+            }
+
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    bool accepted = ReportHit(1.0, 0u, attributes);
+                }
+            }
+
+            ray_any_hit {
+                void main() {
+                    uint kind = gl_HitKindEXT;
+                    AcceptHitAndEndSearch();
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "OpCapability RayTracingKHR" in spv_code
+        assert 'OpExtension "SPV_KHR_ray_tracing"' in spv_code
+        assert "OpEntryPoint RayGenerationKHR" in spv_code
+        assert "OpEntryPoint IntersectionKHR" in spv_code
+        assert "OpEntryPoint AnyHitKHR" in spv_code
+        assert "OpDecorate" in spv_code and "BuiltIn LaunchIdKHR" in spv_code
+        assert "BuiltIn LaunchSizeKHR" in spv_code
+        assert "BuiltIn HitKindKHR" in spv_code
+        assert "OpTypeAccelerationStructureKHR" in spv_code
+        assert "OpTypePointer RayPayloadKHR" in spv_code
+        assert "OpTypePointer CallableDataKHR" in spv_code
+        assert "OpTypePointer HitAttributeKHR" in spv_code
+        assert "OpTraceRayKHR" in spv_code
+        assert "OpExecuteCallableKHR" in spv_code
+        assert "OpReportIntersectionKHR" in spv_code
+        assert "OpTerminateRayKHR" in spv_code
+        assert "does not lower ray tracing operation" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+        ignore_code = VulkanSPIRVCodeGen().generate(Parser(Lexer("""
+                    shader VulkanAnyHitIgnore {
+                        ray_any_hit {
+                            void main() {
+                                IgnoreHit();
+                            }
+                        }
+                    }
+                    """).tokens).parse())
+        assert "OpIgnoreIntersectionKHR" in ignore_code
+        assert_spirv_module_validates(ignore_code, tmp_path)
+
     def test_ray_tracing_operations_emit_diagnostic_comments(self, tmp_path):
         void_type = PrimitiveType("void")
         uint_type = PrimitiveType("uint")
@@ -23245,12 +23583,11 @@ class TestSpirvShaderValidation:
         spv_code = VulkanSPIRVCodeGen().generate(shader_node)
 
         assert (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "TraceRay yet; using a default uint value"
+            "WARNING: SPIR-V TraceRay RayDesc argument must be an " "addressable value"
         ) in spv_code
         assert (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "ReportHit yet; using a default bool value"
+            "WARNING: SPIR-V ray tracing operation ReportHit is only valid "
+            "in IntersectionKHR stages"
         ) in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
 
@@ -23311,48 +23648,48 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_ray_tracing_trace_ray_emits_diagnostic_or_optraceraykhr(self, tmp_path):
-        void_type = PrimitiveType("void")
-        uint_type = PrimitiveType("uint")
+    def test_ray_tracing_trace_ray_emits_optraceraykhr(self, tmp_path):
+        source_code = """
+        shader TraceRayShader {
+            struct RayPayload {
+                vec3 color;
+            };
 
-        entry_point = FunctionNode(
-            name="main",
-            return_type=void_type,
-            parameters=[],
-            body=BlockNode(
-                [
-                    VariableNode(
-                        "traceOut",
-                        uint_type,
-                        RayTracingOpNode("TraceRay", [1, 2, 3, 4, 5, 6, 7, 8]),
-                    ),
-                ]
-            ),
+            accelerationStructureEXT scene;
+
+            ray_generation {
+                void main() {
+                    RayPayload payload;
+                    TraceRay(
+                        scene,
+                        0u,
+                        255u,
+                        0u,
+                        1u,
+                        0u,
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0,
+                        payload
+                    );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
         )
-        shader_node = ShaderNode(
-            name="TraceRayDiagnosticShader",
-            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
-            stages={
-                ShaderStage.RAY_GENERATION: StageNode(
-                    ShaderStage.RAY_GENERATION,
-                    entry_point,
-                )
-            },
-        )
 
-        spv_code = VulkanSPIRVCodeGen().generate(shader_node)
-
-        has_diagnostic = (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "TraceRay yet; using a default uint value"
-        ) in spv_code
-        has_op = "OpTraceRayKHR" in spv_code
-        assert has_diagnostic or has_op
+        assert "OpTraceRayKHR" in spv_code
+        assert "RayPayloadKHR" in spv_code
+        assert "TraceRay yet; using a default uint value" not in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
-    def test_ray_tracing_report_intersection_emits_diagnostic_or_op(self, tmp_path):
+    def test_ray_tracing_report_intersection_emits_op(self, tmp_path):
         void_type = PrimitiveType("void")
         bool_type = PrimitiveType("bool")
 
@@ -23374,8 +23711,8 @@ class TestSpirvShaderValidation:
             name="ReportIntersectionShader",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
             stages={
-                ShaderStage.RAY_GENERATION: StageNode(
-                    ShaderStage.RAY_GENERATION,
+                ShaderStage.RAY_INTERSECTION: StageNode(
+                    ShaderStage.RAY_INTERSECTION,
                     entry_point,
                 )
             },
@@ -23383,12 +23720,8 @@ class TestSpirvShaderValidation:
 
         spv_code = VulkanSPIRVCodeGen().generate(shader_node)
 
-        has_diagnostic = (
-            "WARNING: SPIR-V backend does not lower ray tracing operation "
-            "ReportHit yet; using a default bool value"
-        ) in spv_code
-        has_op = "OpReportIntersectionKHR" in spv_code
-        assert has_diagnostic or has_op
+        assert "OpReportIntersectionKHR" in spv_code
+        assert "ReportHit yet; using a default bool value" not in spv_code
         assert "Unknown expression type RayTracingOpNode" not in spv_code
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)

@@ -1,15 +1,18 @@
 """Lexer for importing Slang source into CrossGL Translator."""
 
 import re
-from typing import Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
+
+from .preprocessor import SlangPreprocessor
 
 # using sets for faster lookup
-SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
+SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI", "PREPROCESSOR"}
 
 TOKENS = tuple(
     [
         ("COMMENT_SINGLE", r"//.*"),
         ("COMMENT_MULTI", r"/\*[\s\S]*?\*/"),
+        ("PREPROCESSOR", r"#[^\r\n]*"),
         ("BITWISE_NOT", r"~"),
         ("STRUCT", r"\bstruct\b"),
         ("CBUFFER", r"\bcbuffer\b"),
@@ -144,8 +147,25 @@ KEYWORDS = {
 class SlangLexer:
     """Tokenize Slang source for the Slang backend parser."""
 
-    def __init__(self, code: str):
-        """Initialize the lexer with raw Slang source text."""
+    def __init__(
+        self,
+        code: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        max_expansion_depth: int = 64,
+        file_path: Optional[str] = None,
+    ):
+        """Initialize the lexer and optionally preprocess Slang source text."""
+        if preprocess:
+            preprocessor = SlangPreprocessor(
+                include_paths=include_paths,
+                defines=defines,
+                strict=strict_preprocessor,
+                max_expansion_depth=max_expansion_depth,
+            )
+            code = preprocessor.preprocess(code, file_path=file_path)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)
@@ -184,7 +204,25 @@ class SlangLexer:
         return None
 
     @classmethod
-    def from_file(cls, filepath: str, chunk_size: int = 8192) -> "SlangLexer":
+    def from_file(
+        cls,
+        filepath: str,
+        chunk_size: int = 8192,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        max_expansion_depth: int = 64,
+    ) -> "SlangLexer":
         """Create a lexer instance from a Slang source file."""
-        with open(filepath) as f:
-            return cls(f.read())
+        del chunk_size
+        with open(filepath, encoding="utf-8") as f:
+            return cls(
+                f.read(),
+                preprocess=preprocess,
+                include_paths=include_paths,
+                defines=defines,
+                strict_preprocessor=strict_preprocessor,
+                max_expansion_depth=max_expansion_depth,
+                file_path=filepath,
+            )

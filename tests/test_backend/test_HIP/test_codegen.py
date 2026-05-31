@@ -49,7 +49,8 @@ class TestHipCodeGen:
 
         assert "// HIP to CrossGL conversion" in result
         assert "// HIP runtime functionality built-in" in result
-        assert "// define HIP_SCALE 2" in result
+        assert "// define HIP_SCALE 2" not in result
+        assert "HIP_SCALE" not in result
         assert "@group(0) @binding(0) var<uniform> kLimit: i32 = 64;" in result
         assert "// HIP managed memory: managedValue" in result
         assert "var managedValue: f32;" in result

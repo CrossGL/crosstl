@@ -122,6 +122,7 @@ class VulkanSPIRVCodeGen:
         self.resource_types = {}
         self.resource_image_types = {}
         self.ray_query_types = {}
+        self.ray_tracing_storage_variables = {}
         self.enum_type_names = set()
         self.enum_variant_values = {}
         self.enum_struct_type_names = set()
@@ -2026,6 +2027,7 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_dimensions",
             "buffer_append",
             "buffer_consume",
             "buffer_increment_counter",
@@ -2105,6 +2107,7 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_dimensions",
             "buffer_append",
             "buffer_consume",
             "buffer_increment_counter",
@@ -3317,6 +3320,28 @@ class VulkanSPIRVCodeGen:
                 function_name == "buffer_increment_counter",
             )[1]
 
+        if function_name == "buffer_dimensions":
+            if not args:
+                self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+                return self.structured_buffer_dimensions_default_value()
+            if len(args) > 1:
+                self.emit(
+                    "; WARNING: buffer_dimensions expression form accepts only a "
+                    "buffer operand"
+                )
+                return self.structured_buffer_dimensions_default_value()
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_dimensions requires a structured or "
+                    "byte-address buffer operand"
+                )
+                return self.structured_buffer_dimensions_default_value()
+            return self.emit_structured_buffer_dimensions(
+                args[0], metadata, "buffer_dimensions"
+            )
+
         if function_name == "buffer_load":
             if len(args) < 2:
                 self.emit("; WARNING: buffer_load requires buffer and index operands")
@@ -4385,6 +4410,445 @@ class VulkanSPIRVCodeGen:
             return self.register_primitive_type("uint")
 
         return self.register_primitive_type("uint")
+
+    def ray_tracing_operation_result_type(self, operation: str) -> SpirvId:
+        if operation == "ReportHit":
+            return self.register_primitive_type("bool")
+        return self.register_primitive_type("uint")
+
+    def ray_tracing_default_value(self, operation: str) -> SpirvId:
+        return self.default_value_for_type(
+            self.ray_tracing_operation_result_type(operation)
+        )
+
+    def ray_tracing_allowed_execution_models(self, operation: str):
+        return {
+            "TraceRay": {"RayGenerationKHR", "ClosestHitKHR", "MissKHR"},
+            "CallShader": {
+                "RayGenerationKHR",
+                "ClosestHitKHR",
+                "MissKHR",
+                "CallableKHR",
+            },
+            "ReportHit": {"IntersectionKHR"},
+            "IgnoreHit": {"AnyHitKHR"},
+            "AcceptHitAndEndSearch": {"AnyHitKHR"},
+        }.get(operation)
+
+    def validate_ray_tracing_operation_context(self, operation: str) -> bool:
+        allowed_models = self.ray_tracing_allowed_execution_models(operation)
+        if allowed_models is None:
+            return False
+        if self.current_execution_model is None:
+            self.emit(
+                f"; WARNING: SPIR-V ray tracing operation {operation} requires "
+                "a ray tracing stage context"
+            )
+            return False
+        if self.current_execution_model in allowed_models:
+            return True
+
+        allowed = ", ".join(sorted(allowed_models))
+        self.emit(
+            f"; WARNING: SPIR-V ray tracing operation {operation} is only valid "
+            f"in {allowed} stages"
+        )
+        return False
+
+    def ray_tracing_acceleration_structure_value_from_expression(
+        self, expr, operation: str
+    ) -> Optional[SpirvId]:
+        pointer = self.variable_pointer_from_expression(expr)
+        if pointer is not None:
+            if pointer.type.storage_class != "Function":
+                self.mark_function_interface_variable(pointer)
+            value = self.get_variable_value(pointer)
+        else:
+            value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} acceleration structure argument "
+                "could not be evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value)
+        type_name = (
+            value_type.type.base_type
+            if value_type is not None
+            else value.type.base_type
+        )
+        if not self.is_acceleration_structure_type_name(type_name):
+            self.emit(
+                f"; WARNING: SPIR-V {operation} acceleration structure argument "
+                f"must be accelerationStructureEXT, got {type_name}"
+            )
+            return None
+
+        return value
+
+    def ray_tracing_uint_operand(
+        self, expr, operation: str, role: str
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument could not be "
+                "evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+                "32-bit integer scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+                f"32-bit integer scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("uint"))
+
+    def ray_tracing_float_operand(
+        self, expr, operation: str, role: str
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument could not be "
+                "evaluated"
+            )
+            return None
+
+        value_type = self.registered_value_type(value) or self.ensure_registered_type(
+            value.type
+        )
+        if self.vector_component_type_and_count(value_type.type.base_type) is not None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+                "32-bit floating-point scalar"
+            )
+            return None
+
+        component_type = self.normalize_primitive_name(value_type.type.base_type)
+        if component_type not in {"float", "double", "int", "uint"}:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+                f"32-bit floating-point scalar, got {component_type}"
+            )
+            return None
+
+        return self.convert_value_to_type(value, self.register_primitive_type("float"))
+
+    def ray_tracing_vec3_operand(
+        self, expr, operation: str, role: str
+    ) -> Optional[SpirvId]:
+        value = self.process_expression(expr)
+        if value is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument could not be "
+                "evaluated"
+            )
+            return None
+
+        float_type = self.register_primitive_type("float")
+        vec3_type = self.register_vector_type(float_type, 3)
+        value = self.convert_value_to_type(value, vec3_type)
+        vector_info = self.vector_component_type_and_count(value.type.base_type)
+        if vector_info != ("float", 3):
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be a "
+                "32-bit floating-point vec3"
+            )
+            return None
+
+        return value
+
+    def ray_tracing_ray_desc_member_expression(
+        self, ray_desc_expr, field_names, operation: str
+    ) -> Optional[MemberAccessNode]:
+        ray_desc_pointer = self.variable_pointer_from_expression(ray_desc_expr)
+        if ray_desc_pointer is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} RayDesc argument must be an "
+                "addressable value"
+            )
+            return None
+
+        ray_desc_type = self.pointer_pointee_type(ray_desc_pointer)
+        members = self.current_struct_members.get(
+            ray_desc_type.type.base_type if ray_desc_type is not None else None, []
+        )
+        available_names = {member_name for _, member_name in members}
+        for field_name in field_names:
+            if field_name in available_names:
+                return MemberAccessNode(ray_desc_expr, field_name)
+
+        expected = "/".join(field_names)
+        self.emit(
+            f"; WARNING: SPIR-V {operation} RayDesc argument does not provide "
+            f"{expected}"
+        )
+        return None
+
+    def trace_ray_argument_expressions(self, arguments):
+        if len(arguments) == 11:
+            return tuple(arguments)
+
+        acceleration, ray_flags, cull_mask, sbt_offset, sbt_stride, miss_index = (
+            arguments[:6]
+        )
+        ray_desc = arguments[6]
+        payload = arguments[7]
+        origin = self.ray_tracing_ray_desc_member_expression(
+            ray_desc, ("Origin", "origin", "rayOrigin", "RayOrigin"), "TraceRay"
+        )
+        tmin = self.ray_tracing_ray_desc_member_expression(
+            ray_desc, ("TMin", "tMin", "Tmin", "tmin"), "TraceRay"
+        )
+        direction = self.ray_tracing_ray_desc_member_expression(
+            ray_desc,
+            ("Direction", "direction", "rayDirection", "RayDirection"),
+            "TraceRay",
+        )
+        tmax = self.ray_tracing_ray_desc_member_expression(
+            ray_desc, ("TMax", "tMax", "Tmax", "tmax"), "TraceRay"
+        )
+        if None in {origin, tmin, direction, tmax}:
+            return None
+
+        return (
+            acceleration,
+            ray_flags,
+            cull_mask,
+            sbt_offset,
+            sbt_stride,
+            miss_index,
+            origin,
+            tmin,
+            direction,
+            tmax,
+            payload,
+        )
+
+    def ray_tracing_storage_variable_name(self, pointer: SpirvId, storage_class: str):
+        base_name = pointer.name or f"value_{pointer.id}"
+        suffix = re.sub(r"[^A-Za-z0-9_]", "_", storage_class).lower()
+        return f"{base_name}_{suffix}"
+
+    def ray_tracing_storage_pointer(
+        self, expr, storage_class: str, operation: str, role: str
+    ) -> Tuple[Optional[SpirvId], Optional[SpirvId]]:
+        pointer = self.variable_pointer_from_expression(expr)
+        if pointer is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument must be an "
+                "addressable value"
+            )
+            return None, None
+
+        value_type = self.pointer_pointee_type(pointer)
+        if value_type is None:
+            self.emit(
+                f"; WARNING: SPIR-V {operation} {role} argument has no value type"
+            )
+            return None, None
+
+        if pointer.type.storage_class == storage_class:
+            self.mark_function_interface_variable(pointer)
+            return pointer, None
+
+        key = (storage_class, pointer.id)
+        storage_pointer = self.ray_tracing_storage_variables.get(key)
+        if storage_pointer is None:
+            storage_pointer = self.create_variable(
+                value_type,
+                storage_class,
+                self.ray_tracing_storage_variable_name(pointer, storage_class),
+            )
+            self.ray_tracing_storage_variables[key] = storage_pointer
+        self.mark_function_interface_variable(storage_pointer)
+
+        value = self.get_variable_value(pointer)
+        if value is not None:
+            self.store_to_variable(
+                storage_pointer, self.convert_value_to_type(value, value_type)
+            )
+
+        return storage_pointer, pointer
+
+    def copy_ray_tracing_storage_back(
+        self, storage_pointer: Optional[SpirvId], destination: Optional[SpirvId]
+    ) -> None:
+        if storage_pointer is None or destination is None:
+            return
+
+        destination_type = self.pointer_pointee_type(destination)
+        value = self.get_variable_value(storage_pointer)
+        if value is None:
+            return
+        if destination_type is not None:
+            value = self.convert_value_to_type(value, destination_type)
+        self.store_to_variable(destination, value)
+
+    def process_trace_ray_operation(self, arguments) -> Optional[SpirvId]:
+        expressions = self.trace_ray_argument_expressions(arguments)
+        if expressions is None:
+            return self.ray_tracing_default_value("TraceRay")
+
+        (
+            acceleration_expr,
+            ray_flags_expr,
+            cull_mask_expr,
+            sbt_offset_expr,
+            sbt_stride_expr,
+            miss_index_expr,
+            origin_expr,
+            tmin_expr,
+            direction_expr,
+            tmax_expr,
+            payload_expr,
+        ) = expressions
+
+        acceleration = self.ray_tracing_acceleration_structure_value_from_expression(
+            acceleration_expr, "TraceRay"
+        )
+        ray_flags = self.ray_tracing_uint_operand(
+            ray_flags_expr, "TraceRay", "ray flags"
+        )
+        cull_mask = self.ray_tracing_uint_operand(
+            cull_mask_expr, "TraceRay", "cull mask"
+        )
+        sbt_offset = self.ray_tracing_uint_operand(
+            sbt_offset_expr, "TraceRay", "shader binding table offset"
+        )
+        sbt_stride = self.ray_tracing_uint_operand(
+            sbt_stride_expr, "TraceRay", "shader binding table stride"
+        )
+        miss_index = self.ray_tracing_uint_operand(
+            miss_index_expr, "TraceRay", "miss shader index"
+        )
+        origin = self.ray_tracing_vec3_operand(origin_expr, "TraceRay", "origin")
+        tmin = self.ray_tracing_float_operand(tmin_expr, "TraceRay", "Tmin")
+        direction = self.ray_tracing_vec3_operand(
+            direction_expr, "TraceRay", "direction"
+        )
+        tmax = self.ray_tracing_float_operand(tmax_expr, "TraceRay", "Tmax")
+        payload, payload_destination = self.ray_tracing_storage_pointer(
+            payload_expr, "RayPayloadKHR", "TraceRay", "payload"
+        )
+
+        operands = {
+            acceleration,
+            ray_flags,
+            cull_mask,
+            sbt_offset,
+            sbt_stride,
+            miss_index,
+            origin,
+            tmin,
+            direction,
+            tmax,
+            payload,
+        }
+        if None in operands:
+            return self.ray_tracing_default_value("TraceRay")
+
+        self.emit(
+            f"OpTraceRayKHR %{acceleration.id} %{ray_flags.id} %{cull_mask.id} "
+            f"%{sbt_offset.id} %{sbt_stride.id} %{miss_index.id} %{origin.id} "
+            f"%{tmin.id} %{direction.id} %{tmax.id} %{payload.id}"
+        )
+        self.copy_ray_tracing_storage_back(payload, payload_destination)
+        return None
+
+    def process_call_shader_operation(self, arguments) -> Optional[SpirvId]:
+        shader_index = self.ray_tracing_uint_operand(
+            arguments[0], "CallShader", "shader index"
+        )
+        callable_data, callable_destination = self.ray_tracing_storage_pointer(
+            arguments[1], "CallableDataKHR", "CallShader", "callable data"
+        )
+        if shader_index is None or callable_data is None:
+            return self.ray_tracing_default_value("CallShader")
+
+        self.emit(f"OpExecuteCallableKHR %{shader_index.id} %{callable_data.id}")
+        self.copy_ray_tracing_storage_back(callable_data, callable_destination)
+        return None
+
+    def process_report_hit_operation(self, arguments) -> SpirvId:
+        hit_t = self.ray_tracing_float_operand(arguments[0], "ReportHit", "hit T")
+        hit_kind = self.ray_tracing_uint_operand(arguments[1], "ReportHit", "hit kind")
+        if len(arguments) == 3:
+            self.ray_tracing_storage_pointer(
+                arguments[2], "HitAttributeKHR", "ReportHit", "hit attribute"
+            )
+        if hit_t is None or hit_kind is None:
+            return self.ray_tracing_default_value("ReportHit")
+
+        result_type = self.register_primitive_type("bool")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpReportIntersectionKHR %{result_type.id} "
+            f"%{hit_t.id} %{hit_kind.id}"
+        )
+        self.value_types[id_value] = result_type
+        return SpirvId(id_value, result_type.type)
+
+    def process_ray_tracing_operation(
+        self, expr: RayTracingOpNode
+    ) -> Optional[SpirvId]:
+        operation = expr.operation
+        arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
+        supported_argument_counts = {
+            "TraceRay": {8, 11},
+            "CallShader": {2},
+            "ReportHit": {2, 3},
+            "IgnoreHit": {0},
+            "AcceptHitAndEndSearch": {0},
+        }
+
+        expected_counts = supported_argument_counts.get(operation)
+        if expected_counts is None:
+            return self.represented_ir_diagnostic_default_value(
+                "ray tracing", operation
+            )
+        if len(arguments) not in expected_counts:
+            expected = self.format_expected_argument_counts(expected_counts)
+            self.emit(
+                f"; WARNING: SPIR-V ray tracing operation {operation} requires "
+                f"{expected} arguments"
+            )
+            return self.ray_tracing_default_value(operation)
+        if not self.validate_ray_tracing_operation_context(operation):
+            return self.ray_tracing_default_value(operation)
+
+        self.require_capability("RayTracingKHR")
+        self.require_extension("SPV_KHR_ray_tracing")
+
+        if operation == "TraceRay":
+            return self.process_trace_ray_operation(arguments)
+        if operation == "CallShader":
+            return self.process_call_shader_operation(arguments)
+        if operation == "ReportHit":
+            return self.process_report_hit_operation(arguments)
+        if operation == "IgnoreHit":
+            self.emit("OpIgnoreIntersectionKHR")
+            return None
+        if operation == "AcceptHitAndEndSearch":
+            self.emit("OpTerminateRayKHR")
+            return None
+
+        return self.represented_ir_diagnostic_default_value("ray tracing", operation)
 
     def ray_query_pointer_from_expression(self, expr) -> Optional[SpirvId]:
         query_pointer = self.variable_pointer_from_expression(expr)
@@ -8523,6 +8987,8 @@ class VulkanSPIRVCodeGen:
                     "OpKill",
                     "OpUnreachable",
                     "OpEmitMeshTasksEXT",
+                    "OpIgnoreIntersectionKHR",
+                    "OpTerminateRayKHR",
                 )
             )
         return False
@@ -11683,6 +12149,12 @@ class VulkanSPIRVCodeGen:
             "task",
             "object",
             "amplification",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_any_hit",
+            "ray_callable",
         }
 
     def patch_parameter_info(
@@ -13439,6 +13911,12 @@ class VulkanSPIRVCodeGen:
             "task",
             "object",
             "amplification",
+            "ray_generation",
+            "ray_intersection",
+            "ray_closest_hit",
+            "ray_miss",
+            "ray_any_hit",
+            "ray_callable",
         }
         for func in getattr(ast, "functions", []):
             qualifier = self.get_function_qualifier(func)
@@ -13861,6 +14339,129 @@ class VulkanSPIRVCodeGen:
     def structured_buffer_counter_default_value(self) -> SpirvId:
         return self.register_constant(0, self.register_primitive_type("uint"))
 
+    def structured_buffer_dimensions_default_value(self) -> SpirvId:
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def emit_structured_buffer_dimensions(
+        self, buffer_pointer: SpirvId, metadata, diagnostic_name: str
+    ) -> SpirvId:
+        block_type = metadata.get("block_type") if metadata is not None else None
+        if block_type is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a buffer block operand")
+            return self.structured_buffer_dimensions_default_value()
+
+        uint_type = self.register_primitive_type("uint")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{buffer_pointer.id} "
+            f"{metadata.get('member_index', 0)}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        if not metadata.get("byte_address"):
+            return length
+
+        byte_stride = self.register_constant(4, uint_type)
+        return self.binary_operation("*", uint_type, length, byte_stride)
+
+    def store_structured_buffer_dimensions_result(
+        self,
+        target_expr,
+        value: SpirvId,
+        diagnostic_name: str,
+    ) -> bool:
+        target_pointer = self.assignable_pointer_from_expression(target_expr)
+        if target_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand must be an assignable "
+                "integer target"
+            )
+            return False
+
+        target_type = self.pointer_pointee_type(target_pointer)
+        if target_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand type could not be "
+                "determined"
+            )
+            return False
+
+        target_type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if target_type_name not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand must be an integer "
+                "target"
+            )
+            return False
+
+        self.store_to_variable(
+            target_pointer, self.convert_value_to_type(value, target_type)
+        )
+        return True
+
+    def process_buffer_dimensions_function_call(
+        self, expr: FunctionCallNode
+    ) -> SpirvId:
+        diagnostic_name = "buffer_dimensions"
+        args = list(getattr(expr, "args", []) or [])
+        if not args:
+            self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+            return self.structured_buffer_dimensions_default_value()
+        if len(args) > 2:
+            self.emit(
+                "; WARNING: buffer_dimensions accepts only buffer and optional "
+                "output operands"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        buffer_pointer = self.variable_pointer_from_expression(args[0])
+        if buffer_pointer is None:
+            self.emit(
+                "; WARNING: buffer_dimensions requires a structured or byte-address "
+                "buffer operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            self.emit(
+                "; WARNING: buffer_dimensions requires a structured or byte-address "
+                "buffer operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        length = self.emit_structured_buffer_dimensions(
+            buffer_pointer, metadata, diagnostic_name
+        )
+        if len(args) == 2:
+            self.store_structured_buffer_dimensions_result(
+                args[1], length, diagnostic_name
+            )
+        return length
+
+    def process_structured_buffer_dimensions_method_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> SpirvId:
+        if len(args) > 1:
+            self.emit(
+                f"; WARNING: {diagnostic_name} accepts only an optional output "
+                "operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        length = self.emit_structured_buffer_dimensions(
+            buffer_pointer, metadata, diagnostic_name
+        )
+        if args:
+            self.store_structured_buffer_dimensions_result(
+                args[0], length, diagnostic_name
+            )
+        return length
+
     def ensure_structured_buffer_counter_metadata(self, metadata) -> bool:
         if metadata.get("counter_variable") is not None:
             return True
@@ -14099,6 +14700,7 @@ class VulkanSPIRVCodeGen:
         if method_name not in {
             "Load",
             "Store",
+            "GetDimensions",
             "Append",
             "Consume",
             "IncrementCounter",
@@ -14115,6 +14717,13 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if method_name == "GetDimensions":
+            return True, self.process_structured_buffer_dimensions_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "StructuredBuffer.GetDimensions",
+            )
         if method_name == "Append":
             return self.process_structured_buffer_append_call(
                 buffer_pointer,
@@ -14695,7 +15304,12 @@ class VulkanSPIRVCodeGen:
         load_width = self.byte_address_method_load_width(method_name)
         store_width = self.byte_address_method_store_width(method_name)
         interlocked_info = self.byte_address_method_interlocked_info(method_name)
-        if load_width is None and store_width is None and interlocked_info is None:
+        if (
+            load_width is None
+            and store_width is None
+            and interlocked_info is None
+            and method_name != "GetDimensions"
+        ):
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -14707,6 +15321,14 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if method_name == "GetDimensions":
+            return True, self.process_structured_buffer_dimensions_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "ByteAddressBuffer.GetDimensions",
+            )
+
         if interlocked_info is not None:
             return True, self.process_byte_address_buffer_interlocked_call(
                 buffer_pointer, metadata, method_name, args
@@ -16833,9 +17455,7 @@ class VulkanSPIRVCodeGen:
             return self.call_wave_operation(expr.operation, expr.arguments)
 
         elif isinstance(expr, RayTracingOpNode):
-            return self.represented_ir_diagnostic_default_value(
-                "ray tracing", expr.operation
-            )
+            return self.process_ray_tracing_operation(expr)
 
         elif isinstance(expr, RayQueryOpNode):
             return self.process_ray_query_operation(expr)
@@ -16897,6 +17517,9 @@ class VulkanSPIRVCodeGen:
 
             if callee_name == "lambda":
                 return self.unsupported_lambda_default_value("lambda expression")
+
+            if callee_name == "buffer_dimensions":
+                return self.process_buffer_dimensions_function_call(expr)
 
             if any(self.contains_lambda_expression(arg) for arg in expr.args):
                 result_type = None
@@ -17123,6 +17746,86 @@ class VulkanSPIRVCodeGen:
                 },
                 {"TessellationControl", "TessellationEvaluation"},
             ),
+            "gl_LaunchIDEXT": (
+                "uvec3",
+                "LaunchIdKHR",
+                "Input",
+                {
+                    "RayGenerationKHR",
+                    "IntersectionKHR",
+                    "AnyHitKHR",
+                    "ClosestHitKHR",
+                    "MissKHR",
+                    "CallableKHR",
+                },
+            ),
+            "gl_LaunchSizeEXT": (
+                "uvec3",
+                "LaunchSizeKHR",
+                "Input",
+                {
+                    "RayGenerationKHR",
+                    "IntersectionKHR",
+                    "AnyHitKHR",
+                    "ClosestHitKHR",
+                    "MissKHR",
+                    "CallableKHR",
+                },
+            ),
+            "gl_HitTEXT": (
+                "float",
+                "RayTmaxKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
+            ),
+            "gl_HitKindEXT": (
+                "uint",
+                "HitKindKHR",
+                "Input",
+                {"AnyHitKHR", "ClosestHitKHR"},
+            ),
+            "gl_WorldRayOriginEXT": (
+                "vec3",
+                "WorldRayOriginKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR", "MissKHR"},
+            ),
+            "gl_WorldRayDirectionEXT": (
+                "vec3",
+                "WorldRayDirectionKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR", "MissKHR"},
+            ),
+            "gl_ObjectRayOriginEXT": (
+                "vec3",
+                "ObjectRayOriginKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
+            ),
+            "gl_ObjectRayDirectionEXT": (
+                "vec3",
+                "ObjectRayDirectionKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
+            ),
+            "gl_RayTminEXT": (
+                "float",
+                "RayTminKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR", "MissKHR"},
+            ),
+            "gl_InstanceCustomIndexEXT": (
+                "int",
+                "InstanceCustomIndexKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
+            ),
+            "gl_GeometryIndexEXT": (
+                "int",
+                "GeometryIndexKHR",
+                "Input",
+                {"IntersectionKHR", "AnyHitKHR", "ClosestHitKHR"},
+            ),
         }
         return builtins.get(name)
 
@@ -17136,6 +17839,12 @@ class VulkanSPIRVCodeGen:
             "TessellationEvaluation",
             "MeshEXT",
             "TaskEXT",
+            "RayGenerationKHR",
+            "IntersectionKHR",
+            "AnyHitKHR",
+            "ClosestHitKHR",
+            "MissKHR",
+            "CallableKHR",
         ]
         models = [model for model in order if model in execution_models]
         models.extend(sorted(execution_models - set(models)))
@@ -18280,10 +18989,22 @@ class VulkanSPIRVCodeGen:
                 "task",
                 "object",
                 "amplification",
+                "ray_generation",
+                "ray_intersection",
+                "ray_closest_hit",
+                "ray_miss",
+                "ray_any_hit",
+                "ray_callable",
             ]:
                 top_level_entries.append((func, qualifier))
             else:
                 helper_functions.append(func)
+
+        if self.tessellation_control_stage is None:
+            for func, qualifier in top_level_entries:
+                if qualifier == "tessellation_control":
+                    self.tessellation_control_stage = func
+                    break
 
         for func in self.order_functions_by_dependencies(helper_functions):
             if func.name in self.inline_storage_buffer_functions:
@@ -18325,7 +19046,14 @@ class VulkanSPIRVCodeGen:
             for func, qualifier in top_level_entries:
                 function_id = self.process_function_node(func)
                 execution_model = self.spirv_execution_model(qualifier)
-                entry_points.append((execution_model, function_id, func.name, None))
+                is_tessellation_entry = execution_model in {
+                    "TessellationControl",
+                    "TessellationEvaluation",
+                }
+                stage_metadata = func if is_tessellation_entry else None
+                entry_points.append(
+                    (execution_model, function_id, func.name, stage_metadata)
+                )
 
         if entry_points:
             self.main_fn_id = entry_points[0][1].id

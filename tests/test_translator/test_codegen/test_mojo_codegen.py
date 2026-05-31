@@ -17,6 +17,7 @@ from crosstl.translator.ast import (
     BuiltinVariableNode,
     CastNode,
     ConstructorNode,
+    ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
@@ -33,6 +34,8 @@ from crosstl.translator.ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReturnNode,
+    ShaderNode,
+    StructNode,
     StructPatternNode,
     SwizzleNode,
     SyncNode,
@@ -240,6 +243,53 @@ fn main():
     assert result.returncode == 0, result.stderr
     assert "[1.0, 1.0, 1.0, 1.0]" in result.stdout
     assert "2.0" in result.stdout
+
+
+def test_uniform_block_parses_as_mojo_cbuffer():
+    code = """
+    uniform Material @binding(4) {
+        vec4 tint;
+        float roughness;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Material:" in generated_code
+    assert "var tint: SIMD[DType.float32, 4]" in generated_code
+    assert "var roughness: Float32" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=Material kind=cbuffer set=0 "
+        "binding=4 binding_source=explicit"
+    ) in generated_code
+
+
+def test_legacy_constants_cbuffer_nodes_emit_mojo_structs():
+    constants = StructNode(
+        "LegacyConstants",
+        [
+            VariableNode("scale", PrimitiveType("float")),
+            VariableNode("offset", VectorType(PrimitiveType("float"), 4)),
+        ],
+    )
+    constants.is_cbuffer = True
+    ast = ShaderNode(
+        "LegacyConstantBuffers",
+        ExecutionModel.GRAPHICS_PIPELINE,
+        cbuffers=[],
+        constants=[constants],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert generated_code.count("@value\nstruct LegacyConstants:") == 1
+    assert "var scale: Float32" in generated_code
+    assert "var offset: SIMD[DType.float32, 4]" in generated_code
+    assert (
+        generated_code.count(
+            "# CrossGL resource metadata: name=LegacyConstants kind=cbuffer"
+        )
+        == 1
+    )
 
 
 def test_braced_struct_constructors_emit_mojo_initializers():
@@ -1514,32 +1564,469 @@ def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
     assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in generated_code
 
 
-@pytest.mark.parametrize(
-    "stage_name",
-    [
-        "geometry",
-        "tessellation_control",
-        "tessellation_evaluation",
-        "task",
-        "amplification",
-        "object",
-        "mesh",
-    ],
-)
-def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
-    code = f"""
-    shader UnsupportedStage {{
-        {stage_name} {{
-            void main() {{}}
-        }}
-    }}
+def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoMeshTaskPipeline {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() @numthreads(1, 1, 1) {
+                MeshPayload payload;
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        object {
+            void main() @numthreads(2, 1, 1) {
+                DispatchMesh(2, 3, 4);
+            }
+        }
+
+        amplification {
+            void main() @numthreads(3, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            )
+                @numthreads(32, 1, 1)
+                @outputtopology(triangle)
+                @maxvertices(64)
+                @maxprimitives(32) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=rf"Unsupported {stage_name} shader stage for Mojo codegen",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL mesh/task placeholders" in generated_code
+    assert "fn _crossgl_set_mesh_output_counts" in generated_code
+    assert "fn _crossgl_dispatch_mesh" in generated_code
+    assert "# CrossGL shader stage: task" in generated_code
+    assert "# CrossGL mesh/task stage: stage=task" in generated_code
+    assert "# CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
+    assert "# CrossGL mesh/task local size: 1, 1, 1" in generated_code
+    assert "# CrossGL shader stage: object" in generated_code
+    assert "# CrossGL shader stage: amplification" in generated_code
+    assert "# CrossGL shader stage: mesh" in generated_code
+    assert "# CrossGL mesh output topology: triangle" in generated_code
+    assert "# CrossGL mesh max vertices: 64" in generated_code
+    assert "# CrossGL mesh max primitives: 32" in generated_code
+    assert (
+        "# CrossGL mesh parameter role: mesh_payload:payload->MeshPayload, "
+        "vertices:verts->MeshVertex[3], indices:tris->uvec3[1]" in generated_code
+    )
+    assert "fn task_main() -> None:" in generated_code
+    assert "fn object_main() -> None:" in generated_code
+    assert "fn amplification_main() -> None:" in generated_code
+    assert "fn mesh_main(" in generated_code
+    assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
+    assert "_crossgl_dispatch_mesh(2, 3, 4)" in generated_code
+    assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
+    assert "MeshOpNode" not in generated_code
+
+    package_dir = tmp_path / "mojo_mesh_task_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_mesh_task_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+    assert output_path.exists()
+
+
+def test_mesh_task_stages_validate_mojo_metadata_and_intrinsics():
+    missing_topology = """
+    shader MissingMojoMeshTopology {
+        mesh {
+            void main() @maxvertices(3) @maxprimitives(1) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires outputtopology"):
+        generate_code(parse_code(tokenize_code(missing_topology)))
+
+    invalid_topology = """
+    shader BadMojoMeshTopology {
+        mesh {
+            void main()
+                @outputtopology(line_strip)
+                @maxvertices(3)
+                @maxprimitives(1) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputtopology.*must be"):
+        generate_code(parse_code(tokenize_code(invalid_topology)))
+
+    invalid_max_vertices = """
+    shader BadMojoMeshMaxVertices {
+        mesh {
+            void main()
+                @outputtopology(triangle)
+                @maxvertices(0)
+                @maxprimitives(1) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="maxvertices.*positive"):
+        generate_code(parse_code(tokenize_code(invalid_max_vertices)))
+
+    set_counts_wrong_stage = """
+    shader BadMojoMeshSetCountsStage {
+        task {
+            void main() @numthreads(1, 1, 1) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="task stage cannot call SetMeshOutputCounts"):
+        generate_code(parse_code(tokenize_code(set_counts_wrong_stage)))
+
+    dispatch_wrong_stage = """
+    shader BadMojoMeshDispatchStage {
+        mesh {
+            void main() @outputtopology(point) @maxvertices(1) @maxprimitives(1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="mesh stage cannot call DispatchMesh"):
+        generate_code(parse_code(tokenize_code(dispatch_wrong_stage)))
+
+    invalid_arity = """
+    shader BadMojoMeshArity {
+        mesh {
+            void main() @outputtopology(point) @maxvertices(1) @maxprimitives(1) {
+                SetMeshOutputCounts(1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires exactly two arguments"):
+        generate_code(parse_code(tokenize_code(invalid_arity)))
+
+    invalid_output_bounds = """
+    shader BadMojoMeshOutputBounds {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        mesh {
+            void main(@vertices out MeshVertex verts[4])
+                @outputtopology(point)
+                @maxvertices(3)
+                @maxprimitives(1) {
+                SetMeshOutputCounts(1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="vertices parameter.*exceeds maxvertices"):
+        generate_code(parse_code(tokenize_code(invalid_output_bounds)))
+
+
+def test_geometry_stage_lowers_to_mojo_metadata_and_stream_placeholders():
+    code = """
+    shader MojoGeometryExpansion {
+        struct GSInput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+        };
+
+        struct GSOutput {
+            vec4 position @ gl_Position;
+            vec3 color @ COLOR;
+        };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) {
+                GSOutput output;
+                output.position = input[0].position;
+                output.color = input[0].normal;
+                stream.Append(output);
+                stream.RestartStrip();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct CrossGLMojoTriangleStream[T: AnyType]:" in generated_code
+    assert "# CrossGL shader stage: geometry" in generated_code
+    assert "# CrossGL geometry stage: maxvertexcount=3" in generated_code
+    assert "# CrossGL geometry input primitive: triangle:input" in generated_code
+    assert (
+        "# CrossGL geometry output stream: TriangleStream:stream->GSOutput"
+        in generated_code
+    )
+    assert (
+        "fn geometry_main(input: InlineArray[GSInput, 3], "
+        "stream: CrossGLMojoTriangleStream[GSOutput]) -> None:" in generated_code
+    )
+    assert "stream.Append(output)" in generated_code
+    assert "stream.RestartStrip()" in generated_code
+
+
+def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_mojo():
+    missing_attribute = """
+    shader MissingMojoGeometryMax {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                inout TriangleStream<GSOutput> stream
+            ) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires maxvertexcount"):
+        generate_code(parse_code(tokenize_code(missing_attribute)))
+
+    invalid_max = """
+    shader BadMojoGeometryMax {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(
+                triangle GSInput input[3],
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(0) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="maxvertexcount.*positive"):
+        generate_code(parse_code(tokenize_code(invalid_max)))
+
+    wrong_arity = """
+    shader BadMojoGeometryInputArity {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(
+                triangle GSInput input[2],
+                inout TriangleStream<GSOutput> stream
+            ) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
+        generate_code(parse_code(tokenize_code(wrong_arity)))
+
+    missing_stream = """
+    shader BadMojoGeometryStream {
+        struct GSInput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(triangle GSInput input[3]) @maxvertexcount(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="must include a PointStream"):
+        generate_code(parse_code(tokenize_code(missing_stream)))
+
+
+def test_tessellation_stages_lower_to_mojo_metadata_and_patch_placeholders(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoTessellationPipeline {
+        struct HSInput {
+            vec3 position;
+        };
+
+        struct HSOutput {
+            vec3 position;
+        };
+
+        struct PatchConstants {
+            float edge;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<HSInput, 3> patch) {
+                PatchConstants constants;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                output.position = patch[0].position;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            void main(OutputPatch<HSOutput, 3> patch) @domain(tri) {
+                vec3 position = patch[0].position;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "struct CrossGLMojoInputPatch[T: CollectionElement, N: Int]:" in generated_code
+    )
+    assert (
+        "struct CrossGLMojoOutputPatch[T: CollectionElement, N: Int]:" in generated_code
+    )
+    assert "# CrossGL shader stage: tessellation_control" in generated_code
+    assert (
+        "# CrossGL tessellation control stage: outputcontrolpoints=3" in generated_code
+    )
+    assert "# CrossGL tessellation domain: tri" in generated_code
+    assert "# CrossGL tessellation partitioning: fractional_odd" in generated_code
+    assert "# CrossGL tessellation output topology: triangle_cw" in generated_code
+    assert "# CrossGL tessellation patch constant function: HSConst" in generated_code
+    assert "# CrossGL shader stage: tessellation_evaluation" in generated_code
+    assert "# CrossGL tessellation evaluation stage: domain=tri" in generated_code
+    assert (
+        "# CrossGL tessellation patch parameter: InputPatch:patch->HSInput[3]"
+        in generated_code
+    )
+    assert (
+        "# CrossGL tessellation patch parameter: OutputPatch:patch->HSOutput[3]"
+        in generated_code
+    )
+    assert (
+        "fn HSConst(patch: CrossGLMojoInputPatch[HSInput, 3]) -> PatchConstants:"
+        in generated_code
+    )
+    assert (
+        "fn tessellation_control_main("
+        "patch: CrossGLMojoInputPatch[HSInput, 3]) -> HSOutput:" in generated_code
+    )
+    assert (
+        "fn tessellation_evaluation_main("
+        "patch: CrossGLMojoOutputPatch[HSOutput, 3]) -> None:" in generated_code
+    )
+    assert "output.position = patch[0].position" in generated_code
+    assert "var position: SIMD[DType.float32, 4] = patch[0].position" in generated_code
+
+    package_dir = tmp_path / "mojo_tessellation_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_tessellation_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+    assert output_path.exists()
+
+
+def test_tessellation_stages_validate_mojo_metadata():
+    missing_control_points = """
+    shader MissingMojoTessControlPoints {
+        tessellation_control {
+            void main() @domain(tri) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires outputcontrolpoints"):
+        generate_code(parse_code(tokenize_code(missing_control_points)))
+
+    invalid_control_points = """
+    shader BadMojoTessControlPoints {
+        tessellation_control {
+            void main() @outputcontrolpoints(0) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+        generate_code(parse_code(tokenize_code(invalid_control_points)))
+
+    missing_domain = """
+    shader MissingMojoTessDomain {
+        tessellation_evaluation {
+            void main() { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires domain"):
+        generate_code(parse_code(tokenize_code(missing_domain)))
+
+    invalid_domain = """
+    shader BadMojoTessDomain {
+        tessellation_evaluation {
+            void main() @domain(hex) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*must be tri"):
+        generate_code(parse_code(tokenize_code(invalid_domain)))
+
+    invalid_partitioning = """
+    shader BadMojoTessPartitioning {
+        tessellation_control {
+            void main() @outputcontrolpoints(3) @partitioning(uneven) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="partitioning.*must be one of"):
+        generate_code(parse_code(tokenize_code(invalid_partitioning)))
+
+    mismatched_output_patch = """
+    shader BadMojoTessOutputPatch {
+        struct HSOutput { vec3 position; };
+
+        tessellation_control {
+            void main(OutputPatch<HSOutput, 4> patch) @outputcontrolpoints(3) { }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="OutputPatch.*must match"):
+        generate_code(parse_code(tokenize_code(mismatched_output_patch)))
 
 
 def test_ray_tracing_stages_emit_mojo_metadata_and_hooks(tmp_path):
@@ -3520,37 +4007,70 @@ def test_image_atomic_explicit_scalar_cast_remains_allowed_for_mojo_codegen():
 
 
 @pytest.mark.parametrize(
-    ("resource_type", "value_type"),
+    ("resource_type", "value_type", "coord_type", "image_type", "coord_mojo_type"),
     [
-        ("RWTexture2DMS<float4>", "float4"),
-        ("RWTexture2DMSArray<uint>", "uint"),
-        ("RasterizerOrderedTexture2DMS<float4>", "float4"),
-        ("RasterizerOrderedTexture2DMSArray<int>", "int"),
+        (
+            "RWTexture2DMS<float4>",
+            "float4",
+            "int2",
+            "Image2DMSFloat4",
+            "SIMD[DType.int32, 2]",
+        ),
+        (
+            "RWTexture2DMSArray<uint>",
+            "uint",
+            "int3",
+            "UImage2DMSArray",
+            "SIMD[DType.int32, 4]",
+        ),
+        (
+            "RasterizerOrderedTexture2DMS<float4>",
+            "float4",
+            "int2",
+            "Image2DMSFloat4",
+            "SIMD[DType.int32, 2]",
+        ),
+        (
+            "RasterizerOrderedTexture2DMSArray<int>",
+            "int",
+            "int3",
+            "IImage2DMSArray",
+            "SIMD[DType.int32, 4]",
+        ),
     ],
 )
-def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
-    resource_type, value_type
+def test_hlsl_multisample_writable_texture_aliases_emit_mojo_image_helpers(
+    resource_type, value_type, coord_type, image_type, coord_mojo_type
 ):
     code = f"""
     {resource_type} msImage;
 
-    {value_type} invalidRead(int2 pixel, int sampleIndex) {{
+    {value_type} readMS({coord_type} pixel, int sampleIndex) {{
         return msImage.Load(pixel, sampleIndex);
     }}
+    void writeMS({coord_type} pixel, int sampleIndex, {value_type} value) {{
+        msImage.Store(pixel, sampleIndex, value);
+    }}
     """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Unsupported writable texture resource for Mojo codegen; "
-            "multisample writable texture alias is not supported"
-        ),
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    assert f"struct {image_type}:" in generated_code
+    assert f"var msImage: {image_type} = {image_type}()" in generated_code
+    assert "return image_load(msImage, pixel, sampleIndex)" in generated_code
+    assert "image_store(msImage, pixel, sampleIndex, value)" in generated_code
+    assert f"fn image_load(image: {image_type}, coord: {coord_mojo_type}" in (
+        generated_code
+    )
+    assert f"fn image_store(image: {image_type}, coord: {coord_mojo_type}" in (
+        generated_code
+    )
+    assert resource_type not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
 
 
 @pytest.mark.parametrize(
-    ("source", "alias_name"),
+    ("source", "expected_snippet", "unexpected_alias"),
     [
         (
             """
@@ -3563,6 +4083,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(msImage);
             }
             """,
+            "var Ok_0: Image2DMSFloat4",
             "RWTexture2DMS",
         ),
         (
@@ -3577,6 +4098,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(image);
             }
             """,
+            "var Ok_0: Image2DMSFloat4",
             "RasterizerOrderedTexture2DMS",
         ),
         (
@@ -3590,6 +4112,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(msImages);
             }
             """,
+            "var Ok_0: InlineArray[UImage2DMSArray, 2]",
             "RWTexture2DMSArray",
         ),
         (
@@ -3606,21 +4129,61 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(payload);
             }
             """,
+            "var image: Image2DMSFloat4",
             "RWTexture2DMS",
         ),
     ],
 )
-def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_diagnostic(
-    source, alias_name
+def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_map_to_images(
+    source, expected_snippet, unexpected_alias
 ):
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Unsupported writable texture resource for Mojo codegen; "
-            rf"multisample writable texture alias is not supported: {alias_name}"
-        ),
-    ):
-        generate_code(parse_code(tokenize_code(source)))
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert expected_snippet in generated_code
+    assert f"{unexpected_alias}<" not in generated_code
+
+
+def test_hlsl_multisample_writable_texture_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RWTexture2DMS<float4> colorSamples;
+    RWTexture2DMSArray<uint> counterLayers;
+    RasterizerOrderedTexture2DMS<float4> orderedSamples;
+    RasterizerOrderedTexture2DMSArray<int> signedLayers;
+
+    float4 readColor(int2 pixel, int sampleIndex) {
+        return colorSamples.Load(pixel, sampleIndex);
+    }
+    void writeColor(int2 pixel, int sampleIndex, float4 value) {
+        colorSamples.Store(pixel, sampleIndex, value);
+    }
+    uint readCounter(int3 pixelLayer, int sampleIndex) {
+        return counterLayers.Load(pixelLayer, sampleIndex);
+    }
+    void writeCounter(int3 pixelLayer, int sampleIndex, uint value) {
+        counterLayers.Store(pixelLayer, sampleIndex, value);
+    }
+    float4 readOrdered(int2 pixel, int sampleIndex) {
+        return orderedSamples.Load(pixel, sampleIndex);
+    }
+    int readSigned(int3 pixelLayer, int sampleIndex) {
+        return signedLayers.Load(pixelLayer, sampleIndex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_multisample_writable_texture_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
@@ -8701,6 +9264,51 @@ def test_resource_binding_metadata_comments_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_texture_and_sampler_binding_namespaces_are_independent_for_mojo_codegen(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    @set(4) @binding(1) sampler2D colorMap;
+    @set(4) @binding(1) sampler linearSampler;
+    @set(4) @binding(2) sampler pointSampler;
+
+    vec4 sampleColor(vec2 uv) {
+        return texture(colorMap, linearSampler, uv) +
+            texture(colorMap, pointSampler, uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMap kind=texture set=4 "
+        "binding=1 binding_source=explicit"
+    ) in generated_code
+    assert (
+        "# CrossGL resource metadata: name=linearSampler kind=sampler set=4 "
+        "binding=1 binding_source=explicit"
+    ) in generated_code
+    assert (
+        "# CrossGL resource metadata: name=pointSampler kind=sampler set=4 "
+        "binding=2 binding_source=explicit"
+    ) in generated_code
+    assert "sample_sampler(colorMap, linearSampler, uv)" in generated_code
+    assert "sample_sampler(colorMap, pointSampler, uv)" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "texture_sampler_binding_namespaces.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
     duplicate_texture_binding = """
     @binding(2) sampler2D firstTexture;
@@ -8709,6 +9317,14 @@ def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
 
     with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
         generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    duplicate_sampler_binding = """
+    @binding(2) sampler firstSampler;
+    @binding(2) sampler secondSampler;
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_sampler_binding)))
 
     overlapping_buffer_range = """
     @binding(3) RWStructuredBuffer<int> counters[2];
@@ -8747,6 +9363,21 @@ def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codeg
     )
     assert "return image_load(counters, pixel)" in generated_code
     assert "image_store(outImage, pixel, value)" in generated_code
+
+    metadata_only_source = """
+    RWStructuredBuffer<int> values @globallycoherent @restrict;
+
+    int readValue(uint index) {
+        return values.Load(index);
+    }
+    """
+    metadata_only_code = generate_code(parse_code(tokenize_code(metadata_only_source)))
+    assert (
+        "# CrossGL resource metadata: name=values kind=buffer set=0 binding=0 "
+        "binding_source=automatic memory=globallycoherent,restrict"
+        in metadata_only_code
+    )
+    assert "return buffer_load(values, index)" in metadata_only_code
 
     invalid_read = """
     writeonly uniform image2D outImage;
@@ -14102,6 +14733,57 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(overlapping_binding)))
 
 
+def test_explicit_glsl_buffer_block_and_direct_arrays_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ExplicitBlock {
+        vec4 positions[2];
+        uint counters[];
+    };
+
+    readonly ExplicitBlock explicitBlock
+        @glsl_buffer_block(std430) @set(3) @binding(6);
+    layout(std430, binding = 9) readonly buffer float values[];
+
+    vec4 readExplicit(uint index) {
+        return explicitBlock.positions[index];
+    }
+
+    float readDirect(uint index) {
+        return values[index];
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=explicitBlock kind=glsl_buffer_block "
+        "set=3 binding=6 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=values kind=glsl_buffer_block "
+        "set=0 binding=9 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert "var counters: List[UInt32]" in generated_code
+    assert "var values = List[Float32]()" in generated_code
+    assert "return explicitBlock.positions[int(index)]" in generated_code
+    assert "return values[int(index)]" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "explicit_glsl_buffer_block_and_direct_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_glsl_buffer_block_runtime_arrays_and_atomics_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -14675,11 +15357,11 @@ def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
-        ("SetMeshOutputCounts(1, 1);", "mesh intrinsic SetMeshOutputCounts"),
-        ("DispatchMesh(1, 1, 1);", "mesh intrinsic DispatchMesh"),
+        ("SetMeshOutputCounts(1, 1);", "compute stage cannot call SetMeshOutputCounts"),
+        ("DispatchMesh(1, 1, 1);", "compute stage cannot call DispatchMesh"),
     ],
 )
-def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen(statement, message):
+def test_mesh_intrinsics_reject_invalid_mojo_stage_contexts(statement, message):
     code = f"""
     shader UnsupportedPipelineIntrinsic {{
         compute {{
@@ -14690,7 +15372,7 @@ def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen(statement, messag
     }}
     """
 
-    with pytest.raises(ValueError, match=f"Unsupported Mojo {message}"):
+    with pytest.raises(ValueError, match=message):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -14708,7 +15390,7 @@ def test_ray_query_methods_lower_to_mojo_hooks():
     assert "var active: Bool = ray_query_proceed(query)" in generated_code
 
 
-def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr():
+def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     codegen = MojoCodeGen()
     query = VariableNode("query", PrimitiveType("RayQuery"))
     scene = VariableNode("scene", PrimitiveType("RaytracingAccelerationStructure"))
@@ -14744,23 +15426,17 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr():
     assert candidate_expr == "ray_query_candidate_ray_t(query)"
     assert "ray_query_candidate_ray_t" in codegen.required_ray_helpers
 
-    cases = [
-        (
-            MeshOpNode("SetMeshOutputCounts", [1, 1]),
-            "Unsupported Mojo mesh intrinsic SetMeshOutputCounts",
-            "MeshOpNode(",
-        ),
-        (
-            MeshOpNode("DispatchMesh", [1, 1, 1]),
-            "Unsupported Mojo mesh intrinsic DispatchMesh",
-            "MeshOpNode(",
-        ),
-    ]
+    codegen.current_shader_type = "mesh"
+    mesh_counts_expr = codegen.generate_expression(
+        MeshOpNode("SetMeshOutputCounts", [1, 1])
+    )
+    assert mesh_counts_expr == "_crossgl_set_mesh_output_counts(1, 1)"
+    assert "set_mesh_output_counts" in codegen.required_mesh_helpers
 
-    for expr, message, repr_marker in cases:
-        with pytest.raises(ValueError, match=message) as excinfo:
-            codegen.generate_expression(expr)
-        assert repr_marker not in str(excinfo.value)
+    codegen.current_shader_type = "task"
+    dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
+    assert dispatch_expr == "_crossgl_dispatch_mesh(1, 1, 1)"
+    assert "dispatch_mesh" in codegen.required_mesh_helpers
 
 
 def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():

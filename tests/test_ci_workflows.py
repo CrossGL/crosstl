@@ -1711,12 +1711,12 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "--planned-action-budget-mode fail" in issue_sync
     assert "--max-planned-created 300" in issue_sync
     assert "--max-planned-updated 300" in issue_sync
-    assert "--max-planned-closed 50" in issue_sync
+    assert "--max-planned-closed 500" in issue_sync
     assert "--max-planned-attached 300" in issue_sync
     assert "--max-planned-total 600" in issue_sync
     assert "--max-planned-stale-parent-closures 0" in issue_sync
-    assert "--max-planned-stale-backlog-closures 100" in issue_sync
-    assert "--max-planned-stale-extracted-closures 100" in issue_sync
+    assert "--max-planned-stale-backlog-closures 250" in issue_sync
+    assert "--max-planned-stale-extracted-closures 250" in issue_sync
     assert "--max-planned-duplicate-marker-closures 25" in issue_sync
     assert (
         "--sync-summary-output support/generated/support-issue-sync-summary.json"

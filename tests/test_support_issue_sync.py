@@ -1356,7 +1356,123 @@ def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys):
     assert report["planned_actions"] is None
     assert report["support_matrix_check"]["provided"] is True
     assert report["support_matrix_check"]["ok"] is True
-    assert "Dry run: would manage 3 desired issues" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "Stale extracted support issue closure is disabled" in captured.out
+    assert "Stale pytest-failure support issue closure is disabled" in captured.out
+    assert "Preserving existing" not in captured.out
+
+
+def test_main_dry_run_with_inspection_prints_planned_summary(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(sample_signals()), encoding="utf-8")
+    existing = [
+        issue(1, "parent:directx"),
+        issue(2, "backlog:directx:old.feature"),
+        issue(
+            3,
+            "extracted:directx:docs.old-candidate:" "documented_candidate_not_detected",
+        ),
+    ]
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        instance = None
+
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=existing)
+            InspectClient.instance = self
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["existing"]["inspected"] is True
+    assert report["planned_actions"]["closed"] == 2
+    assert report["planned_closures"]["stale_backlog"] == 1
+    assert report["planned_closures"]["stale_extracted"] == 1
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 5 desired issues" in captured.out
+    assert (
+        "Support issue sync: created=4, updated=1, closed=2, " "attached=3, unchanged=0"
+    ) in captured.out
+    assert "Preserving existing pytest-failure support issues" not in captured.out
+    assert InspectClient.instance is not None
+    assert InspectClient.instance.created == []
+    assert InspectClient.instance.updated == []
+    assert InspectClient.instance.closed == []
+    assert InspectClient.instance.attached == []
+    assert InspectClient.instance.labels == []
+
+
+def test_main_dry_run_with_inspection_warns_for_existing_pytest_failures(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(sample_signals()), encoding="utf-8")
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[stale_pytest])
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["planned_actions"]["closed"] == 0
+    assert report["planned_actions"]["unchanged"] == 1
+    assert report["planned_action_samples"]["preserved"][0]["reason"] == (
+        "stale_pytest_failure_preserved"
+    )
+    assert (
+        "Preserving existing pytest-failure support issues" in capsys.readouterr().out
+    )
 
 
 def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, capsys):
@@ -2081,7 +2197,7 @@ def test_parse_args_exposes_rate_limit_controls():
             "--max-planned-updated",
             "300",
             "--max-planned-closed",
-            "50",
+            "500",
             "--max-planned-attached",
             "300",
             "--max-planned-total",
@@ -2089,9 +2205,9 @@ def test_parse_args_exposes_rate_limit_controls():
             "--max-planned-stale-parent-closures",
             "0",
             "--max-planned-stale-backlog-closures",
-            "100",
+            "250",
             "--max-planned-stale-extracted-closures",
-            "100",
+            "250",
             "--max-planned-duplicate-marker-closures",
             "25",
             "--plan-output",
@@ -2113,12 +2229,12 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.planned_action_budget_mode == "warn"
     assert args.max_planned_created == 300
     assert args.max_planned_updated == 300
-    assert args.max_planned_closed == 50
+    assert args.max_planned_closed == 500
     assert args.max_planned_attached == 300
     assert args.max_planned_total == 600
     assert args.max_planned_stale_parent_closures == 0
-    assert args.max_planned_stale_backlog_closures == 100
-    assert args.max_planned_stale_extracted_closures == 100
+    assert args.max_planned_stale_backlog_closures == 250
+    assert args.max_planned_stale_extracted_closures == 250
     assert args.max_planned_duplicate_marker_closures == 25
     assert args.plan_output == Path("support/generated/support-issue-plan.json")
     assert args.sync_summary_output == Path(

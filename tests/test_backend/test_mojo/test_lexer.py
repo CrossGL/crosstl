@@ -337,6 +337,26 @@ def test_comments_tokenization():
         pytest.fail("Comments tokenization not implemented.")
 
 
+def test_hash_prefixed_lines_are_comments_not_preprocessor_tokens():
+    code = """
+    #define ENABLED 1
+    #if ENABLED
+    import math
+    #endif
+
+    fn main():
+        let value: Int = 1
+    """
+    tokens = tokenize_code(code)
+    token_values = [value for _, value in tokens]
+
+    assert "define" not in token_values
+    assert "ENABLED" not in token_values
+    assert "if" not in token_values
+    assert ("IMPORT", "import") in tokens
+    assert ("IDENTIFIER", "math") in tokens
+
+
 def test_mod_tokenization():
     code = """
         let a: Int = 10 % 3  # Basic modulus

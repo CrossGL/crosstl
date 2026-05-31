@@ -565,18 +565,20 @@ class MatchStructPatternNode(ASTNode):
 
 
 class UseNode(ASTNode):
-    """Node representing a use statement"""
+    """Node representing a use statement."""
 
-    def __init__(self, path, alias=None, items=None, visibility=None):
+    def __init__(self, path, alias=None, items=None, visibility=None, attributes=None):
         self.path = path
         self.alias = alias
         self.items = items  # For use path::{item1, item2}
         self.visibility = visibility
+        self.attributes = attributes or []
 
     def __repr__(self):
         return (
             f"UseNode(path={self.path}, alias={self.alias}, "
-            f"items={self.items}, visibility={self.visibility})"
+            f"items={self.items}, visibility={self.visibility}, "
+            f"attributes={self.attributes})"
         )
 
 

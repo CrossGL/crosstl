@@ -1381,6 +1381,48 @@ def test_hlsl_glsl_buffer_block_fixed_width_aliases_lower_to_byteaddressbuffer()
     assert "size_t" not in generated_code
 
 
+def test_directx_glsl_buffer_block_scalar_layout_remains_diagnostic():
+    shader = """
+    shader ScalarLayoutGlslBufferBlockHLSL {
+        struct ScalarLayoutBlock {
+            float scale;
+            vec3 normal;
+            float values[];
+        };
+
+        ScalarLayoutBlock block @glsl_buffer_block(scalar) @binding(12);
+
+        float readScalar(uint index) {
+            return block.scale + block.normal.x + block.values[index];
+        }
+
+        float readParam(
+            ScalarLayoutBlock localBlock @glsl_buffer_block(scalar),
+            uint index
+        ) {
+            return localBlock.values[index];
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(shader)))
+
+    assert "unsupported layout scalar" in generated_code
+    assert "currently supports std140 and std430 only" in generated_code
+    assert (
+        "unsupported HLSL GLSL buffer block parameter "
+        "ScalarLayoutBlock localBlock (scalar)" in generated_code
+    )
+    assert "unsupported HLSL GLSL buffer block function readParam omitted" in (
+        generated_code
+    )
+    assert "RWByteAddressBuffer block" not in generated_code
+    assert "ByteAddressBuffer block :" not in generated_code
+    assert "struct ScalarLayoutBlock {" not in generated_code
+    assert "block.Load" not in generated_code
+    assert "localBlock.Load" not in generated_code
+
+
 def test_directx_byte_address_vector_buffer_helpers_lower_to_load_store_methods():
     shader = """
     shader ByteAddressVectorHelpersHLSL {

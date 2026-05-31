@@ -200,6 +200,9 @@ class RustParser:
                         attributes=attrs,
                     )
                     functions.append(f)
+                elif self.current_token[0] == "USE":
+                    u = self.parse_use_statement(attributes=attrs)
+                    use_statements.append(u)
                 elif self.current_token[0] == "EXTERN":
                     self.skip_extern_block()
                 elif (
@@ -228,6 +231,12 @@ class RustParser:
                             visibility=visibility,
                         )
                         functions.append(f)
+                    elif self.current_token[0] == "USE":
+                        u = self.parse_use_statement(
+                            visibility=visibility,
+                            attributes=attrs,
+                        )
+                        use_statements.append(u)
                     elif self.current_token[0] == "EXTERN":
                         self.skip_extern_block()
                     elif (
@@ -457,7 +466,7 @@ class RustParser:
 
         return self.parse_loop(label)
 
-    def parse_use_statement(self, visibility=None):
+    def parse_use_statement(self, visibility=None, attributes=None):
         self.eat("USE")
         path = []
         items = None
@@ -487,7 +496,7 @@ class RustParser:
             self.eat("IDENTIFIER")
 
         self.eat("SEMICOLON")
-        return UseNode("::".join(path), alias, items, visibility)
+        return UseNode("::".join(path), alias, items, visibility, attributes)
 
     def parse_use_group_items(self, prefix=None):
         items = []
