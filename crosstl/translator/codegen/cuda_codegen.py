@@ -15,6 +15,8 @@ from ..ast import (
     MemberAccessNode,
     PointerAccessNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -298,7 +300,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def generic_visit(self, node):
         """Fallback visitor for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
-            return node
+            ray_builtin = self.cuda_ray_builtin_expression(node)
+            if ray_builtin is not None and node not in self.variable_types:
+                return ray_builtin
+            return self.builtin_map.get(node, node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -1019,7 +1024,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "compute",
             "fragment",
             "vertex",
-        } | self.cuda_ray_stage_names()
+        }
         for qualifier in qualifiers:
             qualifier_name = str(qualifier).lower()
             if qualifier_name in supported_stage_names:
@@ -1273,7 +1278,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
+        ray_builtin = self.cuda_ray_builtin_expression(name)
+        if ray_builtin is not None and name not in self.variable_types:
+            return ray_builtin
         return self.builtin_map.get(name, name)
+
+    def cuda_ray_builtin_expression(self, name):
+        helper_name = {
+            "gl_LaunchIDEXT": "cgl_ray_launch_id",
+            "gl_LaunchSizeEXT": "cgl_ray_launch_size",
+            "gl_HitTEXT": "cgl_ray_hit_t",
+            "gl_HitKindEXT": "cgl_ray_hit_kind",
+            "gl_WorldRayOriginEXT": "cgl_ray_world_origin",
+            "gl_WorldRayDirectionEXT": "cgl_ray_world_direction",
+            "gl_ObjectRayOriginEXT": "cgl_ray_object_origin",
+            "gl_ObjectRayDirectionEXT": "cgl_ray_object_direction",
+            "gl_RayTminEXT": "cgl_ray_t_min",
+            "gl_IncomingRayFlagsEXT": "cgl_ray_incoming_flags",
+            "gl_InstanceCustomIndexEXT": "cgl_ray_instance_custom_index",
+            "gl_GeometryIndexEXT": "cgl_ray_geometry_index",
+        }.get(str(name))
+        if helper_name is None:
+            return None
+        self.require_cuda_ray_runtime_helpers()
+        return f"{helper_name}()"
 
     def format_literal(self, value, literal_type=None):
         if isinstance(value, bool):
@@ -1461,6 +1489,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         is_user_function = self.is_user_defined_function(func_name)
         if not is_user_function:
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name, raw_args
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
+        if not is_user_function:
             buffer_call = self.generate_buffer_call(
                 function_expr, func_name, raw_args, args
             )
@@ -1571,6 +1605,51 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def visit_RayTracingOpNode(self, node):
+        operation = getattr(node, "operation", "")
+        if operation in self.function_return_types:
+            args = ", ".join(
+                self.visit(arg) for arg in getattr(node, "arguments", []) or []
+            )
+            return f"{operation}({args})"
+        return self.generate_ray_tracing_call_expression(
+            operation,
+            getattr(node, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, arguments):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        self.require_cuda_ray_runtime_helpers()
+        generated_args = [self.visit(arg) for arg in arguments or []]
+        if operation == "TraceRay" and len(generated_args) == 11:
+            ray_desc = (
+                "CglRayDesc("
+                f"{generated_args[6]}, {generated_args[7]}, "
+                f"{generated_args[8]}, {generated_args[9]}"
+                ")"
+            )
+            generated_args = generated_args[:6] + [ray_desc, generated_args[10]]
+        elif operation == "ReportHit" and len(generated_args) == 2:
+            generated_args.append("CglBuiltInTriangleIntersectionAttributes{}")
+
+        helper_name = self.convert_builtin_function(operation)
+        return f"{helper_name}({', '.join(generated_args)})"
+
+    def visit_RayQueryOpNode(self, node):
+        operation = getattr(node, "operation", "")
+        helper_name = self.require_cuda_ray_query_helper(operation)
+        args = [self.visit(getattr(node, "query_expr", None))]
+        args.extend(self.visit(arg) for arg in getattr(node, "arguments", []) or [])
+        return f"{helper_name}({', '.join(args)})"
 
     def visit_WaveOpNode(self, node):
         raw_args = list(getattr(node, "arguments", []) or [])
@@ -3428,6 +3507,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "uimage2DMS": "cudaSurfaceObject_t",
             "uimage2DMSArray": "cudaSurfaceObject_t",
             "buffer": "CUdeviceptr",
+            "accelerationStructureEXT": "CglRayTracingAccelerationStructure",
+            "AccelerationStructure": "CglRayTracingAccelerationStructure",
+            "acceleration_structure": "CglRayTracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayTracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
         }
 
         sampled_resource_type = self.canonical_sampled_resource_type(crossgl_type)
@@ -3437,6 +3526,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         storage_resource_type = self.canonical_storage_resource_type(crossgl_type)
         if storage_resource_type:
             return type_mapping.get(storage_resource_type, storage_resource_type)
+
+        ray_resource_type = self.canonical_ray_resource_type(crossgl_type)
+        if ray_resource_type:
+            return self.cuda_mapped_type_result(type_mapping[ray_resource_type])
 
         # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
@@ -3458,7 +3551,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
-        return type_mapping.get(crossgl_type, crossgl_type)
+        return self.cuda_mapped_type_result(
+            type_mapping.get(crossgl_type, crossgl_type)
+        )
+
+    def cuda_mapped_type_result(self, mapped_type):
+        base_type = str(mapped_type).split("[", 1)[0].strip()
+        if base_type in {
+            "CglRayTracingAccelerationStructure",
+            "CglRayDesc",
+            "CglRayQuery",
+            "CglBuiltInTriangleIntersectionAttributes",
+        }:
+            self.require_cuda_ray_runtime_helpers()
+        return mapped_type
 
     def type_name_string(self, type_name):
         """Return a stable string spelling for TypeNode or legacy type values."""
@@ -3974,6 +4080,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.wave_result_type(
                 getattr(node, "operation", ""), getattr(node, "arguments", []) or []
             )
+        if isinstance(node, RayTracingOpNode):
+            if getattr(node, "operation", "") == "ReportHit":
+                return "bool"
+            return None
+        if isinstance(node, RayQueryOpNode):
+            operation = getattr(node, "operation", "")
+            if operation == "Proceed":
+                return "bool"
+            if operation in {"CandidateRayT", "CommittedRayT"}:
+                return "float"
+            return "uint"
         if isinstance(node, MemberAccessNode):
             member_type = self.member_access_member_type(node)
             if member_type is not None:
@@ -3990,6 +4107,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     func_name,
                     getattr(node, "arguments", getattr(node, "args", [])) or [],
                 )
+            if func_name == "ReportHit":
+                return "bool"
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -4188,6 +4307,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"u{image_type}"
         return image_type
 
+    def canonical_ray_resource_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        if base_type in {
+            "accelerationStructureEXT",
+            "AccelerationStructure",
+            "acceleration_structure",
+            "RaytracingAccelerationStructure",
+            "RayTracingAccelerationStructure",
+        }:
+            return "RayTracingAccelerationStructure"
+        return None
+
     def resource_base_type(self, type_name):
         """Normalize resource aliases before resource dispatch decisions."""
         type_name = self.strip_cuda_indirect_type_qualifiers(type_name)
@@ -4195,6 +4328,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return (
             self.canonical_sampled_resource_type(base_type)
             or self.canonical_storage_resource_type(base_type)
+            or self.canonical_ray_resource_type(base_type)
             or base_type
         )
 
@@ -6368,6 +6502,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "memoryBarrierBuffer": "__threadfence",
             "memoryBarrierImage": "__threadfence",
             "workgroupBarrier": "__syncthreads",
+            # Ray tracing placeholders
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
+            "TraceRay": "cgl_trace_ray",
+            "CallShader": "cgl_call_shader",
+            "ReportHit": "cgl_report_hit",
+            "IgnoreHit": "cgl_ignore_hit",
+            "AcceptHitAndEndSearch": "cgl_accept_hit_and_end_search",
             # Texture functions
             "texture": "tex2D",
             "textureLod": "tex2DLod",
@@ -6505,6 +6650,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         canonical = self.resource_base_type(base_name) or base_name
         canonical = canonical.rsplit("::", 1)[-1]
+        mapped_type = self.convert_crossgl_type_to_cuda(canonical)
+        mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
+        if mapped_base == "CglRayTracingAccelerationStructure":
+            return "acceleration_structure"
         if canonical in {"sampler", "SamplerState"}:
             return "sampler"
         if canonical.startswith("sampler"):
@@ -7119,6 +7268,182 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             helper_lines.append("")
 
         self.output[3:3] = helper_lines
+
+    def require_cuda_ray_runtime_helpers(self):
+        helper_name = "cgl_ray_runtime_helpers"
+        if helper_name in self.helper_functions:
+            return
+
+        self.helper_functions[helper_name] = (
+            "struct CglRayTracingAccelerationStructure\n"
+            "{\n"
+            "    unsigned long long handle;\n"
+            "};\n"
+            "\n"
+            "struct CglRayDesc\n"
+            "{\n"
+            "    float3 origin;\n"
+            "    float t_min;\n"
+            "    float3 direction;\n"
+            "    float t_max;\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc()\n"
+            "        : origin(make_float3(0.0f, 0.0f, 0.0f)),\n"
+            "          t_min(0.0f),\n"
+            "          direction(make_float3(0.0f, 0.0f, 1.0f)),\n"
+            "          t_max(0.0f)\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc(\n"
+            "        float3 origin_value,\n"
+            "        float t_min_value,\n"
+            "        float3 direction_value,\n"
+            "        float t_max_value)\n"
+            "        : origin(origin_value),\n"
+            "          t_min(t_min_value),\n"
+            "          direction(direction_value),\n"
+            "          t_max(t_max_value)\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            "struct CglRayQuery\n"
+            "{\n"
+            "    unsigned int state;\n"
+            "};\n"
+            "\n"
+            "struct CglBuiltInTriangleIntersectionAttributes\n"
+            "{\n"
+            "    float2 barycentrics;\n"
+            "};\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_id()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_size()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_hit_t()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_hit_kind()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_t_min()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_incoming_flags()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_instance_custom_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_geometry_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "template <typename AS, typename Flags, typename Mask, "
+            "typename HitGroup, typename Multiplier, typename Miss, "
+            "typename Ray, typename Payload>\n"
+            "__device__ inline void cgl_trace_ray(\n"
+            "    const AS&,\n"
+            "    const Flags&,\n"
+            "    const Mask&,\n"
+            "    const HitGroup&,\n"
+            "    const Multiplier&,\n"
+            "    const Miss&,\n"
+            "    const Ray&,\n"
+            "    const Payload&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Index, typename Data>\n"
+            "__device__ inline void cgl_call_shader(const Index&, const Data&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Distance, typename Kind, typename Attributes>\n"
+            "__device__ inline bool cgl_report_hit(\n"
+            "    const Distance&,\n"
+            "    const Kind&,\n"
+            "    const Attributes&)\n"
+            "{\n"
+            "    return false;\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_ignore_hit()\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_accept_hit_and_end_search()\n"
+            "{\n"
+            "}\n"
+        )
+
+    def require_cuda_ray_query_helper(self, operation):
+        self.require_cuda_ray_runtime_helpers()
+        helper_name = f"cgl_ray_query_{self.cuda_snake_case_name(operation)}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        return_type = "bool" if operation == "Proceed" else "unsigned int"
+        return_value = "false" if return_type == "bool" else "0u"
+        self.helper_functions[helper_name] = (
+            "template <typename Query, typename... Args>\n"
+            f"__device__ inline {return_type} {helper_name}(Query&, Args&&...)\n"
+            "{\n"
+            f"    return {return_value};\n"
+            "}"
+        )
+        return helper_name
+
+    def cuda_snake_case_name(self, name):
+        text = str(name)
+        result = []
+        for index, char in enumerate(text):
+            if char.isupper() and index > 0:
+                previous = text[index - 1]
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if previous.islower() or previous.isdigit() or next_char.islower():
+                    result.append("_")
+            result.append(char.lower())
+        return "".join(result).replace("__", "_").strip("_")
 
     def vector_component_count_for_type(self, type_name):
         if not isinstance(type_name, str):

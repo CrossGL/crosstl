@@ -107,12 +107,6 @@ class TestCudaCodeGen:
             ("task", "task"),
             ("tessellation_control", "tessellation_control"),
             ("tessellation_evaluation", "tessellation_evaluation"),
-            ("ray_any_hit", "ray_any_hit"),
-            ("ray_callable", "ray_callable"),
-            ("ray_closest_hit", "ray_closest_hit"),
-            ("ray_generation", "ray_generation"),
-            ("ray_intersection", "ray_intersection"),
-            ("ray_miss", "ray_miss"),
         ],
     )
     def test_unsupported_graphics_pipeline_stages_raise_diagnostics(
@@ -134,6 +128,172 @@ class TestCudaCodeGen:
             match=rf"CUDA output does not support stage type\(s\): {normalized_stage}",
         ):
             CudaCodeGen().generate(ast)
+
+    def test_ray_tracing_stages_emit_cuda_metadata_and_hooks(self, tmp_path):
+        source_code = """
+        shader CudaRayTracingStages {
+            struct RayPayload {
+                vec3 color;
+            };
+
+            struct HitAttributes {
+                vec2 barycentrics;
+            };
+
+            struct CallableData {
+                uint value;
+            };
+
+            accelerationStructureEXT scene @binding(3) @set(2);
+
+            ray_generation {
+                void main() {
+                    uvec3 launch = gl_LaunchIDEXT;
+                    uint launchWidth = gl_LaunchSizeEXT.x;
+                    RayDesc ray = RayDesc(
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    RayPayload payload;
+                    CallableData data;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                    CallShader(0, data);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    float hitT @ gl_HitTEXT
+                ) {
+                    payload.color = vec3(1.0, 0.0, hitT);
+                }
+            }
+
+            ray_any_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    uint hitKind @ gl_HitKindEXT
+                ) {
+                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    IgnoreHit();
+                    AcceptHitAndEndSearch();
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) {
+                    payload.color = vec3(0.0, 0.0, 0.0);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) {
+                    data.value = data.value + 1u;
+                }
+            }
+
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    bool accepted = ReportHit(1.0, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+            "set=2 binding=3 binding_source=explicit" in cuda_code
+        )
+        assert "struct CglRayTracingAccelerationStructure" in cuda_code
+        assert "struct CglRayDesc" in cuda_code
+        assert "// CrossGL ray stage: ray_generation" in cuda_code
+        assert "// CrossGL ray stage: closest_hit" in cuda_code
+        assert "// CrossGL ray stage: any_hit" in cuda_code
+        assert "// CrossGL ray stage: miss" in cuda_code
+        assert "// CrossGL ray stage: callable" in cuda_code
+        assert "// CrossGL ray stage: intersection" in cuda_code
+        assert "__device__ void ray_generation_main()" in cuda_code
+        assert "__device__ void ray_closest_hit_main(" in cuda_code
+        assert "// CrossGL parameter semantic: payload: ray_payload" in cuda_code
+        assert "// CrossGL parameter semantic: attributes: hit_attribute" in cuda_code
+        assert "// CrossGL parameter semantic: data: callable_data" in cuda_code
+        assert "uint3 launch = cgl_ray_launch_id();" in cuda_code
+        assert "uint launchWidth = cgl_ray_launch_size().x;" in cuda_code
+        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in cuda_code
+        assert "cgl_call_shader(0, data);" in cuda_code
+        assert "cgl_ignore_hit();" in cuda_code
+        assert "cgl_accept_hit_and_end_search();" in cuda_code
+        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in cuda_code
+        assert (
+            "bool acceptedWithoutAttributes = cgl_report_hit"
+            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in cuda_code
+        )
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cuda_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
+        self,
+    ):
+        invalid_type = """
+        shader InvalidCudaRayBuiltinType {
+            ray_generation {
+                void main(float launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader InvalidCudaRayBuiltinStage {
+            fragment {
+                void main(uvec3 launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        duplicate = """
+        shader DuplicateCudaRayBuiltin {
+            ray_generation {
+                void main(
+                    uvec3 launch @ gl_LaunchIDEXT,
+                    uvec3 launchAgain @ SV_DispatchRaysIndex
+                ) {
+                }
+            }
+        }
+        """
+        with pytest.raises(
+            ValueError, match="Duplicate CUDA stage parameter semantic launch_id"
+        ):
+            CudaCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+
+    def test_ray_query_methods_lower_to_cuda_hooks(self):
+        source_code = """
+        void queryRay(RayQuery query) {
+            bool active = query.Proceed();
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct CglRayQuery" in cuda_code
+        assert "__device__ void queryRay(CglRayQuery query)" in cuda_code
+        assert "__device__ inline bool cgl_ray_query_proceed" in cuda_code
+        assert "bool active = cgl_ray_query_proceed(query);" in cuda_code
 
     def test_unsupported_function_stage_qualifiers_raise_diagnostics(self):
         ast = ShaderNode(

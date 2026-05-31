@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 440
+        "test_count": 443
       },
       "translator_codegen": {
         "exists": true,
@@ -1416,15 +1416,6 @@
       "feature_id": "stage.ray_tracing",
       "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, ray state getters for RayTMin and RayFlags, world ray vector getters, candidate/committed object ray vector getters, object/world transform matrix getters, candidate AABB opacity, and intersection metadata getters for type, primitive index, instance ID, instance custom index, shader-binding-table record offset, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, and triangle vertex positions remain incomplete.",
       "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "CUDA codegen rejects ray tracing stages explicitly; no CUDA ray pipeline ABI is implemented in this repo.",
-      "status": "unsupported"
     },
     {
       "backend": "CUDA",
@@ -3324,10 +3315,12 @@
       "support": {
         "cuda": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_ray_tracing_stages_emit_cuda_metadata_and_hooks",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_cuda_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_ray_query_methods_lower_to_cuda_hooks"
           ],
-          "notes": "CUDA codegen rejects ray tracing stages explicitly; no CUDA ray pipeline ABI is implemented in this repo.",
-          "status": "unsupported"
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to CUDA device entry functions with deterministic CrossGL ray-stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or placeholder hooks, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to CUDA hook calls, and RayQuery methods lower to deterministic CUDA query hooks with optional nvcc smoke coverage.",
+          "status": "supported"
         },
         "directx": {
           "evidence": [
@@ -6130,15 +6123,15 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 170,
+    "backlog_count": 169,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
         "partial": 8,
-        "supported": 16,
+        "supported": 17,
         "unknown": 15,
-        "unsupported": 4,
+        "unsupported": 3,
         "validated_rejection": 0
       },
       "directx": {
