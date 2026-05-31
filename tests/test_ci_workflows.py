@@ -165,6 +165,7 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["permissions"]["missing_required_write_permissions"] == {}
     )
     assert report["workflows"]["actions"]["workflow_count"] == len(_workflow_texts())
+    assert report["workflows"]["actions"]["missing_node24_opt_in"] == []
     assert report["workflows"]["actions"]["mutable_refs"] == {}
     assert report["workflows"]["pull_request_target"]["workflows"] == [
         "pr-issue-links.yml"
@@ -467,6 +468,68 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["support_issue_sync"]["issue_sync_report_upload_after_sync"]
         is True
     )
+
+
+def test_workflows_opt_into_node24_action_runtime():
+    workflows = _workflow_texts()
+
+    for workflow_name, workflow in workflows.items():
+        has_action_refs = re.search(
+            r"^\s*(?:-\s*)?uses:\s+[^@\s]+@",
+            workflow,
+            re.MULTILINE,
+        )
+        if has_action_refs:
+            assert (
+                'FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in workflow
+            ), f"{workflow_name} must opt JS actions into Node 24"
+
+
+def test_ci_coverage_reports_missing_node24_action_runtime_opt_in():
+    module = _load_ci_coverage_module()
+    workflows = {
+        "enabled.yml": (
+            """
+name: Enabled
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  check:
+    steps:
+      - uses: actions/checkout@v4
+"""
+        ),
+        "missing.yml": (
+            """
+name: Missing
+
+jobs:
+  check:
+    steps:
+      - uses: actions/checkout@v4
+"""
+        ),
+        "no-actions.yml": (
+            """
+name: No Actions
+
+jobs:
+  check:
+    steps:
+      - run: python -m pytest
+"""
+        ),
+    }
+
+    report = module.workflow_actions_report(workflows)
+
+    assert report["node24_opt_in"] == {
+        "enabled.yml": True,
+        "missing.yml": False,
+    }
+    assert report["missing_node24_opt_in"] == ["missing.yml"]
 
 
 def test_ci_coverage_check_command_passes():
@@ -954,6 +1017,7 @@ def test_ci_coverage_reports_missing_workflow_runtime_permission_and_action_poli
     report["workflows"]["permissions"]["missing_required_write_permissions"] = {
         "stale-prs.yml": ["pull-requests"]
     }
+    report["workflows"]["actions"]["missing_node24_opt_in"] = ["docs.yml"]
     report["workflows"]["actions"]["mutable_refs"] = {
         "issue_assign.yml": ["bdougie/take-action@main"]
     }
@@ -965,6 +1029,10 @@ def test_ci_coverage_reports_missing_workflow_runtime_permission_and_action_poli
     assert "docs.yml missing explicit permissions" in errors
     assert "backend-tests.yml has unexpected write permissions: issues" in errors
     assert "stale-prs.yml missing required write permissions: pull-requests" in errors
+    assert (
+        "docs.yml must set FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 for JavaScript actions"
+        in errors
+    )
     assert (
         "issue_assign.yml has mutable action refs: bdougie/take-action@main" in errors
     )
