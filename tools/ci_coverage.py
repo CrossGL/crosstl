@@ -973,6 +973,10 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
     dry_run_step = workflow_step_section(workflow, "Dry-run issue sync")
     plan_step = workflow_step_section(workflow, "Plan GitHub issue sync")
     sync_step = workflow_step_section(workflow, "Sync GitHub issues")
+    metrics_baseline_step = workflow_step_section(
+        workflow,
+        "Download previous support issue sync metrics",
+    )
     summary_step = workflow_step_section(workflow, "Write support automation summary")
     issue_report_upload_step = workflow_step_section(
         workflow, "Upload support issue sync reports"
@@ -1073,6 +1077,37 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             and "--output support/generated/support-issue-ci-summary.md" in summary_step
             and "--metrics-output support/generated/support-issue-sync-metrics.json"
             in summary_step
+            and "--metrics-baseline support/generated/support-issue-baseline"
+            in summary_step
+            and "--metrics-comparison-output support/generated/support-issue-sync-metrics-comparison.json"
+            in summary_step
+        ),
+        "downloads_issue_sync_metrics_baseline": (
+            "if: github.event_name != 'pull_request'" in metrics_baseline_step
+            and "continue-on-error: true" in metrics_baseline_step
+            and "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in metrics_baseline_step
+            and "gh run list" in metrics_baseline_step
+            and '--workflow "Support Issue Sync"' in metrics_baseline_step
+            and "--status success" in metrics_baseline_step
+            and "gh run download" in metrics_baseline_step
+            and "support/generated/support-issue-baseline" in metrics_baseline_step
+        ),
+        "issue_sync_metrics_baseline_after_sync": (
+            workflow_step_after(
+                workflow,
+                "Download previous support issue sync metrics",
+                "Dry-run issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Download previous support issue sync metrics",
+                "Plan GitHub issue sync",
+            )
+            and workflow_step_after(
+                workflow,
+                "Download previous support issue sync metrics",
+                "Sync GitHub issues",
+            )
         ),
         "support_automation_summary_on_failure": "if: always()" in summary_step,
         "appends_support_automation_summary_to_step_summary": (
@@ -1221,6 +1256,8 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             and "support/generated/support-issue-sync-summary.json"
             in issue_report_upload_step
             and "support/generated/support-issue-sync-metrics.json"
+            in issue_report_upload_step
+            and "support/generated/support-issue-sync-metrics-comparison.json"
             in issue_report_upload_step
             and "support/generated/support-issue-ci-summary.md"
             in issue_report_upload_step
@@ -1686,6 +1723,8 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "support_matrix_check_upload_after_validate",
         "issue_sync_uses_support_matrix_check_report",
         "writes_support_automation_summary",
+        "downloads_issue_sync_metrics_baseline",
+        "issue_sync_metrics_baseline_after_sync",
         "support_automation_summary_on_failure",
         "appends_support_automation_summary_to_step_summary",
         "support_automation_summary_emits_annotations",
@@ -2181,6 +2220,8 @@ def build_ci_coverage_comparison(
         "support_matrix_check_upload_after_validate",
         "issue_sync_uses_support_matrix_check_report",
         "writes_support_automation_summary",
+        "downloads_issue_sync_metrics_baseline",
+        "issue_sync_metrics_baseline_after_sync",
         "support_automation_summary_on_failure",
         "appends_support_automation_summary_to_step_summary",
         "support_automation_summary_emits_annotations",
@@ -2770,6 +2811,14 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Support automation summary",
                     ok_text(support_sync["writes_support_automation_summary"]),
+                ],
+                [
+                    "Issue sync metrics baseline download",
+                    ok_text(support_sync["downloads_issue_sync_metrics_baseline"]),
+                ],
+                [
+                    "Issue sync metrics baseline after sync",
+                    ok_text(support_sync["issue_sync_metrics_baseline_after_sync"]),
                 ],
                 [
                     "Support automation summary on failure",

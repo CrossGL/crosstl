@@ -22,10 +22,16 @@ DEFAULT_SYNC_SUMMARY_PATH = (
 DEFAULT_SYNC_METRICS_PATH = (
     ROOT / "support" / "generated" / "support-issue-sync-metrics.json"
 )
+DEFAULT_SYNC_METRICS_COMPARISON_PATH = (
+    ROOT / "support" / "generated" / "support-issue-sync-metrics-comparison.json"
+)
 MATRIX_CHECK_GENERATOR = "tools/support_matrix.py check"
 EVIDENCE_CHECK_GENERATOR = "tools/support_matrix.py evidence"
 ISSUE_SYNC_GENERATOR = "tools/sync_support_issues.py"
 ISSUE_SYNC_METRICS_GENERATOR = "tools/support_ci_summary.py metrics"
+ISSUE_SYNC_METRICS_COMPARISON_GENERATOR = (
+    "tools/support_ci_summary.py metrics comparison"
+)
 SUPPORTED_SCHEMA_VERSION = 1
 MATRIX_CHECK_REQUIRED_FIELDS = ("schema_version", "generator", "ok", "summary")
 EVIDENCE_CHECK_REQUIRED_FIELDS = (
@@ -49,6 +55,7 @@ SYNC_SUMMARY_REQUIRED_FIELDS = (
     "mode",
     "sync_summary",
 )
+ISSUE_SYNC_METRICS_REQUIRED_FIELDS = ("schema_version", "generator", "summary")
 MATRIX_CHECK_SUMMARY_COUNTERS = (
     "artifact_count",
     "stale_count",
@@ -68,6 +75,24 @@ ISSUE_CLOSURE_COUNTERS = (
     "stale_backlog",
     "stale_extracted",
     "duplicate_marker",
+)
+ISSUE_SYNC_METRIC_TREND_FIELDS = (
+    "planned_action_total",
+    "actual_action_total",
+    "planned_closure_total",
+    "actual_closure_total",
+    "action_reason_total",
+    "action_overrun_count",
+    "action_shortfall_count",
+    "closure_overrun_count",
+    "closure_shortfall_count",
+)
+ISSUE_SYNC_METRIC_ATTENTION_FIELDS = (
+    "actual_action_total",
+    "actual_closure_total",
+    "action_reason_total",
+    "action_overrun_count",
+    "closure_overrun_count",
 )
 OPERATION_LEDGER_SUMMARY_LIMIT = 12
 EVIDENCE_ROW_SUMMARY_LIMIT = 12
@@ -2394,6 +2419,141 @@ def build_issue_sync_metrics(
     return metrics
 
 
+def locate_issue_sync_metrics_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    if path.is_dir():
+        direct = path / DEFAULT_SYNC_METRICS_PATH.name
+        if direct.exists():
+            return direct
+        matches = sorted(path.rglob(DEFAULT_SYNC_METRICS_PATH.name))
+        if matches:
+            return matches[0]
+        return direct
+    return path
+
+
+def int_metric(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def issue_sync_metrics_reference(
+    metrics: dict[str, Any] | None,
+    path: Path | None,
+) -> dict[str, Any]:
+    status = "missing"
+    if metrics is not None:
+        status = "load-error" if metrics.get("load_error") else "available"
+    reference: dict[str, Any] = {
+        "path": display_path(path),
+        "status": status,
+        "available": status == "available",
+    }
+    if metrics and metrics.get("load_error"):
+        reference["load_error"] = metrics["load_error"]
+    if metrics and isinstance(metrics.get("workflow_source"), dict):
+        reference["workflow_source"] = metrics["workflow_source"]
+    return reference
+
+
+def metric_delta_entry(field: str, baseline: int, current: int) -> dict[str, Any]:
+    delta = current - baseline
+    return {
+        "field": field,
+        "baseline": baseline,
+        "current": current,
+        "delta": delta,
+    }
+
+
+def build_issue_sync_metrics_comparison(
+    current_metrics: dict[str, Any] | None,
+    current_metrics_path: Path | None,
+    baseline_metrics: dict[str, Any] | None,
+    baseline_metrics_path: Path | None,
+) -> dict[str, Any]:
+    current_valid = current_metrics is not None and not current_metrics.get(
+        "load_error"
+    )
+    baseline_valid = baseline_metrics is not None and not baseline_metrics.get(
+        "load_error"
+    )
+    current_summary = current_metrics.get("summary", {}) if current_valid else {}
+    baseline_summary = baseline_metrics.get("summary", {}) if baseline_valid else {}
+    if not isinstance(current_summary, dict):
+        current_summary = {}
+    if not isinstance(baseline_summary, dict):
+        baseline_summary = {}
+
+    deltas: dict[str, int | None] = {}
+    increases: list[dict[str, Any]] = []
+    decreases: list[dict[str, Any]] = []
+    unchanged: list[str] = []
+    for field in ISSUE_SYNC_METRIC_TREND_FIELDS:
+        baseline_value = int_metric(baseline_summary.get(field))
+        current_value = int_metric(current_summary.get(field))
+        delta = (
+            current_value - baseline_value
+            if baseline_value is not None and current_value is not None
+            else None
+        )
+        deltas[field] = delta
+        if delta is None:
+            continue
+        entry = metric_delta_entry(field, baseline_value, current_value)
+        if delta > 0:
+            increases.append(entry)
+        elif delta < 0:
+            decreases.append(entry)
+        else:
+            unchanged.append(field)
+
+    no_op_current = current_summary.get("no_op_sync")
+    no_op_baseline = baseline_summary.get("no_op_sync")
+    no_op_changed = (
+        no_op_current != no_op_baseline
+        if isinstance(no_op_current, bool) and isinstance(no_op_baseline, bool)
+        else None
+    )
+    attention = any(
+        item["field"] in ISSUE_SYNC_METRIC_ATTENTION_FIELDS for item in increases
+    )
+    summary: dict[str, Any] = {
+        "baseline_available": baseline_valid,
+        "current_available": current_valid,
+        "comparable": baseline_valid and current_valid,
+        "attention": attention,
+        "positive_delta_count": len(increases),
+        "negative_delta_count": len(decreases),
+        "unchanged_delta_count": len(unchanged),
+        "no_op_sync_changed": no_op_changed,
+    }
+    for field, delta in deltas.items():
+        summary[f"{field}_delta"] = delta
+
+    return {
+        "schema_version": SUPPORTED_SCHEMA_VERSION,
+        "generator": ISSUE_SYNC_METRICS_COMPARISON_GENERATOR,
+        "baseline": issue_sync_metrics_reference(
+            baseline_metrics,
+            baseline_metrics_path,
+        ),
+        "current": issue_sync_metrics_reference(
+            current_metrics,
+            current_metrics_path,
+        ),
+        "summary": summary,
+        "deltas": deltas,
+        "increases": increases,
+        "decreases": decreases,
+    }
+
+
 def write_json_report(path: Path, report: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -3027,6 +3187,94 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
     return lines
 
 
+def metrics_reference_label(reference: dict[str, Any]) -> str:
+    path = reference.get("path") or ""
+    status = reference.get("status", "missing")
+    if status == "available":
+        return f"available at `{path}`" if path else "available"
+    if status == "load-error":
+        load_error = reference.get("load_error") or {}
+        message = load_error.get("type", "load-error")
+        return (
+            f"load-error at `{path}` ({message})" if path else f"load-error ({message})"
+        )
+    return f"missing at `{path}`" if path else "not configured"
+
+
+def delta_label(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    if value > 0:
+        return f"+{value}"
+    return str(value)
+
+
+def yes_no_label(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "n/a"
+
+
+def metric_delta_line(entry: dict[str, Any]) -> str:
+    return "- {field}: {current} vs {baseline} ({delta})".format(
+        field=entry.get("field", "unknown"),
+        current=entry.get("current", "n/a"),
+        baseline=entry.get("baseline", "n/a"),
+        delta=delta_label(entry.get("delta")),
+    )
+
+
+def render_issue_sync_metrics_comparison(
+    comparison: dict[str, Any] | None,
+) -> list[str]:
+    if comparison is None:
+        return []
+    summary = comparison.get("summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+    rows = [
+        ["Baseline", metrics_reference_label(comparison.get("baseline", {}))],
+        ["Current", metrics_reference_label(comparison.get("current", {}))],
+        ["Comparable", yes_no_label(summary.get("comparable"))],
+        ["Attention", yes_no_label(summary.get("attention"))],
+        [
+            "Planned action delta",
+            delta_label(summary.get("planned_action_total_delta")),
+        ],
+        ["Actual action delta", delta_label(summary.get("actual_action_total_delta"))],
+        [
+            "Planned closure delta",
+            delta_label(summary.get("planned_closure_total_delta")),
+        ],
+        [
+            "Actual closure delta",
+            delta_label(summary.get("actual_closure_total_delta")),
+        ],
+        ["Action reason delta", delta_label(summary.get("action_reason_total_delta"))],
+        [
+            "Action overrun delta",
+            delta_label(summary.get("action_overrun_count_delta")),
+        ],
+        [
+            "Closure overrun delta",
+            delta_label(summary.get("closure_overrun_count_delta")),
+        ],
+        ["No-op sync changed", yes_no_label(summary.get("no_op_sync_changed"))],
+    ]
+    lines = ["## Issue Sync Metrics", "", markdown_table(["Field", "Value"], rows)]
+    increases = comparison.get("increases") or []
+    decreases = comparison.get("decreases") or []
+    if increases:
+        lines.extend(["", "Increased metrics:"])
+        lines.extend(metric_delta_line(entry) for entry in increases)
+    if decreases:
+        lines.extend(["", "Decreased metrics:"])
+        lines.extend(metric_delta_line(entry) for entry in decreases)
+    return lines
+
+
 def github_command_escape(value: Any, *, property_value: bool = False) -> str:
     text = str(value)
     text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -3342,6 +3590,7 @@ def render_summary(
     sync_summary_path: Path | None,
     evidence_check: dict[str, Any] | None = None,
     evidence_check_path: Path | None = None,
+    metrics_comparison: dict[str, Any] | None = None,
 ) -> str:
     lines = ["# Support Automation Summary", ""]
     evidence_required = evidence_check_path is not None
@@ -3364,6 +3613,10 @@ def render_summary(
     lines.extend(render_issue_plan(issue_plan, issue_plan_path))
     lines.extend([""])
     lines.extend(render_sync_summary(sync_summary, sync_summary_path))
+    metrics_lines = render_issue_sync_metrics_comparison(metrics_comparison)
+    if metrics_lines:
+        lines.extend([""])
+        lines.extend(metrics_lines)
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -3401,6 +3654,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional JSON metrics output path for issue sync trend tracking",
+    )
+    parser.add_argument(
+        "--metrics-baseline",
+        type=Path,
+        default=None,
+        help=(
+            "Optional previous support-issue-sync-metrics.json path or directory "
+            "for best-effort trend comparison"
+        ),
+    )
+    parser.add_argument(
+        "--metrics-comparison-output",
+        type=Path,
+        default=None,
+        help="Optional JSON output path for issue sync metrics trend comparison",
     )
     parser.add_argument(
         "--step-summary",
@@ -3454,6 +3722,30 @@ def main(argv: list[str] | None = None) -> int:
         required_fields=SYNC_SUMMARY_REQUIRED_FIELDS,
         contract_validator=validate_sync_summary_contract,
     )
+    metrics_output = resolve_path(args.metrics_output)
+    metrics = build_issue_sync_metrics(
+        issue_plan,
+        issue_plan_path,
+        sync_summary,
+        sync_summary_path,
+    )
+    metrics_baseline_path = locate_issue_sync_metrics_path(
+        resolve_path(args.metrics_baseline)
+    )
+    metrics_comparison_output = resolve_path(args.metrics_comparison_output)
+    metrics_comparison = None
+    if args.metrics_baseline is not None or metrics_comparison_output is not None:
+        baseline_metrics = load_optional_json(
+            metrics_baseline_path,
+            expected_generator=ISSUE_SYNC_METRICS_GENERATOR,
+            required_fields=ISSUE_SYNC_METRICS_REQUIRED_FIELDS,
+        )
+        metrics_comparison = build_issue_sync_metrics_comparison(
+            metrics,
+            metrics_output,
+            baseline_metrics,
+            metrics_baseline_path,
+        )
     text = render_summary(
         matrix_check,
         matrix_check_path,
@@ -3463,6 +3755,7 @@ def main(argv: list[str] | None = None) -> int:
         sync_summary_path,
         evidence_check=evidence_check,
         evidence_check_path=evidence_check_path,
+        metrics_comparison=metrics_comparison,
     )
 
     output = resolve_path(args.output)
@@ -3473,18 +3766,13 @@ def main(argv: list[str] | None = None) -> int:
         output.write_text(text, encoding="utf-8")
         print(f"Wrote {display_path(output)}")
 
-    metrics_output = resolve_path(args.metrics_output)
     if metrics_output is not None:
-        write_json_report(
-            metrics_output,
-            build_issue_sync_metrics(
-                issue_plan,
-                issue_plan_path,
-                sync_summary,
-                sync_summary_path,
-            ),
-        )
+        write_json_report(metrics_output, metrics)
         print(f"Wrote {display_path(metrics_output)}")
+
+    if metrics_comparison_output is not None and metrics_comparison is not None:
+        write_json_report(metrics_comparison_output, metrics_comparison)
+        print(f"Wrote {display_path(metrics_comparison_output)}")
 
     if args.step_summary is not None:
         args.step_summary.parent.mkdir(parents=True, exist_ok=True)

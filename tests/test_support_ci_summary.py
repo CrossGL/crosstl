@@ -689,6 +689,117 @@ def test_build_issue_sync_metrics_summarizes_action_churn():
     }
 
 
+def test_build_issue_sync_metrics_comparison_detects_increases():
+    module = load_summary_module()
+    current = module.build_issue_sync_metrics(
+        issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+    baseline = json.loads(json.dumps(current))
+    baseline["summary"]["planned_action_total"] = 8
+    baseline["summary"]["actual_action_total"] = 2
+    baseline["summary"]["action_reason_total"] = 3
+    baseline["summary"]["action_overrun_count"] = 1
+    baseline["summary"]["actual_closure_total"] = 1
+
+    comparison = module.build_issue_sync_metrics_comparison(
+        current,
+        Path("support/generated/support-issue-sync-metrics.json"),
+        baseline,
+        Path("support/generated/baseline/support-issue-sync-metrics.json"),
+    )
+
+    assert comparison["schema_version"] == 1
+    assert comparison["generator"] == "tools/support_ci_summary.py metrics comparison"
+    assert comparison["baseline"]["status"] == "available"
+    assert comparison["current"]["status"] == "available"
+    assert comparison["summary"]["baseline_available"] is True
+    assert comparison["summary"]["current_available"] is True
+    assert comparison["summary"]["comparable"] is True
+    assert comparison["summary"]["attention"] is True
+    assert comparison["summary"]["planned_action_total_delta"] == 2
+    assert comparison["summary"]["actual_action_total_delta"] == 3
+    assert comparison["summary"]["action_reason_total_delta"] == 2
+    assert comparison["summary"]["action_overrun_count_delta"] == 1
+    assert comparison["summary"]["actual_closure_total_delta"] == -1
+    assert {
+        "field": "actual_action_total",
+        "baseline": 2,
+        "current": 5,
+        "delta": 3,
+    } in comparison["increases"]
+    assert {
+        "field": "actual_closure_total",
+        "baseline": 1,
+        "current": 0,
+        "delta": -1,
+    } in comparison["decreases"]
+
+
+def test_build_issue_sync_metrics_comparison_handles_missing_baseline():
+    module = load_summary_module()
+    current = module.build_issue_sync_metrics(
+        issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+
+    comparison = module.build_issue_sync_metrics_comparison(
+        current,
+        Path("support/generated/support-issue-sync-metrics.json"),
+        None,
+        Path("support/generated/baseline/support-issue-sync-metrics.json"),
+    )
+
+    assert comparison["baseline"]["status"] == "missing"
+    assert comparison["summary"]["baseline_available"] is False
+    assert comparison["summary"]["current_available"] is True
+    assert comparison["summary"]["comparable"] is False
+    assert comparison["summary"]["attention"] is False
+    assert comparison["summary"]["actual_action_total_delta"] is None
+
+
+def test_render_summary_includes_issue_sync_metrics_comparison():
+    module = load_summary_module()
+    current = module.build_issue_sync_metrics(
+        issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+    baseline = json.loads(json.dumps(current))
+    baseline["summary"]["actual_action_total"] = 2
+    comparison = module.build_issue_sync_metrics_comparison(
+        current,
+        Path("support/generated/support-issue-sync-metrics.json"),
+        baseline,
+        Path("support/generated/baseline/support-issue-sync-metrics.json"),
+    )
+
+    text = module.render_summary(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+        metrics_comparison=comparison,
+    )
+
+    assert "## Issue Sync Metrics" in text
+    assert (
+        "| Baseline | available at `support/generated/baseline/support-issue-sync-metrics.json` |"
+        in text
+    )
+    assert "| Comparable | yes |" in text
+    assert "| Attention | yes |" in text
+    assert "| Actual action delta | +3 |" in text
+    assert "- actual_action_total: 5 vs 2 (+3)" in text
+
+
 def test_render_summary_handles_missing_reports():
     module = load_summary_module()
 
@@ -3005,16 +3116,32 @@ def test_render_summary_reports_pass_when_all_sections_are_clean():
 
 
 def test_support_ci_summary_cli_writes_markdown(tmp_path):
+    module = load_summary_module()
     matrix_path = tmp_path / "support-matrix-check.json"
     evidence_path = tmp_path / "support-evidence-check.json"
     plan_path = tmp_path / "support-issue-plan.json"
     sync_path = tmp_path / "support-issue-sync-summary.json"
     output_path = tmp_path / "support-issue-ci-summary.md"
     metrics_path = tmp_path / "support-issue-sync-metrics.json"
+    comparison_path = tmp_path / "support-issue-sync-metrics-comparison.json"
+    baseline_dir = tmp_path / "baseline-artifact"
+    baseline_nested_dir = baseline_dir / "support-issue-sync-reports"
     matrix_path.write_text(json.dumps(matrix_check_report(ok=True)), encoding="utf-8")
     evidence_path.write_text(json.dumps(evidence_check_report()), encoding="utf-8")
     plan_path.write_text(json.dumps(issue_plan_report()), encoding="utf-8")
     sync_path.write_text(json.dumps(sync_summary_report()), encoding="utf-8")
+    baseline_nested_dir.mkdir(parents=True)
+    baseline_metrics = module.build_issue_sync_metrics(
+        issue_plan_report(),
+        plan_path,
+        sync_summary_report(),
+        sync_path,
+    )
+    baseline_metrics["summary"]["actual_action_total"] = 4
+    (baseline_nested_dir / "support-issue-sync-metrics.json").write_text(
+        json.dumps(baseline_metrics),
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         [
@@ -3032,6 +3159,10 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
             str(output_path),
             "--metrics-output",
             str(metrics_path),
+            "--metrics-baseline",
+            str(baseline_dir),
+            "--metrics-comparison-output",
+            str(comparison_path),
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -3045,7 +3176,12 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
     assert "| Rows missing evidence | 2 |" in text
     assert "| Status | pass |" in text
     assert "| Sync updated | 2 |" in text
+    assert "## Issue Sync Metrics" in text
+    assert "| Actual action delta | +1 |" in text
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     assert metrics["summary"]["planned_action_total"] == 10
     assert metrics["summary"]["actual_action_total"] == 5
     assert metrics["summary"]["action_reason_total"] == 5
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    assert comparison["summary"]["comparable"] is True
+    assert comparison["summary"]["actual_action_total_delta"] == 1

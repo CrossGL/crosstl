@@ -308,6 +308,39 @@ jobs:
           --plan-output support/generated/support-issue-plan.json
           --sync-summary-output support/generated/support-issue-sync-summary.json
 
+      - name: Download previous support issue sync metrics
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p support/generated/support-issue-baseline
+          previous_run=""
+          for run_id in $(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow "Support Issue Sync" \
+            --branch main \
+            --status success \
+            --limit 10 \
+            --json databaseId \
+            --jq '.[].databaseId'); do
+            if [ "$run_id" != "$GITHUB_RUN_ID" ]; then
+              previous_run="$run_id"
+              break
+            fi
+          done
+          if [ -z "$previous_run" ]; then
+            echo "No previous successful Support Issue Sync run found."
+            exit 0
+          fi
+          gh run download "$previous_run" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name support-issue-sync-reports \
+            --dir support/generated/support-issue-baseline || {
+              echo "Previous support issue sync metrics artifact not available."
+              exit 0
+            }
+
       - name: Write support automation summary
         if: always()
         run: |
@@ -318,6 +351,8 @@ jobs:
             --sync-summary support/generated/support-issue-sync-summary.json \
             --output support/generated/support-issue-ci-summary.md \
             --metrics-output support/generated/support-issue-sync-metrics.json \
+            --metrics-baseline support/generated/support-issue-baseline \
+            --metrics-comparison-output support/generated/support-issue-sync-metrics-comparison.json \
             --step-summary "$GITHUB_STEP_SUMMARY" \
             --github-annotations \
             --fail-on-attention
@@ -333,6 +368,7 @@ jobs:
             support/generated/support-issue-plan.json
             support/generated/support-issue-sync-summary.json
             support/generated/support-issue-sync-metrics.json
+            support/generated/support-issue-sync-metrics-comparison.json
             support/generated/support-issue-ci-summary.md
           if-no-files-found: ignore
           retention-days: 30

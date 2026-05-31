@@ -341,6 +341,18 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     )
     assert (
         report["workflows"]["support_issue_sync"][
+            "downloads_issue_sync_metrics_baseline"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "issue_sync_metrics_baseline_after_sync"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
             "support_automation_summary_on_failure"
         ]
         is True
@@ -824,6 +836,12 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         "writes_support_automation_summary"
     ] = False
     report["workflows"]["support_issue_sync"][
+        "downloads_issue_sync_metrics_baseline"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "issue_sync_metrics_baseline_after_sync"
+    ] = False
+    report["workflows"]["support_issue_sync"][
         "support_automation_summary_on_failure"
     ] = False
     report["workflows"]["support_issue_sync"][
@@ -960,6 +978,13 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         in errors
     )
     assert "support-issue-sync.yml missing writes_support_automation_summary" in errors
+    assert (
+        "support-issue-sync.yml missing downloads_issue_sync_metrics_baseline" in errors
+    )
+    assert (
+        "support-issue-sync.yml missing issue_sync_metrics_baseline_after_sync"
+        in errors
+    )
     assert (
         "support-issue-sync.yml missing support_automation_summary_on_failure" in errors
     )
@@ -1936,12 +1961,23 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         "--metrics-output support/generated/support-issue-sync-metrics.json"
         in issue_sync
     )
+    assert "name: Download previous support issue sync metrics" in issue_sync
+    assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in issue_sync
+    assert '--workflow "Support Issue Sync"' in issue_sync
+    assert "gh run download" in issue_sync
+    assert "support/generated/support-issue-baseline" in issue_sync
+    assert "--metrics-baseline support/generated/support-issue-baseline" in issue_sync
+    assert (
+        "--metrics-comparison-output support/generated/support-issue-sync-metrics-comparison.json"
+        in issue_sync
+    )
     assert '--step-summary "$GITHUB_STEP_SUMMARY"' in issue_sync
     assert "--github-annotations" in issue_sync
     assert "--fail-on-attention" in issue_sync
     assert "support/generated/support-issue-plan.json" in issue_sync
     assert "support/generated/support-issue-sync-summary.json" in issue_sync
     assert "support/generated/support-issue-sync-metrics.json" in issue_sync
+    assert "support/generated/support-issue-sync-metrics-comparison.json" in issue_sync
     assert "support/generated/support-issue-ci-summary.md" in issue_sync
 
 
