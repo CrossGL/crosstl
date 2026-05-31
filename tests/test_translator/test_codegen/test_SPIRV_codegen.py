@@ -21747,6 +21747,150 @@ class TestVulkanSPIRVCodeGen:
         assert "WARNING" not in spv_code
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_multisample_sampling_and_query_lod_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MultisampleUnsupportedSampling {
+            sampler2dms msTexture;
+            sampler2dmsarray msArray;
+            sampler linearSampler;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec3 texLayer = vec3(texCoord, 0.0);
+                    vec2 dx = vec2(0.1, 0.0);
+                    vec2 dy = vec2(0.0, 0.1);
+                    ivec2 offset = ivec2(1, 0);
+                    vec4 sampled = texture(msTexture, texCoord);
+                    vec4 sampledWithSampler = texture(
+                        msArray,
+                        linearSampler,
+                        texLayer
+                    );
+                    vec4 lod = textureLod(msTexture, texCoord, 0.0);
+                    vec4 grad = textureGrad(msTexture, texCoord, dx, dy);
+                    vec4 shifted = textureOffset(msTexture, texCoord, offset);
+                    vec4 projected = textureProj(msTexture, vec3(texCoord, 1.0));
+                    vec2 queryLod = textureQueryLod(msTexture, texCoord);
+                    fragColor = sampled + sampledWithSampler + lod + grad
+                        + shifted + projected + vec4(queryLod, 0.0, 0.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: texture is not valid for multisample images",
+            "; WARNING: textureLod is not valid for multisample images",
+            "; WARNING: textureGrad is not valid for multisample images",
+            "; WARNING: textureOffset is not valid for multisample images",
+            "; WARNING: textureProj is not valid for multisample images",
+            "; WARNING: textureQueryLod is not valid for multisample images",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count("; WARNING: texture is not valid for multisample images")
+            == 2
+        )
+        for opcode in [
+            "OpImageSampleExplicitLod",
+            "OpImageSampleImplicitLod",
+            "OpImageQueryLod",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageQuery" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_multisample_gather_and_compare_emit_diagnostics(self, tmp_path):
+        source_code = """
+        shader MultisampleUnsupportedGatherCompare {
+            sampler2dms msTexture;
+            sampler2dmsarray msArray;
+            sampler compareSampler;
+
+            fragment {
+                input vec2 texCoord;
+                output vec4 fragColor;
+
+                void main() {
+                    vec3 texLayer = vec3(texCoord, 0.0);
+                    ivec2 offset = ivec2(1, 0);
+                    vec4 gather = textureGather(msTexture, texCoord, 0);
+                    vec4 gatherArray = textureGather(
+                        msArray,
+                        compareSampler,
+                        texLayer,
+                        1
+                    );
+                    vec4 gatherOffset = textureGatherOffset(
+                        msTexture,
+                        texCoord,
+                        offset,
+                        0
+                    );
+                    vec4 gatherOffsets = textureGatherOffsets(
+                        msTexture,
+                        texCoord,
+                        offset
+                    );
+                    float compare = textureCompare(msTexture, texCoord, 0.5);
+                    vec4 gatherCompare = textureGatherCompare(
+                        msTexture,
+                        texCoord,
+                        0.5
+                    );
+                    vec4 gatherCompareOffset = textureGatherCompareOffset(
+                        msTexture,
+                        texCoord,
+                        0.5,
+                        offset
+                    );
+                    fragColor = gather + gatherArray + gatherOffset + gatherOffsets
+                        + gatherCompare + gatherCompareOffset + vec4(compare);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        for warning in [
+            "; WARNING: textureGather is not valid for multisample images",
+            "; WARNING: textureGatherOffset is not valid for multisample images",
+            "; WARNING: textureGatherOffsets is not valid for multisample images",
+            "; WARNING: textureCompare is not valid for multisample images",
+            "; WARNING: textureGatherCompare is not valid for multisample images",
+            "; WARNING: textureGatherCompareOffset is not valid for multisample images",
+        ]:
+            assert warning in spv_code
+
+        assert (
+            spv_code.count(
+                "; WARNING: textureGather is not valid for multisample images"
+            )
+            == 2
+        )
+        for opcode in [
+            "OpImageGather",
+            "OpImageDrefGather",
+            "OpImageSampleDrefExplicitLod",
+            "OpImageSampleDrefImplicitLod",
+        ]:
+            assert opcode not in spv_code
+        assert "OpCapability ImageGatherExtended" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_image_operand_mask_order_maintained_for_combined_operands(self, tmp_path):
         source_code = """
         shader OperandOrder {

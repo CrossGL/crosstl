@@ -1556,6 +1556,12 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
         barrier();
         workgroupBarrier();
         memoryBarrier();
+        memoryBarrierShared();
+        memoryBarrierBuffer();
+        memoryBarrierImage();
+        groupMemoryBarrier();
+        allMemoryBarrier();
+        deviceMemoryBarrier();
     }
     """
 
@@ -1563,11 +1569,27 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
 
     assert "fn _crossgl_workgroup_barrier():" in generated_code
     assert "fn _crossgl_memory_barrier():" in generated_code
+    for helper in [
+        "_crossgl_memory_barrier_shared",
+        "_crossgl_memory_barrier_buffer",
+        "_crossgl_memory_barrier_image",
+        "_crossgl_group_memory_barrier",
+        "_crossgl_all_memory_barrier",
+        "_crossgl_device_memory_barrier",
+    ]:
+        assert f"fn {helper}():" in generated_code
+        assert generated_code.count(f"{helper}()") == 2
     assert generated_code.count("_crossgl_workgroup_barrier()") == 3
     assert generated_code.count("_crossgl_memory_barrier()") == 2
     assert "\n    barrier()" not in generated_code
     assert "workgroupBarrier()" not in generated_code
     assert "memoryBarrier()" not in generated_code
+    assert "memoryBarrierShared()" not in generated_code
+    assert "memoryBarrierBuffer()" not in generated_code
+    assert "memoryBarrierImage()" not in generated_code
+    assert "groupMemoryBarrier()" not in generated_code
+    assert "allMemoryBarrier()" not in generated_code
+    assert "deviceMemoryBarrier()" not in generated_code
     generated_code += "\nfn main():\n    sync()\n"
 
     source_path = tmp_path / "synchronization_builtins.mojo"
@@ -1613,19 +1635,22 @@ def test_direct_sync_nodes_emit_mojo_helpers_without_ast_repr():
 
     workgroup_stmt = codegen.generate_statement(SyncNode("barrier"), indent=1)
     memory_stmt = codegen.generate_statement(SyncNode("memoryBarrier"))
+    shared_stmt = codegen.generate_statement(SyncNode("memoryBarrierShared"))
 
     assert workgroup_stmt == "    _crossgl_workgroup_barrier()\n"
     assert memory_stmt == "_crossgl_memory_barrier()\n"
+    assert shared_stmt == "_crossgl_memory_barrier_shared()\n"
     assert "SyncNode(" not in workgroup_stmt
     assert "_crossgl_workgroup_barrier" in codegen.required_sync_helpers
     assert "_crossgl_memory_barrier" in codegen.required_sync_helpers
+    assert "_crossgl_memory_barrier_shared" in codegen.required_sync_helpers
 
 
 def test_direct_sync_nodes_reject_unknown_or_argument_forms():
     codegen = MojoCodeGen()
 
     with pytest.raises(
-        ValueError, match="Unsupported Mojo synchronization operation deviceBarrier"
+        ValueError, match="Invalid Mojo synchronization operation deviceBarrier"
     ):
         codegen.generate_statement(SyncNode("deviceBarrier"))
 
@@ -2137,14 +2162,27 @@ def test_resource_placeholders_emit_for_sampler_types():
         "fn sample_grad(tex: Texture2D, coord: SIMD[DType.float32, 2], "
         "ddx: SIMD[DType.float32, 2], ddy: SIMD[DType.float32, 2])" in generated_code
     )
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], lod: Float32)" in generated_code
+    )
+    assert (
+        "fn sample_grad_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], ddx: SIMD[DType.float32, 2], "
+        "ddy: SIMD[DType.float32, 2])" in generated_code
+    )
     assert "return sample_lod(tex, uv, 1.0)" in generated_code
     assert "return sample_grad(tex, uv, uv, uv)" in generated_code
     assert "sample(tex, uv)" in generated_code
     assert "sample_lod(tex, uv, 1.0)" in generated_code
     assert "sample_grad(tex, uv, uv, uv)" in generated_code
-    assert "sample(tex, state, uv)" not in generated_code
-    assert "sample_lod(tex, state, uv, 1.0)" not in generated_code
-    assert "sample_grad(tex, state, uv, uv, uv)" not in generated_code
+    assert "sample_sampler(tex, state, uv)" in generated_code
+    assert "sample_lod_sampler(tex, state, uv, 1.0)" in generated_code
+    assert "sample_grad_sampler(tex, state, uv, uv, uv)" in generated_code
     assert "fn noop() -> None:\n    pass" in generated_code
     assert "sampler1D" not in generated_code
     assert "sampler1DArray" not in generated_code
@@ -2266,14 +2304,23 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
         "# CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
         "binding=0 binding_source=explicit register=s0" in generated_code
     )
-    assert "return sample(colorMap, uv)" in generated_code
-    assert "return sample_lod(colorMap, uv, 1.0)" in generated_code
-    assert "return sample_grad(colorMap, uv, uv, uv)" in generated_code
+    assert "return sample_sampler(colorMap, linearSampler, uv)" in generated_code
+    assert "return sample_lod_sampler(colorMap, linearSampler, uv, 1.0)" in (
+        generated_code
+    )
+    assert "return sample_grad_sampler(colorMap, linearSampler, uv, uv, uv)" in (
+        generated_code
+    )
     assert "return texture_size(colorMap)" in generated_code
-    assert "_crossgl_calculate_level_of_detail_Texture2D" in generated_code
-    assert "_crossgl_calculate_level_of_detail_unclamped_Texture2D" in generated_code
+    assert "_crossgl_calculate_level_of_detail_sampler_Texture2D_Sampler" in (
+        generated_code
+    )
+    assert (
+        "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2D_Sampler"
+        in generated_code
+    )
     assert "return texel_fetch(samples, pixel, sampleIndex)" in generated_code
-    assert "return sample(shadowMap, uvDepth)" in generated_code
+    assert "return sample_sampler(shadowMap, compareSampler, uvDepth)" in generated_code
     assert "Texture2D<float4>" not in generated_code
     assert "Texture2DMS<float4>" not in generated_code
     assert "SamplerState" not in generated_code
@@ -3741,6 +3788,9 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
     }
+    vec4 fetchTexOffset(sampler2D tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
     ivec2 imgSize(image2D image) {
         return imageSize(image);
     }
@@ -3786,6 +3836,10 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
         "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
+    )
     assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert (
         "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> "
@@ -3804,6 +3858,7 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "return texture_samples(tex)" in generated_code
     assert "return image_samples(image)" in generated_code
     assert "return texel_fetch(tex, pixel, 0)" in generated_code
+    assert "return texel_fetch_offset(tex, pixel, 0, offset)" in generated_code
     assert "return image_size(image)" in generated_code
     assert "return image_load(image, pixel)" in generated_code
     assert "image_store(image, pixel, value)" in generated_code
@@ -3812,6 +3867,7 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "textureSamples" not in generated_code
     assert "imageSamples" not in generated_code
     assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
     assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
 
@@ -4455,6 +4511,30 @@ def test_match_expression_lowers_payload_enum_destructuring_patterns():
     assert "MatchNode" not in generated_code
 
 
+def test_match_expression_lowers_unqualified_payload_enum_patterns():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            Some(payload) => payload,
+            None => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if value.variant == MaybeInt_Some:" in generated_code
+    assert "__cgl_match_value_0 = value.Some_0" in generated_code
+    assert "else:\n        __cgl_match_value_0 = 0" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
 def test_match_expression_payload_enum_destructuring_patterns_compile_with_mojo(
     tmp_path,
 ):
@@ -5033,8 +5113,14 @@ def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
         "Sampler(), InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
     )
     assert "Ok_0=ResourceSet()" not in generated_code
-    assert "sample(value.Ok_0.textures[int(slot)], uv)" in generated_code
-    assert "sample(value.Ok_0.singleTexture, uv)" in generated_code
+    assert (
+        "sample_sampler(value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)"
+        in generated_code
+    )
+    assert (
+        "sample_sampler(value.Ok_0.singleTexture, value.Ok_0.state, uv)"
+        in generated_code
+    )
     assert "image_load(value.Ok_0.inputs[int(slot)], pixel)" in generated_code
     assert "image_load(value.Ok_0.singleInput, pixel)" in generated_code
     assert "buffer_load(value.Ok_0.values[int(slot)], index)" in generated_code
@@ -5048,13 +5134,17 @@ def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
         in generated_code
     )
     assert "buffer_store4(value.Ok_0.singleRaw, offset, data)" in generated_code
-    assert "sample(value.Ok_0[int(index)].textures[int(slot)], uv)" in generated_code
+    assert (
+        "sample_sampler(value.Ok_0[int(index)].textures[int(slot)], "
+        "value.Ok_0[int(index)].state, uv)" in generated_code
+    )
     assert (
         "buffer_load(value.Ok_0[int(index)].values[int(slot)], bufferIndex)"
         in generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -5686,7 +5776,7 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "var Ok_0: InlineArray[RWByteAddressBuffer, 2]" in generated_code
     assert "texture_size(value.Ok_0, 0)" in generated_code
     assert "image_size(value.Ok_0)" in generated_code
-    assert "sample(value.Ok_0, uv)" in generated_code
+    assert "sample_sampler(value.Ok_0, state, uv)" in generated_code
     assert "image_load(value.Ok_0, pixel)" in generated_code
     assert "image_store(value.Ok_0, pixel, color)" in generated_code
     assert "texture_samples(value.Ok_0)" in generated_code
@@ -5701,7 +5791,7 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
     assert "buffer_load4(value.Ok_0, offset)" in generated_code
     assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
-    assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
+    assert "sample_sampler(value.Ok_0[int(slot)], state, uv)" in generated_code
     assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
     assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
     assert "texel_fetch(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
@@ -6702,7 +6792,7 @@ def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
     assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
     assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2D_Sampler" in generated_code
     assert "texture_size(value.Ok_0.textures[int(slot)], 0)" in generated_code
     assert "texture_query_levels(value.Ok_0.textures[int(slot)])" in generated_code
     assert "texture_samples(value.Ok_0.msTextures[int(slot)])" in generated_code
@@ -6713,8 +6803,8 @@ def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
         in generated_code
     )
     assert (
-        "_crossgl_texture_query_lod_Texture2D_SIMD_DType_float32_2("
-        "value.Ok_0.textures[int(slot)], uv)" in generated_code
+        "_crossgl_texture_query_lod_sampler_Texture2D_Sampler_SIMD_DType_float32_2("
+        "value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)" in generated_code
     )
     assert (
         "texture_size(value.Ok_0[int(index)].textures[int(slot)], 0)" in generated_code
@@ -7112,6 +7202,97 @@ def test_generic_payload_enum_match_expression_uses_single_subject_call():
     assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
     assert "else:" in generated_code
     assert "Result<" not in generated_code
+
+
+def test_generic_payload_enum_match_expression_lowers_unqualified_patterns():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    Result<vec3, MathError> makeResult(bool ok) {
+        match ok {
+            true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); }
+            _ => { return Result::Err(MathError::DivisionByZero); }
+        }
+    }
+
+    vec3 read(bool ok, vec3 fallback) {
+        let value = match makeResult(ok) {
+            Ok(actual) => actual,
+            Err(_) => fallback
+        };
+        return value;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var __cgl_match_subject_0: Result_vec3_MathError = makeResult(ok)"
+        in generated_code
+    )
+    assert generated_code.count("makeResult(ok)") == 1
+    assert "if __cgl_match_subject_0.variant == Result_Ok:" in generated_code
+    assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = fallback" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "Result<" not in generated_code
+
+
+def test_nested_generic_payload_enum_field_patterns_lower_unqualified_variants():
+    code = """
+    generic<T> struct Option {
+        enum OptionType {
+            Some(T),
+            None
+        }
+        OptionType variant;
+    }
+
+    enum RenderCommand {
+        Draw {
+            material: Option<int>,
+            value: int
+        },
+        Clear
+    };
+
+    int inspect(RenderCommand command) {
+        return match command {
+            Draw { material: Some(mat), value } => mat + value,
+            Draw { material: None, value } => value,
+            Clear => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "if command.variant == RenderCommand_Draw and "
+        "command.material.variant == Option_Some:" in generated_code
+    )
+    assert (
+        "elif command.variant == RenderCommand_Draw and "
+        "command.material.variant == Option_None:" in generated_code
+    )
+    assert (
+        "__cgl_match_value_0 = (command.material.Some_0 + command.value)"
+        in generated_code
+    )
+    assert "__cgl_match_value_0 = command.value" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "struct destructuring patterns cannot be lowered" not in generated_code
 
 
 def test_nested_generic_payload_enum_field_patterns_compile_with_mojo(tmp_path):
@@ -7842,6 +8023,9 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
     }
+    vec4 fetchTexOffset(sampler2D tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
     ivec2 imgSize(image2D image) {
         return imageSize(image);
     }
@@ -7880,6 +8064,26 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
 
 
 def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
+    missing_texture_samples = """
+    int invalidSamples() {
+        return textureSamples();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_samples.*texture resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_texture_samples)))
+
+    extra_texture_samples = """
+    sampler2DMS msTex;
+
+    int invalidSamples(sampler2DMS tex) {
+        return textureSamples(tex, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_samples.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_texture_samples)))
+
     non_multisample_texture_samples = """
     sampler2D colorMap;
 
@@ -7902,6 +8106,26 @@ def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
     with pytest.raises(ValueError, match="image_samples.*multisample image required"):
         generate_code(parse_code(tokenize_code(non_multisample_image_samples)))
 
+    missing_image_samples = """
+    int invalidSamples() {
+        return imageSamples();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="image_samples.*image resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_image_samples)))
+
+    extra_image_samples = """
+    image2DMS image;
+
+    int invalidSamples(image2DMS image) {
+        return imageSamples(image, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="image_samples.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_image_samples)))
+
     wrong_resource_for_texture_samples = """
     image2D image;
 
@@ -7923,6 +8147,26 @@ def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
         ValueError, match="texture_query_levels.*non-multisample texture required"
     ):
         generate_code(parse_code(tokenize_code(multisample_query_levels)))
+
+    missing_query_levels = """
+    int invalidLevels() {
+        return textureQueryLevels();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_query_levels.*texture resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_query_levels)))
+
+    extra_query_levels = """
+    sampler2D colorMap;
+
+    int invalidLevels(sampler2D tex) {
+        return textureQueryLevels(tex, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_query_levels.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_query_levels)))
 
     image_query_levels = """
     image2D image;
@@ -8149,6 +8393,89 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
 
     generated_code += "\nfn main():\n    pass\n"
     source_path = tmp_path / "resource_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_unsized_resource_arrays_use_mojo_lists_bindings_and_compile(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoUnsizedResourceArrays {
+        @set(1) @binding(4) sampler2D textures[];
+        @binding(2) sampler samplers[];
+        image2D images[];
+        StructuredBuffer<float> weights[];
+        RWStructuredBuffer<int> values[];
+        ByteAddressBuffer rawBytes[];
+        RWByteAddressBuffer rawOut[];
+
+        fragment {
+            vec4 main(
+                int index,
+                vec2 uv,
+                ivec2 pixel,
+                uint offset,
+                int value
+            ) @ gl_FragColor {
+                let sampled = texture(textures[index], samplers[index], uv);
+                let color = imageLoad(images[index], pixel);
+                imageStore(images[index], pixel, color);
+                let loaded = buffer_load(values[index], offset);
+                let weight = buffer_load(weights[index], offset);
+                let raw = buffer_load(rawBytes[index], offset);
+                buffer_store(values[index], offset, loaded + value);
+                buffer_store(rawOut[index], offset, raw);
+                return sampled + color
+                    + vec4(float(loaded) + weight + float(raw));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var textures = List[Texture2D]()" in generated_code
+    assert "var samplers = List[Sampler]()" in generated_code
+    assert "var images = List[Image2D]()" in generated_code
+    assert "var weights = List[StructuredBuffer[Float32]]()" in generated_code
+    assert "var values = List[RWStructuredBuffer[Int32]]()" in generated_code
+    assert "var rawBytes = List[ByteAddressBuffer]()" in generated_code
+    assert "var rawOut = List[RWByteAddressBuffer]()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=textures kind=texture set=1 "
+        "binding=4 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=samplers kind=sampler set=0 "
+        "binding=2 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=images kind=image set=0 "
+        "binding=0 binding_source=automatic" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=values kind=buffer set=0 "
+        "binding=1 binding_source=automatic" in generated_code
+    )
+    assert "sample_sampler(textures[int(index)], samplers[int(index)], uv)" in (
+        generated_code
+    )
+    assert "image_load(images[int(index)], pixel)" in generated_code
+    assert "buffer_load(values[int(index)], offset)" in generated_code
+    assert "buffer_load(rawBytes[int(index)], offset)" in generated_code
+    assert "buffer_store(rawOut[int(index)], offset, raw)" in generated_code
+    assert "texture(textures" not in generated_code
+    assert "imageLoad(images" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "unsized_resource_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],
@@ -11518,7 +11845,10 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
     assert "# CrossGL resource metadata: name=BufferBundle" not in generated_code
     assert "TextureBundle kind=texture" not in generated_code
     assert "BufferBundle kind=buffer" not in generated_code
-    assert "sample(__cgl_match_subject_0.Ok_0.texture, uv)" in generated_code
+    assert (
+        "sample_sampler(__cgl_match_subject_0.Ok_0.texture, "
+        "__cgl_match_subject_0.Ok_0.samplerState, uv)" in generated_code
+    )
     assert "buffer_store(__cgl_match_subject_1.Ok_0.values, index, value)" in (
         generated_code
     )
@@ -12077,7 +12407,10 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
         "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
         "InlineArray[ResourceSet, 2]:" in generated_code
     )
-    assert "return sample(copied[0].textures[int(slot)], uv)" in generated_code
+    assert (
+        "return sample_sampler(copied[0].textures[int(slot)], copied[0].state, uv)"
+        in generated_code
+    )
     assert "return image_load(copied[0].inputs[int(slot)], pixel)" in generated_code
     assert "image_store(copied[0].outputs[int(slot)], pixel, value)" in (generated_code)
     assert "return buffer_load(copied[0].values[int(slot)], index)" in generated_code
@@ -12088,8 +12421,9 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
     assert "buffer_store4(copied[0].rawBuffers[int(slot)], offset, data)" in (
         generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -12242,8 +12576,9 @@ def test_resource_struct_array_branch_value_operations_compile_with_mojo(
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "return sample((left if useLeft else right).textures[int(slot)], uv)" in (
-        generated_code
+    assert (
+        "return sample_sampler((left if useLeft else right).textures[int(slot)], "
+        "(left if useLeft else right).state, uv)" in generated_code
     )
     assert (
         "return image_load((left if useLeft else right)[0].inputs[int(slot)], pixel)"
@@ -12275,8 +12610,9 @@ def test_resource_struct_array_branch_value_operations_compile_with_mojo(
     assert "return buffer_load(__cgl_match_value_1.values[int(slot)], index)" in (
         generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -12387,7 +12723,10 @@ def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholde
     assert "image_store(bundle.resources.outputs[int(slot)], pixel, value)" in (
         generated_code
     )
-    assert "return sample(resources.textures[int(slot)], uv)" in generated_code
+    assert (
+        "return sample_sampler(resources.textures[int(slot)], "
+        "resources.states[int(slot)], uv)" in generated_code
+    )
     assert "image_store(resources.outputs[int(slot)], pixel, value)" in generated_code
     assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
         generated_code
@@ -13605,6 +13944,98 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(overlapping_binding)))
 
 
+def test_glsl_buffer_block_runtime_arrays_and_atomics_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    layout(std430, set = 2, binding = 1) buffer CounterBlock {
+        uint counters[];
+        int signedCounters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+
+    uint swapCounter(uint index, uint expected, uint replacement) {
+        return atomicCompSwap(counters.counters[index], expected, replacement);
+    }
+
+    int maxSigned(uint index, int value) {
+        return atomicMax(counters.signedCounters[index], value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=counters kind=glsl_buffer_block "
+        "set=2 binding=1 binding_source=explicit layout=std430" in generated_code
+    )
+    assert "var counters: List[UInt32]" in generated_code
+    assert "var signedCounters: List[Int32]" in generated_code
+    assert "var __cgl_atomic_0: UInt32 = counters.counters[int(index)]" in (
+        generated_code
+    )
+    assert "counters.counters[int(index)] = (__cgl_atomic_0 + value)" in (
+        generated_code
+    )
+    assert "if __cgl_atomic_1 == expected:" in generated_code
+    assert "counters.counters[int(index)] = replacement" in generated_code
+    assert "counters.signedCounters[int(index)] = max(__cgl_atomic_2, value)" in (
+        generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "glsl_buffer_block_runtime_arrays_and_atomics.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_glsl_buffer_block_atomic_diagnostics_for_mojo_codegen():
+    readonly_atomic = """
+    layout(std430, binding = 1) readonly buffer CounterBlock {
+        uint counters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_atomic)))
+
+    writeonly_atomic = """
+    layout(std430, binding = 1) writeonly buffer CounterBlock {
+        uint counters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*writeonly"):
+        generate_code(parse_code(tokenize_code(writeonly_atomic)))
+
+    float_atomic = """
+    layout(std430, binding = 1) buffer CounterBlock {
+        float values[];
+    } counters;
+
+    float addCounter(uint index, float value) {
+        return atomicAdd(counters.values[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*scalar integer target"):
+        generate_code(parse_code(tokenize_code(float_atomic)))
+
+
 def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -13941,12 +14372,14 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_intrinsics_are_rejected_for_mojo_codegen():
+def test_wave_intrinsics_lower_to_mojo_subgroup_helpers():
     code = """
     shader ComputeWaveDiagnostics {
         compute {
             void main() {
                 uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool first = WaveIsFirstLane();
                 uint sumValue = WaveActiveSum(lane);
                 bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
                 uvec4 ballot = WaveActiveBallot(anyLane);
@@ -13956,8 +14389,129 @@ def test_wave_intrinsics_are_rejected_for_mojo_codegen():
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported Mojo wave intrinsic Wave"):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL wave/subgroup placeholders" in generated_code
+    assert "fn _crossgl_wave_get_lane_index() -> UInt32:" in generated_code
+    assert "fn _crossgl_wave_get_lane_count() -> UInt32:" in generated_code
+    assert "fn _crossgl_wave_is_first_lane() -> Bool:" in generated_code
+    assert "fn _crossgl_wave_active_sum(value: UInt32) -> UInt32:" in generated_code
+    assert (
+        "fn _crossgl_wave_active_any_true(predicate: Bool) -> Bool:" in generated_code
+    )
+    assert (
+        "fn _crossgl_wave_active_ballot(predicate: Bool) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn _crossgl_wave_read_lane_at(value: UInt32, lane: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert "var lane: UInt32 = _crossgl_wave_get_lane_index()" in generated_code
+    assert "var count: UInt32 = _crossgl_wave_get_lane_count()" in generated_code
+    assert "var first: Bool = _crossgl_wave_is_first_lane()" in generated_code
+    assert "var sumValue: UInt32 = _crossgl_wave_active_sum(lane)" in generated_code
+    assert (
+        "var anyLane: Bool = _crossgl_wave_active_any_true((sumValue > 0))"
+        in generated_code
+    )
+    assert (
+        "var ballot: SIMD[DType.uint32, 4] = _crossgl_wave_active_ballot(anyLane)"
+        in generated_code
+    )
+    assert (
+        "var broadcast: UInt32 = _crossgl_wave_read_lane_at(sumValue, 0)"
+        in generated_code
+    )
+    assert "Unsupported Mojo wave intrinsic" not in generated_code
+    assert "WaveOpNode(" not in generated_code
+
+
+def test_wave_match_count_quad_and_multi_prefix_lower_to_mojo_helpers():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool equal = WaveActiveAllEqual(lane);
+                uint bitCount = WaveActiveCountBits(equal);
+                uint prefixCount = WavePrefixCountBits(equal);
+                uvec4 mask = WaveMatch(lane);
+                uint quadLane = QuadReadLaneAt(lane, 1u);
+                uint quadX = QuadReadAcrossX(lane);
+                uint quadY = QuadReadAcrossY(lane);
+                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+                uint sum = WaveMultiPrefixSum(lane, mask);
+                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint count = WaveMultiPrefixCountBits(equal, mask);
+                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_wave_active_all_equal(lane)" in generated_code
+    assert "_crossgl_wave_active_count_bits(equal)" in generated_code
+    assert "_crossgl_wave_prefix_count_bits(equal)" in generated_code
+    assert "_crossgl_wave_match(lane)" in generated_code
+    assert "_crossgl_quad_read_lane_at(lane, 1)" in generated_code
+    assert "_crossgl_quad_read_across_x(lane)" in generated_code
+    assert "_crossgl_quad_read_across_y(lane)" in generated_code
+    assert "_crossgl_quad_read_across_diagonal(lane)" in generated_code
+    assert "_crossgl_wave_multi_prefix_sum(lane, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_product((lane + 1), mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_count_bits(equal, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_and(product, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_or(bitAnd, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_xor(bitOr, mask)" in generated_code
+    assert "fn _crossgl_wave_match(value: UInt32) -> SIMD[DType.uint32, 4]:" in (
+        generated_code
+    )
+    assert (
+        "fn _crossgl_wave_multi_prefix_sum(value: UInt32, "
+        "mask: SIMD[DType.uint32, 4]) -> UInt32:" in generated_code
+    )
+    assert "Unsupported Mojo wave intrinsic" not in generated_code
+
+
+def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    uint waveHelpers(uint lane, bool active, uvec4 mask) {
+        uint sumValue = WaveActiveSum(lane);
+        bool anyLane = WaveActiveAnyTrue(active);
+        uvec4 matched = WaveMatch(sumValue);
+        uint multi = WaveMultiPrefixSum(sumValue, mask);
+        uint quad = QuadReadLaneAt(multi, 1u);
+        return WaveReadLaneAt(quad, 0u);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "_crossgl_wave_active_sum(lane)" in generated_code
+    assert "_crossgl_wave_match(sumValue)" in generated_code
+    assert "_crossgl_wave_multi_prefix_sum(sumValue, mask)" in generated_code
+    assert "_crossgl_quad_read_lane_at(multi, 1)" in generated_code
+    assert "_crossgl_wave_read_lane_at(quad, 0)" in generated_code
+
+    package_dir = tmp_path / "mojo_wave_helpers_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_wave_helpers_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
 
 
 @pytest.mark.parametrize(
@@ -14003,11 +14557,6 @@ def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr
 
     cases = [
         (
-            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))]),
-            "Unsupported Mojo wave intrinsic WaveActiveSum",
-            "WaveOpNode(",
-        ),
-        (
             RayTracingOpNode(
                 "TraceRay",
                 [
@@ -14050,6 +14599,22 @@ def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr
         with pytest.raises(ValueError, match=message) as excinfo:
             codegen.generate_expression(expr)
         assert repr_marker not in str(excinfo.value)
+
+
+def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():
+    codegen = MojoCodeGen()
+
+    generated_expr = codegen.generate_expression(
+        WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+    )
+
+    assert generated_expr == "_crossgl_wave_active_sum(1)"
+    assert (
+        "_crossgl_wave_active_sum",
+        ("UInt32",),
+        "UInt32",
+        "WaveActiveSum",
+    ) in codegen.required_wave_helpers
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
@@ -14261,15 +14826,24 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     assert "struct Texture2DShadow:" in generated_code
     assert "struct Texture2DArray:" in generated_code
     assert "struct Texture2DArrayShadow:" in generated_code
-    assert "_crossgl_sample_offset_Texture2D" in generated_code
-    assert "_crossgl_texture_gather_Texture2D" in generated_code
-    assert "_crossgl_sample_proj_Texture2D" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2DArray" in generated_code
-    assert "_crossgl_texture_compare_Texture2DShadow" in generated_code
-    assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
-    assert "_crossgl_texture_compare_Texture2DArrayShadow" in generated_code
-    assert "_crossgl_texture_gather_compare_Texture2DArrayShadow" in generated_code
+    assert "_crossgl_sample_offset_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_gather_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_sample_proj_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler" in generated_code
+    assert "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler" in generated_code
+    assert (
+        "_crossgl_texture_gather_compare_sampler_Texture2DShadow_Sampler"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_compare_sampler_Texture2DArrayShadow_Sampler"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
+        in generated_code
+    )
     assert "textureOffset" not in generated_code
     assert "textureLodOffset" not in generated_code
     assert "textureGradOffset" not in generated_code
@@ -14398,6 +14972,70 @@ def test_texture_coordinate_and_argument_diagnostics_for_mojo_codegen():
     """
     with pytest.raises(ValueError, match="texel_fetch.*texture resource required"):
         generate_code(parse_code(tokenize_code(image_texel_fetch)))
+
+    shadow_texel_fetch = """
+    sampler2DShadow shadowMap;
+
+    vec4 invalidFetch(sampler2DShadow shadow, ivec2 pixel) {
+        return texelFetch(shadow, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch.*non-shadow texture required"):
+        generate_code(parse_code(tokenize_code(shadow_texel_fetch)))
+
+    missing_texel_offset = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel) {
+        return texelFetchOffset(tex, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*expected 3 argument"):
+        generate_code(parse_code(tokenize_code(missing_texel_offset)))
+
+    multisample_texel_offset = """
+    sampler2DMS msTexture;
+
+    vec4 invalidFetch(sampler2DMS tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texel_fetch_offset.*texel-fetch-offset texture required"
+    ):
+        generate_code(parse_code(tokenize_code(multisample_texel_offset)))
+
+    cube_texel_offset = """
+    samplerCube cubeMap;
+
+    vec4 invalidFetch(samplerCube tex, ivec4 cubePixel, ivec2 offset) {
+        return texelFetchOffset(tex, cubePixel, 0, offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texel_fetch_offset.*texel-fetch-offset texture required"
+    ):
+        generate_code(parse_code(tokenize_code(cube_texel_offset)))
+
+    bad_offset_rank = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel, ivec3 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*offset.*Texture2D"):
+        generate_code(parse_code(tokenize_code(bad_offset_rank)))
+
+    bad_fetch_lod = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel, float lod, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*lod_or_sample"):
+        generate_code(parse_code(tokenize_code(bad_fetch_lod)))
 
 
 def test_advanced_texture_placeholder_argument_diagnostics_for_mojo_codegen():
@@ -14633,11 +15271,11 @@ def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_pat
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn sample(tex: Texture2DShadow, "
+        "fn sample_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4]) -> Float32:" in generated_code
     )
     assert (
-        "fn sample_lod(tex: Texture2DShadow, "
+        "fn sample_lod_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4], lod: Float32) -> Float32:" in generated_code
     )
     assert "fn sampleShadow(" in generated_code
@@ -15920,14 +16558,18 @@ def test_direct_texture_nodes_emit_mojo_sample_helpers_without_ast_repr():
     lod_expr = TextureNode(tex, state, uv, level=lod)
     shadow_expr = TextureNode(shadow, state, uv)
 
-    assert codegen.generate_expression(sample_expr) == "sample(tex, uv)"
+    assert codegen.generate_expression(sample_expr) == "sample_sampler(tex, state, uv)"
     assert codegen.generate_expression(no_sampler_expr) == "sample(tex, uv)"
-    assert codegen.generate_expression(lod_expr) == "sample_lod(tex, uv, lod)"
+    assert (
+        codegen.generate_expression(lod_expr)
+        == "sample_lod_sampler(tex, state, uv, lod)"
+    )
     assert "TextureNode(" not in codegen.generate_expression(sample_expr)
     assert codegen.expression_result_type(sample_expr) == "vec4"
     assert codegen.expression_result_type(shadow_expr) == "float"
     assert "Texture2D" in codegen.required_resource_sample_types
-    assert "Texture2D" in codegen.required_resource_lod_types
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
 
 
 def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
@@ -15951,12 +16593,14 @@ def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
         TextureNode(tex, state, uv, level=lod, offset=offset)
     )
 
-    assert offset_call.startswith("_crossgl_sample_offset_Texture2D")
-    assert offset_call.endswith("(tex, uv, offset)")
-    assert lod_offset_call.startswith("_crossgl_sample_lod_offset_Texture2D")
-    assert lod_offset_call.endswith("(tex, uv, lod, offset)")
+    assert offset_call.startswith("_crossgl_sample_offset_sampler_Texture2D_Sampler")
+    assert offset_call.endswith("(tex, state, uv, offset)")
+    assert lod_offset_call.startswith(
+        "_crossgl_sample_lod_offset_sampler_Texture2D_Sampler"
+    )
+    assert lod_offset_call.endswith("(tex, state, uv, lod, offset)")
     assert "TextureNode(" not in offset_call
-    assert "state" not in offset_call
+    assert "state" in offset_call
     assert (
         codegen.expression_result_type(TextureNode(tex, state, uv, offset=offset))
         == "vec4"
@@ -15965,10 +16609,12 @@ def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_sample_offset_Texture2D") for name in helper_names
+        name.startswith("_crossgl_sample_offset_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_sample_lod_offset_Texture2D") for name in helper_names
+        name.startswith("_crossgl_sample_lod_offset_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
 
 
@@ -15998,9 +16644,9 @@ def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
         TextureOpNode("SampleGrad", tex, [uv, ddx, ddy], sampler_expr=state)
     )
 
-    assert sample_call == "sample(tex, uv)"
-    assert lod_call == "sample_lod(tex, uv, lod)"
-    assert grad_call == "sample_grad(tex, uv, ddx, ddy)"
+    assert sample_call == "sample_sampler(tex, state, uv)"
+    assert lod_call == "sample_lod_sampler(tex, state, uv, lod)"
+    assert grad_call == "sample_grad_sampler(tex, state, uv, ddx, ddy)"
     assert "TextureOpNode(" not in sample_call
     assert (
         codegen.expression_result_type(
@@ -16008,9 +16654,9 @@ def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
         )
         == "vec4"
     )
-    assert "Texture2D" in codegen.required_resource_sample_types
-    assert "Texture2D" in codegen.required_resource_lod_types
-    assert "Texture2D" in codegen.required_resource_grad_types
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
+    assert "Texture2D" in codegen.required_resource_grad_sampler_types
 
 
 def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
@@ -16050,10 +16696,12 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
 
     assert load_call == "texel_fetch(tex, coord, 0)"
     assert size_call == "texture_size(tex)"
-    assert gather_call.startswith("_crossgl_texture_gather_Texture2D")
-    assert gather_call.endswith("(tex, uv)")
-    assert compare_call.startswith("_crossgl_texture_compare_Texture2DShadow")
-    assert compare_call.endswith("(shadow, uv, depth)")
+    assert gather_call.startswith("_crossgl_texture_gather_sampler_Texture2D_Sampler")
+    assert gather_call.endswith("(tex, state, uv)")
+    assert compare_call.startswith(
+        "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_call.endswith("(shadow, state, uv, depth)")
     assert texture_samples_call == "texture_samples(msTex)"
     assert image_samples_call == "image_samples(msImage)"
     assert "TextureOpNode(" not in gather_call
@@ -16080,10 +16728,11 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_texture_gather_Texture2D") for name in helper_names
+        name.startswith("_crossgl_texture_gather_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_Texture2DShadow")
+        name.startswith("_crossgl_texture_compare_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert ("texture_samples", "Texture2DMS") in (
@@ -16207,49 +16856,63 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         )
     )
 
-    assert bias_call.startswith("_crossgl_sample_bias_Texture2D")
-    assert bias_call.endswith("(tex, uv, bias)")
-    assert bias_offset_call.startswith("_crossgl_sample_bias_offset_Texture2D")
-    assert bias_offset_call.endswith("(tex, uv, bias, offset)")
-    assert compare_lod_call.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
-    assert compare_lod_call.endswith("(shadow, uv, depth, lod)")
+    assert bias_call.startswith("_crossgl_sample_bias_sampler_Texture2D_Sampler")
+    assert bias_call.endswith("(tex, state, uv, bias)")
+    assert bias_offset_call.startswith(
+        "_crossgl_sample_bias_offset_sampler_Texture2D_Sampler"
+    )
+    assert bias_offset_call.endswith("(tex, state, uv, bias, offset)")
+    assert compare_lod_call.startswith(
+        "_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_lod_call.endswith("(shadow, state, uv, depth, lod)")
     assert compare_lod_offset_call.startswith(
-        "_crossgl_texture_compare_lod_offset_Texture2DShadow"
+        "_crossgl_texture_compare_lod_offset_sampler_Texture2DShadow_Sampler"
     )
-    assert compare_lod_offset_call.endswith("(shadow, uv, depth, lod, offset)")
-    assert compare_grad_call.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
-    assert compare_grad_call.endswith("(shadow, uv, depth, ddx, ddy)")
+    assert compare_lod_offset_call.endswith("(shadow, state, uv, depth, lod, offset)")
+    assert compare_grad_call.startswith(
+        "_crossgl_texture_compare_grad_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_grad_call.endswith("(shadow, state, uv, depth, ddx, ddy)")
     assert compare_grad_offset_call.startswith(
-        "_crossgl_texture_compare_grad_offset_Texture2DShadow"
+        "_crossgl_texture_compare_grad_offset_sampler_Texture2DShadow_Sampler"
     )
-    assert compare_grad_offset_call.endswith("(shadow, uv, depth, ddx, ddy, offset)")
-    assert gather_offsets_call.startswith("_crossgl_texture_gather_offsets_Texture2D")
-    assert gather_offsets_call.endswith("(tex, uv, offset, offset, offset, offset)")
+    assert compare_grad_offset_call.endswith(
+        "(shadow, state, uv, depth, ddx, ddy, offset)"
+    )
+    assert gather_offsets_call.startswith(
+        "_crossgl_texture_gather_offsets_sampler_Texture2D_Sampler"
+    )
+    assert gather_offsets_call.endswith(
+        "(tex, state, uv, offset, offset, offset, offset)"
+    )
     assert compare_proj_grad_offset_call.startswith(
-        "_crossgl_texture_compare_proj_grad_offset_Texture2DShadow"
+        "_crossgl_texture_compare_proj_grad_offset_sampler_Texture2DShadow_Sampler"
     )
     assert compare_proj_grad_offset_call.endswith(
-        "(shadow, uv, depth, ddx, ddy, offset)"
+        "(shadow, state, uv, depth, ddx, ddy, offset)"
     )
-    assert query_lod_call.startswith("_crossgl_texture_query_lod_Texture2DArray")
-    assert query_lod_call.endswith("(arrayTex, uvLayer)")
+    assert query_lod_call.startswith(
+        "_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler"
+    )
+    assert query_lod_call.endswith("(arrayTex, state, uvLayer)")
     assert calculate_lod_call.startswith(
-        "_crossgl_calculate_level_of_detail_Texture2DArray"
+        "_crossgl_calculate_level_of_detail_sampler_Texture2DArray_Sampler"
     )
-    assert calculate_lod_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_call.endswith("(arrayTex, state, uvLayer)")
     assert calculate_lod_unclamped_call.startswith(
-        "_crossgl_calculate_level_of_detail_unclamped_Texture2DArray"
+        "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2DArray_Sampler"
     )
-    assert calculate_lod_unclamped_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_unclamped_call.endswith("(arrayTex, state, uvLayer)")
     assert gather_cmp_red_call.startswith(
-        "_crossgl_texture_gather_compare_Texture2DArrayShadow"
+        "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
     )
-    assert gather_cmp_red_call.endswith("(arrayShadow, uvLayer, depth)")
+    assert gather_cmp_red_call.endswith("(arrayShadow, state, uvLayer, depth)")
     assert gather_cmp_alpha_offset_call.startswith(
-        "_crossgl_texture_gather_compare_offset_Texture2DArrayShadow"
+        "_crossgl_texture_gather_compare_offset_sampler_Texture2DArrayShadow_Sampler"
     )
     assert gather_cmp_alpha_offset_call.endswith(
-        "(arrayShadow, uvLayer, depth, offset)"
+        "(arrayShadow, state, uvLayer, depth, offset)"
     )
     assert "TextureOpNode(" not in "\n".join(
         [
@@ -16311,42 +16974,51 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_sample_bias_Texture2D") for name in helper_names
-    )
-    assert any(
-        name.startswith("_crossgl_sample_bias_offset_Texture2D")
+        name.startswith("_crossgl_sample_bias_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
+        name.startswith("_crossgl_sample_bias_offset_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
+        name.startswith("_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_gather_offsets_Texture2D")
+        name.startswith("_crossgl_texture_compare_grad_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_proj_grad_offset_Texture2DShadow")
+        name.startswith("_crossgl_texture_gather_offsets_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_query_lod_Texture2DArray")
+        name.startswith(
+            "_crossgl_texture_compare_proj_grad_offset_sampler_Texture2DShadow_Sampler"
+        )
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_calculate_level_of_detail_Texture2DArray")
+        name.startswith("_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_calculate_level_of_detail_unclamped_Texture2DArray")
+        name.startswith(
+            "_crossgl_calculate_level_of_detail_sampler_Texture2DArray_Sampler"
+        )
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_gather_compare_Texture2DArrayShadow")
+        name.startswith(
+            "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2DArray_Sampler"
+        )
+        for name in helper_names
+    )
+    assert any(
+        name.startswith(
+            "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
+        )
         for name in helper_names
     )
 
@@ -22741,29 +23413,57 @@ def test_mojo_texel_fetch_operations():
     vec4 fetchPixel(sampler2D tex, ivec2 pixel, int lod) {
         return texelFetch(tex, pixel, lod);
     }
+    vec4 fetchPixelOffset(sampler2D tex, ivec2 pixel, int lod, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
     vec4 fetchLine(sampler1D tex, int pixel, int lod) {
         return texelFetch(tex, pixel, lod);
     }
+    vec4 fetchLineOffset(sampler1D tex, int pixel, int lod, int offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
     vec4 fetchLayer(sampler2DArray tex, ivec3 pixelLayer, int lod) {
         return texelFetch(tex, pixelLayer, lod);
+    }
+    vec4 fetchLayerOffset(
+        sampler2DArray tex,
+        ivec3 pixelLayer,
+        int lod,
+        ivec2 offset
+    ) {
+        return texelFetchOffset(tex, pixelLayer, lod, offset);
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert "texel_fetch(tex, pixel, lod)" in generated_code
+    assert "texel_fetch_offset(tex, pixel, lod, offset)" in generated_code
     assert (
         "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
+    )
     assert "fn texel_fetch(tex: Texture1D, coord: Int32, lod: Int32)" in generated_code
+    assert (
+        "fn texel_fetch_offset(tex: Texture1D, coord: Int32, lod: Int32, "
+        "offset: Int32)" in generated_code
+    )
     assert (
         "fn texel_fetch(tex: Texture2DArray, coord: SIMD[DType.int32, 4], lod: Int32)"
         in generated_code
+    )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2DArray, coord: SIMD[DType.int32, 4], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
     )
     assert "struct Texture2D:" in generated_code
     assert "struct Texture1D:" in generated_code
     assert "struct Texture2DArray:" in generated_code
     assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
 
 
 def test_mojo_texture_query_operations():
@@ -23687,10 +24387,10 @@ def test_combined_texture_sampler_sampling_in_mojo():
     combined_sample = codegen.generate_expression(TextureNode(tex, sampler, uv))
     lod_sample = codegen.generate_expression(TextureNode(tex, sampler, uv, level=lod))
 
-    assert combined_sample == "sample(albedo, uv)"
-    assert lod_sample == "sample_lod(albedo, uv, lod)"
-    assert "Texture2D" in codegen.required_resource_sample_types
-    assert "Texture2D" in codegen.required_resource_lod_types
+    assert combined_sample == "sample_sampler(albedo, linearSampler, uv)"
+    assert lod_sample == "sample_lod_sampler(albedo, linearSampler, uv, lod)"
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
     assert codegen.expression_result_type(TextureNode(tex, sampler, uv)) == "vec4"
 
 
@@ -23710,11 +24410,11 @@ def test_separate_texture_and_sampler_objects_for_mojo():
     sample_b = codegen.generate_expression(TextureNode(tex, sampler_b, uv))
     no_sampler = codegen.generate_expression(TextureNode(tex, None, uv))
 
-    assert sample_a == "sample(myTexture, uv)"
-    assert sample_b == "sample(myTexture, uv)"
+    assert sample_a == "sample_sampler(myTexture, samplerA, uv)"
+    assert sample_b == "sample_sampler(myTexture, samplerB, uv)"
     assert no_sampler == "sample(myTexture, uv)"
-    assert "samplerA" not in sample_a
-    assert "samplerB" not in sample_b
+    assert "samplerA" in sample_a
+    assert "samplerB" in sample_b
     assert codegen.expression_result_type(TextureNode(tex, sampler_a, uv)) == "vec4"
 
 

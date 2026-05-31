@@ -626,6 +626,7 @@ class TestHipCodeGen:
             hipTextureObject_t ambiguous;
             hipSurfaceObject_t surf;
             hipSurfaceObject_t lineSurf;
+            texture<float4, 1> lineTex;
             texture<float4, 2> legacyTex;
             texture<float4, hipTextureTypeCubemap> cubeTex;
             texture<float4, hipTextureTypeCubemapLayered> cubeLayerTex;
@@ -638,7 +639,9 @@ class TestHipCodeGen:
             float2 uv = make_float2(0.25f, 0.75f);
             float3 uvw = make_float3(0.25f, 0.75f, 0.5f);
             int2 pixel = make_int2(1, 2);
+            int lineIndex = 3;
             float4 sampled = tex2D<float4>(tex, uv.x, uv.y);
+            float4 fetchedLine = tex1Dfetch<float4>(lineTex, lineIndex);
             float4 arraySample = tex2D<float4>(textures[1], uv);
             float4 paramSample = tex2D<float4>(paramTex, uv);
             float4 globalSample = tex2D<float4>(globalTex, uv);
@@ -761,6 +764,7 @@ class TestHipCodeGen:
         assert "var ambiguous: sampler;" in result
         assert "var surf: image2D;" in result
         assert "var lineSurf: image1D;" in result
+        assert "var lineTex: sampler1D;" in result
         assert "var legacyTex: sampler2D;" in result
         assert "var lineSurface: image1D;" in result
         assert "var lineLayerSurface: image1DArray;" in result
@@ -771,6 +775,9 @@ class TestHipCodeGen:
         assert "var cubeSurface: imageCube;" in result
         assert "var cubeLayerSurface: imageCubeArray;" in result
         assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
+        assert (
+            "var fetchedLine: vec4<f32> = texelFetch(lineTex, lineIndex, 0);" in result
+        )
         assert "var arraySample: vec4<f32> = texture(textures[1], uv);" in result
         assert "var paramSample: vec4<f32> = texture(paramTex, uv);" in result
         assert "var globalSample: vec4<f32> = texture(globalTex, uv);" in result

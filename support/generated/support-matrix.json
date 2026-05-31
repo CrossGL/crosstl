@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 638
+        "test_count": 640
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 105,
+        "unsupported_marker_count": 114,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -533,6 +533,10 @@
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "raise ValueError(f\"Unsupported CUDA wave intrinsic {operation}\")"
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
           },
           {
@@ -566,10 +570,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_plain_atomic_call("
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 419
+        "test_count": 435
       },
       "translator_codegen": {
         "exists": true,
@@ -607,7 +607,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 49,
+        "unsupported_marker_count": 71,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -655,7 +655,11 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "\"Unsupported match arm for HIP codegen; only unguarded \""
+            "text": "\"Unsupported match expression for HIP codegen; return context \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "raise ValueError(f\"Unsupported HIP wave intrinsic {operation}\")"
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -679,15 +683,11 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):"
+            "text": "def unsupported_image_access_call(self, func_name, image_type, reason):"
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} image atomic resource call: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_image_atomic_coordinate_rank_call("
+            "text": "f\"/* unsupported {self.resource_backend_name()} image access: \""
           }
         ]
       },
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 465
+        "test_count": 484
       },
       "translator_codegen": {
         "exists": true,
@@ -721,7 +721,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 87,
+        "unsupported_marker_count": 95,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 559
+        "test_count": 568
       },
       "translator_codegen": {
         "exists": true,
@@ -835,7 +835,7 @@
         "path": "crosstl/backend/Rust"
       },
       "signals": {
-        "unsupported_marker_count": 46,
+        "unsupported_marker_count": 53,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
@@ -890,32 +890,32 @@
             "text": "raise ValueError(f\"Unsupported match pattern for Rust codegen: {pattern!r}\")"
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "if self.closure_body_contains_unsupported_helper_node(closure.body):"
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return self.unsupported_glsl_buffer_block_statement("
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "def closure_body_contains_unsupported_helper_node(self, node):"
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return self.unsupported_glsl_buffer_block_statement("
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "unsupported_types = ("
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return self.unsupported_glsl_buffer_block_expression("
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "if isinstance(node, unsupported_types):"
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "def unsupported_glsl_buffer_block_expression(self, operation, reason, result_type):"
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "self.closure_body_contains_unsupported_helper_node(item)"
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"/* unsupported Rust GLSL buffer block: {operation} {reason} */ {fallback}\""
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": "return self.closure_body_contains_unsupported_helper_node("
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "def unsupported_glsl_buffer_block_statement(self, operation, reason):"
           },
           {
-            "path": "crosstl/backend/Rust/RustCrossGLCodeGen.py",
-            "text": ") or self.closure_body_contains_unsupported_helper_node("
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "return f\"/* unsupported Rust GLSL buffer block: {operation} {reason} */\""
           }
         ]
       },
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 628
+        "test_count": 642
       },
       "translator_codegen": {
         "exists": true,
@@ -949,8 +949,16 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 321,
+        "unsupported_marker_count": 351,
         "unsupported_marker_samples": [
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "unsupported_type_message=("
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "\"type is not supported by Slang ByteAddressBuffer lowering\""
+          },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"Slang {stage_name} stage does not support \""
@@ -1013,7 +1021,7 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"Unsupported match arm for Slang codegen; {rejection_reason}\""
+            "text": "f\"/* unsupported Slang match expression: \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1022,14 +1030,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "\"/* unsupported Slang match expression: requires statement \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang match expression: {rejection_reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "+ f\"{temp_name} = /* unsupported Slang match expression: {reason} */ \""
           }
         ]
       },
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 465
+        "test_count": 476
       },
       "translator_codegen": {
         "exists": true,
@@ -1614,42 +1614,6 @@
       "feature_id": "io.struct_semantics",
       "notes": "",
       "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "resources",
-      "feature": "Explicit and automatic resource bindings",
-      "feature_id": "resources.bindings",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "resources",
-      "feature": "Explicit and automatic resource bindings",
-      "feature_id": "resources.bindings",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "resources",
-      "feature": "Explicit and automatic resource bindings",
-      "feature_id": "resources.bindings",
-      "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics. Mojo still uses compile-smoke placeholders rather than a native GPU resource ABI.",
-      "status": "partial"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "resources",
-      "feature": "Explicit and automatic resource bindings",
-      "feature_id": "resources.bindings",
-      "notes": "",
-      "status": "unknown"
     },
     {
       "backend": "CUDA",
@@ -2701,7 +2665,7 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations. Broader GLSL subgroup capability validation remains incomplete.",
       "status": "partial"
     },
     {
@@ -2737,8 +2701,8 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
-      "status": "validated_rejection"
+      "notes": "Mojo lowers Wave* forms to compile-smoke placeholder helpers for lane queries, reductions, votes, ballots, lane reads, quad reads, WaveMatch, and WaveMultiPrefix* forms. Real target-native subgroup ABI semantics remain incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Rust",
@@ -3817,9 +3781,14 @@
       "name": "Explicit and automatic resource bindings",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_resource_binding_metadata_comments_emit_cuda_bindings",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_cuda_codegen",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_forwarded_dynamic_resource_arrays_emit_cuda_metadata_arguments",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_glsl_buffer_blocks_emit_cuda_structs_pointers_and_metadata"
+          ],
+          "notes": "Global sampled textures, samplers, storage images, structured-buffer/resource-array declarations, GLSL buffer blocks, and cbuffers emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, fixed resource-array range reservation, duplicate/range-overlap diagnostics, and CUDA query sidecar metadata forwarding.",
+          "status": "supported"
         },
         "directx": {
           "evidence": [],
@@ -3827,9 +3796,14 @@
           "status": "supported"
         },
         "hip": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_resource_binding_metadata_comments_emit_hip_bindings",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_hip_codegen",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_forwarded_dynamic_resource_arrays_emit_hip_metadata_arguments",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_glsl_buffer_blocks_emit_hip_structs_pointers_and_metadata"
+          ],
+          "notes": "Global sampled textures, samplers, storage images, structured-buffer/resource-array declarations, GLSL buffer blocks, and cbuffers emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, fixed resource-array range reservation, duplicate/range-overlap diagnostics, and HIP query sidecar metadata forwarding.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [],
@@ -3841,8 +3815,8 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_binding_metadata_comments_compile_with_mojo",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen"
           ],
-          "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics. Mojo still uses compile-smoke placeholders rather than a native GPU resource ABI.",
-          "status": "partial"
+          "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [],
@@ -3850,9 +3824,12 @@
           "status": "supported"
         },
         "rust": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_resource_binding_metadata_comments_compile_with_rust",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_rust_codegen"
+          ],
+          "notes": "Global texture, sampler, image, structured-buffer/resource-array, and cbuffer declarations emit deterministic CrossGL resource metadata comments with explicit @set/@group/@binding and HLSL register-space preservation, automatic per-namespace binding assignment, and duplicate/range-overlap diagnostics.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
@@ -5651,19 +5628,21 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_intrinsics_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_intrinsics_lower_to_mojo_subgroup_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_wave_match_count_quad_and_multi_prefix_lower_to_mojo_helpers",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr"
           ],
-          "notes": "Mojo has no target-native subgroup ABI in this backend; WaveOpNode forms are rejected deterministically instead of stringifying unsupported IR.",
-          "status": "validated_rejection"
+          "notes": "Mojo lowers Wave* forms to compile-smoke placeholder helpers for lane queries, reductions, votes, ballots, lane reads, quad reads, WaveMatch, and WaveMultiPrefix* forms. Real target-native subgroup ABI semantics remain incomplete.",
+          "status": "partial"
         },
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers"
           ],
-          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations. Broader GLSL subgroup capability validation remains incomplete.",
           "status": "partial"
         },
         "rust": {
@@ -6060,13 +6039,13 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 195,
+    "backlog_count": 191,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
-        "partial": 11,
-        "supported": 12,
+        "partial": 10,
+        "supported": 13,
         "unknown": 16,
         "unsupported": 4,
         "validated_rejection": 0
@@ -6081,8 +6060,8 @@
       },
       "hip": {
         "diagnostic": 0,
-        "partial": 11,
-        "supported": 11,
+        "partial": 10,
+        "supported": 12,
         "unknown": 17,
         "unsupported": 4,
         "validated_rejection": 0
@@ -6098,10 +6077,10 @@
       "mojo": {
         "diagnostic": 0,
         "partial": 26,
-        "supported": 11,
+        "supported": 12,
         "unknown": 0,
         "unsupported": 5,
-        "validated_rejection": 1
+        "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
@@ -6114,8 +6093,8 @@
       "rust": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 12,
-        "unknown": 22,
+        "supported": 13,
+        "unknown": 21,
         "unsupported": 4,
         "validated_rejection": 0
       },

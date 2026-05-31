@@ -609,6 +609,35 @@ MOJO_ATOMIC_OP_ALIASES = {
     "InterlockedCompareExchange": "image_atomic_comp_swap",
 }
 
+MOJO_SCALAR_ATOMIC_OPS = {
+    "atomicAdd": "add",
+    "atomicMin": "min",
+    "atomicMax": "max",
+    "atomicAnd": "and",
+    "atomicOr": "or",
+    "atomicXor": "xor",
+    "atomicExchange": "exchange",
+    "atomicCompSwap": "compare_exchange",
+    "atomicCompareExchange": "compare_exchange",
+    "InterlockedAdd": "add",
+    "InterlockedMin": "min",
+    "InterlockedMax": "max",
+    "InterlockedAnd": "and",
+    "InterlockedOr": "or",
+    "InterlockedXor": "xor",
+    "InterlockedExchange": "exchange",
+    "InterlockedCompareExchange": "compare_exchange",
+}
+
+MOJO_SCALAR_ATOMIC_TYPES = {
+    "int",
+    "uint",
+    "short",
+    "ushort",
+    "long",
+    "ulong",
+}
+
 MOJO_TYPED_BUFFER_RESOURCE_TYPES = {
     "Buffer",
     "RWBuffer",
@@ -809,6 +838,109 @@ MOJO_SYNC_BUILTINS = {
     "barrier": "_crossgl_workgroup_barrier",
     "workgroupBarrier": "_crossgl_workgroup_barrier",
     "memoryBarrier": "_crossgl_memory_barrier",
+    "memoryBarrierShared": "_crossgl_memory_barrier_shared",
+    "memoryBarrierBuffer": "_crossgl_memory_barrier_buffer",
+    "memoryBarrierImage": "_crossgl_memory_barrier_image",
+    "groupMemoryBarrier": "_crossgl_group_memory_barrier",
+    "allMemoryBarrier": "_crossgl_all_memory_barrier",
+    "deviceMemoryBarrier": "_crossgl_device_memory_barrier",
+}
+
+MOJO_WAVE_OP_ARITIES = {
+    "WaveGetLaneCount": 0,
+    "WaveGetLaneIndex": 0,
+    "WaveIsFirstLane": 0,
+    "WaveActiveSum": 1,
+    "WaveActiveProduct": 1,
+    "WaveActiveBitAnd": 1,
+    "WaveActiveBitOr": 1,
+    "WaveActiveBitXor": 1,
+    "WaveActiveMin": 1,
+    "WaveActiveMax": 1,
+    "WaveActiveAllTrue": 1,
+    "WaveActiveAnyTrue": 1,
+    "WaveActiveAllEqual": 1,
+    "WaveActiveBallot": 1,
+    "WaveActiveCountBits": 1,
+    "WaveReadLaneAt": 2,
+    "WaveReadLaneFirst": 1,
+    "WavePrefixSum": 1,
+    "WavePrefixProduct": 1,
+    "WavePrefixCountBits": 1,
+    "QuadReadAcrossX": 1,
+    "QuadReadAcrossY": 1,
+    "QuadReadAcrossDiagonal": 1,
+    "QuadReadLaneAt": 2,
+    "WaveMatch": 1,
+    "WaveMultiPrefixSum": 2,
+    "WaveMultiPrefixCountBits": 2,
+    "WaveMultiPrefixProduct": 2,
+    "WaveMultiPrefixBitAnd": 2,
+    "WaveMultiPrefixBitOr": 2,
+    "WaveMultiPrefixBitXor": 2,
+}
+
+MOJO_WAVE_HELPERS = {
+    "WaveGetLaneCount": "_crossgl_wave_get_lane_count",
+    "WaveGetLaneIndex": "_crossgl_wave_get_lane_index",
+    "WaveIsFirstLane": "_crossgl_wave_is_first_lane",
+    "WaveActiveSum": "_crossgl_wave_active_sum",
+    "WaveActiveProduct": "_crossgl_wave_active_product",
+    "WaveActiveBitAnd": "_crossgl_wave_active_bit_and",
+    "WaveActiveBitOr": "_crossgl_wave_active_bit_or",
+    "WaveActiveBitXor": "_crossgl_wave_active_bit_xor",
+    "WaveActiveMin": "_crossgl_wave_active_min",
+    "WaveActiveMax": "_crossgl_wave_active_max",
+    "WaveActiveAllTrue": "_crossgl_wave_active_all_true",
+    "WaveActiveAnyTrue": "_crossgl_wave_active_any_true",
+    "WaveActiveAllEqual": "_crossgl_wave_active_all_equal",
+    "WaveActiveBallot": "_crossgl_wave_active_ballot",
+    "WaveActiveCountBits": "_crossgl_wave_active_count_bits",
+    "WaveReadLaneAt": "_crossgl_wave_read_lane_at",
+    "WaveReadLaneFirst": "_crossgl_wave_read_lane_first",
+    "WavePrefixSum": "_crossgl_wave_prefix_sum",
+    "WavePrefixProduct": "_crossgl_wave_prefix_product",
+    "WavePrefixCountBits": "_crossgl_wave_prefix_count_bits",
+    "QuadReadAcrossX": "_crossgl_quad_read_across_x",
+    "QuadReadAcrossY": "_crossgl_quad_read_across_y",
+    "QuadReadAcrossDiagonal": "_crossgl_quad_read_across_diagonal",
+    "QuadReadLaneAt": "_crossgl_quad_read_lane_at",
+    "WaveMatch": "_crossgl_wave_match",
+    "WaveMultiPrefixSum": "_crossgl_wave_multi_prefix_sum",
+    "WaveMultiPrefixCountBits": "_crossgl_wave_multi_prefix_count_bits",
+    "WaveMultiPrefixProduct": "_crossgl_wave_multi_prefix_product",
+    "WaveMultiPrefixBitAnd": "_crossgl_wave_multi_prefix_bit_and",
+    "WaveMultiPrefixBitOr": "_crossgl_wave_multi_prefix_bit_or",
+    "WaveMultiPrefixBitXor": "_crossgl_wave_multi_prefix_bit_xor",
+}
+
+MOJO_WAVE_PREDICATE_ARGUMENT_OPS = {
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveBallot",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+MOJO_WAVE_UINT_RESULT_OPS = {
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+MOJO_WAVE_BOOL_RESULT_OPS = {
+    "WaveIsFirstLane",
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveAllEqual",
+}
+
+MOJO_WAVE_UVEC4_RESULT_OPS = {
+    "WaveActiveBallot",
+    "WaveMatch",
 }
 
 MOJO_RESOURCE_ACCESS_QUALIFIERS = {
@@ -914,13 +1046,17 @@ class MojoCodeGen:
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
+        self.required_resource_sample_sampler_types = set()
         self.required_resource_lod_types = set()
+        self.required_resource_lod_sampler_types = set()
         self.required_resource_grad_types = set()
+        self.required_resource_grad_sampler_types = set()
         self.required_resource_size_types = set()
         self.required_resource_size_helpers = set()
         self.required_resource_query_level_types = set()
         self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
+        self.required_resource_texel_fetch_offset_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
         self.required_resource_builtin_helpers = {}
@@ -934,6 +1070,7 @@ class MojoCodeGen:
         self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
         self.required_sync_helpers = set()
+        self.required_wave_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -956,6 +1093,7 @@ class MojoCodeGen:
         self.match_expression_counter = 0
         self.match_subject_counter = 0
         self.dimension_query_counter = 0
+        self.scalar_atomic_counter = 0
         self.expression_prelude_stack = []
         self.type_mapping = {
             # Scalar Types
@@ -1121,13 +1259,17 @@ class MojoCodeGen:
         self.mojo_used_resource_bindings = {}
         self.required_resource_types = set()
         self.required_resource_sample_types = set()
+        self.required_resource_sample_sampler_types = set()
         self.required_resource_lod_types = set()
+        self.required_resource_lod_sampler_types = set()
         self.required_resource_grad_types = set()
+        self.required_resource_grad_sampler_types = set()
         self.required_resource_size_types = set()
         self.required_resource_size_helpers = set()
         self.required_resource_query_level_types = set()
         self.required_resource_sample_count_helpers = set()
         self.required_resource_texel_fetch_types = set()
+        self.required_resource_texel_fetch_offset_types = set()
         self.required_image_load_types = set()
         self.required_image_store_types = set()
         self.required_resource_builtin_helpers = {}
@@ -1141,6 +1283,7 @@ class MojoCodeGen:
         self.required_byte_address_vector_store_helpers = set()
         self.required_reinterpret_helpers = set()
         self.required_sync_helpers = set()
+        self.required_wave_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -1162,6 +1305,7 @@ class MojoCodeGen:
         self.match_expression_counter = 0
         self.match_subject_counter = 0
         self.dimension_query_counter = 0
+        self.scalar_atomic_counter = 0
         self.expression_prelude_stack = []
 
         header = "# Generated Mojo Shader Code\n"
@@ -4817,6 +4961,11 @@ class MojoCodeGen:
         self.dimension_query_counter += 1
         return name
 
+    def next_scalar_atomic_temp_name(self):
+        name = f"__cgl_atomic_{self.scalar_atomic_counter}"
+        self.scalar_atomic_counter += 1
+        return name
+
     def generate_statement(self, stmt, indent=0):
         """Render a single CrossGL statement as Mojo code."""
         indent_str = "    " * indent
@@ -5359,7 +5508,7 @@ class MojoCodeGen:
         if (
             guard is not None
             and isinstance(pattern, IdentifierPatternNode)
-            and not self.is_enum_identifier_pattern(pattern)
+            and not self.is_enum_identifier_pattern(pattern, subject_type)
         ):
             replacements[pattern.name] = expression
             return replacements
@@ -5392,7 +5541,7 @@ class MojoCodeGen:
         if isinstance(pattern, LiteralPatternNode):
             condition = f"{expression} == {self.generate_expression(pattern.literal)}"
         elif isinstance(pattern, IdentifierPatternNode):
-            if self.is_enum_identifier_pattern(pattern):
+            if self.is_enum_identifier_pattern(pattern, subject_type):
                 condition = self.enum_identifier_pattern_condition(
                     pattern, expression, subject_type
                 )
@@ -5421,12 +5570,17 @@ class MojoCodeGen:
             raise self.match_arm_error()
         return condition
 
-    def is_enum_identifier_pattern(self, pattern):
+    def is_enum_identifier_pattern(self, pattern, subject_type=None):
         name = getattr(pattern, "name", None)
-        return isinstance(name, str) and name in self.enum_variant_aliases
+        if not isinstance(name, str):
+            return False
+        return (
+            self.resolve_match_enum_variant_path(name, subject_type)
+            in self.enum_variant_aliases
+        )
 
     def enum_identifier_pattern_condition(self, pattern, expression, subject_type=None):
-        name = pattern.name
+        name = self.resolve_match_enum_variant_path(pattern.name, subject_type)
         alias = self.enum_variant_aliases[name]
         enum_type = self.enum_variant_result_types.get(name)
         if enum_type in self.struct_types or self.generic_enum_specialization_for_type(
@@ -5438,7 +5592,9 @@ class MojoCodeGen:
     def constructor_pattern_condition(
         self, pattern, expression, replacements, subject_type=None
     ):
-        variant_path = getattr(pattern, "type_name", None)
+        variant_path = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
         variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
         if variant_fields is None:
             raise self.match_arm_error("constructor patterns cannot be lowered")
@@ -5473,7 +5629,9 @@ class MojoCodeGen:
     def struct_pattern_condition(
         self, pattern, expression, replacements, subject_type=None
     ):
-        pattern_type = getattr(pattern, "type_name", None)
+        pattern_type = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
         variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
         if variant_fields is not None:
             field_types = dict(variant_fields)
@@ -5516,12 +5674,14 @@ class MojoCodeGen:
         )
 
     def enum_pattern_variant_fields(self, variant_path, subject_type=None):
+        variant_path = self.resolve_match_enum_variant_path(variant_path, subject_type)
         variant_fields = self.enum_variant_constructor_fields.get(variant_path)
         if variant_fields is not None:
             return variant_fields
         return self.generic_enum_variant_fields_for_type(variant_path, subject_type)
 
     def enum_variant_tag_condition(self, variant_path, expression, subject_type=None):
+        variant_path = self.resolve_match_enum_variant_path(variant_path, subject_type)
         alias = self.enum_variant_aliases[variant_path]
         enum_type = self.enum_variant_result_types.get(variant_path)
         if enum_type in self.struct_types or self.generic_enum_specialization_for_type(
@@ -5529,6 +5689,33 @@ class MojoCodeGen:
         ):
             return f"{expression}.variant == {alias}"
         return f"{expression} == {alias}"
+
+    def resolve_match_enum_variant_path(self, variant_path, subject_type=None):
+        if not isinstance(variant_path, str):
+            return variant_path
+
+        normalized = variant_path.replace(".", "::")
+        if normalized in self.enum_variant_aliases:
+            return normalized
+        if "::" in normalized:
+            return normalized
+
+        enum_name = self.match_subject_enum_type_name(subject_type)
+        if enum_name is None:
+            return normalized
+        if normalized not in self.enum_variant_names.get(enum_name, []):
+            return normalized
+        return f"{enum_name}::{normalized}"
+
+    def match_subject_enum_type_name(self, subject_type):
+        specialization = self.generic_enum_specialization_for_type(subject_type)
+        if specialization is not None:
+            return specialization["base_name"]
+
+        type_name = self.type_name(subject_type)
+        if type_name in self.enum_variant_names:
+            return type_name
+        return None
 
     def struct_pattern_type_name(self, pattern_type, subject_type=None):
         if not isinstance(pattern_type, str):
@@ -5586,7 +5773,7 @@ class MojoCodeGen:
                 )
             return conditions
         if isinstance(pattern, IdentifierPatternNode):
-            if self.is_enum_identifier_pattern(pattern):
+            if self.is_enum_identifier_pattern(pattern, subject_type):
                 if collect_conditions:
                     conditions.append(
                         self.enum_identifier_pattern_condition(
@@ -5598,7 +5785,9 @@ class MojoCodeGen:
                 replacements[pattern.name] = expression
             return conditions
         if isinstance(pattern, ConstructorPatternNode):
-            variant_path = getattr(pattern, "type_name", None)
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
             variant_fields = self.enum_pattern_variant_fields(
                 variant_path, subject_type
             )
@@ -5625,7 +5814,9 @@ class MojoCodeGen:
                 )
             return conditions
         if isinstance(pattern, StructPatternNode):
-            pattern_type = getattr(pattern, "type_name", None)
+            pattern_type = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
             variant_fields = self.enum_pattern_variant_fields(
                 pattern_type, subject_type
             )
@@ -5699,7 +5890,7 @@ class MojoCodeGen:
                 continue
 
             if isinstance(pattern, IdentifierPatternNode):
-                if self.is_enum_identifier_pattern(pattern):
+                if self.is_enum_identifier_pattern(pattern, subject_type):
                     continue
                 if guard is not None:
                     continue
@@ -5897,9 +6088,11 @@ class MojoCodeGen:
         if isinstance(pattern, LiteralPatternNode):
             return self.literal_pattern_binding_name(pattern) is not None
         if isinstance(pattern, IdentifierPatternNode):
-            return not self.is_enum_identifier_pattern(pattern)
+            return not self.is_enum_identifier_pattern(pattern, subject_type)
         if isinstance(pattern, StructPatternNode):
-            pattern_type = getattr(pattern, "type_name", None)
+            pattern_type = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
             if self.enum_pattern_variant_fields(pattern_type, subject_type) is not None:
                 return False
             struct_type = self.struct_pattern_type_name(pattern_type, subject_type)
@@ -5921,10 +6114,12 @@ class MojoCodeGen:
     def match_pattern_enum_variant_path(self, pattern, subject_type=None):
         if isinstance(
             pattern, IdentifierPatternNode
-        ) and self.is_enum_identifier_pattern(pattern):
-            return pattern.name.replace(".", "::")
+        ) and self.is_enum_identifier_pattern(pattern, subject_type):
+            return self.resolve_match_enum_variant_path(pattern.name, subject_type)
         if isinstance(pattern, ConstructorPatternNode):
-            variant_path = getattr(pattern, "type_name", None)
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
             if (
                 variant_path in self.enum_variant_result_types
                 or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
@@ -5932,7 +6127,9 @@ class MojoCodeGen:
             ):
                 return variant_path.replace(".", "::")
         if isinstance(pattern, StructPatternNode):
-            variant_path = getattr(pattern, "type_name", None)
+            variant_path = self.resolve_match_enum_variant_path(
+                getattr(pattern, "type_name", None), subject_type
+            )
             if (
                 variant_path in self.enum_variant_result_types
                 or self.generic_enum_variant_fields_for_type(variant_path, subject_type)
@@ -5942,7 +6139,9 @@ class MojoCodeGen:
         return None
 
     def constructor_pattern_rejection_reason(self, pattern, subject_type=None):
-        variant_path = getattr(pattern, "type_name", None)
+        variant_path = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
         variant_fields = self.enum_pattern_variant_fields(variant_path, subject_type)
         if variant_fields is None:
             return "constructor patterns cannot be lowered"
@@ -5959,7 +6158,9 @@ class MojoCodeGen:
         return None
 
     def struct_pattern_rejection_reason(self, pattern, subject_type=None):
-        pattern_type = getattr(pattern, "type_name", None)
+        pattern_type = self.resolve_match_enum_variant_path(
+            getattr(pattern, "type_name", None), subject_type
+        )
         variant_fields = self.enum_pattern_variant_fields(pattern_type, subject_type)
         if variant_fields is not None:
             field_types = dict(variant_fields)
@@ -5989,7 +6190,7 @@ class MojoCodeGen:
             if isinstance(nested_pattern, (WildcardPatternNode, LiteralPatternNode)):
                 continue
             if isinstance(nested_pattern, IdentifierPatternNode):
-                if self.is_enum_identifier_pattern(nested_pattern):
+                if self.is_enum_identifier_pattern(nested_pattern, subject_type):
                     continue
                 continue
             if isinstance(nested_pattern, ConstructorPatternNode):
@@ -6689,6 +6890,8 @@ class MojoCodeGen:
                 )
             if func_name == "texelFetch":
                 return self.generate_texel_fetch_call(expr.args)
+            if func_name == "texelFetchOffset":
+                return self.generate_texel_fetch_call(expr.args, with_offset=True)
             if func_name == "imageSize":
                 return self.generate_resource_size_call(expr.args, "image_size")
             if func_name == "imageLoad":
@@ -6712,6 +6915,9 @@ class MojoCodeGen:
                 return self.generate_resource_builtin_call(
                     expr.args, helper_base, return_kind
                 )
+            scalar_atomic = self.generate_scalar_atomic_call(func_name, expr.args)
+            if scalar_atomic is not None:
+                return scalar_atomic
             if func_name in MOJO_IMAGE_ATOMIC_BUILTINS:
                 return self.generate_image_atomic_call(
                     expr.args, MOJO_IMAGE_ATOMIC_BUILTINS[func_name]
@@ -7270,6 +7476,8 @@ class MojoCodeGen:
             resource_type = self.map_type(self.expression_result_type(resource_args[0]))
             if self.is_image_resource_type(resource_type):
                 return self.generate_image_atomic_call(resource_args, atomic_helper)
+        if operation == "texelFetchOffset":
+            return self.generate_texel_fetch_call(resource_args, with_offset=True)
         if operation in {"Load", "texelFetch"}:
             fetch_args = list(resource_args)
             if fetch_args:
@@ -7319,13 +7527,13 @@ class MojoCodeGen:
         sync_type = getattr(stmt, "sync_type", "")
         if getattr(stmt, "arguments", None):
             raise ValueError(
-                "Unsupported Mojo synchronization operation "
+                "Invalid Mojo synchronization operation "
                 f"{sync_type}; arguments are not supported"
             )
 
         helper_name = MOJO_SYNC_BUILTINS.get(sync_type)
         if helper_name is None:
-            raise ValueError(f"Unsupported Mojo synchronization operation {sync_type}")
+            raise ValueError(f"Invalid Mojo synchronization operation {sync_type}")
         self.required_sync_helpers.add(helper_name)
         indent_str = "    " * indent
         return f"{indent_str}{helper_name}()\n"
@@ -7335,9 +7543,100 @@ class MojoCodeGen:
         helper_base = MOJO_ATOMIC_OP_ALIASES.get(operation)
         if helper_base is None:
             raise ValueError(f"Unsupported Mojo atomic operation {operation}")
+        scalar_atomic = self.generate_scalar_atomic_call(
+            operation, [expr.target, *getattr(expr, "arguments", [])]
+        )
+        if scalar_atomic is not None:
+            return scalar_atomic
         return self.generate_image_atomic_call(
             [expr.target, *getattr(expr, "arguments", [])], helper_base
         )
+
+    def generate_scalar_atomic_call(self, func_name, args):
+        operation = MOJO_SCALAR_ATOMIC_OPS.get(func_name)
+        if operation is None or not args:
+            return None
+
+        target = args[0]
+        target_type = self.type_name(self.expression_result_type(target))
+        if target_type is None:
+            return None
+        if self.buffer_resource_info(target_type) is not None:
+            return None
+        mapped_target_type = self.map_type(target_type)
+        if self.is_image_resource_type(mapped_target_type):
+            return None
+        if self.is_texture_resource_type(mapped_target_type):
+            return None
+        if target_type not in MOJO_SCALAR_ATOMIC_TYPES:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; "
+                f"scalar integer target required: {target_type}"
+            )
+        if not self.is_assignable_atomic_target(target):
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; assignable target required"
+            )
+        expected_args = 3 if operation == "compare_exchange" else 2
+        if len(args) != expected_args:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; expected "
+                f"{expected_args} argument(s), got {len(args)}"
+            )
+        if not self.expression_prelude_stack:
+            raise ValueError(
+                f"Unsupported {func_name} for Mojo codegen; "
+                "scalar atomic lowering requires statement context"
+            )
+
+        self.validate_resource_read_write_access(target, func_name)
+        target_expr = self.generate_expression(target)
+        temp_name = self.next_scalar_atomic_temp_name()
+        mojo_type = self.map_type(target_type)
+        context = self.expression_prelude_stack[-1]
+        indent_str = "    " * context["indent"]
+        context["lines"].append(
+            f"{indent_str}var {temp_name}: {mojo_type} = {target_expr}\n"
+        )
+
+        if operation == "compare_exchange":
+            compare_expr = self.generate_expression(
+                args[1], target_type, f"{func_name} compare"
+            )
+            value_expr = self.generate_expression(
+                args[2], target_type, f"{func_name} value"
+            )
+            context["lines"].append(f"{indent_str}if {temp_name} == {compare_expr}:\n")
+            context["lines"].append(f"{indent_str}    {target_expr} = {value_expr}\n")
+            return temp_name
+
+        value_expr = self.generate_expression(
+            args[1], target_type, f"{func_name} value"
+        )
+        if operation == "exchange":
+            update_expr = value_expr
+        elif operation == "add":
+            update_expr = f"({temp_name} + {value_expr})"
+        elif operation == "min":
+            update_expr = f"min({temp_name}, {value_expr})"
+        elif operation == "max":
+            update_expr = f"max({temp_name}, {value_expr})"
+        elif operation == "and":
+            update_expr = f"({temp_name} & {value_expr})"
+        elif operation == "or":
+            update_expr = f"({temp_name} | {value_expr})"
+        elif operation == "xor":
+            update_expr = f"({temp_name} ^ {value_expr})"
+        else:
+            raise ValueError(f"Unsupported Mojo scalar atomic operation {func_name}")
+
+        context["lines"].append(f"{indent_str}{target_expr} = {update_expr}\n")
+        return temp_name
+
+    def is_assignable_atomic_target(self, target):
+        return isinstance(
+            target, (ArrayAccessNode, MemberAccessNode, VariableNode)
+        ) or (hasattr(target, "__class__") and "Identifier" in str(target.__class__))
 
     def builtin_variable_result_type(self, name):
         if name in {
@@ -7361,10 +7660,49 @@ class MojoCodeGen:
 
     def generate_wave_op(self, expr):
         operation = getattr(expr, "operation", "wave intrinsic")
-        raise ValueError(
-            "Unsupported Mojo wave intrinsic "
-            f"{operation}; Mojo backend does not model subgroup execution"
+        args = list(getattr(expr, "arguments", []) or [])
+        expected_count = MOJO_WAVE_OP_ARITIES.get(operation)
+        if expected_count is None:
+            raise ValueError(f"Unsupported Mojo wave intrinsic {operation}")
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Mojo wave intrinsic {operation} requires {expected_count} "
+                f"argument{'s' if expected_count != 1 else ''}, got {len(args)}"
+            )
+
+        helper_name = MOJO_WAVE_HELPERS[operation]
+        arg_types = tuple(
+            self.mojo_wave_argument_mojo_type(operation, index, arg)
+            for index, arg in enumerate(args)
         )
+        return_type = self.map_type(self.mojo_wave_result_type(operation, args))
+        self.required_wave_helpers.add((helper_name, arg_types, return_type, operation))
+
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{helper_name}({generated_args})"
+
+    def mojo_wave_result_type(self, operation, args):
+        if operation in MOJO_WAVE_UINT_RESULT_OPS:
+            return "uint"
+        if operation in MOJO_WAVE_BOOL_RESULT_OPS:
+            return "bool"
+        if operation in MOJO_WAVE_UVEC4_RESULT_OPS:
+            return "uvec4"
+        if args:
+            return self.expression_result_type(args[0]) or "uint"
+        return "uint"
+
+    def mojo_wave_argument_mojo_type(self, operation, index, arg):
+        if index == 0 and operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
+            return self.map_type("bool")
+        if index == 1 and operation.startswith("WaveMultiPrefix"):
+            return self.map_type("uvec4")
+        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            arg_type = self.expression_result_type(arg)
+            if self.type_name(arg_type) in MOJO_INTEGER_INDEX_TYPES:
+                return self.map_type(arg_type)
+            return self.map_type("uint")
+        return self.map_type(self.expression_result_type(arg) or "uint")
 
     def generate_ray_tracing_op(self, expr):
         operation = getattr(expr, "operation", "ray tracing intrinsic")
@@ -7594,19 +7932,28 @@ class MojoCodeGen:
         if not args:
             return f"{helper_name}()"
 
-        args = self.strip_split_sampler_arg(args)
-        texture_type = self.expression_result_type(args[0])
+        validation_args, sampler_arg = self.split_sampler_arg(args)
+        texture_type = self.expression_result_type(validation_args[0])
         mapped_type = self.map_type(texture_type)
-        self.validate_texture_sample_args(args, helper_name, mapped_type)
+        self.validate_texture_sample_args(validation_args, helper_name, mapped_type)
         if mapped_type in MOJO_RESOURCE_SAMPLE_COORDS:
-            if helper_name == "sample":
-                self.required_resource_sample_types.add(mapped_type)
+            if sampler_arg is None:
+                if helper_name == "sample":
+                    self.required_resource_sample_types.add(mapped_type)
+                elif helper_name == "sample_lod":
+                    self.required_resource_lod_types.add(mapped_type)
+                elif helper_name == "sample_grad":
+                    self.required_resource_grad_types.add(mapped_type)
+            elif helper_name == "sample":
+                self.required_resource_sample_sampler_types.add(mapped_type)
             elif helper_name == "sample_lod":
-                self.required_resource_lod_types.add(mapped_type)
+                self.required_resource_lod_sampler_types.add(mapped_type)
             elif helper_name == "sample_grad":
-                self.required_resource_grad_types.add(mapped_type)
+                self.required_resource_grad_sampler_types.add(mapped_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
+        if sampler_arg is not None:
+            helper_name = f"{helper_name}_sampler"
         return f"{helper_name}({generated_args})"
 
     def validate_texture_sample_args(self, args, helper_name, resource_type):
@@ -7664,12 +8011,16 @@ class MojoCodeGen:
                 )
 
     def strip_split_sampler_arg(self, args):
+        stripped_args, _ = self.split_sampler_arg(args)
+        return stripped_args
+
+    def split_sampler_arg(self, args):
         if len(args) < 3:
-            return args
+            return args, None
         sampler_type = self.map_type(self.expression_result_type(args[1]))
         if sampler_type == "Sampler":
-            return [args[0], *args[2:]]
-        return args
+            return [args[0], *args[2:]], args[1]
+        return args, None
 
     def generate_user_function_call_arguments(self, func_name, args):
         parameter_types = self.function_parameter_types.get(func_name, [])
@@ -8374,26 +8725,46 @@ class MojoCodeGen:
         return f"{helper_name}({generated_args})"
 
     def generate_resource_query_levels_call(self, args):
-        if args:
-            resource_type = self.map_type(self.expression_result_type(args[0]))
-            if not self.is_texture_resource_type(resource_type):
-                raise ValueError(
-                    "Unsupported texture_query_levels for Mojo codegen; "
-                    f"texture resource required: {resource_type}"
-                )
-            if self.is_multisample_resource_type(resource_type):
-                raise ValueError(
-                    "Unsupported texture_query_levels for Mojo codegen; "
-                    f"non-multisample texture required: {resource_type}"
-                )
-            self.required_resource_query_level_types.add(resource_type)
+        if not args:
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                "texture resource required: <missing>"
+            )
+        if len(args) != 1:
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; expected "
+                f"0 argument(s) after texture resource, got {len(args) - 1}"
+            )
+
+        resource_type = self.map_type(self.expression_result_type(args[0]))
+        if not self.is_texture_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                f"texture resource required: {resource_type}"
+            )
+        if self.is_multisample_resource_type(resource_type):
+            raise ValueError(
+                "Unsupported texture_query_levels for Mojo codegen; "
+                f"non-multisample texture required: {resource_type}"
+            )
+        self.required_resource_query_level_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"texture_query_levels({generated_args})"
 
     def generate_resource_sample_count_call(self, args, helper_name):
         if not args:
-            return f"{helper_name}()"
+            required_kind = "texture" if helper_name == "texture_samples" else "image"
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"{required_kind} resource required: <missing>"
+            )
+        if len(args) != 1:
+            required_kind = "texture" if helper_name == "texture_samples" else "image"
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"0 argument(s) after {required_kind} resource, got {len(args) - 1}"
+            )
 
         resource_type = self.map_type(self.expression_result_type(args[0]))
         if helper_name == "texture_samples":
@@ -8418,43 +8789,66 @@ class MojoCodeGen:
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
         return f"{helper_name}({generated_args})"
 
-    def generate_texel_fetch_call(self, args):
+    def generate_texel_fetch_call(self, args, *, with_offset=False):
+        helper_name = "texel_fetch_offset" if with_offset else "texel_fetch"
         if args:
             resource_type = self.map_type(self.expression_result_type(args[0]))
-            self.validate_texel_fetch_args(args, resource_type)
-            if resource_type in MOJO_RESOURCE_TEXEL_COORDS:
+            self.validate_texel_fetch_args(args, resource_type, with_offset=with_offset)
+            if with_offset and resource_type in MOJO_RESOURCE_OFFSET_COORDS:
+                self.required_resource_texel_fetch_offset_types.add(resource_type)
+            elif resource_type in MOJO_RESOURCE_TEXEL_COORDS:
                 self.required_resource_texel_fetch_types.add(resource_type)
 
         generated_args = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"texel_fetch({generated_args})"
+        return f"{helper_name}({generated_args})"
 
-    def validate_texel_fetch_args(self, args, resource_type):
+    def validate_texel_fetch_args(self, args, resource_type, *, with_offset=False):
+        helper_name = "texel_fetch_offset" if with_offset else "texel_fetch"
         if not self.is_texture_resource_type(resource_type):
             raise ValueError(
-                "Unsupported texel_fetch for Mojo codegen; "
+                f"Unsupported {helper_name} for Mojo codegen; "
                 f"texture resource required: {resource_type}"
             )
-        if resource_type not in MOJO_RESOURCE_TEXEL_COORDS:
+        if self.is_shadow_resource_type(resource_type):
             raise ValueError(
-                "Unsupported texel_fetch for Mojo codegen; "
-                f"texel-fetch texture required: {resource_type}"
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"non-shadow texture required: {resource_type}"
             )
-        if len(args) != 3:
+        required_resources = (
+            MOJO_RESOURCE_OFFSET_COORDS if with_offset else MOJO_RESOURCE_TEXEL_COORDS
+        )
+        if resource_type not in required_resources:
             raise ValueError(
-                "Unsupported texel_fetch for Mojo codegen; expected 2 argument(s) "
-                f"after texture resource, got {len(args) - 1}"
+                f"Unsupported {helper_name} for Mojo codegen; "
+                f"texel-fetch{'-offset' if with_offset else ''} texture required: "
+                f"{resource_type}"
+            )
+        expected_count = 4 if with_offset else 3
+        if len(args) != expected_count:
+            raise ValueError(
+                f"Unsupported {helper_name} for Mojo codegen; expected "
+                f"{expected_count - 1} argument(s) after texture resource, "
+                f"got {len(args) - 1}"
             )
 
         self.validate_resource_argument_type(
             args[1],
             MOJO_RESOURCE_TEXEL_COORDS[resource_type],
-            "texel_fetch",
+            helper_name,
             resource_type,
             "coordinate",
         )
         self.validate_resource_argument_type(
-            args[2], "Int32", "texel_fetch", resource_type, "lod_or_sample"
+            args[2], "Int32", helper_name, resource_type, "lod_or_sample"
         )
+        if with_offset:
+            self.validate_resource_argument_type(
+                args[3],
+                MOJO_RESOURCE_OFFSET_COORDS[resource_type],
+                helper_name,
+                resource_type,
+                "offset",
+            )
 
     def generate_image_load_call(self, args):
         if args:
@@ -8901,8 +9295,11 @@ class MojoCodeGen:
         if not args:
             return f"{helper_base}()"
 
-        args = self.strip_split_sampler_arg(args)
-        self.validate_texture_builtin_resource(args, helper_base)
+        validation_args, sampler_arg = self.split_sampler_arg(args)
+        self.validate_texture_builtin_resource(validation_args, helper_base)
+        helper_base = (
+            f"{helper_base}_sampler" if sampler_arg is not None else helper_base
+        )
         arg_types = tuple(self.resource_builtin_arg_type(arg) for arg in args)
         helper_name = self.resource_builtin_helper_name(helper_base, arg_types)
         self.required_resource_builtin_helpers[(helper_name, arg_types)] = {
@@ -9583,12 +9980,16 @@ class MojoCodeGen:
             and not self.required_saturate_helpers
             and not self.required_resource_types
             and not self.required_resource_sample_types
+            and not self.required_resource_sample_sampler_types
             and not self.required_resource_lod_types
+            and not self.required_resource_lod_sampler_types
             and not self.required_resource_grad_types
+            and not self.required_resource_grad_sampler_types
             and not self.required_resource_size_types
             and not self.required_resource_query_level_types
             and not self.required_resource_sample_count_helpers
             and not self.required_resource_texel_fetch_types
+            and not self.required_resource_texel_fetch_offset_types
             and not self.required_image_load_types
             and not self.required_image_store_types
             and not self.required_resource_builtin_helpers
@@ -9602,14 +10003,18 @@ class MojoCodeGen:
             and not self.required_byte_address_vector_store_helpers
             and not self.required_reinterpret_helpers
             and not self.required_sync_helpers
+            and not self.required_wave_helpers
         ):
             return ""
 
         code = ""
         resource_sampled_types = (
             self.required_resource_sample_types
+            | self.required_resource_sample_sampler_types
             | self.required_resource_lod_types
+            | self.required_resource_lod_sampler_types
             | self.required_resource_grad_types
+            | self.required_resource_grad_sampler_types
             | self.required_resource_size_types
             | self.required_resource_query_level_types
             | {
@@ -9617,9 +10022,22 @@ class MojoCodeGen:
                 for _, resource_type in self.required_resource_sample_count_helpers
             }
             | self.required_resource_texel_fetch_types
+            | self.required_resource_texel_fetch_offset_types
             | self.required_image_load_types
             | self.required_image_store_types
         )
+        resource_builtin_sampler_required = any(
+            "Sampler" in helper["arg_types"]
+            for helper in self.required_resource_builtin_helpers.values()
+        )
+        resource_types = self.required_resource_types | resource_sampled_types
+        if (
+            self.required_resource_sample_sampler_types
+            or self.required_resource_lod_sampler_types
+            or self.required_resource_grad_sampler_types
+            or resource_builtin_sampler_required
+        ):
+            resource_types.add("Sampler")
         if (
             self.required_resource_types
             or resource_sampled_types
@@ -9634,18 +10052,22 @@ class MojoCodeGen:
             or self.required_byte_address_vector_store_helpers
         ):
             code += "# CrossGL resource placeholders\n"
-            for resource_type in sorted(
-                self.required_resource_types | resource_sampled_types
-            ):
+            for resource_type in sorted(resource_types):
                 code += self.generate_resource_type(resource_type)
             for buffer_type in sorted(self.required_buffer_resource_types):
                 code += self.generate_buffer_resource_type(buffer_type)
             for resource_type in sorted(self.required_resource_sample_types):
                 code += self.generate_resource_sample_helper(resource_type)
+            for resource_type in sorted(self.required_resource_sample_sampler_types):
+                code += self.generate_resource_sample_sampler_helper(resource_type)
             for resource_type in sorted(self.required_resource_lod_types):
                 code += self.generate_resource_lod_helper(resource_type)
+            for resource_type in sorted(self.required_resource_lod_sampler_types):
+                code += self.generate_resource_lod_sampler_helper(resource_type)
             for resource_type in sorted(self.required_resource_grad_types):
                 code += self.generate_resource_grad_helper(resource_type)
+            for resource_type in sorted(self.required_resource_grad_sampler_types):
+                code += self.generate_resource_grad_sampler_helper(resource_type)
             for helper_name, resource_type in sorted(
                 self.required_resource_size_helpers
             ):
@@ -9660,6 +10082,10 @@ class MojoCodeGen:
                 )
             for resource_type in sorted(self.required_resource_texel_fetch_types):
                 code += self.generate_texel_fetch_helper(resource_type)
+            for resource_type in sorted(
+                self.required_resource_texel_fetch_offset_types
+            ):
+                code += self.generate_texel_fetch_offset_helper(resource_type)
             for resource_type in sorted(self.required_image_load_types):
                 code += self.generate_image_load_helper(resource_type)
             for resource_type in sorted(self.required_image_store_types):
@@ -9694,6 +10120,12 @@ class MojoCodeGen:
             code += "# CrossGL synchronization placeholders\n"
             for helper_name in sorted(self.required_sync_helpers):
                 code += self.generate_sync_helper(helper_name)
+            code += "\n"
+
+        if self.required_wave_helpers:
+            code += "# CrossGL wave/subgroup placeholders\n"
+            for helper in sorted(self.required_wave_helpers):
+                code += self.generate_wave_helper(helper)
             code += "\n"
 
         if self.required_fract_helpers or self.required_saturate_helpers:
@@ -9742,6 +10174,51 @@ class MojoCodeGen:
 
     def generate_sync_helper(self, helper_name):
         return f"fn {helper_name}():\n    pass\n\n"
+
+    def generate_wave_helper(self, helper):
+        helper_name, arg_types, return_type, operation = helper
+        parameter_names = self.wave_helper_parameter_names(operation, len(arg_types))
+        params = [
+            f"{parameter_name}: {arg_type}"
+            for parameter_name, arg_type in zip(parameter_names, arg_types)
+        ]
+        code = f"fn {helper_name}({', '.join(params)}) -> {return_type}:\n"
+        code += f"    return {self.wave_helper_return_expression(operation, return_type)}\n\n"
+        return code
+
+    def wave_helper_parameter_names(self, operation, arg_count):
+        if arg_count == 0:
+            return []
+        if arg_count == 1:
+            if operation in MOJO_WAVE_PREDICATE_ARGUMENT_OPS:
+                return ["predicate"]
+            return ["value"]
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return ["value", "lane"]
+        if operation == "WaveMultiPrefixCountBits":
+            return ["predicate", "mask"]
+        return ["value", "mask"]
+
+    def wave_helper_return_expression(self, operation, return_type):
+        if operation == "WaveGetLaneCount":
+            return "1"
+        if operation == "WaveGetLaneIndex":
+            return "0"
+        if operation == "WaveIsFirstLane":
+            return "True"
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "predicate"
+        if operation == "WaveActiveAllEqual":
+            return "True"
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+            "WaveActiveBallot",
+            "WaveMatch",
+        }:
+            return self.zero_mojo_value(return_type)
+        return "value"
 
     def generate_resource_type(self, resource_type):
         code = f"@value\nstruct {resource_type}:\n"
@@ -9854,6 +10331,16 @@ class MojoCodeGen:
         code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
+    def generate_resource_sample_sampler_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
     def generate_resource_lod_helper(self, resource_type):
         coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
         return_type = self.resource_sample_return_type(resource_type)
@@ -9867,12 +10354,36 @@ class MojoCodeGen:
             code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
 
+    def generate_resource_lod_sampler_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_lod_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}, lod: Float32) -> {return_type}:\n"
+        )
+        if return_type == "SIMD[DType.float32, 4]":
+            code += "    return SIMD[DType.float32, 4](0.0, 0.0, lod, 1.0)\n\n"
+        else:
+            code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
     def generate_resource_grad_helper(self, resource_type):
         coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
         return_type = self.resource_sample_return_type(resource_type)
         code = (
             f"fn sample_grad(tex: {resource_type}, coord: {coord_type}, "
             f"ddx: {coord_type}, ddy: {coord_type}) -> {return_type}:\n"
+        )
+        code += f"    return {self.zero_mojo_value(return_type)}\n\n"
+        return code
+
+    def generate_resource_grad_sampler_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_SAMPLE_COORDS[resource_type]
+        return_type = self.resource_sample_return_type(resource_type)
+        code = (
+            f"fn sample_grad_sampler(tex: {resource_type}, sampler: Sampler, "
+            f"coord: {coord_type}, ddx: {coord_type}, ddy: {coord_type}) "
+            f"-> {return_type}:\n"
         )
         code += f"    return {self.zero_mojo_value(return_type)}\n\n"
         return code
@@ -9910,6 +10421,16 @@ class MojoCodeGen:
         code = (
             f"fn texel_fetch(tex: {resource_type}, coord: {coord_type}, "
             "lod: Int32) -> SIMD[DType.float32, 4]:\n"
+        )
+        code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
+        return code
+
+    def generate_texel_fetch_offset_helper(self, resource_type):
+        coord_type = MOJO_RESOURCE_TEXEL_COORDS[resource_type]
+        offset_type = MOJO_RESOURCE_OFFSET_COORDS[resource_type]
+        code = (
+            f"fn texel_fetch_offset(tex: {resource_type}, coord: {coord_type}, "
+            f"lod: Int32, offset: {offset_type}) -> SIMD[DType.float32, 4]:\n"
         )
         code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 1.0)\n\n"
         return code
@@ -10855,7 +11376,7 @@ class MojoCodeGen:
                     if self.is_shadow_resource_type(resource_type):
                         return "float"
                 return "vec4"
-            if func_name == "texelFetch":
+            if func_name in {"texelFetch", "texelFetchOffset"}:
                 return "vec4"
             if func_name == "textureQueryLevels":
                 return "int"
@@ -10901,6 +11422,10 @@ class MojoCodeGen:
                 if return_kind == "vec2":
                     return "vec2"
                 return "vec4"
+            if func_name in MOJO_SCALAR_ATOMIC_OPS and expr.args:
+                target_type = self.type_name(self.expression_result_type(expr.args[0]))
+                if target_type in MOJO_SCALAR_ATOMIC_TYPES:
+                    return target_type
             if func_name in MOJO_IMAGE_ATOMIC_BUILTINS and expr.args:
                 resource_type = self.map_type(self.expression_result_type(expr.args[0]))
                 value_type = self.image_value_type(resource_type)
@@ -10925,6 +11450,10 @@ class MojoCodeGen:
                     return MOJO_DTYPE_INFO[vector_info[0]][0]
                 return base_type
             return self.builtin_variable_result_type(expr.builtin_name)
+        if isinstance(expr, WaveOpNode):
+            return self.mojo_wave_result_type(
+                getattr(expr, "operation", ""), getattr(expr, "arguments", []) or []
+            )
         if isinstance(expr, TextureNode):
             resource_type = self.map_type(
                 self.expression_result_type(expr.texture_expr)
@@ -10987,6 +11516,9 @@ class MojoCodeGen:
                 return "int"
             return "vec4"
         if isinstance(expr, AtomicOpNode):
+            target_type = self.type_name(self.expression_result_type(expr.target))
+            if target_type in MOJO_SCALAR_ATOMIC_TYPES:
+                return target_type
             resource_type = self.map_type(self.expression_result_type(expr.target))
             value_type = self.image_value_type(resource_type)
             if value_type == "UInt32":

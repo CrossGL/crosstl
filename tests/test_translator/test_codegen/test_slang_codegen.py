@@ -9142,7 +9142,7 @@ def test_match_literal_and_wildcard_arms_lower_to_slang_switch():
     assert "MatchNode" not in generated_code
 
 
-def test_match_guarded_arm_rejected_for_slang_switch_lowering():
+def test_match_guarded_arm_lowers_to_slang_if_chain():
     code = """
     shader main {
         compute {
@@ -9164,9 +9164,116 @@ def test_match_guarded_arm_rejected_for_slang_switch_lowering():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(ValueError, match="Unsupported match arm for Slang"):
-        generate_code(ast)
+    assert "switch (mode)" not in generated_code
+    assert "if (((mode == 0) && (mode > 0)))" in generated_code
+    assert "else {" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_identifier_binding_arm_lowers_to_slang_scoped_else_body():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    other => {
+                        value = other;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int other = mode;" in generated_code
+    assert "value = other;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_guarded_identifier_binding_falls_through_to_later_slang_arm():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    candidate if candidate > 2 => {
+                        value = candidate;
+                    }
+                    _ => {
+                        value = 7;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "candidate > 2" in generated_code
+    assert "value = candidate;" in generated_code
+    assert "value = 7;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_plain_struct_pattern_binds_fields_for_slang():
+    code = """
+    shader main {
+        struct Pair {
+            int left;
+            int right;
+        };
+
+        compute {
+            int main(Pair pair) {
+                int value = 0;
+                match pair {
+                    Pair { left, right } => {
+                        value = left + right;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int main(Pair pair)" in generated_code
+    assert "int left = pair.left;" in generated_code
+    assert "int right = pair.right;" in generated_code
+    assert "value = left + right;" in generated_code
+    assert "MatchNode" not in generated_code
 
 
 def test_array_access_and_ternary_expressions_emit_slang_syntax():
@@ -10753,6 +10860,68 @@ def test_conflicting_slang_resource_binding_ranges_raise(resource_source, messag
         generate_code(ast)
 
 
+def test_unsized_slang_resource_arrays_preserve_bindless_declarations_and_operations():
+    code = """
+    shader UnsizedSlangResourceArrays {
+        sampler querySampler;
+        sampler2d textures[];
+        sampler states[];
+        image2D images[] @rgba16f;
+        StructuredBuffer<float4> values[];
+        RWStructuredBuffer<uint> counters[];
+        ByteAddressBuffer rawBytes[];
+
+        float4 sampleArray(int index, float2 uv, int2 pixel, uint offset) {
+            float4 color = texture(textures[index], states[index], uv);
+            float4 imageColor = imageLoad(images[index], pixel);
+            float4 bufferValue = values[index].Load(0u);
+            uint counterValue = counters[index].Load(1u);
+            uint rawValue = rawBytes[index].Load(offset);
+            return color + imageColor + bufferValue
+                + float4(counterValue + rawValue);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[vk::binding(0, 0)]] SamplerState querySampler : register(s0);" in (
+        generated_code
+    )
+    assert "[[vk::binding(0, 0)]] Sampler2D<float4> textures[] : register(t0);" in (
+        generated_code
+    )
+    assert "[[vk::binding(1, 0)]] SamplerState states[] : register(s1);" in (
+        generated_code
+    )
+    assert "[[vk::binding(0, 0)]] RWTexture2D<float4> images[] : register(u0);" in (
+        generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] StructuredBuffer<float4> values[] : register(t1);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<uint> counters[] : register(u1);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] ByteAddressBuffer rawBytes[] : register(t2);"
+        in generated_code
+    )
+    assert "float4 color = textures[index].Sample(uv);" in generated_code
+    assert "float4 imageColor = images[index][pixel];" in generated_code
+    assert "float4 bufferValue = values[index].Load(0u);" in generated_code
+    assert "uint counterValue = counters[index].Load(1u);" in generated_code
+    assert "uint rawValue = rawBytes[index].Load(offset);" in generated_code
+    assert "texture(textures" not in generated_code
+    assert "imageLoad(images" not in generated_code
+
+
 def test_one_dimensional_resources_emit_slang_methods_and_helpers():
     code = """
     shader OneDResources {
@@ -12272,6 +12441,227 @@ def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
     assert "ms[sampleState" not in generated_code
     assert "msLayers[sampleState" not in generated_code
     assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_offset_emits_slang_load_offsets():
+    code = """
+    shader Resources {
+        sampler1d lineMap;
+        sampler1darray lineLayers;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+        sampler3d volumeMap;
+        sampler linearSampler;
+
+        compute {
+            vec4 fetchOffsets(
+                sampler1D line,
+                sampler1DArray lineArray,
+                sampler2D tex,
+                sampler2DArray layers,
+                sampler3D volume,
+                sampler sampleState,
+                int x,
+                ivec2 xLayer,
+                ivec2 pixel,
+                ivec3 pixelLayer,
+                ivec3 voxel,
+                int lod,
+                int offset1,
+                ivec2 offset2,
+                ivec3 offset3
+            ) {
+                vec4 lineFetch = texelFetchOffset(line, x, lod, offset1);
+                vec4 lineLayerFetch = texelFetchOffset(
+                    lineArray,
+                    sampleState,
+                    xLayer,
+                    lod,
+                    offset1
+                );
+                vec4 fetched = texelFetchOffset(tex, pixel, lod, offset2);
+                vec4 fetchedLayer = texelFetchOffset(
+                    layers,
+                    sampleState,
+                    pixelLayer,
+                    lod,
+                    offset2
+                );
+                vec4 fetchedVolume = texelFetchOffset(
+                    volume,
+                    voxel,
+                    lod,
+                    offset3
+                );
+                return lineFetch + lineLayerFetch + fetched
+                    + fetchedLayer + fetchedVolume;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler1D<float4> lineMap : register(t0);" in generated_code
+    assert "Sampler1DArray<float4> lineLayers : register(t1);" in generated_code
+    assert "Sampler2D<float4> colorMap : register(t2);" in generated_code
+    assert "Sampler2DArray<float4> layerMap : register(t3);" in generated_code
+    assert "Sampler3D<float4> volumeMap : register(t4);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "float4 lineFetch = line.Load(int2(x, lod), offset1);" in generated_code
+    assert (
+        "float4 lineLayerFetch = lineArray.Load(int3(xLayer, lod), offset1);"
+        in generated_code
+    )
+    assert "float4 fetched = tex.Load(int3(pixel, lod), offset2);" in generated_code
+    assert (
+        "float4 fetchedLayer = layers.Load(int4(pixelLayer, lod), offset2);"
+        in generated_code
+    )
+    assert (
+        "float4 fetchedVolume = volume.Load(int4(voxel, lod), offset3);"
+        in generated_code
+    )
+    assert "lineArray.Load(int3(sampleState" not in generated_code
+    assert "layers.Load(int4(sampleState" not in generated_code
+    assert "texelFetchOffset(" not in generated_code
+
+
+def test_texel_fetch_offset_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler querySampler;
+        sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        samplercube cubeTex;
+        samplercubearray cubeArrayTex;
+        image2D colorImage;
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(2, 3);
+                ivec3 badPixel = ivec3(2, 3, 4);
+                ivec3 cubePixel = ivec3(1, 0, 0);
+                ivec4 cubeLayerPixel = ivec4(1, 0, 0, 2);
+                ivec2 offset = ivec2(1, 0);
+                ivec3 badOffset = ivec3(1, 0, 0);
+                uvec2 uintOffset = uvec2(1u, 0u);
+                float floatFetchLod = 1.0;
+                int lod = 0;
+
+                vec4 missingOffset = texelFetchOffset(colorMap, pixel, lod);
+                vec4 extraOffset = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    offset,
+                    offset
+                );
+                vec4 samplerOffset = texelFetchOffset(
+                    querySampler,
+                    pixel,
+                    lod,
+                    offset
+                );
+                vec4 imageOffset = texelFetchOffset(colorImage, pixel, lod, offset);
+                vec4 shadowOffset = texelFetchOffset(shadowMap, pixel, lod, offset);
+                vec4 multisampleOffset = texelFetchOffset(msTex, pixel, lod, offset);
+                vec4 cubeOffset = texelFetchOffset(
+                    cubeTex,
+                    cubePixel,
+                    lod,
+                    offset
+                );
+                vec4 cubeArrayOffset = texelFetchOffset(
+                    cubeArrayTex,
+                    cubeLayerPixel,
+                    lod,
+                    offset
+                );
+                vec4 badCoordRank = texelFetchOffset(
+                    colorMap,
+                    badPixel,
+                    lod,
+                    offset
+                );
+                vec4 badOffsetRank = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    badOffset
+                );
+                vec4 badOffsetType = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    uintOffset
+                );
+                vec4 badFetchIndex = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    floatFetchLod,
+                    offset
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 missingOffset = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires lod/sample and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 extraOffset = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires lod/sample and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    for variable in [
+        "samplerOffset",
+        "imageOffset",
+        "shadowOffset",
+        "multisampleOffset",
+        "cubeOffset",
+        "cubeArrayOffset",
+    ]:
+        assert (
+            f"float4 {variable} = /* unsupported Slang sampled texture: "
+            "texelFetchOffset requires an offset-capable non-shadow "
+            "non-multisampled sampled texture resource */ float4(0.0);"
+            in generated_code
+        )
+    assert (
+        "float4 badCoordRank = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetRank = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetType = /* unsupported Slang sampled texture: "
+        "texelFetchOffset offset must be scalar or vector int, got uint2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badFetchIndex = /* unsupported Slang sampled texture: "
+        "texelFetchOffset fetch index argument must be scalar int or uint, "
+        "got float */ float4(0.0);" in generated_code
+    )
+    assert "texelFetchOffset(" not in generated_code
+    assert ".Load(" not in generated_code
 
 
 def test_texture_gather_builtins_emit_slang_gather_methods():
@@ -16291,6 +16681,8 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int missingTextureSamples = textureSamples();
                 int missingImageSamples = imageSamples();
                 int missingLevels = textureQueryLevels();
+                int levelsFromSampler = textureQueryLevels(querySampler);
+                int levelsFromImage = textureQueryLevels(colorImage);
                 int extraTextureSamples = textureSamples(msTex, 0);
                 int extraImageSamples = imageSamples(msImage, 0);
                 int extraLevels = textureQueryLevels(colorMap, 0);
@@ -16441,6 +16833,16 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "textureQueryLevels requires a resource argument */ 0;" in generated_code
     )
     assert (
+        "int levelsFromSampler = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int levelsFromImage = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
         "int extraTextureSamples = /* unsupported Slang resource query: "
         "textureSamples accepts only a resource argument */ 0;" in generated_code
     )
@@ -16556,7 +16958,7 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0))));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 55
+    assert generated_code.count("unsupported Slang resource query") == 57
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
@@ -17183,13 +17585,13 @@ def test_resource_query_expected_types_flow_through_tail_expression_returns():
         "    }" in generated_code
     )
     assert (
-        "case 0:\n"
+        "case 0: {\n"
         "            return {/* unsupported Slang resource query: textureSize "
         "returns int2 but target expects int */ 0, /* unsupported Slang resource "
         "query: imageSize returns int2 but target expects int */ 0};" in generated_code
     )
     assert (
-        "default:\n"
+        "default: {\n"
         "            return {/* unsupported Slang resource query: textureSize "
         "returns int2 but target expects int */ 0, /* unsupported Slang resource "
         "query: imageSize returns int2 but target expects int */ 0};" in generated_code
@@ -17364,7 +17766,6 @@ def test_match_expression_defaults_assign_typed_values_for_missing_value_paths()
     assert "MatchNode(" not in generated_code
     assert "int chooseScalar(int mode)" in generated_code
     assert "int2[2] chooseVectorRow(int mode)" in generated_code
-    assert generated_code.count("default:") == 2
     assert (
         "cgl_match_value = /* unsupported Slang match expression: no wildcard "
         "arm handles remaining cases */ 0;" in generated_code
@@ -17409,19 +17810,17 @@ def test_match_expression_rejects_guarded_and_range_patterns_with_typed_values()
     generated_code = generate_code(ast)
 
     assert "MatchNode(" not in generated_code
-    assert "if mode > 0" not in generated_code
+    assert "if (((mode == 0) && (mode > 0)))" in generated_code
+    assert "cgl_match_value = 7;" in generated_code
+    assert "cgl_match_value = 1;" in generated_code
     assert "case .." not in generated_code
     assert (
-        "return /* unsupported Slang match expression: guarded arms cannot be "
-        "lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: range-style patterns "
-        "cannot be lowered to switch */ {int2(0), int2(0)};" in generated_code
+        "return /* unsupported Slang match expression: rest patterns are not "
+        "supported */ {int2(0), int2(0)};" in generated_code
     )
 
 
-def test_match_expression_reports_wildcard_and_destructuring_pattern_diagnostics():
+def test_match_expression_lowers_wildcard_and_binding_patterns_and_reports_type_diagnostics():
     code = """
     shader SlangMatchExpressionPatternDetailDiagnostics {
         compute {
@@ -17472,25 +17871,17 @@ def test_match_expression_reports_wildcard_and_destructuring_pattern_diagnostics
     assert "case Option::Some" not in generated_code
     assert "case Pair" not in generated_code
     assert "only unguarded literal patterns" not in generated_code
+    assert "int chooseDuplicateWildcard(int mode)" in generated_code
+    assert "int chooseNonFinalWildcard(int mode)" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "cgl_match_value = candidate;" in generated_code
     assert (
-        "return /* unsupported Slang match expression: multiple wildcard arms "
-        "cannot be lowered to switch */ 0;" in generated_code
+        "return /* unsupported Slang match expression: enum constructor pattern "
+        "Option::Some cannot match expression type int */ 0;" in generated_code
     )
     assert (
-        "return /* unsupported Slang match expression: wildcard arm must be "
-        "final */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: identifier binding "
-        "patterns cannot be lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: constructor patterns "
-        "cannot be lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: struct destructuring "
-        "patterns cannot be lowered to switch */ 0;" in generated_code
+        "return /* unsupported Slang match expression: struct pattern Pair "
+        "cannot match expression type int */ 0;" in generated_code
     )
 
 
@@ -17641,6 +18032,55 @@ def test_storage_image_load_store_emit_slang_subscript_access():
     assert "signedLayers[pixelLayer, sampleIndex] = signedValue;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_slangc_smoke_compiles_generated_storage_image_load_store_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangStorageImageCompileSmoke {
+        image2D colorImage @rgba32f;
+        image2DArray layerImage @rgba32f;
+        uimage2D counters @r32ui;
+        image3D signedVolume @r32i;
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec2 pixel = ivec2(int(tid.x), int(tid.y));
+                ivec3 layerPixel = ivec3(pixel, 0);
+                ivec3 voxel = ivec3(pixel, 0);
+                vec4 color = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, color + vec4(1.0, 0.0, 0.0, 0.0));
+                vec4 layer = imageLoad(layerImage, layerPixel);
+                imageStore(layerImage, layerPixel, layer);
+                uint count = imageLoad(counters, pixel);
+                imageStore(counters, pixel, count + 1u);
+                int signedValue = imageLoad(signedVolume, voxel);
+                imageStore(signedVolume, voxel, signedValue - 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
+    assert "RWTexture2DArray<float4> layerImage : register(u1);" in generated_code
+    assert "RWTexture2D<uint> counters : register(u2);" in generated_code
+    assert "RWTexture3D<int> signedVolume : register(u3);" in generated_code
+    assert "float4 color = colorImage[pixel];" in generated_code
+    assert "colorImage[pixel] = color + float4(1.0, 0.0, 0.0, 0.0);" in generated_code
+    assert "float4 layer = layerImage[layerPixel];" in generated_code
+    assert "layerImage[layerPixel] = layer;" in generated_code
+    assert "uint count = counters[pixel];" in generated_code
+    assert "counters[pixel] = count + 1u;" in generated_code
+    assert "int signedValue = signedVolume[voxel];" in generated_code
+    assert "signedVolume[voxel] = signedValue - 1;" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
 
 
 def test_storage_image_access_qualifiers_emit_slang_diagnostics():
@@ -18306,6 +18746,42 @@ def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
     assert "imageAtomicCompSwap(image" not in generated_code
     assert "cgl_imageAtomicAdd_uimage2DMS" not in generated_code
     assert "cgl_imageAtomicCompSwap_iimage2DMSArray" not in generated_code
+
+
+def test_float_image_atomics_emit_slang_diagnostic_stubs():
+    code = """
+    shader FloatAtomicImages {
+        image2D floats @r32f;
+
+        float addFloat(image2D image @r32f, ivec2 pixel, float value) {
+            return imageAtomicAdd(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float oldValue = imageAtomicExchange(floats, ivec2(0, 0), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float> floats : register(u0);" in generated_code
+    assert (
+        "return /* unsupported Slang image atomic: imageAtomicAdd "
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0;" in generated_code
+    )
+    assert (
+        "float oldValue = /* unsupported Slang image atomic: imageAtomicExchange "
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0;" in generated_code
+    )
+    assert "imageAtomicAdd(image" not in generated_code
+    assert "imageAtomicExchange(floats" not in generated_code
+    assert "cgl_imageAtomicAdd_image2D" not in generated_code
+    assert "cgl_imageAtomicExchange_image2D" not in generated_code
 
 
 def test_formatted_image_arrays_preserve_expression_sizes():
@@ -20447,6 +20923,123 @@ def test_structured_buffer_declarations_emit_slang_resource_types():
     assert "outputLights.Store(tid.x, light);" in generated_code
     assert "buffer_load(" not in generated_code
     assert "buffer_store(" not in generated_code
+
+
+def test_glsl_buffer_array_declarations_lower_to_slang_resources():
+    code = """
+    shader SlangGlslBufferArrays {
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            layout(std430, binding = 3) writeonly buffer float outValues[];
+
+            void main() {
+                float value = buffer_load(values, 0u);
+                buffer_store(outValues, 1u, value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> values "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> outValues "
+        ": register(u3);" in generated_code
+    )
+    assert "float value = values.Load(0u);" in generated_code
+    assert "outValues.Store(1u, value);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_glsl_buffer_blocks_lower_to_slang_byteaddress_offsets():
+    code = """
+    shader SlangGlslBufferBlocks {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        layout(std430, set = 1, binding = 4) buffer ParticleBlock {
+            Particle particles[];
+        } particleBlock;
+
+        compute {
+            void main() {
+                float mass = particleBlock.particles[0u].mass;
+                particleBlock.particles[1u].mass = mass;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Particle" in generated_code
+    assert "struct ParticleBlock" not in generated_code
+    assert (
+        "[[vk::binding(4, 1)]] RWByteAddressBuffer particleBlock "
+        ": register(u4, space1);" in generated_code
+    )
+    assert "float mass = asfloat(particleBlock.Load((0u * 32 + 16)));" in (
+        generated_code
+    )
+    assert "particleBlock.Store((1u * 32 + 16), asuint(mass));" in generated_code
+    assert "particleBlock.particles" not in generated_code
+    assert "unsupported Slang GLSL buffer block" not in generated_code
+
+
+def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang():
+    code = """
+    shader SlangGlslBufferBlockAccess {
+        struct Data {
+            uint value;
+        };
+
+        Data readOnlyData @glsl_buffer_block(std430) @readonly;
+        Data writeOnlyData @glsl_buffer_block(std430) @writeonly;
+        Data readWriteData @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint blockedRead = writeOnlyData.value;
+                readOnlyData.value = blockedRead;
+                uint original = atomicAdd(readWriteData.value, 1u);
+                readWriteData.value += original;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "ByteAddressBuffer readOnlyData : register(t0);" in generated_code
+    assert "RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    assert "RWByteAddressBuffer readWriteData : register(u1);" in generated_code
+    assert (
+        "uint blockedRead = /* unsupported Slang GLSL buffer block: load "
+        "requires readable buffer block resource */ 0u;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang GLSL buffer block store: readonly "
+        "ByteAddressBuffer cannot be written */;" in generated_code
+    )
+    assert (
+        "uint __crossgl_slang_byteaddress_atomic_add_uint"
+        "(RWByteAddressBuffer buffer, uint offset, uint value)" in generated_code
+    )
+    assert (
+        "uint original = __crossgl_slang_byteaddress_atomic_add_uint"
+        "(readWriteData, 0, 1u);" in generated_code
+    )
+    assert "readWriteData.Store(0, (readWriteData.Load(0) + original));" in (
+        generated_code
+    )
+    assert "atomicAdd(" not in generated_code
 
 
 def test_texture_resource_declarations_emit_slang_typed_textures():

@@ -159,7 +159,7 @@
       "category": "language",
       "feature": "Wave/subgroup intrinsics",
       "feature_id": "language.wave_intrinsics",
-      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+      "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations. Broader GLSL subgroup capability validation remains incomplete.",
       "status": "partial"
     }
   ],
@@ -1472,11 +1472,11 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering",
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers"
           ],
-          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, and quad operations to GL_KHR_shader_subgroup builtins with required extension declarations. WaveMatch and WaveMultiPrefix* partition-mask forms emit deterministic diagnostics because GL_KHR_shader_subgroup has no direct equivalent.",
+          "notes": "Lowers CrossGL Wave* lane, vote, reduction, ballot, shuffle, quad, WaveMatch, and WaveMultiPrefix* operations to GL_KHR_shader_subgroup builtins or local helper functions with required extension declarations. Broader GLSL subgroup capability validation remains incomplete.",
           "status": "partial"
         }
       }

@@ -10388,7 +10388,7 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
         "bool anyLane = subgroupAny((prefixSum > 0u));",
         "bool allLane = subgroupAll((prefixProduct > 0u));",
         "uvec4 ballot = subgroupBallot(anyLane);",
-        "uint broadcast = subgroupBroadcast(prefixSum, 0u);",
+        "uint broadcast = subgroupShuffle(prefixSum, 0u);",
         "uint firstValue = subgroupBroadcastFirst(broadcast);",
         "uint quadX = subgroupQuadSwapHorizontal(firstValue);",
         "uint quadY = subgroupQuadSwapVertical(quadX);",
@@ -10403,7 +10403,7 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     assert "QuadRead" not in generated
 
 
-def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
+def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering():
     code = """
     shader GLSLWaveDiagnostics {
         compute {
@@ -10427,10 +10427,8 @@ def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
         "uint missing = /* GLSL wave intrinsic diagnostic: WaveReadLaneAt "
         "expects 2 arguments, got 1 */ 0u;" in generated
     )
-    assert (
-        "uvec4 matchMask = /* GLSL wave intrinsic diagnostic: WaveMatch "
-        "has no GL_KHR_shader_subgroup equivalent */ uvec4(0u);" in generated
-    )
+    assert "uvec4 crossglWaveMatch(uint value)" in generated
+    assert "uvec4 matchMask = crossglWaveMatch(lane);" in generated
     assert "WaveOpNode" not in generated
 
 
@@ -10442,10 +10440,14 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
                 bool flag;
                 float value;
                 vec2 values;
+                mat2 transform;
                 float badSum = WaveActiveSum(flag);
                 uint badBits = WaveActiveBitAnd(value);
                 bool badVote = WaveActiveAnyTrue(values);
                 uint badLane = WaveReadLaneAt(1u, value);
+                uvec4 badMatch = WaveMatch(transform);
+                uint badMultiMask = WaveMultiPrefixSum(1u, values);
+                uint badMultiCount = WaveMultiPrefixCountBits(value, uvec4(1u));
             }
         }
     }
@@ -10471,13 +10473,28 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
             "WaveReadLaneAt requires a scalar integer lane argument: "
             "value has type float"
         ),
+        (
+            "WaveMatch requires a scalar or vector value argument: "
+            "transform has type mat2"
+        ),
+        (
+            "WaveMultiPrefixSum requires a uvec4 partition mask argument: "
+            "values has type vec2"
+        ),
+        (
+            "WaveMultiPrefixCountBits requires a boolean scalar value argument: "
+            "value has type float"
+        ),
     ]:
         assert expected in generated
 
     assert "subgroupAdd(flag)" not in generated
     assert "subgroupAnd(value)" not in generated
     assert "subgroupAny(values)" not in generated
-    assert "subgroupBroadcast(1u, value)" not in generated
+    assert "subgroupShuffle(1u, value)" not in generated
+    assert "crossglWaveMatch(transform)" not in generated
+    assert "crossglWaveMultiPrefixSum(1u, values)" not in generated
+    assert "crossglWaveMultiPrefixCountBits(value, uvec4(1u))" not in generated
 
 
 def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
@@ -10527,15 +10544,17 @@ def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
     assert "WavePrefixCountBits(" not in generated
 
 
-def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
+def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers():
     code = """
     shader GLSLWaveMultiPrefixDiagnostics {
         compute {
             void main() {
                 uint lane = WaveGetLaneIndex();
                 uvec4 mask = WaveActiveBallot(lane > 0u);
+                uvec4 matchMask = WaveMatch(lane);
                 uint sumValue = WaveMultiPrefixSum(lane, mask);
                 uint productValue = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint countValue = WaveMultiPrefixCountBits(lane > 1u, mask);
                 uint andValue = WaveMultiPrefixBitAnd(lane, mask);
                 uint orValue = WaveMultiPrefixBitOr(lane, mask);
                 uint xorValue = WaveMultiPrefixBitXor(lane, mask);
@@ -10548,22 +10567,27 @@ def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
     generated = generate_code(ast)
 
     assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
     assert "uvec4 mask = subgroupBallot((lane > 0u));" in generated
-    for operation in [
-        "WaveMultiPrefixSum",
-        "WaveMultiPrefixProduct",
-        "WaveMultiPrefixBitAnd",
-        "WaveMultiPrefixBitOr",
-        "WaveMultiPrefixBitXor",
+    for expected in [
+        "bool crossglWaveMaskContains(uvec4 mask, uint lane)",
+        "void crossglWaveMaskSet(inout uvec4 mask, uint lane)",
+        "uvec4 crossglWaveMatch(uint value)",
+        "uint crossglWaveMultiPrefixCountBits(bool value, uvec4 mask)",
+        "uvec4 matchMask = crossglWaveMatch(lane);",
+        "uint sumValue = crossglWaveMultiPrefixSum(lane, mask);",
+        "uint productValue = crossglWaveMultiPrefixProduct((lane + 1u), mask);",
+        "uint countValue = crossglWaveMultiPrefixCountBits((lane > 1u), mask);",
+        "uint andValue = crossglWaveMultiPrefixBitAnd(lane, mask);",
+        "uint orValue = crossglWaveMultiPrefixBitOr(lane, mask);",
+        "uint xorValue = crossglWaveMultiPrefixBitXor(lane, mask);",
+        "result += subgroupShuffle(value, lane);",
+        "result += subgroupShuffle(laneValue, lane);",
     ]:
-        assert (
-            f"{operation} requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ) in generated
+        assert expected in generated
 
     assert "subgroupClustered" not in generated
     assert "subgroupInclusive" not in generated
-    assert "subgroupExclusive" not in generated
     assert "WaveOpNode" not in generated
 
 
@@ -25671,7 +25695,7 @@ def test_glsl_wave_subgroup_ballot_and_shuffle_in_fragment_shader():
     assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
     assert "uint lane = gl_SubgroupInvocationID;" in generated
     assert "uvec4 ballot = subgroupBallot((value > 0.5));" in generated
-    assert "float shuffled = subgroupBroadcast(value, 0u);" in generated
+    assert "float shuffled = subgroupShuffle(value, 0u);" in generated
     assert "float first = subgroupBroadcastFirst(value);" in generated
     assert "WaveGetLaneIndex" not in generated
     assert "WaveActiveBallot" not in generated

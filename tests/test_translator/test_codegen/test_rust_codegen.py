@@ -2453,12 +2453,22 @@ mod gpu {
     impl<T> ImageLike<T> for Image2DMSArray<T> {}
 
     pub trait BufferLike<T> {}
+    pub trait ReadableBufferLike<T> {}
+    pub trait WritableBufferLike<T> {}
     impl<T> BufferLike<T> for Buffer<T> {}
+    impl<T> ReadableBufferLike<T> for Buffer<T> {}
     impl<T> BufferLike<T> for RwBuffer<T> {}
+    impl<T> ReadableBufferLike<T> for RwBuffer<T> {}
+    impl<T> WritableBufferLike<T> for RwBuffer<T> {}
     impl<T> BufferLike<T> for AppendBuffer<T> {}
+    impl<T> WritableBufferLike<T> for AppendBuffer<T> {}
     impl<T> BufferLike<T> for ConsumeBuffer<T> {}
+    impl<T> ReadableBufferLike<T> for ConsumeBuffer<T> {}
     impl BufferLike<u32> for ByteAddressBuffer {}
+    impl ReadableBufferLike<u32> for ByteAddressBuffer {}
     impl BufferLike<u32> for RwByteAddressBuffer {}
+    impl ReadableBufferLike<u32> for RwByteAddressBuffer {}
+    impl WritableBufferLike<u32> for RwByteAddressBuffer {}
 
     pub trait SampleCoord {}
     impl SampleCoord for f32 {}
@@ -3517,6 +3527,18 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_load_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+    ) -> Value
+    where
+        Image: ImageLike<Value>,
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_store<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
@@ -3527,9 +3549,32 @@ mod gpu {
     {
     }
 
+    pub fn image_store_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    )
+    where
+        Image: ImageLike<Value>,
+    {
+    }
+
     pub fn image_atomic_add<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_add_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3549,9 +3594,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_min_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_max<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_max_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3571,9 +3640,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_and_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_or<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_or_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3593,9 +3686,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_xor_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_exchange<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_exchange_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3616,12 +3733,25 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_comp_swap_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _compare: Value,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn buffer_load<Resource, Index, Value>(
         _resource: Resource,
         _index: Index,
     ) -> Value
     where
-        Resource: BufferLike<Value>,
+        Resource: ReadableBufferLike<Value>,
         Value: Default,
     {
         Value::default()
@@ -3633,8 +3763,22 @@ mod gpu {
         _value: Value,
     )
     where
-        Resource: BufferLike<Value>,
+        Resource: WritableBufferLike<Value>,
     {
+    }
+
+    pub fn buffer_append<Resource, Value>(_resource: Resource, _value: Value)
+    where
+        Resource: WritableBufferLike<Value>,
+    {
+    }
+
+    pub fn buffer_consume<Resource, Value>(_resource: Resource) -> Value
+    where
+        Resource: ReadableBufferLike<Value>,
+        Value: Default,
+    {
+        Value::default()
     }
 
     pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
@@ -16292,6 +16436,89 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
+    code = """
+    shader TexelFetchSamplerFamilyProbe {
+        sampler1D rampMap;
+        sampler1DArray rampArrayMap;
+        sampler2DArray arrayMap;
+        sampler3D volumeMap;
+        samplerCube envMap;
+        samplerCubeArray probeMap;
+
+        fragment {
+            vec4 main(
+                int x,
+                ivec2 xLayer,
+                ivec3 pixelLayer,
+                ivec3 voxel,
+                ivec3 cubeCoord,
+                ivec4 cubeLayerCoord,
+                int lod,
+                int offset1,
+                ivec2 offset2,
+                ivec3 offset3
+            ) @ gl_FragColor {
+                let rampFetch = texelFetch(rampMap, x, lod);
+                let rampOffset = texelFetchOffset(rampMap, x, lod, offset1);
+                let rampLayerFetch = texelFetch(rampArrayMap, xLayer, lod);
+                let layerOffset = texelFetchOffset(arrayMap, pixelLayer, lod, offset2);
+                let volumeOffset = texelFetchOffset(volumeMap, voxel, lod, offset3);
+                let cubeFetch = texelFetch(envMap, cubeCoord, lod);
+                let cubeArrayFetch = texelFetch(probeMap, cubeLayerCoord, lod);
+                return rampFetch + rampOffset + rampLayerFetch + layerOffset
+                    + volumeOffset + cubeFetch + cubeArrayFetch;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static RAMP_MAP: std::sync::LazyLock<Texture1D<f32>>" in generated_code
+    assert (
+        "static RAMP_ARRAY_MAP: std::sync::LazyLock<Texture1DArray<f32>>"
+        in generated_code
+    )
+    assert (
+        "static ARRAY_MAP: std::sync::LazyLock<Texture2DArray<f32>>" in generated_code
+    )
+    assert "static VOLUME_MAP: std::sync::LazyLock<Texture3D<f32>>" in generated_code
+    assert "static ENV_MAP: std::sync::LazyLock<TextureCube<f32>>" in generated_code
+    assert (
+        "static PROBE_MAP: std::sync::LazyLock<TextureCubeArray<f32>>" in generated_code
+    )
+    assert "let rampFetch: Vec4<f32> = texel_fetch(*RAMP_MAP, x, lod);" in (
+        generated_code
+    )
+    assert (
+        "let rampOffset: Vec4<f32> = texel_fetch_offset(*RAMP_MAP, x, lod, offset1);"
+        in generated_code
+    )
+    assert (
+        "let rampLayerFetch: Vec4<f32> = texel_fetch(*RAMP_ARRAY_MAP, xLayer, lod);"
+        in generated_code
+    )
+    assert (
+        "let layerOffset: Vec4<f32> = texel_fetch_offset(*ARRAY_MAP, pixelLayer, lod, offset2);"
+        in generated_code
+    )
+    assert (
+        "let volumeOffset: Vec4<f32> = texel_fetch_offset(*VOLUME_MAP, voxel, lod, offset3);"
+        in generated_code
+    )
+    assert "let cubeFetch: Vec4<f32> = texel_fetch(*ENV_MAP, cubeCoord, lod);" in (
+        generated_code
+    )
+    assert (
+        "let cubeArrayFetch: Vec4<f32> = texel_fetch(*PROBE_MAP, cubeLayerCoord, lod);"
+        in generated_code
+    )
+    assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     tmp_path,
 ):
@@ -16866,6 +17093,134 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
+    code = """
+    shader RustResourceArrays {
+        sampler2D fixedTextures[2];
+        sampler fixedSamplers[2];
+        image2D fixedImages[2];
+        StructuredBuffer<float> fixedWeights[2];
+        RWStructuredBuffer<int> fixedValues[2];
+        ByteAddressBuffer fixedRaw[2];
+        RWByteAddressBuffer fixedRawOut[2];
+        sampler2D bindlessTextures[];
+        sampler bindlessSamplers[];
+        image2D bindlessImages[];
+        StructuredBuffer<float> bindlessWeights[];
+        RWStructuredBuffer<int> bindlessValues[];
+        ByteAddressBuffer bindlessRaw[];
+        RWByteAddressBuffer bindlessRawOut[];
+
+        fragment {
+            vec4 main(
+                int fixedIndex,
+                int index,
+                vec2 uv,
+                ivec2 pixel,
+                uint offset,
+                int value
+            ) @ gl_FragColor {
+                let fixedSampled = texture(
+                    fixedTextures[fixedIndex],
+                    fixedSamplers[fixedIndex],
+                    uv
+                );
+                let bindlessSampled = texture(
+                    bindlessTextures[index],
+                    bindlessSamplers[index],
+                    uv
+                );
+                let fixedColor = imageLoad(fixedImages[fixedIndex], pixel);
+                let bindlessColor = imageLoad(bindlessImages[index], pixel);
+                imageStore(fixedImages[fixedIndex], pixel, fixedColor);
+                imageStore(bindlessImages[index], pixel, bindlessColor);
+                let fixedLoaded = buffer_load(fixedValues[fixedIndex], offset);
+                let bindlessLoaded = buffer_load(bindlessValues[index], offset);
+                let fixedWeight = buffer_load(fixedWeights[fixedIndex], offset);
+                let bindlessWeight = buffer_load(bindlessWeights[index], offset);
+                let fixedRawValue = buffer_load(fixedRaw[fixedIndex], offset);
+                let bindlessRawValue = buffer_load(bindlessRaw[index], offset);
+                buffer_store(fixedValues[fixedIndex], offset, fixedLoaded + value);
+                buffer_store(bindlessValues[index], offset, bindlessLoaded + value);
+                buffer_store(fixedRawOut[fixedIndex], offset, fixedRawValue);
+                buffer_store(bindlessRawOut[index], offset, bindlessRawValue);
+                return fixedSampled + bindlessSampled + fixedColor + bindlessColor
+                    + vec4(float(fixedLoaded + bindlessLoaded) + fixedWeight
+                        + bindlessWeight
+                        + float(fixedRawValue + bindlessRawValue));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static FIXED_TEXTURES: std::sync::LazyLock<[Texture2D<f32>; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_SAMPLERS: std::sync::LazyLock<[Sampler; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_IMAGES: std::sync::LazyLock<[Image2D<Vec4<f32>>; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_WEIGHTS: std::sync::LazyLock<[StructuredBuffer<f32>; 2]>" in (
+        generated_code
+    )
+    assert (
+        "static FIXED_VALUES: std::sync::LazyLock<[RWStructuredBuffer<i32>; 2]>"
+        in generated_code
+    )
+    assert "static FIXED_RAW: std::sync::LazyLock<[ByteAddressBuffer; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_RAW_OUT: std::sync::LazyLock<[RwByteAddressBuffer; 2]>" in (
+        generated_code
+    )
+    assert "static BINDLESS_TEXTURES: Vec<Texture2D<f32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_SAMPLERS: Vec<Sampler> = Vec::new();" in generated_code
+    assert "static BINDLESS_IMAGES: Vec<Image2D<Vec4<f32>>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_WEIGHTS: Vec<StructuredBuffer<f32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_VALUES: Vec<RWStructuredBuffer<i32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_RAW: Vec<ByteAddressBuffer> = Vec::new();" in generated_code
+    assert "static BINDLESS_RAW_OUT: Vec<RwByteAddressBuffer> = Vec::new();" in (
+        generated_code
+    )
+    assert (
+        "sample_sampler((*FIXED_TEXTURES)[fixedIndex as usize], "
+        "(*FIXED_SAMPLERS)[fixedIndex as usize], uv)"
+    ) in generated_code
+    assert (
+        "sample_sampler(BINDLESS_TEXTURES[index as usize], "
+        "BINDLESS_SAMPLERS[index as usize], uv)"
+    ) in generated_code
+    assert "image_load((*FIXED_IMAGES)[fixedIndex as usize], pixel)" in generated_code
+    assert "image_load(BINDLESS_IMAGES[index as usize], pixel)" in generated_code
+    assert "buffer_load((*FIXED_VALUES)[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(BINDLESS_VALUES[index as usize], offset)" in generated_code
+    assert "buffer_load((*FIXED_RAW)[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(BINDLESS_RAW[index as usize], offset)" in generated_code
+    assert (
+        "buffer_store((*FIXED_RAW_OUT)[fixedIndex as usize], offset, fixedRawValue)"
+        in (generated_code)
+    )
+    assert (
+        "buffer_store(BINDLESS_RAW_OUT[index as usize], offset, bindlessRawValue)"
+        in (generated_code)
+    )
+    assert "texture(fixedTextures" not in generated_code
+    assert "imageLoad(fixedImages" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
     code = """
     shader ResourceBundleProbe {
@@ -16984,11 +17339,14 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
                 let weight = buffer_load(weights, index);
                 uint length = 0u;
                 buffer_dimensions(values, length);
+                buffer_append(appendValues, amount);
+                uint consumed = buffer_consume(consumeValues);
                 buffer_store(values, index, value + int(previous));
                 return color + ramp + vec4(
                     weight + float(signedValue.x + int(unsignedValue.x))
                         + float(size1D + size2D.x + size3D.z + sizeCube.y
                             + sizeArray.z + sizeMs.y + sizeMsArray.z + sampleCount)
+                        + float(consumed)
                 );
             }
         }
@@ -17103,6 +17461,8 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "let weight: f32 = buffer_load(*WEIGHTS, index);" in generated_code
     assert "let length: u32 = 0;" in generated_code
     assert "buffer_dimensions(*VALUES, length);" in generated_code
+    assert "buffer_append(*APPEND_VALUES, amount);" in generated_code
+    assert "let consumed: u32 = buffer_consume(*CONSUME_VALUES);" in generated_code
     assert (
         "buffer_store(*VALUES, index, (value + (previous as i32)));" in generated_code
     )
@@ -17120,6 +17480,421 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "imageAtomicAnd" not in generated_code
     assert "imageAtomicOr" not in generated_code
     assert "imageAtomicXor" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_resource_memory_qualifiers_map_rust_buffer_access_and_compile(tmp_path):
+    code = """
+    shader RustResourceMemoryQualifiers {
+        readonly RWStructuredBuffer<int> readOnlyValues;
+        writeonly StructuredBuffer<int> writeOnlyValues;
+        readwrite StructuredBuffer<float> readWriteValues;
+        RWStructuredBuffer<int> attrReadValues @access(read);
+        StructuredBuffer<int> attrWriteValues @access(write);
+        readonly RWByteAddressBuffer rawInput;
+        writeonly ByteAddressBuffer rawOutput;
+        readonly image2D source @rgba32f;
+        writeonly image2D target @rgba32f;
+
+        compute {
+            void main(uint index, uint byteOffset) {
+                int value = buffer_load(readOnlyValues, index);
+                int attrValue = buffer_load(attrReadValues, index);
+                uint rawValue = buffer_load(rawInput, byteOffset);
+                buffer_store(writeOnlyValues, index, value + attrValue);
+                buffer_store(readWriteValues, index, float(value));
+                buffer_store(attrWriteValues, index, attrValue);
+                buffer_store(rawOutput, byteOffset, rawValue);
+                vec4 color = imageLoad(source, ivec2(0));
+                imageStore(target, ivec2(0), color);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "static READ_ONLY_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static WRITE_ONLY_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static READ_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>"
+        in generated_code
+    )
+    assert (
+        "static ATTR_READ_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static ATTR_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert "static RAW_INPUT: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
+    assert (
+        "static RAW_OUTPUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
+    )
+    assert "static SOURCE: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
+    assert "static TARGET: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
+    assert "let value: i32 = buffer_load(*READ_ONLY_VALUES, index);" in generated_code
+    assert (
+        "let attrValue: i32 = buffer_load(*ATTR_READ_VALUES, index);" in generated_code
+    )
+    assert "let rawValue: u32 = buffer_load(*RAW_INPUT, byteOffset);" in generated_code
+    assert "buffer_store(*WRITE_ONLY_VALUES, index, (value + attrValue));" in (
+        generated_code
+    )
+    assert "buffer_store(*READ_WRITE_VALUES, index, (value as f32));" in generated_code
+    assert "buffer_store(*ATTR_WRITE_VALUES, index, attrValue);" in generated_code
+    assert "buffer_store(*RAW_OUTPUT, byteOffset, rawValue);" in generated_code
+    assert "let color: Vec4<f32> = image_load(*SOURCE, Vec2::<i32>::new(0, 0));" in (
+        generated_code
+    )
+    assert "image_store(*TARGET, Vec2::<i32>::new(0, 0), color);" in generated_code
+    assert "readonly" not in generated_code
+    assert "writeonly" not in generated_code
+    assert "readwrite" not in generated_code
+    assert "access" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_glsl_buffer_array_declarations_map_to_rust_resources_and_compile(tmp_path):
+    code = """
+    shader RustGlslBufferArrays {
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            layout(std430, binding = 3) writeonly buffer float outValues[];
+
+            void main() {
+                float value = buffer_load(values, 0u);
+                buffer_store(outValues, 1u, value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static VALUES: std::sync::LazyLock<StructuredBuffer<f32>>" in (
+        generated_code
+    )
+    assert "static OUT_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>" in (
+        generated_code
+    )
+    assert "let value: f32 = buffer_load(*VALUES, 0);" in generated_code
+    assert "buffer_store(*OUT_VALUES, 1, value);" in generated_code
+    assert "Vec<f32>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path):
+    code = """
+    shader RustGlslBufferBlocks {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        layout(std430, binding = 4) buffer ParticleBlock {
+            Particle particles[];
+        } particleBlock;
+
+        struct Data {
+            uint value;
+        };
+
+        Data readOnlyData @glsl_buffer_block(std430) @readonly;
+        Data writeOnlyData @glsl_buffer_block(std430) @writeonly;
+
+        compute {
+            void main() {
+                float mass = particleBlock.particles[0u].mass;
+                particleBlock.particles[1u].mass = mass;
+                uint blockedRead = writeOnlyData.value;
+                readOnlyData.value = blockedRead;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=particleBlock "
+        "kind=glsl_buffer_block layout=std430 access=readwrite" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=readOnlyData "
+        "kind=glsl_buffer_block layout=std430 access=readonly" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=writeOnlyData "
+        "kind=glsl_buffer_block layout=std430 access=writeonly" in generated_code
+    )
+    assert "static PARTICLE_BLOCK: std::sync::LazyLock<ParticleBlock>" in (
+        generated_code
+    )
+    assert "let mass: f32 = (*PARTICLE_BLOCK).particles[0].mass;" in generated_code
+    assert (
+        "/* unsupported Rust GLSL buffer block: store Rust placeholder storage "
+        "is immutable */;" in generated_code
+    )
+    assert (
+        "let blockedRead: u32 = /* unsupported Rust GLSL buffer block: load "
+        "writeonly placeholder cannot be read */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Rust GLSL buffer block: store readonly placeholder "
+        "cannot be written */;" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
+    code = """
+    shader RustResourceBindings {
+        sampler2D colorMap @set(2) @binding(5);
+        sampler linearSampler @binding(1);
+        @binding(3) RWStructuredBuffer<int> counters[2];
+        sampler2D registeredTexture @register(t7, space3);
+
+        @binding(6)
+        cbuffer Camera {
+            float exposure;
+        };
+
+        image2D outImage;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=colorMap kind=texture set=2 "
+        "binding=5 binding_source=explicit" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+        "binding=1 binding_source=explicit" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=counters kind=buffer set=0 "
+        "binding=3 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=registeredTexture kind=texture set=3 "
+        "binding=7 binding_source=explicit register=t7,space3" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=outImage kind=image set=0 "
+        "binding=0 binding_source=automatic" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
+        "binding=6 binding_source=explicit" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
+    duplicate_texture_binding = """
+    shader DuplicateRustTextureBindings {
+        @binding(2) sampler2D firstTexture;
+        @binding(2) sampler2D secondTexture;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    overlapping_buffer_range = """
+    shader DuplicateRustBufferBindings {
+        @binding(3) RWStructuredBuffer<int> counters[2];
+        @binding(4)
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(overlapping_buffer_range)))
+
+
+def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_path):
+    code = """
+    shader ExplicitStorageImageFormats {
+        image2D scalarFloat @r32f;
+        uimage2D scalarCounter @r32ui;
+        image2D rgFloat @rg32f;
+        uimage2D rgUint @format(rg32ui);
+        image3D signedVolume @r32i;
+
+        fragment {
+            vec4 main(ivec2 pixel) @ gl_FragColor {
+                float scalar = imageLoad(scalarFloat, pixel);
+                imageStore(scalarFloat, pixel, scalar + 1.0);
+                uint count = imageLoad(scalarCounter, pixel);
+                imageStore(scalarCounter, pixel, count + 1u);
+                vec2 pair = imageLoad(rgFloat, pixel);
+                imageStore(rgFloat, pixel, pair);
+                uvec2 unsignedPair = imageLoad(rgUint, pixel);
+                imageStore(rgUint, pixel, unsignedPair);
+                int signedValue = imageLoad(signedVolume, ivec3(0));
+                imageStore(signedVolume, ivec3(0), signedValue - 1);
+                return vec4(
+                    scalar + float(count) + pair.x
+                        + float(unsignedPair.x + uint(signedValue))
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static SCALAR_FLOAT: std::sync::LazyLock<Image2D<f32>>" in generated_code
+    assert "static SCALAR_COUNTER: std::sync::LazyLock<Image2D<u32>>" in generated_code
+    assert "static RG_FLOAT: std::sync::LazyLock<Image2D<Vec2<f32>>>" in generated_code
+    assert "static RG_UINT: std::sync::LazyLock<Image2D<Vec2<u32>>>" in generated_code
+    assert "static SIGNED_VOLUME: std::sync::LazyLock<Image3D<i32>>" in generated_code
+    assert "let scalar: f32 = image_load(*SCALAR_FLOAT, pixel);" in generated_code
+    assert "image_store(*SCALAR_FLOAT, pixel, (scalar + 1.0));" in generated_code
+    assert "let count: u32 = image_load(*SCALAR_COUNTER, pixel);" in generated_code
+    assert "image_store(*SCALAR_COUNTER, pixel, (count + 1));" in generated_code
+    assert "let pair: Vec2<f32> = image_load(*RG_FLOAT, pixel);" in generated_code
+    assert "image_store(*RG_FLOAT, pixel, pair);" in generated_code
+    assert (
+        "let unsignedPair: Vec2<u32> = image_load(*RG_UINT, pixel);" in generated_code
+    )
+    assert "image_store(*RG_UINT, pixel, unsignedPair);" in generated_code
+    assert (
+        "let signedValue: i32 = image_load(*SIGNED_VOLUME, "
+        "Vec3::<i32>::new(0, 0, 0));" in generated_code
+    )
+    assert (
+        "image_store(*SIGNED_VOLUME, Vec3::<i32>::new(0, 0, 0), "
+        "(signedValue - 1));" in generated_code
+    )
+    assert "image2D" not in generated_code
+    assert "uimage2D" not in generated_code
+    assert "image3D" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
+    code = """
+    shader MultisampleStorageImages {
+        image2DMS msImage;
+        image2DMSArray msLayerImage;
+        uimage2DMS msCounter;
+        iimage2DMSArray msSignedLayers;
+
+        compute {
+            void main(uint amount) {
+                ivec2 pixel = ivec2(4, 8);
+                ivec3 pixelLayer = ivec3(4, 8, 1);
+                int sampleIndex = 2;
+                vec4 color = imageLoad(msImage, pixel, sampleIndex);
+                imageStore(msImage, pixel, sampleIndex, color + vec4(1.0));
+                vec4 layer = imageLoad(msLayerImage, pixelLayer, sampleIndex);
+                imageStore(msLayerImage, pixelLayer, sampleIndex, layer);
+                uvec4 counts = imageLoad(msCounter, pixel, sampleIndex);
+                imageStore(msCounter, pixel, sampleIndex, counts);
+                uint previous = imageAtomicAdd(msCounter, pixel, sampleIndex, amount);
+                uint exchanged = imageAtomicExchange(
+                    msCounter,
+                    pixel,
+                    sampleIndex,
+                    previous
+                );
+                int swapped = imageAtomicCompSwap(
+                    msSignedLayers,
+                    pixelLayer,
+                    sampleIndex,
+                    0,
+                    int(exchanged)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static MS_IMAGE: std::sync::LazyLock<Image2DMS<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_LAYER_IMAGE: std::sync::LazyLock<Image2DMSArray<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_COUNTER: std::sync::LazyLock<Image2DMS<Vec4<u32>>>" in (
+        generated_code
+    )
+    assert (
+        "static MS_SIGNED_LAYERS: std::sync::LazyLock<Image2DMSArray<Vec4<i32>>>"
+        in (generated_code)
+    )
+    assert (
+        "let color: Vec4<f32> = image_load_sample(*MS_IMAGE, pixel, sampleIndex);"
+        in (generated_code)
+    )
+    assert (
+        "image_store_sample(*MS_IMAGE, pixel, sampleIndex, "
+        "(color + Vec4::<f32>::new" in generated_code
+    )
+    assert (
+        "let layer: Vec4<f32> = "
+        "image_load_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex);" in generated_code
+    )
+    assert "image_store_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex, layer);" in (
+        generated_code
+    )
+    assert (
+        "let counts: Vec4<u32> = image_load_sample(*MS_COUNTER, pixel, sampleIndex);"
+        in generated_code
+    )
+    assert "image_store_sample(*MS_COUNTER, pixel, sampleIndex, counts);" in (
+        generated_code
+    )
+    assert (
+        "let previous: u32 = "
+        "image_atomic_add_sample(*MS_COUNTER, pixel, sampleIndex, amount);"
+        in generated_code
+    )
+    assert (
+        "let exchanged: u32 = "
+        "image_atomic_exchange_sample(*MS_COUNTER, pixel, sampleIndex, previous);"
+        in generated_code
+    )
+    assert (
+        "let swapped: i32 = image_atomic_comp_swap_sample("
+        "*MS_SIGNED_LAYERS, pixelLayer, sampleIndex, 0, (exchanged as i32));"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "imageAtomicAdd" not in generated_code
     assert "imageAtomicExchange" not in generated_code
     assert "imageAtomicCompSwap" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -22893,6 +23668,73 @@ def test_wave_ballot_emits_rust_subgroup_ballot():
     assert "subgroup_ballot(active)" in generated_code
 
 
+def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool first = WaveIsFirstLane();
+                bool equal = WaveActiveAllEqual(lane);
+                uint bitCount = WaveActiveCountBits(equal);
+                uint prefixCount = WavePrefixCountBits(equal);
+                uvec4 mask = WaveMatch(lane);
+                uint quadLane = QuadReadLaneAt(lane, 1u);
+                uint quadX = QuadReadAcrossX(lane);
+                uint quadY = QuadReadAcrossY(lane);
+                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_size()" in generated_code
+    assert "subgroup_elect()" in generated_code
+    assert "subgroup_all_equal(lane)" in generated_code
+    assert "subgroup_ballot_bit_count(equal)" in generated_code
+    assert "subgroup_exclusive_ballot_bit_count(equal)" in generated_code
+    assert "subgroup_match(lane)" in generated_code
+    assert "subgroup_quad_broadcast(lane, 1)" in generated_code
+    assert "subgroup_quad_swap_horizontal(lane)" in generated_code
+    assert "subgroup_quad_swap_vertical(lane)" in generated_code
+    assert "subgroup_quad_swap_diagonal(lane)" in generated_code
+    assert "unsupported wave op" not in generated_code
+
+
+def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool active = lane > 0u;
+                uvec4 mask = WaveActiveBallot(active);
+                uint sum = WaveMultiPrefixSum(lane, mask);
+                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint count = WaveMultiPrefixCountBits(active, mask);
+                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "subgroup_partitioned_add(lane, mask)" in generated_code
+    assert "subgroup_partitioned_mul((lane + 1), mask)" in generated_code
+    assert "subgroup_partitioned_ballot_bit_count(active, mask)" in generated_code
+    assert "subgroup_partitioned_and(product, mask)" in generated_code
+    assert "subgroup_partitioned_or(bitAnd, mask)" in generated_code
+    assert "subgroup_partitioned_xor(bitOr, mask)" in generated_code
+    assert "unsupported wave op" not in generated_code
+
+
 def test_barrier_emits_rust_workgroup_barrier():
     code = """
     shader ComputeSync {
@@ -22933,6 +23775,57 @@ def test_workgroup_barrier_emits_rust_sync():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     assert "workgroup_barrier()" in generated_code
+
+
+def test_rust_memory_barrier_variants_emit_sync_intrinsics():
+    code = """
+    shader ComputeSyncVariants {
+        compute {
+            void main() {
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+                groupMemoryBarrier();
+                allMemoryBarrier();
+                deviceMemoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    for expected in [
+        "memory_barrier_shared()",
+        "memory_barrier_buffer()",
+        "memory_barrier_image()",
+        "group_memory_barrier()",
+        "all_memory_barrier()",
+        "device_memory_barrier()",
+    ]:
+        assert expected in generated_code
+
+
+def test_rust_user_defined_synchronization_names_are_not_lowered():
+    code = """
+    shader ComputeSyncShadowing {
+        void barrier() {
+            return;
+        }
+
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn barrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "workgroup_barrier()" not in generated_code
+    assert "memory_barrier()" in generated_code
 
 
 def test_multiple_wave_ops_in_one_function():

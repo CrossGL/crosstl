@@ -612,6 +612,7 @@ class GLSLCodeGen:
         "QuadReadLaneAt": 2,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
         "WaveMultiPrefixProduct": 2,
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
@@ -629,7 +630,7 @@ class GLSLCodeGen:
         "WaveActiveAnyTrue": "subgroupAny",
         "WaveActiveAllEqual": "subgroupAllEqual",
         "WaveActiveBallot": "subgroupBallot",
-        "WaveReadLaneAt": "subgroupBroadcast",
+        "WaveReadLaneAt": "subgroupShuffle",
         "WaveReadLaneFirst": "subgroupBroadcastFirst",
         "WavePrefixSum": "subgroupExclusiveAdd",
         "WavePrefixProduct": "subgroupExclusiveMul",
@@ -663,37 +664,68 @@ class GLSLCodeGen:
         "QuadReadAcrossY": "#extension GL_KHR_shader_subgroup_quad : require",
         "QuadReadAcrossDiagonal": "#extension GL_KHR_shader_subgroup_quad : require",
         "QuadReadLaneAt": "#extension GL_KHR_shader_subgroup_quad : require",
+        "WaveMatch": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixSum": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixCountBits": (
+            "#extension GL_KHR_shader_subgroup_ballot : require"
+        ),
+        "WaveMultiPrefixProduct": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitAnd": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitOr": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitXor": "#extension GL_KHR_shader_subgroup_ballot : require",
     }
-    GLSL_WAVE_DIAGNOSTIC_OPERATIONS = {
+    GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
         "WaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits",
         "WaveMultiPrefixProduct",
         "WaveMultiPrefixBitAnd",
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
-    GLSL_WAVE_DIAGNOSTIC_REASONS = {
-        "WaveMatch": "has no GL_KHR_shader_subgroup equivalent",
-        "WaveMultiPrefixSum": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixProduct": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitAnd": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitOr": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitXor": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
+    GLSL_WAVE_HELPER_VALUE_TYPES = (
+        "bool",
+        "bvec2",
+        "bvec3",
+        "bvec4",
+        "int",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "uint",
+        "uvec2",
+        "uvec3",
+        "uvec4",
+        "float",
+        "vec2",
+        "vec3",
+        "vec4",
+        "double",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+    )
+    GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS = {
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    GLSL_WAVE_MULTI_PREFIX_OPERATIONS = {
+        *GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS,
+        "WaveMultiPrefixCountBits",
+        *GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS,
+    }
+    GLSL_WAVE_MULTI_PREFIX_HELPERS = {
+        "WaveMultiPrefixSum": "crossglWaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits": "crossglWaveMultiPrefixCountBits",
+        "WaveMultiPrefixProduct": "crossglWaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd": "crossglWaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr": "crossglWaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor": "crossglWaveMultiPrefixBitXor",
     }
     GLSL_WAVE_NUMERIC_OPERATIONS = {
         "WaveActiveSum",
@@ -1337,7 +1369,167 @@ class GLSLCodeGen:
             line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
             if line and line not in lines:
                 lines.append(line)
+            if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
+                shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
+                if shuffle_line not in lines:
+                    lines.append(shuffle_line)
         return lines
+
+    def generate_glsl_wave_helpers(self, ast, target_stage=None):
+        operations = self.glsl_wave_operations(ast, target_stage)
+        needs_match = "WaveMatch" in operations
+        multi_prefix_operations = [
+            operation
+            for operation in self.GLSL_WAVE_MULTI_PREFIX_HELPERS
+            if operation in operations
+        ]
+        if not needs_match and not multi_prefix_operations:
+            return ""
+
+        code = self.glsl_wave_mask_contains_helper()
+        if needs_match:
+            code += self.glsl_wave_mask_set_helper()
+            code += self.glsl_wave_match_helpers()
+        for operation in multi_prefix_operations:
+            code += self.glsl_wave_multi_prefix_helper(operation)
+        return code
+
+    def glsl_wave_mask_contains_helper(self):
+        return (
+            "bool crossglWaveMaskContains(uvec4 mask, uint lane) {\n"
+            "    if (lane < 32u) {\n"
+            "        return (mask.x & (1u << lane)) != 0u;\n"
+            "    }\n"
+            "    if (lane < 64u) {\n"
+            "        return (mask.y & (1u << (lane - 32u))) != 0u;\n"
+            "    }\n"
+            "    if (lane < 96u) {\n"
+            "        return (mask.z & (1u << (lane - 64u))) != 0u;\n"
+            "    }\n"
+            "    return (mask.w & (1u << (lane - 96u))) != 0u;\n"
+            "}\n\n"
+        )
+
+    def glsl_wave_mask_set_helper(self):
+        return (
+            "void crossglWaveMaskSet(inout uvec4 mask, uint lane) {\n"
+            "    if (lane < 32u) {\n"
+            "        mask.x |= (1u << lane);\n"
+            "    } else if (lane < 64u) {\n"
+            "        mask.y |= (1u << (lane - 32u));\n"
+            "    } else if (lane < 96u) {\n"
+            "        mask.z |= (1u << (lane - 64u));\n"
+            "    } else {\n"
+            "        mask.w |= (1u << (lane - 96u));\n"
+            "    }\n"
+            "}\n\n"
+        )
+
+    def glsl_wave_match_helpers(self):
+        code = ""
+        for value_type in self.GLSL_WAVE_HELPER_VALUE_TYPES:
+            condition = self.glsl_wave_match_condition(value_type)
+            code += (
+                f"uvec4 crossglWaveMatch({value_type} value) {{\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uvec4 result = uvec4(0u);\n"
+                "    for (uint lane = 0u; lane < gl_SubgroupSize; ++lane) {\n"
+                "        if (crossglWaveMaskContains(activeMask, lane) && "
+                f"{condition}) {{\n"
+                "            crossglWaveMaskSet(result, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
+
+    def glsl_wave_match_condition(self, value_type):
+        if value_type.startswith(("bvec", "ivec", "uvec", "vec", "dvec")):
+            return "all(equal(subgroupShuffle(value, lane), value))"
+        return "subgroupShuffle(value, lane) == value"
+
+    def glsl_wave_multi_prefix_helper(self, operation):
+        helper_name = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
+        if operation == "WaveMultiPrefixCountBits":
+            return (
+                f"uint {helper_name}(bool value, uvec4 mask) {{\n"
+                "    uint laneValue = value ? 1u : 0u;\n"
+                "    uint result = 0u;\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uint limit = min(gl_SubgroupInvocationID, gl_SubgroupSize);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (crossglWaveMaskContains(mask, lane) && "
+                "crossglWaveMaskContains(activeMask, lane)) {\n"
+                "            result += subgroupShuffle(laneValue, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+
+        identity, assignment = self.glsl_wave_multi_prefix_identity_and_assignment(
+            operation
+        )
+        code = ""
+        for value_type in self.glsl_wave_multi_prefix_value_types(operation):
+            code += (
+                f"{value_type} {helper_name}({value_type} value, uvec4 mask) {{\n"
+                f"    {value_type} result = {value_type}({identity});\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uint limit = min(gl_SubgroupInvocationID, gl_SubgroupSize);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (crossglWaveMaskContains(mask, lane) && "
+                "crossglWaveMaskContains(activeMask, lane)) {\n"
+                f"            result {assignment} subgroupShuffle(value, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
+
+    def glsl_wave_multi_prefix_identity_and_assignment(self, operation):
+        if operation == "WaveMultiPrefixProduct":
+            return "1", "*="
+        if operation == "WaveMultiPrefixBitAnd":
+            return "~0", "&="
+        if operation == "WaveMultiPrefixBitOr":
+            return "0", "|="
+        if operation == "WaveMultiPrefixBitXor":
+            return "0", "^="
+        return "0", "+="
+
+    def glsl_wave_multi_prefix_value_types(self, operation):
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
+            return (
+                "int",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uint",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+            )
+        return (
+            "int",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uint",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "float",
+            "vec2",
+            "vec3",
+            "vec4",
+            "double",
+            "dvec2",
+            "dvec3",
+            "dvec4",
+        )
 
     def uses_ray_extension_type(self, ast, target_stage=None):
         return (
@@ -1717,6 +1909,7 @@ class GLSLCodeGen:
             self,
             self.generic_enum_specializations,
         )
+        code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         global_vars = list(getattr(ast, "global_variables", []) or [])
         stage_local_resource_vars = collect_stage_local_variables(
@@ -6929,7 +7122,11 @@ class GLSLCodeGen:
                 "WaveActiveAllEqual",
             }:
                 return "bool"
-            if expr.operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+            if expr.operation in {
+                "WaveActiveCountBits",
+                "WavePrefixCountBits",
+                "WaveMultiPrefixCountBits",
+            }:
                 return "uint"
             if expr.operation in {"WaveActiveBallot", "WaveMatch"}:
                 return "uvec4"
@@ -8039,14 +8236,6 @@ class GLSLCodeGen:
                 operation, f"expects {expected_arity} arguments, got {actual_arity}"
             )
 
-        if operation in self.GLSL_WAVE_DIAGNOSTIC_OPERATIONS:
-            return self.glsl_wave_diagnostic_expression(
-                operation,
-                self.GLSL_WAVE_DIAGNOSTIC_REASONS.get(
-                    operation, "has no GL_KHR_shader_subgroup equivalent"
-                ),
-            )
-
         type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
         if type_diagnostic is not None:
             return type_diagnostic
@@ -8064,6 +8253,14 @@ class GLSLCodeGen:
         if operation == "WavePrefixCountBits":
             predicate = self.generate_expression(arguments[0])
             return f"subgroupBallotExclusiveBitCount(subgroupBallot({predicate}))"
+        if operation == "WaveMatch":
+            value = self.generate_expression(arguments[0])
+            return f"crossglWaveMatch({value})"
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_OPERATIONS:
+            value = self.generate_expression(arguments[0])
+            mask = self.generate_expression(arguments[1])
+            helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            return f"{helper}({value}, {mask})"
 
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
@@ -8084,7 +8281,11 @@ class GLSLCodeGen:
             "WaveActiveAllEqual",
         }:
             return "bool"
-        if operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+        }:
             return "uint"
         if operation in {"WaveActiveBallot", "WaveMatch"}:
             return "uvec4"
@@ -8127,6 +8328,49 @@ class GLSLCodeGen:
                 {"float", "double", "int", "uint", "bool"},
                 allow_vectors=True,
             )
+        if operation == "WaveMatch":
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a scalar or vector",
+                "value",
+                {"float", "double", "int", "uint", "bool"},
+                allow_vectors=True,
+            )
+        if operation == "WaveMultiPrefixCountBits":
+            diagnostic = self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a boolean scalar",
+                "value",
+                {"bool"},
+                allow_vectors=False,
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS:
+            diagnostic = self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "a numeric scalar or vector",
+                "value",
+                {"float", "double", "int", "uint"},
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
+            diagnostic = self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "an integer scalar or vector",
+                "value",
+                {"int", "uint"},
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
         index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
         if index_argument is not None:
             return self.glsl_wave_validate_argument_type(
@@ -8179,6 +8423,22 @@ class GLSLCodeGen:
             ),
         )
 
+    def glsl_wave_validate_mask_argument(self, operation, arg):
+        result_type = self.expression_result_type(arg)
+        if result_type is None:
+            return None
+        mapped_type = self.map_type(result_type)
+        _base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if array_suffix or mapped_type != "uvec4":
+            return self.glsl_wave_diagnostic_expression(
+                operation,
+                (
+                    "requires a uvec4 partition mask argument: "
+                    f"{expression_debug_name(arg)} has type {mapped_type}"
+                ),
+            )
+        return None
+
     def glsl_wave_diagnostic_expression(self, operation, reason):
         return (
             f"/* GLSL wave intrinsic diagnostic: {operation} {reason} */ "
@@ -8189,7 +8449,12 @@ class GLSLCodeGen:
         expected_type = self.current_expression_expected_type
         if expected_type:
             return self.zero_value_expression(expected_type)
-        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+        if operation in {
+            "WaveIsFirstLane",
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveAllEqual",
+        }:
             return "false"
         if operation in {"WaveActiveBallot", "WaveMatch"}:
             return "uvec4(0u)"

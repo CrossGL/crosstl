@@ -2370,11 +2370,14 @@ class VulkanSPIRVCodeGen:
         depth_id = args[coord_index + 1]
         extra_args = args[coord_index + 2 : required_arg_count]
         metadata = self.resource_metadata_for_value(sampled_image_id)
-        if (
-            not metadata
-            or metadata.get("kind") != "sampled_image"
-            or int(metadata.get("depth", 0)) != 1
-        ):
+        if not metadata or metadata.get("kind") != "sampled_image":
+            self.emit(
+                f"; WARNING: {function_name} requires a shadow sampled image operand"
+            )
+            return None
+        if not self.validate_non_multisample_sampled_image(function_name, metadata):
+            return None
+        if int(metadata.get("depth", 0)) != 1:
             self.emit(
                 f"; WARNING: {function_name} requires a shadow sampled image operand"
             )
@@ -2522,6 +2525,14 @@ class VulkanSPIRVCodeGen:
             f"{coordinate_kind} coordinate operand"
         )
         return False
+
+    def validate_non_multisample_sampled_image(
+        self, function_name: str, metadata
+    ) -> bool:
+        if metadata and metadata.get("multisampled"):
+            self.emit(f"; WARNING: {function_name} is not valid for multisample images")
+            return False
+        return True
 
     def validate_sampled_texture_lod_operand(
         self, function_name: str, lod_id: SpirvId
@@ -3069,6 +3080,8 @@ class VulkanSPIRVCodeGen:
                 f"{self.projected_texture_operand_description(function_name)} operands"
             )
             return self.default_value_for_type(result_type)
+        if not self.validate_non_multisample_sampled_image(function_name, metadata):
+            return self.default_value_for_type(result_type)
         if function_name in {"textureProjLod", "textureProjLodOffset"}:
             if not self.validate_sampled_texture_lod_operand(
                 function_name, extra_args[0]
@@ -3482,6 +3495,8 @@ class VulkanSPIRVCodeGen:
                     "sampler, coordinate, and optional bias operands"
                 )
                 return self.default_value_for_type(result_type)
+            if not self.validate_non_multisample_sampled_image(function_name, metadata):
+                return self.default_value_for_type(result_type)
             if not self.validate_sampled_texture_coordinate(
                 function_name, metadata, coord_id
             ):
@@ -3682,6 +3697,8 @@ class VulkanSPIRVCodeGen:
                     "sampler, coordinate, offset, and optional bias operands"
                 )
                 return self.default_value_for_type(result_type)
+            if not self.validate_non_multisample_sampled_image(function_name, metadata):
+                return self.default_value_for_type(result_type)
             if not self.validate_sampled_texture_coordinate(
                 function_name, metadata, coord_id
             ):
@@ -3731,6 +3748,8 @@ class VulkanSPIRVCodeGen:
             sampled_image_id, coord_id, extra_args, metadata = sample_args
             int_type = self.register_primitive_type("int")
             result_type = self.resource_access_result_type(metadata)
+            if not self.validate_non_multisample_sampled_image(function_name, metadata):
+                return self.default_value_for_type(result_type)
             if not self.validate_sampled_texture_coordinate(
                 function_name, metadata, coord_id
             ):
@@ -4039,6 +4058,9 @@ class VulkanSPIRVCodeGen:
                 self.emit("; WARNING: textureQueryLod requires a sampled image operand")
                 return self.resource_query_lod_default_value()
 
+            if not self.validate_non_multisample_sampled_image(function_name, metadata):
+                return self.resource_query_lod_default_value()
+
             if not self.validate_resource_query_lod_coordinate(
                 function_name, metadata, coord_id
             ):
@@ -4083,6 +4105,8 @@ class VulkanSPIRVCodeGen:
             result_type = self.resource_access_result_type(metadata)
             if len(extra_args) > extra_arg_count:
                 self.emit(self.sampled_texture_excess_operand_warning(function_name))
+                return self.default_value_for_type(result_type)
+            if not self.validate_non_multisample_sampled_image(function_name, metadata):
                 return self.default_value_for_type(result_type)
             if not self.validate_sampled_texture_coordinate(
                 function_name, metadata, coord_id

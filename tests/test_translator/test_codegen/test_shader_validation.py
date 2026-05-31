@@ -135,6 +135,69 @@ shader MetalWaveIntrinsicsValidation {
 """
 
 
+GLSL_WAVE_INTRINSICS_COMPUTE_SHADER = """
+shader GLSLWaveIntrinsicsValidation {
+    compute {
+        void main() {
+            uint lane = WaveGetLaneIndex();
+            uvec2 vectorLane = uvec2(lane, lane + 1u);
+            uvec4 mask = WaveActiveBallot(lane > 0u);
+            uvec4 matchMask = WaveMatch(lane);
+            uint sumValue = WaveMultiPrefixSum(lane, mask);
+            uint productValue = WaveMultiPrefixProduct(lane + 1u, mask);
+            uint countValue = WaveMultiPrefixCountBits(lane > 1u, mask);
+            uint andValue = WaveMultiPrefixBitAnd(lane, mask);
+            uint orValue = WaveMultiPrefixBitOr(lane, mask);
+            uint xorValue = WaveMultiPrefixBitXor(lane, mask);
+            uvec2 vectorSum = WaveMultiPrefixSum(vectorLane, mask);
+            uvec2 vectorXor = WaveMultiPrefixBitXor(vectorLane, mask);
+            uint folded = matchMask.x + sumValue + productValue + countValue;
+            folded = folded + andValue + orValue + xorValue;
+            folded = folded + vectorSum.x + vectorXor.y;
+        }
+    }
+}
+"""
+
+
+HLSL_WAVE_INTRINSICS_COMPUTE_SHADER = """
+shader HLSLWaveIntrinsicsValidation {
+    compute {
+        void main() {
+            uint lane = WaveGetLaneIndex();
+            uint laneCount = WaveGetLaneCount();
+            uint value = lane + 1u;
+            bool predicate = value > 0u;
+            uvec4 mask = WaveActiveBallot(predicate);
+            uint sumValue = WaveActiveSum(value);
+            uint productValue = WaveActiveProduct(value);
+            uint countValue = WaveActiveCountBits(predicate);
+            uint prefixSum = WavePrefixSum(value);
+            uint prefixCount = WavePrefixCountBits(predicate);
+            uvec4 matchMask = WaveMatch(value);
+            uint multiSum = WaveMultiPrefixSum(value, mask);
+            uint multiCount = WaveMultiPrefixCountBits(predicate, mask);
+            uint multiProduct = WaveMultiPrefixProduct(value, mask);
+            uint multiAnd = WaveMultiPrefixBitAnd(value, mask);
+            uint multiOr = WaveMultiPrefixBitOr(value, mask);
+            uint multiXor = WaveMultiPrefixBitXor(value, mask);
+            uint readLane = WaveReadLaneAt(value, lane);
+            uint firstLane = WaveReadLaneFirst(value);
+            uint quadX = QuadReadAcrossX(value);
+            bool quadAny = QuadAny(predicate);
+            bool quadAll = QuadAll(predicate);
+            uint folded = lane + laneCount + sumValue + productValue;
+            folded = folded + countValue + prefixSum + prefixCount;
+            folded = folded + matchMask.x + multiSum + multiCount;
+            folded = folded + multiProduct + multiAnd + multiOr + multiXor;
+            folded = folded + readLane + firstLane + quadX;
+            folded = folded + (quadAny ? value : 0u) + (quadAll ? value : 0u);
+        }
+    }
+}
+"""
+
+
 FRAGMENT_STRUCT_INPUT_SHADER = """
 shader FragmentStructInputValidation {
     struct VSOutput {
@@ -11467,6 +11530,21 @@ def test_generated_glsl_compute_stage_validates_with_glslang(tmp_path):
     run_validator([glslang, "-S", "comp", str(source)])
 
 
+def test_generated_glsl_wave_intrinsics_compute_validates_with_glslang(tmp_path):
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+
+    source = tmp_path / "glsl_wave_intrinsics.comp"
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(GLSL_WAVE_INTRINSICS_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator([glslang, "-S", "comp", str(source)])
+
+
 def test_generated_glsl_compute_do_while_validates_with_glslang(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:
@@ -12151,6 +12229,24 @@ def test_generated_hlsl_compute_stage_validates_with_dxc(tmp_path):
 
     run_validator(
         [dxc, "-T", "cs_6_0", "-E", "CSMain", str(source), "-Fo", str(output)]
+    )
+
+
+def test_generated_hlsl_wave_intrinsics_compute_validates_with_dxc(tmp_path):
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not installed")
+
+    source = tmp_path / "hlsl_wave_intrinsics.hlsl"
+    output = tmp_path / "hlsl_wave_intrinsics.dxil"
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(HLSL_WAVE_INTRINSICS_COMPUTE_SHADER),
+        "compute",
+    )
+    source.write_text(code, encoding="utf-8")
+
+    run_validator(
+        [dxc, "-T", "cs_6_5", "-E", "CSMain", str(source), "-Fo", str(output)]
     )
 
 
