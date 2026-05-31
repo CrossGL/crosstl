@@ -131,6 +131,9 @@ class PullRequestContext:
 class SupportIssueLink:
     key: str
     issue_numbers: tuple[int, ...]
+    reason: str
+    base_row: dict[str, Any] | None = None
+    head_row: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -407,11 +410,20 @@ def support_backlog_row_details(matrix: dict[str, Any]) -> dict[str, dict[str, A
     for item in matrix.get("backlog", []):
         key = "backlog:{}:{}".format(item["backend_id"], item["feature_id"])
         support = support_lookup.get(key, {})
-        rows[key] = {
-            "status": item.get("status") or support.get("status"),
-            "notes": item.get("notes") or support.get("notes") or "",
-            "evidence": sorted(support.get("evidence") or []),
-        }
+        details = {}
+        for field in ("backend_id", "backend", "feature_id", "feature", "category"):
+            if item.get(field):
+                details[field] = item[field]
+        status = item.get("status") or support.get("status")
+        if status:
+            details["status"] = status
+        notes = item.get("notes") or support.get("notes")
+        if notes:
+            details["notes"] = notes
+        evidence = sorted(support.get("evidence") or [])
+        if evidence:
+            details["evidence"] = evidence
+        rows[key] = details
     return rows
 
 
@@ -425,7 +437,11 @@ def support_issue_numbers_for_keys(
     keys: set[str],
 ) -> list[int]:
     return flatten_support_issue_numbers(
-        support_issue_links_for_keys(support_issue_number_lookup(support_issues), keys)
+        support_issue_links_for_keys(
+            support_issue_number_lookup(support_issues),
+            keys,
+            reason="matched_marker_key",
+        )
     )
 
 
@@ -446,9 +462,21 @@ def support_issue_number_lookup(
 def support_issue_links_for_keys(
     numbers_by_key: dict[str, tuple[int, ...]],
     keys: set[str],
+    *,
+    reason: str,
+    base_rows: dict[str, dict[str, Any]] | None = None,
+    head_rows: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[SupportIssueLink, ...]:
+    base_rows = base_rows or {}
+    head_rows = head_rows or {}
     return tuple(
-        SupportIssueLink(key=key, issue_numbers=numbers_by_key[key])
+        SupportIssueLink(
+            key=key,
+            issue_numbers=numbers_by_key[key],
+            reason=reason,
+            base_row=base_rows.get(key),
+            head_row=head_rows.get(key),
+        )
         for key in sorted(keys)
         if numbers_by_key.get(key)
     )
@@ -471,7 +499,19 @@ def flatten_support_issue_numbers(
 def support_issue_link_audit(
     links: tuple[SupportIssueLink, ...],
 ) -> list[dict[str, Any]]:
-    return [{"key": link.key, "issues": list(link.issue_numbers)} for link in links]
+    entries = []
+    for link in links:
+        entry = {
+            "key": link.key,
+            "issues": list(link.issue_numbers),
+            "reason": link.reason,
+        }
+        if link.base_row is not None:
+            entry["base_row"] = link.base_row
+        if link.head_row is not None:
+            entry["head_row"] = link.head_row
+        entries.append(entry)
+    return entries
 
 
 def support_matrix_issue_numbers(
@@ -517,8 +557,20 @@ def support_matrix_issue_numbers(
 
     support_issues = client.list_open_support_issues()
     numbers_by_key = support_issue_number_lookup(support_issues)
-    closure_links = support_issue_links_for_keys(numbers_by_key, closure_keys)
-    reference_links = support_issue_links_for_keys(numbers_by_key, progress_keys)
+    closure_links = support_issue_links_for_keys(
+        numbers_by_key,
+        closure_keys,
+        reason="removed_from_backlog",
+        base_rows=base_rows,
+        head_rows=head_rows,
+    )
+    reference_links = support_issue_links_for_keys(
+        numbers_by_key,
+        progress_keys,
+        reason="backlog_row_changed",
+        base_rows=base_rows,
+        head_rows=head_rows,
+    )
     closure_numbers = set(flatten_support_issue_numbers(closure_links))
     reference_links = tuple(
         link
@@ -700,13 +752,48 @@ def support_link_audit_counts(audit: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def format_support_row_delta(entry: dict[str, Any]) -> str:
+    if entry.get("reason") == "removed_from_backlog":
+        return "row removed"
+    pieces = []
+    base_row = entry.get("base_row") or {}
+    head_row = entry.get("head_row") or {}
+    for field in ("status", "notes", "evidence"):
+        base_value = base_row.get(field)
+        head_value = head_row.get(field)
+        if base_value == head_value:
+            continue
+        if field == "evidence":
+            base_value = len(base_value or [])
+            head_value = len(head_value or [])
+            if base_value == head_value:
+                continue
+        if field == "notes":
+            if base_value and head_value:
+                pieces.append("notes changed")
+                continue
+            base_value = "present" if base_value else "missing"
+            head_value = "present" if head_value else "missing"
+        pieces.append(
+            f"{field}: {base_value or 'missing'} -> {head_value or 'missing'}"
+        )
+    return "; ".join(pieces)
+
+
 def format_support_link_entries(entries: list[dict[str, Any]], limit: int = 8) -> str:
     if not entries:
         return "none"
     rendered = []
     for entry in entries[:limit]:
         issues = ", ".join(f"#{number}" for number in entry["issues"])
-        rendered.append(f"{issues} ({entry['key']})")
+        reason = entry.get("reason")
+        details = [entry["key"]]
+        if reason:
+            details.append(f"reason={reason}")
+        row_delta = format_support_row_delta(entry)
+        if row_delta:
+            details.append(row_delta)
+        rendered.append(f"{issues} ({'; '.join(details)})")
     remaining = len(entries) - limit
     if remaining > 0:
         rendered.append(f"... +{remaining} more")

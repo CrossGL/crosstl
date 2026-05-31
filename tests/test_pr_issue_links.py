@@ -508,23 +508,47 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(
     assert summary["support_closures"] == 1
     assert summary["support_references"] == 1
     assert summary["traceability_satisfied"] == 1
-    assert summary["support_link_audit"] == {
-        "inspection_failed": False,
-        "closure_links": [
-            {
-                "key": "backlog:metal:language.wave_intrinsics",
-                "issues": [498],
-            }
-        ],
-        "reference_links": [
-            {
-                "key": "backlog:metal:texture.projected",
-                "issues": [432],
-            }
-        ],
-        "missing_closure_keys": [],
-        "missing_reference_keys": [],
-    }
+    assert summary["support_link_audit"]["inspection_failed"] is False
+    assert summary["support_link_audit"]["missing_closure_keys"] == []
+    assert summary["support_link_audit"]["missing_reference_keys"] == []
+    assert summary["support_link_audit"]["closure_links"] == [
+        {
+            "key": "backlog:metal:language.wave_intrinsics",
+            "issues": [498],
+            "reason": "removed_from_backlog",
+            "base_row": {
+                "backend_id": "metal",
+                "feature_id": "language.wave_intrinsics",
+                "status": "partial",
+                "notes": "Wave active ops are missing.",
+                "evidence": ["tests/old.py::test_wave_active"],
+            },
+        }
+    ]
+    assert summary["support_link_audit"]["reference_links"] == [
+        {
+            "key": "backlog:metal:texture.projected",
+            "issues": [432],
+            "reason": "backlog_row_changed",
+            "base_row": {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar projection is supported.",
+                "evidence": ["tests/old.py::test_planar_projection"],
+            },
+            "head_row": {
+                "backend_id": "metal",
+                "feature_id": "texture.projected",
+                "status": "partial",
+                "notes": "Planar and cube-shadow projection are supported.",
+                "evidence": [
+                    "tests/new.py::test_cube_shadow_projection",
+                    "tests/old.py::test_planar_projection",
+                ],
+            },
+        }
+    ]
     assert client.updated_bodies == [
         (
             5,
@@ -546,8 +570,14 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(
     captured = capsys.readouterr()
     assert "Support link audit: closure_candidates=1" in captured.out
     assert "reference_candidates=1" in captured.out
-    assert "#498 (backlog:metal:language.wave_intrinsics)" in captured.out
-    assert "#432 (backlog:metal:texture.projected)" in captured.out
+    assert (
+        "#498 (backlog:metal:language.wave_intrinsics; "
+        "reason=removed_from_backlog; row removed)"
+    ) in captured.out
+    assert (
+        "#432 (backlog:metal:texture.projected; reason=backlog_row_changed; "
+        "notes changed; evidence: 1 -> 2)"
+    ) in captured.out
 
 
 def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
@@ -646,6 +676,63 @@ def test_support_link_audit_writes_step_summary(tmp_path, monkeypatch):
     assert "#498 (backlog:metal:language.wave_intrinsics)" in text
     assert "#432 (backlog:metal:texture.projected)" in text
     assert "backlog:metal:texture.gather" in text
+
+
+def test_support_link_step_summary_includes_change_reasons(tmp_path, monkeypatch):
+    module = load_sync_module()
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    summary = {
+        "support_link_audit": {
+            "inspection_failed": False,
+            "closure_links": [
+                {
+                    "key": "backlog:metal:language.wave_intrinsics",
+                    "issues": [498],
+                    "reason": "removed_from_backlog",
+                    "base_row": {
+                        "status": "partial",
+                        "notes": "Wave active ops are missing.",
+                        "evidence": ["tests/old.py::test_wave_active"],
+                    },
+                }
+            ],
+            "reference_links": [
+                {
+                    "key": "backlog:metal:texture.projected",
+                    "issues": [432],
+                    "reason": "backlog_row_changed",
+                    "base_row": {
+                        "status": "partial",
+                        "notes": "Planar projection is supported.",
+                        "evidence": ["tests/old.py::test_planar_projection"],
+                    },
+                    "head_row": {
+                        "status": "partial",
+                        "notes": "Planar and cube projection are supported.",
+                        "evidence": [
+                            "tests/new.py::test_cube_projection",
+                            "tests/old.py::test_planar_projection",
+                        ],
+                    },
+                }
+            ],
+            "missing_closure_keys": [],
+            "missing_reference_keys": [],
+        }
+    }
+
+    module.write_support_link_step_summary(summary)
+
+    text = summary_path.read_text(encoding="utf-8")
+    assert (
+        "#498 (backlog:metal:language.wave_intrinsics; "
+        "reason=removed_from_backlog; row removed)"
+    ) in text
+    assert (
+        "#432 (backlog:metal:texture.projected; reason=backlog_row_changed; "
+        "notes changed; evidence: 1 -> 2)"
+    ) in text
 
 
 def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
