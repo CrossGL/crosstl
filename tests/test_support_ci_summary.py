@@ -128,6 +128,13 @@ def issue_plan_report():
         "mode": "dry-run",
         "close_extracted_issues": False,
         "close_pytest_failure_issues": True,
+        "workflow_source": {
+            "event": "workflow_run",
+            "workflow": "Backend Tests",
+            "run_id": "26722241319",
+            "conclusion": "success",
+            "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+        },
         "desired": {
             "total": 42,
             "parents": 10,
@@ -284,6 +291,13 @@ def sync_summary_report():
         "mode": "sync",
         "close_extracted_issues": False,
         "close_pytest_failure_issues": True,
+        "workflow_source": {
+            "event": "workflow_run",
+            "workflow": "Backend Tests",
+            "run_id": "26722241319",
+            "conclusion": "success",
+            "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+        },
         "sync_summary": {
             "created": 0,
             "updated": 2,
@@ -535,6 +549,11 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Issue sync | fail |" in text
     assert "| Status | fail |" in text
     assert "`support/generated/support-matrix.json`: 18 diff lines" in text
+    assert (
+        "| Source workflow | Backend Tests (#26722241319, success, "
+        "event=workflow_run) |"
+    ) in text
+    assert "| Source head SHA | 731cb899d2ca |" in text
     assert "| Close stale extracted issues | False |" in text
     assert "| Close stale pytest-failure issues | True |" in text
     assert "| Desired total | 42 |" in text
@@ -566,6 +585,14 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
         "(#19) (reason=stale_extracted_preserved)"
     ) in text
     assert "| Embedded matrix check | fail |" in text
+    assert (
+        text.count(
+            "| Source workflow | Backend Tests (#26722241319, success, "
+            "event=workflow_run) |"
+        )
+        == 2
+    )
+    assert text.count("| Source head SHA | 731cb899d2ca |") == 2
     assert text.count("| Close stale extracted issues | False |") == 2
     assert text.count("| Close stale pytest-failure issues | True |") == 2
     assert "| Sync attached | 3 |" in text
@@ -1461,6 +1488,31 @@ def test_load_optional_json_rejects_invalid_issue_plan_closure_mode(tmp_path):
     }
 
 
+def test_load_optional_json_rejects_invalid_issue_plan_workflow_source(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["workflow_source"] = {
+        "event": "workflow_run",
+        "workflow": "Backend Tests",
+        "run_id": 26722241319,
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "workflow_source.run_id must be str, got int",
+    }
+
+
 def test_load_optional_json_reports_invalid_embedded_matrix_summary_counter(
     tmp_path,
 ):
@@ -2172,6 +2224,31 @@ def test_load_optional_json_rejects_invalid_sync_closure_mode(tmp_path):
         "path": str(sync_path),
         "type": "InvalidReportField",
         "message": "close_extracted_issues must be bool, got int",
+    }
+
+
+def test_load_optional_json_rejects_unknown_sync_workflow_source_field(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = clean_sync_summary_report()
+    report["workflow_source"] = {
+        "event": "workflow_run",
+        "workflow": "Translator Tests",
+        "unexpected": "value",
+    }
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "workflow_source contains unknown fields: unexpected",
     }
 
 

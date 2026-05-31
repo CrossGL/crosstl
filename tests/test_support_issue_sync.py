@@ -790,6 +790,13 @@ def test_issue_sync_report_includes_desired_counts_and_planned_actions():
         close_extracted_issues=True,
         manage_sub_issues=True,
         existing_issues=[existing_parent],
+        workflow_source={
+            "event": "workflow_run",
+            "workflow": "Backend Tests",
+            "run_id": 26722241319,
+            "conclusion": "success",
+            "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+        },
     )
 
     assert report["schema_version"] == 1
@@ -817,6 +824,69 @@ def test_issue_sync_report_includes_desired_counts_and_planned_actions():
     }
     assert report["planned_action_samples"]["created"][0]["key"] == "parent:frontend"
     assert report["planned_action_samples"]["updated"][0]["key"] == "parent:directx"
+    assert report["workflow_source"] == {
+        "event": "workflow_run",
+        "workflow": "Backend Tests",
+        "run_id": "26722241319",
+        "conclusion": "success",
+        "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+    }
+
+
+def test_github_workflow_source_reads_workflow_run_event(tmp_path):
+    module = load_sync_module()
+    event_path = tmp_path / "event.json"
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "name": "Translator Tests",
+                    "id": 26722241346,
+                    "conclusion": "success",
+                    "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    source = module.github_workflow_source(
+        {
+            "GITHUB_EVENT_NAME": "workflow_run",
+            "GITHUB_EVENT_PATH": str(event_path),
+            "GITHUB_WORKFLOW": "Support Issue Sync",
+            "GITHUB_RUN_ID": "26722414948",
+            "GITHUB_SHA": "ignored-current-sha",
+        }
+    )
+
+    assert source == {
+        "event": "workflow_run",
+        "workflow": "Translator Tests",
+        "run_id": "26722241346",
+        "conclusion": "success",
+        "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+    }
+
+
+def test_github_workflow_source_falls_back_to_current_run_metadata():
+    module = load_sync_module()
+
+    source = module.github_workflow_source(
+        {
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_WORKFLOW": "Support Issue Sync",
+            "GITHUB_RUN_ID": "26722414948",
+            "GITHUB_SHA": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+        }
+    )
+
+    assert source == {
+        "event": "workflow_dispatch",
+        "workflow": "Support Issue Sync",
+        "run_id": "26722414948",
+        "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+    }
 
 
 def test_issue_sync_report_samples_preserved_stale_extracted_issues():
@@ -1321,16 +1391,32 @@ def test_issue_sync_report_flags_operation_ledger_shortfalls():
     ]
 
 
-def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys):
+def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys, monkeypatch):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
     signals_path = tmp_path / "missing-signals.json"
     plan_path = tmp_path / "support-issue-plan.json"
     matrix_check_path = tmp_path / "support-matrix-check.json"
+    event_path = tmp_path / "event.json"
     matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
     matrix_check_path.write_text(
         json.dumps(sample_matrix_check_report(ok=True)), encoding="utf-8"
     )
+    event_path.write_text(
+        json.dumps(
+            {
+                "workflow_run": {
+                    "name": "Complete Test Suite",
+                    "id": 26722241325,
+                    "conclusion": "success",
+                    "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_run")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
 
     result = module.main(
         [
@@ -1356,6 +1442,13 @@ def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys):
     assert report["planned_actions"] is None
     assert report["support_matrix_check"]["provided"] is True
     assert report["support_matrix_check"]["ok"] is True
+    assert report["workflow_source"] == {
+        "event": "workflow_run",
+        "workflow": "Complete Test Suite",
+        "run_id": "26722241325",
+        "conclusion": "success",
+        "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+    }
     captured = capsys.readouterr()
     assert "Dry run: would manage 3 desired issues" in captured.out
     assert "Stale extracted support issue closure is disabled" in captured.out

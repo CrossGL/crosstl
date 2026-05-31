@@ -1291,6 +1291,7 @@ def validate_issue_plan_contract(
         lambda: validate_budget_contract(report, path, "planned_closure_budget"),
         lambda: validate_embedded_matrix_check_contract(report, path),
         lambda: validate_operation_reconciliation_contract(report, path),
+        lambda: validate_workflow_source_contract(report, path),
     ):
         error = validator()
         if error is not None:
@@ -1946,6 +1947,40 @@ def validate_operation_reconciliation_contract(
     return None
 
 
+def validate_workflow_source_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    source = report.get("workflow_source")
+    if source is None:
+        return None
+    if not isinstance(source, dict):
+        return invalid_field_error(path, "workflow_source", dict, source)
+    allowed_fields = {"event", "workflow", "run_id", "conclusion", "head_sha"}
+    unknown_fields = sorted(set(source) - allowed_fields)
+    if unknown_fields:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "workflow_source contains unknown fields: {}".format(
+                ", ".join(unknown_fields)
+            ),
+        )
+    for field in sorted(allowed_fields):
+        if field not in source:
+            continue
+        value = source[field]
+        if not value_matches_type(value, str):
+            return invalid_field_error(path, f"workflow_source.{field}", str, value)
+        if not value.strip():
+            return load_error(
+                path,
+                "InvalidReportField",
+                f"workflow_source.{field} must not be empty",
+            )
+    return None
+
+
 def validate_sync_summary_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -1972,6 +2007,7 @@ def validate_sync_summary_contract(
         lambda: validate_operation_ledger_contract(report, path),
         lambda: validate_operation_reconciliation_contract(report, path),
         lambda: validate_sync_failure_contract(report, path),
+        lambda: validate_workflow_source_contract(report, path),
     ):
         error = validator()
         if error is not None:
@@ -2331,6 +2367,36 @@ def issue_sync_status(report: dict[str, Any] | None) -> str:
     return "unknown"
 
 
+def workflow_source_label(source: dict[str, Any]) -> str:
+    workflow = source.get("workflow") or "unknown"
+    details = []
+    run_id = source.get("run_id")
+    if run_id:
+        details.append(f"#{run_id}")
+    conclusion = source.get("conclusion")
+    if conclusion:
+        details.append(str(conclusion))
+    event = source.get("event")
+    if event:
+        details.append(f"event={event}")
+    if details:
+        return "{} ({})".format(workflow, ", ".join(details))
+    return str(workflow)
+
+
+def add_workflow_source_rows(
+    rows: list[list[Any]],
+    report: dict[str, Any],
+) -> None:
+    source = report.get("workflow_source")
+    if not isinstance(source, dict) or not source:
+        return
+    rows.append(["Source workflow", workflow_source_label(source)])
+    head_sha = source.get("head_sha")
+    if head_sha:
+        rows.append(["Source head SHA", str(head_sha)[:12]])
+
+
 def overall_status(*statuses: str) -> str:
     if any(status in {"fail", "load-error"} for status in statuses):
         return "attention"
@@ -2527,6 +2593,7 @@ def render_issue_plan(report: dict[str, Any] | None, path: Path | None) -> list[
         ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
+    add_workflow_source_rows(rows, report)
     if "close_extracted_issues" in report:
         rows.append(["Close stale extracted issues", report["close_extracted_issues"]])
     if "close_pytest_failure_issues" in report:
@@ -2677,6 +2744,7 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
         ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
+    add_workflow_source_rows(rows, report)
     if "close_extracted_issues" in report:
         rows.append(["Close stale extracted issues", report["close_extracted_issues"]])
     if "close_pytest_failure_issues" in report:

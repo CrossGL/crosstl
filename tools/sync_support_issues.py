@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -228,6 +229,60 @@ def load_json_input(
     if schema_error is not None:
         return {"load_error": schema_error}
     return data
+
+
+def non_empty_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def normalize_workflow_source(
+    source: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    if not source:
+        return None
+    normalized: dict[str, str] = {}
+    for key in ("event", "workflow", "run_id", "conclusion", "head_sha"):
+        value = non_empty_string(source.get(key))
+        if value is not None:
+            normalized[key] = value
+    return normalized or None
+
+
+def github_workflow_source(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, str] | None:
+    env = env or os.environ
+    event_name = non_empty_string(env.get("GITHUB_EVENT_NAME"))
+    event_payload: dict[str, Any] = {}
+    event_path = non_empty_string(env.get("GITHUB_EVENT_PATH"))
+    if event_path is not None:
+        loaded = load_optional_json(Path(event_path))
+        if loaded is not None and not loaded.get("load_error"):
+            event_payload = loaded
+
+    workflow_run = event_payload.get("workflow_run")
+    if isinstance(workflow_run, dict):
+        return normalize_workflow_source(
+            {
+                "event": event_name or "workflow_run",
+                "workflow": workflow_run.get("name"),
+                "run_id": workflow_run.get("id"),
+                "conclusion": workflow_run.get("conclusion"),
+                "head_sha": workflow_run.get("head_sha"),
+            }
+        )
+
+    return normalize_workflow_source(
+        {
+            "event": event_name,
+            "workflow": env.get("GITHUB_WORKFLOW"),
+            "run_id": env.get("GITHUB_RUN_ID"),
+            "head_sha": env.get("GITHUB_SHA"),
+        }
+    )
 
 
 def json_report_schema_error(
@@ -2276,6 +2331,7 @@ def issue_sync_report(
     sync_failure: dict[str, Any] | None = None,
     input_failures: list[dict[str, Any]] | None = None,
     operation_ledger: list[dict[str, Any]] | None = None,
+    workflow_source: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     planned_actions = None
     planned_closures = None
@@ -2355,6 +2411,9 @@ def issue_sync_report(
             else None
         ),
     }
+    normalized_workflow_source = normalize_workflow_source(workflow_source)
+    if normalized_workflow_source is not None:
+        report["workflow_source"] = normalized_workflow_source
     if existing_issues is not None:
         existing_by_key, duplicates, unmarked = split_existing_issues(existing_issues)
         report["existing"] = {
@@ -2932,6 +2991,7 @@ def main(argv: list[str] | None = None) -> int:
     ):
         matrix_check_report_path = ROOT / matrix_check_report_path
     matrix_check_report = load_optional_json(matrix_check_report_path)
+    workflow_source = github_workflow_source()
     manage_sub_issues = not args.no_sub_issues
     planned_action_budget_limits = planned_action_budget_limits_from_args(args)
     planned_closure_budget_limits = planned_closure_budget_limits_from_args(args)
@@ -2965,6 +3025,7 @@ def main(argv: list[str] | None = None) -> int:
                     planned_action_budget_mode=args.planned_action_budget_mode,
                     planned_closure_budget_limits=planned_closure_budget_limits,
                     input_failures=input_failures,
+                    workflow_source=workflow_source,
                 ),
             )
         return 1
@@ -3055,6 +3116,7 @@ def main(argv: list[str] | None = None) -> int:
                         planned_closure_budget_limits=planned_closure_budget_limits,
                         input_failures=input_failures,
                         preflight_failure=preflight_failure_summary(exc),
+                        workflow_source=workflow_source,
                     ),
                 )
             return 1
@@ -3150,6 +3212,7 @@ def main(argv: list[str] | None = None) -> int:
                 existing_issues=existing_issues,
                 existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
                 input_failures=input_failures,
+                workflow_source=workflow_source,
             ),
         )
     budget_errors = planned_action_budget_errors(
@@ -3210,6 +3273,7 @@ def main(argv: list[str] | None = None) -> int:
                         sync_failure=sync_failure_summary(exc),
                         input_failures=input_failures,
                         operation_ledger=exc.operation_ledger,
+                        workflow_source=workflow_source,
                     ),
                 )
             return 1
@@ -3242,6 +3306,7 @@ def main(argv: list[str] | None = None) -> int:
                 sync_summary=summary,
                 input_failures=input_failures,
                 operation_ledger=operation_ledger,
+                workflow_source=workflow_source,
             ),
         )
     return 0
