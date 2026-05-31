@@ -1465,6 +1465,12 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     assert _matrix_values(backend_tests, "OS") == RUNNER_OSES
     assert "fail-fast: false" in backend_tests
     assert "max-parallel: 24" in backend_tests
+    assert "id: setup_python" in backend_tests
+    assert "continue-on-error: true" in backend_tests
+    assert "name: Classify Python setup failure" in backend_tests
+    assert "steps.setup_python.outcome == 'failure'" in backend_tests
+    assert "workflow=Backend Tests" in backend_tests
+    assert "Classification: setup infrastructure before project tests" in backend_tests
     assert "pytest tests/test_backend/test_${{ matrix.backend }}" in backend_tests
 
 
@@ -1480,6 +1486,14 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert _matrix_values(translator_tests, "OS") == RUNNER_OSES
     assert "fail-fast: false" in translator_tests
     assert "max-parallel: 24" in translator_tests
+    assert "id: setup_python" in translator_tests
+    assert "continue-on-error: true" in translator_tests
+    assert "name: Classify Python setup failure" in translator_tests
+    assert "steps.setup_python.outcome == 'failure'" in translator_tests
+    assert "workflow=Translator Tests" in translator_tests
+    assert "Classification: setup infrastructure before project tests" in (
+        translator_tests
+    )
     assert 'if [ "${{ matrix.component }}" == "general" ]; then' in translator_tests
     assert (
         "pytest tests/test_translator --ignore=tests/test_translator/test_codegen"

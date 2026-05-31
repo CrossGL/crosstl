@@ -43,9 +43,27 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
+        id: setup_python
         uses: actions/setup-python@v5
+        continue-on-error: true
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Classify Python setup failure
+        if: steps.setup_python.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "::error title=Python setup failed::actions/setup-python failed before project dependencies or tests ran (workflow=Translator Tests, component=${{ matrix.component }}, python=${{ matrix.python-version }}, os=${{ matrix.OS }}). Treat this as CI setup infrastructure unless a later dependency or pytest step executed."
+          {
+            echo "## Matrix Setup Failure"
+            echo "- Workflow: Translator Tests"
+            echo "- Component: ${{ matrix.component }}"
+            echo "- Python: ${{ matrix.python-version }}"
+            echo "- OS: ${{ matrix.OS }}"
+            echo "- Stage: actions/setup-python"
+            echo "- Classification: setup infrastructure before project tests"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
       - name: Install dependencies
         run: |
