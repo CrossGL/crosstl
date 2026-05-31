@@ -1286,8 +1286,16 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
                     len(reconciliation.get("action_overruns", [])),
                 ],
                 [
+                    "Operation action shortfalls",
+                    len(reconciliation.get("action_shortfalls", [])),
+                ],
+                [
                     "Operation closure overruns",
                     len(reconciliation.get("closure_overruns", [])),
+                ],
+                [
+                    "Operation closure shortfalls",
+                    len(reconciliation.get("closure_shortfalls", [])),
                 ],
             ]
         )
@@ -1316,9 +1324,11 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
         for key, value in sorted(operation.items()):
             lines.append(f"- {key}: `{value}`")
     action_overruns = reconciliation.get("action_overruns", [])
+    action_shortfalls = reconciliation.get("action_shortfalls", [])
     closure_overruns = reconciliation.get("closure_overruns", [])
-    if action_overruns or closure_overruns:
-        lines.extend(["", "Operation reconciliation overruns:"])
+    closure_shortfalls = reconciliation.get("closure_shortfalls", [])
+    if action_overruns or action_shortfalls or closure_overruns or closure_shortfalls:
+        lines.extend(["", "Operation reconciliation differences:"])
         for overrun in action_overruns:
             lines.append(
                 "- action {action}: {actual} > planned {planned}".format(
@@ -1327,12 +1337,28 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
                     planned=overrun.get("planned", 0),
                 )
             )
+        for shortfall in action_shortfalls:
+            lines.append(
+                "- action {action}: {actual} < planned {planned}".format(
+                    action=shortfall.get("action", "unknown"),
+                    actual=shortfall.get("actual", 0),
+                    planned=shortfall.get("planned", 0),
+                )
+            )
         for overrun in closure_overruns:
             lines.append(
                 "- closure {category}: {actual} > planned {planned}".format(
                     category=overrun.get("category", "unknown"),
                     actual=overrun.get("actual", 0),
                     planned=overrun.get("planned", 0),
+                )
+            )
+        for shortfall in closure_shortfalls:
+            lines.append(
+                "- closure {category}: {actual} < planned {planned}".format(
+                    category=shortfall.get("category", "unknown"),
+                    actual=shortfall.get("actual", 0),
+                    planned=shortfall.get("planned", 0),
                 )
             )
     lines.extend(render_operation_ledger(operation_ledger))
@@ -1582,6 +1608,18 @@ def github_annotation_lines(
                         file=display_path(sync_summary_path),
                     )
                 )
+            for shortfall in reconciliation.get("action_shortfalls", []):
+                lines.append(
+                    github_annotation(
+                        "Support issue sync missed planned actions",
+                        "{action}: {actual} < planned {planned}".format(
+                            action=shortfall.get("action", "unknown"),
+                            actual=shortfall.get("actual", 0),
+                            planned=shortfall.get("planned", 0),
+                        ),
+                        file=display_path(sync_summary_path),
+                    )
+                )
             for overrun in reconciliation.get("closure_overruns", []):
                 lines.append(
                     github_annotation(
@@ -1590,6 +1628,18 @@ def github_annotation_lines(
                             category=overrun.get("category", "unknown"),
                             actual=overrun.get("actual", 0),
                             planned=overrun.get("planned", 0),
+                        ),
+                        file=display_path(sync_summary_path),
+                    )
+                )
+            for shortfall in reconciliation.get("closure_shortfalls", []):
+                lines.append(
+                    github_annotation(
+                        "Support issue sync missed planned closures",
+                        "{category}: {actual} < planned {planned}".format(
+                            category=shortfall.get("category", "unknown"),
+                            actual=shortfall.get("actual", 0),
+                            planned=shortfall.get("planned", 0),
                         ),
                         file=display_path(sync_summary_path),
                     )

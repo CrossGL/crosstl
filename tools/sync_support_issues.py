@@ -1604,15 +1604,18 @@ def operation_reconciliation_report(
         "planned_actions": planned_actions,
         "actual_actions": None,
         "action_overruns": [],
+        "action_shortfalls": [],
         "planned_closures": planned_closures,
         "actual_closures": None,
         "closure_overruns": [],
+        "closure_shortfalls": [],
     }
     if planned_actions is None or operation_ledger is None:
         return report
 
     actual_actions = operation_ledger_action_counts(operation_ledger)
     action_overruns = []
+    action_shortfalls = []
     for action in sorted(actual_actions):
         actual = actual_actions[action]
         planned = planned_actions.get(action, 0)
@@ -1624,9 +1627,18 @@ def operation_reconciliation_report(
                     "planned": planned,
                 }
             )
+        if actual < planned:
+            action_shortfalls.append(
+                {
+                    "action": action,
+                    "actual": actual,
+                    "planned": planned,
+                }
+            )
 
     actual_closures = operation_ledger_closure_counts(operation_ledger)
     closure_overruns = []
+    closure_shortfalls = []
     if planned_closures is not None:
         for category in sorted(actual_closures):
             actual = actual_closures[category]
@@ -1639,14 +1651,29 @@ def operation_reconciliation_report(
                         "planned": planned,
                     }
                 )
+            if actual < planned:
+                closure_shortfalls.append(
+                    {
+                        "category": category,
+                        "actual": actual,
+                        "planned": planned,
+                    }
+                )
 
     report.update(
         {
-            "ok": not action_overruns and not closure_overruns,
+            "ok": not (
+                action_overruns
+                or action_shortfalls
+                or closure_overruns
+                or closure_shortfalls
+            ),
             "actual_actions": actual_actions,
             "action_overruns": action_overruns,
+            "action_shortfalls": action_shortfalls,
             "actual_closures": actual_closures,
             "closure_overruns": closure_overruns,
+            "closure_shortfalls": closure_shortfalls,
         }
     )
     return report

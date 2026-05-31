@@ -1129,32 +1129,48 @@ def test_issue_sync_report_flags_planned_closure_budget_violations():
 def test_issue_sync_report_reconciles_operation_ledger_with_plan():
     module = load_sync_module()
     desired = module.build_desired_issues(sample_matrix())
-    existing_parent = issue(1, "parent:directx")
 
     report = module.issue_sync_report(
         desired,
         mode="sync",
         close_extracted_issues=True,
         manage_sub_issues=True,
-        existing_issues=[existing_parent],
+        existing_issues=[],
         operation_ledger=[
             {
-                "action": "updated",
+                "action": "created",
                 "key": "parent:directx",
                 "number": 1,
-            }
+            },
+            {
+                "action": "created",
+                "key": "parent:frontend",
+                "number": 2,
+            },
+            {
+                "action": "created",
+                "key": "backlog:directx:textures.gather",
+                "number": 3,
+            },
+            {
+                "action": "attached",
+                "parent_key": "parent:directx",
+                "parent_number": 1,
+                "child_key": "backlog:directx:textures.gather",
+                "child_number": 3,
+            },
         ],
     )
 
     reconciliation = report["operation_reconciliation"]
     assert reconciliation["evaluated"] is True
     assert reconciliation["ok"] is True
-    assert reconciliation["planned_actions"]["updated"] == 1
+    assert reconciliation["planned_actions"]["created"] == 3
     assert reconciliation["actual_actions"] == {
-        "created": 0,
-        "updated": 1,
+        "created": 3,
+        "updated": 0,
         "closed": 0,
-        "attached": 0,
+        "attached": 1,
     }
     assert reconciliation["actual_closures"] == {
         "total": 0,
@@ -1164,7 +1180,9 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
         "duplicate_marker": 0,
     }
     assert reconciliation["action_overruns"] == []
+    assert reconciliation["action_shortfalls"] == []
     assert reconciliation["closure_overruns"] == []
+    assert reconciliation["closure_shortfalls"] == []
 
 
 def test_issue_sync_report_flags_operation_ledger_overruns():
@@ -1209,6 +1227,59 @@ def test_issue_sync_report_flags_operation_ledger_overruns():
             "category": "total",
             "actual": 1,
             "planned": 0,
+        },
+    ]
+    assert reconciliation["action_shortfalls"] == [
+        {
+            "action": "attached",
+            "actual": 0,
+            "planned": 1,
+        },
+        {
+            "action": "created",
+            "actual": 0,
+            "planned": 3,
+        },
+    ]
+    assert reconciliation["closure_shortfalls"] == []
+
+
+def test_issue_sync_report_flags_operation_ledger_shortfalls():
+    module = load_sync_module()
+
+    report = module.issue_sync_report(
+        {},
+        mode="sync",
+        close_extracted_issues=True,
+        manage_sub_issues=False,
+        existing_issues=[issue(1, "parent:oldbackend")],
+        operation_ledger=[],
+    )
+
+    reconciliation = report["operation_reconciliation"]
+    assert reconciliation["evaluated"] is True
+    assert reconciliation["ok"] is False
+    assert reconciliation["planned_actions"]["closed"] == 1
+    assert reconciliation["actual_actions"]["closed"] == 0
+    assert reconciliation["action_overruns"] == []
+    assert reconciliation["action_shortfalls"] == [
+        {
+            "action": "closed",
+            "actual": 0,
+            "planned": 1,
+        }
+    ]
+    assert reconciliation["closure_overruns"] == []
+    assert reconciliation["closure_shortfalls"] == [
+        {
+            "category": "stale_parent",
+            "actual": 0,
+            "planned": 1,
+        },
+        {
+            "category": "total",
+            "actual": 0,
+            "planned": 1,
         },
     ]
 

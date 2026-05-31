@@ -324,6 +324,13 @@ def sync_summary_report():
                     "planned": 1,
                 },
             ],
+            "action_shortfalls": [
+                {
+                    "action": "created",
+                    "actual": 0,
+                    "planned": 1,
+                }
+            ],
             "planned_closures": {
                 "total": 0,
                 "stale_parent": 0,
@@ -339,6 +346,7 @@ def sync_summary_report():
                 "duplicate_marker": 0,
             },
             "closure_overruns": [],
+            "closure_shortfalls": [],
         },
         "sync_failure": {
             "phase": "create_issue",
@@ -472,10 +480,13 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Operation ledger entries | 2 |" in text
     assert "| Operation reconciliation | fail |" in text
     assert "| Operation action overruns | 2 |" in text
+    assert "| Operation action shortfalls | 1 |" in text
     assert "| Operation closure overruns | 0 |" in text
-    assert "Operation reconciliation overruns:" in text
+    assert "| Operation closure shortfalls | 0 |" in text
+    assert "Operation reconciliation differences:" in text
     assert "- action attached: 3 > planned 2" in text
     assert "- action updated: 2 > planned 1" in text
+    assert "- action created: 0 < planned 1" in text
     assert "| Sync failure phase | create_issue |" in text
     assert "| Sync failure error | RuntimeError |" in text
     assert "| Sync recovery rerun safe | True |" in text
@@ -820,6 +831,7 @@ def test_render_summary_fails_when_sync_operations_exceed_plan():
                     "planned": 0,
                 }
             ],
+            "action_shortfalls": [],
             "planned_closures": {
                 "total": 0,
                 "stale_parent": 0,
@@ -846,6 +858,7 @@ def test_render_summary_fails_when_sync_operations_exceed_plan():
                     "planned": 0,
                 },
             ],
+            "closure_shortfalls": [],
         },
     }
 
@@ -864,6 +877,98 @@ def test_render_summary_fails_when_sync_operations_exceed_plan():
     assert "- action closed: 1 > planned 0" in text
     assert "- closure duplicate_marker: 1 > planned 0" in text
     assert "- closure total: 1 > planned 0" in text
+
+
+def test_render_summary_fails_when_sync_operations_miss_plan():
+    module = load_summary_module()
+    sync_report = {
+        "schema_version": 1,
+        "generator": "tools/sync_support_issues.py",
+        "mode": "sync",
+        "sync_summary": {
+            "created": 0,
+            "updated": 0,
+            "closed": 0,
+            "attached": 0,
+            "unchanged": 0,
+        },
+        "operation_reconciliation": {
+            "evaluated": True,
+            "ok": False,
+            "planned_actions": {
+                "created": 1,
+                "updated": 0,
+                "closed": 1,
+                "attached": 0,
+                "unchanged": 0,
+            },
+            "actual_actions": {
+                "created": 0,
+                "updated": 0,
+                "closed": 0,
+                "attached": 0,
+            },
+            "action_overruns": [],
+            "action_shortfalls": [
+                {
+                    "action": "created",
+                    "actual": 0,
+                    "planned": 1,
+                },
+                {
+                    "action": "closed",
+                    "actual": 0,
+                    "planned": 1,
+                },
+            ],
+            "planned_closures": {
+                "total": 1,
+                "stale_parent": 1,
+                "stale_backlog": 0,
+                "stale_extracted": 0,
+                "duplicate_marker": 0,
+            },
+            "actual_closures": {
+                "total": 0,
+                "stale_parent": 0,
+                "stale_backlog": 0,
+                "stale_extracted": 0,
+                "duplicate_marker": 0,
+            },
+            "closure_overruns": [],
+            "closure_shortfalls": [
+                {
+                    "category": "stale_parent",
+                    "actual": 0,
+                    "planned": 1,
+                },
+                {
+                    "category": "total",
+                    "actual": 0,
+                    "planned": 1,
+                },
+            ],
+        },
+    }
+
+    text = module.render_summary(
+        matrix_check_report(ok=True),
+        Path("support/generated/support-matrix-check.json"),
+        clean_issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_report,
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+
+    assert "| Overall | attention |" in text
+    assert "| Issue sync | fail |" in text
+    assert "| Operation reconciliation | fail |" in text
+    assert "| Operation action shortfalls | 2 |" in text
+    assert "| Operation closure shortfalls | 2 |" in text
+    assert "- action created: 0 < planned 1" in text
+    assert "- action closed: 0 < planned 1" in text
+    assert "- closure stale_parent: 0 < planned 1" in text
+    assert "- closure total: 0 < planned 1" in text
 
 
 def test_load_optional_json_reports_malformed_artifact(tmp_path):
