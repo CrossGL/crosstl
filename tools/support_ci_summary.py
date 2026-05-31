@@ -323,12 +323,11 @@ def validate_budget_contract(
                 bool,
                 value[bool_field],
             )
-    if (
-        value.get("evaluated")
-        and "ok" in value
-        and not value_matches_type(value["ok"], bool)
-    ):
-        return invalid_field_error(path, f"{field}.ok", bool, value["ok"])
+    ok = value.get("ok")
+    if ok is not None and not value_matches_type(ok, bool):
+        return invalid_field_error(path, f"{field}.ok", bool, ok)
+    if value.get("provided") and value.get("evaluated") and ok is None:
+        return invalid_field_error(path, f"{field}.ok", bool, ok)
     violations = value.get("violations")
     if violations is None:
         return None
@@ -522,6 +521,8 @@ def validate_audit_bucket(
     bucket: Any,
     path: Path | None,
     field: str,
+    *,
+    sample_limit: int | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(bucket, dict):
         return invalid_field_error(path, field, dict, bucket)
@@ -539,14 +540,53 @@ def validate_audit_bucket(
                 int,
                 bucket[counter],
             )
+        if bucket[counter] < 0:
+            return invalid_field_error(
+                path,
+                f"{field}.{counter}",
+                "non-negative int",
+                bucket[counter],
+            )
+    if bucket["open"] + bucket["closed"] != bucket["total"]:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "{}.total must match open + closed: {} != {}".format(
+                field,
+                bucket["total"],
+                bucket["open"] + bucket["closed"],
+            ),
+        )
     if "samples" not in bucket:
         return load_error(
             path,
             "MissingReportFields",
             f"{field} missing required fields: samples",
         )
+    samples = bucket["samples"]
+    if isinstance(samples, list):
+        if len(samples) > bucket["total"]:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "{}.samples must not exceed total: {} > {}".format(
+                    field,
+                    len(samples),
+                    bucket["total"],
+                ),
+            )
+        if sample_limit is not None and len(samples) > sample_limit:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "{}.samples must not exceed sample_limit: {} > {}".format(
+                    field,
+                    len(samples),
+                    sample_limit,
+                ),
+            )
     return validate_sample_list(
-        bucket["samples"],
+        samples,
         path,
         f"{field}.samples",
         ("key", "number", "title", "state", "reason"),
@@ -575,6 +615,13 @@ def validate_managed_issue_audit_contract(
             int,
             audit["sample_limit"],
         )
+    if audit["sample_limit"] < 0:
+        return invalid_field_error(
+            path,
+            "managed_issue_audit.sample_limit",
+            "non-negative int",
+            audit["sample_limit"],
+        )
 
     for bucket in (
         "stale",
@@ -589,7 +636,10 @@ def validate_managed_issue_audit_contract(
                 f"managed_issue_audit missing required fields: {bucket}",
             )
         error = validate_audit_bucket(
-            audit[bucket], path, f"managed_issue_audit.{bucket}"
+            audit[bucket],
+            path,
+            f"managed_issue_audit.{bucket}",
+            sample_limit=audit["sample_limit"],
         )
         if error is not None:
             return error
@@ -2095,6 +2145,18 @@ def evidence_check_status(report: dict[str, Any] | None) -> str:
     return "pass"
 
 
+def audit_bucket_open_count(
+    audit: dict[str, Any] | None,
+    bucket: str,
+) -> int:
+    if not audit:
+        return 0
+    value = audit.get(bucket)
+    if not isinstance(value, dict):
+        return 0
+    return int(value.get("open", 0))
+
+
 def issue_plan_status(report: dict[str, Any] | None) -> str:
     if report is None:
         return "missing"
@@ -2119,6 +2181,8 @@ def issue_plan_status(report: dict[str, Any] | None) -> str:
             and budget.get("ok") is False
         ):
             return "fail"
+    if audit_bucket_open_count(report.get("managed_issue_audit"), "ignored_unknown"):
+        return "fail"
 
     return "pass" if report.get("mode") else "unknown"
 
@@ -2786,6 +2850,20 @@ def github_annotation_lines(
                         type=error.get("type", "unknown"),
                         message=error.get("message", ""),
                     ),
+                    file=display_path(issue_plan_path),
+                )
+            )
+
+        audit = issue_plan.get("managed_issue_audit") or {}
+        ignored_unknown = audit.get("ignored_unknown") or {}
+        if ignored_unknown.get("open", 0):
+            lines.append(
+                github_annotation(
+                    "Unknown managed support issue markers",
+                    (
+                        "{} open managed support issues have sync markers this "
+                        "tool does not understand."
+                    ).format(ignored_unknown.get("open", 0)),
                     file=display_path(issue_plan_path),
                 )
             )
