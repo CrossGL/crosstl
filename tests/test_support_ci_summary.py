@@ -1395,6 +1395,183 @@ def test_load_optional_json_reports_missing_planned_action_sample_fields(tmp_pat
     }
 
 
+def test_load_optional_json_reports_missing_input_failure_fields(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["input_failures"] = [
+        {
+            "input": "signals",
+            "path": "support/generated/support-signals.json",
+        }
+    ]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "MissingReportFields",
+        "message": "input_failures[0] missing required fields: error",
+    }
+
+
+def test_load_optional_json_reports_invalid_input_failure_path(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["input_failures"] = [
+        {
+            "input": "signals",
+            "path": 17,
+            "error": {
+                "type": "JSONDecodeError",
+                "message": "bad json",
+            },
+        }
+    ]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "input_failures[0].path must be str or NoneType, got int",
+    }
+
+
+def test_load_optional_json_reports_invalid_input_failure_error(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["input_failures"] = [
+        {
+            "input": "signals",
+            "path": None,
+            "error": {
+                "type": "JSONDecodeError",
+                "message": 17,
+            },
+        }
+    ]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "input_failures[0].error.message must be str, got int",
+    }
+
+
+def test_load_optional_json_reports_missing_preflight_failure_fields(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["preflight_failure"] = {
+        "phase": "list_managed_issues",
+        "operation": {},
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "MissingReportFields",
+        "message": "preflight_failure missing required fields: error",
+    }
+
+
+def test_load_optional_json_reports_invalid_preflight_failure_operation(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["preflight_failure"] = {
+        "phase": "list_sub_issues",
+        "operation": {
+            "parent": {
+                "number": 17,
+            }
+        },
+        "error": {
+            "type": "RuntimeError",
+            "message": "read failed",
+        },
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": (
+            "preflight_failure.operation.parent must be str, int, bool, "
+            "or null, got object"
+        ),
+    }
+
+
+def test_load_optional_json_reports_invalid_preflight_failure_error(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["preflight_failure"] = {
+        "phase": "list_sub_issues",
+        "operation": {
+            "parent_key": "parent:directx",
+            "parent_number": 17,
+        },
+        "error": {
+            "type": "GitHubApiError",
+            "message": "read failed",
+            "status": "500",
+        },
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "preflight_failure.error.status must be int, got str",
+    }
+
+
 def test_load_optional_json_reports_invalid_issue_plan_budget_violation_contract(
     tmp_path,
 ):

@@ -894,6 +894,138 @@ def validate_evidence_check_contract(
     return None
 
 
+def validate_report_error_summary(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_field_error(path, field, dict, value)
+    error = validate_nested_field_types(
+        value,
+        path,
+        field,
+        {
+            "path": (str, type(None)),
+            "type": str,
+            "message": str,
+            "method": str,
+            "status": int,
+            "body": str,
+        },
+    )
+    if error is not None:
+        return error
+    missing = [required for required in ("type", "message") if required not in value]
+    if missing:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "{} missing required fields: {}".format(field, ", ".join(missing)),
+        )
+    return None
+
+
+def validate_operation_context_value(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_field_error(path, field, dict, value)
+    for key, item in value.items():
+        if not isinstance(key, str):
+            return invalid_field_error(path, f"{field} key", str, key)
+        if not isinstance(item, (str, int, bool)) and item is not None:
+            return invalid_field_error(
+                path,
+                f"{field}.{key}",
+                "str, int, bool, or null",
+                item,
+            )
+    return None
+
+
+def validate_input_failures_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    error = validate_optional_object_list(report, path, "input_failures")
+    if error is not None:
+        return error
+    for index, failure in enumerate(report.get("input_failures") or []):
+        field = f"input_failures[{index}]"
+        missing = [
+            required
+            for required in ("input", "path", "error")
+            if required not in failure
+        ]
+        if missing:
+            return load_error(
+                path,
+                "MissingReportFields",
+                "{} missing required fields: {}".format(field, ", ".join(missing)),
+            )
+        error = validate_nested_field_types(
+            failure,
+            path,
+            field,
+            {
+                "input": str,
+                "path": (str, type(None)),
+                "error": dict,
+            },
+        )
+        if error is not None:
+            return error
+        error = validate_report_error_summary(failure["error"], path, f"{field}.error")
+        if error is not None:
+            return error
+    return None
+
+
+def validate_preflight_failure_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    failure = report.get("preflight_failure")
+    if failure is None:
+        return None
+    if not isinstance(failure, dict):
+        return invalid_field_error(path, "preflight_failure", dict, failure)
+    missing = [
+        required
+        for required in ("phase", "operation", "error")
+        if required not in failure
+    ]
+    if missing:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "preflight_failure missing required fields: {}".format(", ".join(missing)),
+        )
+    error = validate_nested_field_types(
+        failure,
+        path,
+        "preflight_failure",
+        {
+            "phase": str,
+            "operation": dict,
+            "error": dict,
+        },
+    )
+    if error is not None:
+        return error
+    error = validate_operation_context_value(
+        failure["operation"], path, "preflight_failure.operation"
+    )
+    if error is not None:
+        return error
+    return validate_report_error_summary(
+        failure["error"], path, "preflight_failure.error"
+    )
+
+
 def validate_issue_plan_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -931,8 +1063,8 @@ def validate_issue_plan_contract(
         ),
         lambda: validate_planned_action_samples_contract(report, path),
         lambda: validate_managed_issue_audit_contract(report, path),
-        lambda: validate_optional_object_list(report, path, "input_failures"),
-        lambda: validate_optional_object(report, path, "preflight_failure"),
+        lambda: validate_input_failures_contract(report, path),
+        lambda: validate_preflight_failure_contract(report, path),
         lambda: validate_budget_contract(report, path, "planned_action_budget"),
         lambda: validate_budget_contract(report, path, "planned_closure_budget"),
         lambda: validate_operation_reconciliation_contract(report, path),
