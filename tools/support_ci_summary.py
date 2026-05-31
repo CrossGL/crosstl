@@ -1259,6 +1259,8 @@ def validate_issue_plan_contract(
             "mode": str,
             "desired": dict,
             "existing": dict,
+            "close_extracted_issues": bool,
+            "close_pytest_failure_issues": bool,
             "support_matrix_check": dict,
         },
     )
@@ -1955,6 +1957,8 @@ def validate_sync_summary_contract(
             "schema_version": int,
             "generator": str,
             "mode": str,
+            "close_extracted_issues": bool,
+            "close_pytest_failure_issues": bool,
             "sync_summary": dict,
         },
     )
@@ -2523,6 +2527,12 @@ def render_issue_plan(report: dict[str, Any] | None, path: Path | None) -> list[
         ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
+    if "close_extracted_issues" in report:
+        rows.append(["Close stale extracted issues", report["close_extracted_issues"]])
+    if "close_pytest_failure_issues" in report:
+        rows.append(
+            ["Close stale pytest-failure issues", report["close_pytest_failure_issues"]]
+        )
     rows.extend(
         ["Desired " + key, value] for key, value in count_rows(report.get("desired"))
     )
@@ -2667,6 +2677,12 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
         ["Report", f"`{display_path(path)}`"],
         ["Mode", report.get("mode", "unknown")],
     ]
+    if "close_extracted_issues" in report:
+        rows.append(["Close stale extracted issues", report["close_extracted_issues"]])
+    if "close_pytest_failure_issues" in report:
+        rows.append(
+            ["Close stale pytest-failure issues", report["close_pytest_failure_issues"]]
+        )
     summary = report.get("sync_summary")
     if summary is None:
         rows.append(["Sync summary", "not available"])

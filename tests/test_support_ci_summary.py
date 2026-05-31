@@ -126,6 +126,8 @@ def issue_plan_report():
         "schema_version": 1,
         "generator": "tools/sync_support_issues.py",
         "mode": "dry-run",
+        "close_extracted_issues": False,
+        "close_pytest_failure_issues": True,
         "desired": {
             "total": 42,
             "parents": 10,
@@ -280,6 +282,8 @@ def sync_summary_report():
         "schema_version": 1,
         "generator": "tools/sync_support_issues.py",
         "mode": "sync",
+        "close_extracted_issues": False,
+        "close_pytest_failure_issues": True,
         "sync_summary": {
             "created": 0,
             "updated": 2,
@@ -434,6 +438,8 @@ def clean_issue_plan_report():
         "schema_version": 1,
         "generator": "tools/sync_support_issues.py",
         "mode": "dry-run",
+        "close_extracted_issues": True,
+        "close_pytest_failure_issues": True,
         "desired": {
             "total": 3,
             "parents": 2,
@@ -465,6 +471,8 @@ def clean_sync_summary_report():
         "schema_version": 1,
         "generator": "tools/sync_support_issues.py",
         "mode": "sync",
+        "close_extracted_issues": True,
+        "close_pytest_failure_issues": False,
         "sync_summary": {
             "created": 0,
             "updated": 0,
@@ -527,6 +535,8 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Issue sync | fail |" in text
     assert "| Status | fail |" in text
     assert "`support/generated/support-matrix.json`: 18 diff lines" in text
+    assert "| Close stale extracted issues | False |" in text
+    assert "| Close stale pytest-failure issues | True |" in text
     assert "| Desired total | 42 |" in text
     assert "| Planned created | 2 |" in text
     assert "| Planned closure stale_parent | 1 |" in text
@@ -556,6 +566,8 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
         "(#19) (reason=stale_extracted_preserved)"
     ) in text
     assert "| Embedded matrix check | fail |" in text
+    assert text.count("| Close stale extracted issues | False |") == 2
+    assert text.count("| Close stale pytest-failure issues | True |") == 2
     assert "| Sync attached | 3 |" in text
     assert "| Operation ledger entries | 5 |" in text
     assert "| Operation reconciliation | fail |" in text
@@ -1428,6 +1440,27 @@ def test_load_optional_json_reports_invalid_issue_plan_contract(tmp_path):
     }
 
 
+def test_load_optional_json_rejects_invalid_issue_plan_closure_mode(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["close_pytest_failure_issues"] = "false"
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "close_pytest_failure_issues must be bool, got str",
+    }
+
+
 def test_load_optional_json_reports_invalid_embedded_matrix_summary_counter(
     tmp_path,
 ):
@@ -2118,6 +2151,27 @@ def test_load_optional_json_reports_invalid_sync_summary_contract(tmp_path):
         "path": str(sync_path),
         "type": "InvalidReportField",
         "message": "operation_ledger must be list, got object",
+    }
+
+
+def test_load_optional_json_rejects_invalid_sync_closure_mode(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = clean_sync_summary_report()
+    report["close_extracted_issues"] = 1
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "close_extracted_issues must be bool, got int",
     }
 
 
