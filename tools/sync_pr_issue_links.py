@@ -1030,6 +1030,15 @@ def write_support_traceability_step_summary(summary: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def write_sync_summary_output(path: Path, summary: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "summary": summary,
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 def emit_support_link_audit(summary: dict[str, Any]) -> None:
     audit = summary.get("support_link_audit")
     if not audit:
@@ -1231,6 +1240,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "rows remain open but changed in the PR support matrix"
         ),
     )
+    parser.add_argument(
+        "--summary-output",
+        type=Path,
+        help=(
+            "Write a machine-readable JSON summary of PR issue link and support "
+            "traceability decisions"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1285,6 +1302,9 @@ def main(argv: list[str] | None = None) -> int:
                 "'Support issue traceability: no issue closed' marker."
             )
             print(f"::warning::{warning}")
+    if args.summary_output:
+        write_sync_summary_output(args.summary_output, summary)
+        print(f"Wrote {args.summary_output}")
     if summary.get("traceability_failed"):
         if not args.enforce_support_traceability:
             return 0

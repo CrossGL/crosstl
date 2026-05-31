@@ -1754,6 +1754,14 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability(
     assert "--sync-support-references" in pr_issue_links
     assert "--check-support-traceability" not in pr_issue_links
     assert "--enforce-support-traceability" in pr_issue_links
+    assert (
+        "--summary-output support/generated/pr-issue-link-summary.json"
+        in pr_issue_links
+    )
+    assert "name: Upload PR issue link summary" in pr_issue_links
+    assert "if: always()" in pr_issue_links
+    assert "name: pr-issue-link-summary" in pr_issue_links
+    assert "path: support/generated/pr-issue-link-summary.json" in pr_issue_links
 
 
 def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
