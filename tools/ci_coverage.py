@@ -93,6 +93,19 @@ FULL_SUITE_FAILURE_SUMMARIES = {
         "artifact": "compiler-smoke-macos-failure-summary",
     },
 }
+MATRIX_FAILURE_SUMMARY_FIELDS = (
+    "run_shell_bash",
+    "writes_junit",
+    "writes_failure_summary",
+    "appends_to_step_summary",
+    "summary_on_pytest_failure",
+    "summary_after_run",
+    "uploads_failure_summary",
+    "upload_on_pytest_failure",
+    "upload_ignores_missing_files",
+    "upload_retention",
+    "upload_after_summary",
+)
 SUPPORT_ISSUE_SYNC_REQUIRED_TESTS = [
     "tests/test_support_matrix.py",
     "tests/test_support_signals.py",
@@ -312,6 +325,11 @@ def yaml_list_values(section: list[str], key: str) -> list[str]:
 def pull_request_path_filters(workflow: str) -> list[str]:
     pull_request = nested_yaml_section(workflow, "pull_request", 2)
     return yaml_list_values(pull_request, "paths")
+
+
+def workflow_run_workflows(workflow: str) -> list[str]:
+    workflow_run = nested_yaml_section(workflow, "workflow_run", 2)
+    return yaml_list_values(workflow_run, "workflows")
 
 
 def workflow_step_section(workflow: str, name: str) -> str:
@@ -727,6 +745,33 @@ def workflow_matrix_report(
         ),
         "oses": compare_sets(matrix_values(workflow, "OS"), RUNNER_OSES),
         "fail_fast_false": "fail-fast: false" in workflow,
+        "failure_summary": matrix_failure_summary_report(
+            workflow,
+            matrix_key=matrix_key,
+            prefix=(
+                workflow_name[:-4] if workflow_name.endswith(".yml") else workflow_name
+            ),
+            run_step=(
+                "Run backend tests"
+                if workflow_name == "backend-tests.yml"
+                else "Run translator tests"
+            ),
+            summary_step=(
+                "Write backend test failure summary"
+                if workflow_name == "backend-tests.yml"
+                else "Write translator test failure summary"
+            ),
+            upload_step=(
+                "Upload backend test failure summary"
+                if workflow_name == "backend-tests.yml"
+                else "Upload translator test failure summary"
+            ),
+            run_step_id=(
+                "run_backend_tests"
+                if workflow_name == "backend-tests.yml"
+                else "run_translator_tests"
+            ),
+        ),
     }
 
 
@@ -803,6 +848,63 @@ def full_suite_failure_summary_report(workflow: str) -> dict[str, dict[str, bool
     return summaries
 
 
+def matrix_failure_summary_report(
+    workflow: str,
+    *,
+    matrix_key: str,
+    prefix: str,
+    run_step: str,
+    summary_step: str,
+    upload_step: str,
+    run_step_id: str,
+) -> dict[str, bool]:
+    run_step_text = workflow_step_section(workflow, run_step)
+    summary_step_text = workflow_step_section(workflow, summary_step)
+    upload_step_text = workflow_step_section(workflow, upload_step)
+    matrix_component = "${{ matrix." + matrix_key + " }}"
+    matrix_python = "${{ matrix.python-version }}"
+    matrix_os = "${{ matrix.OS }}"
+    artifact_base = f"{prefix}-{matrix_component}-{matrix_python}-{matrix_os}"
+    junit = f"support/generated/{artifact_base}.xml"
+    json_report = f"support/generated/{artifact_base}-failure-summary.json"
+    markdown_report = f"support/generated/{artifact_base}-failure-summary.md"
+    failure_condition = f"if: failure() && steps.{run_step_id}.outcome == 'failure'"
+    return {
+        "run_shell_bash": "shell: bash" in run_step_text,
+        "writes_junit": f"--junitxml {junit}" in run_step_text,
+        "writes_failure_summary": (
+            "python tools/pytest_failure_summary.py" in summary_step_text
+            and junit in summary_step_text
+            and f"--json-output {json_report}" in summary_step_text
+            and f"--markdown-output {markdown_report}" in summary_step_text
+        ),
+        "appends_to_step_summary": (
+            f'cat {markdown_report} >> "$GITHUB_STEP_SUMMARY"' in summary_step_text
+        ),
+        "summary_on_pytest_failure": failure_condition in summary_step_text,
+        "summary_after_run": workflow_step_after(workflow, summary_step, run_step),
+        "uploads_failure_summary": (
+            "actions/upload-artifact@v4" in upload_step_text
+            and "name: {}-failure-summary-{}-{}-{}".format(
+                prefix,
+                matrix_component,
+                matrix_python,
+                matrix_os,
+            )
+            in upload_step_text
+            and junit in upload_step_text
+            and json_report in upload_step_text
+            and markdown_report in upload_step_text
+        ),
+        "upload_on_pytest_failure": failure_condition in upload_step_text,
+        "upload_ignores_missing_files": "if-no-files-found: ignore" in upload_step_text,
+        "upload_retention": "retention-days: 30" in upload_step_text,
+        "upload_after_summary": workflow_step_after(
+            workflow, upload_step, summary_step
+        ),
+    }
+
+
 def full_suite_report(workflow: str) -> dict[str, Any]:
     required_markers = {
         marker: marker in workflow for marker in FULL_SUITE_REQUIRED_MARKERS
@@ -840,6 +942,7 @@ def full_suite_report(workflow: str) -> dict[str, Any]:
 
 def support_issue_sync_report(workflow: str) -> dict[str, Any]:
     path_filters = pull_request_path_filters(workflow)
+    workflow_run_names = workflow_run_workflows(workflow)
     support_matrix_check_step = workflow_step_section(
         workflow, "Validate support matrix artifacts"
     )
@@ -873,12 +976,14 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
         "hourly_schedule": 'cron: "17 * * * *"' in workflow,
         "workflow_run_full_tests": (
             "workflow_run:" in workflow
-            and "Complete Test Suite" in workflow
+            and "Complete Test Suite" in workflow_run_names
             and "types:" in workflow
             and "completed" in workflow
             and "branches:" in workflow
             and "main" in workflow
         ),
+        "workflow_run_backend_tests": "Backend Tests" in workflow_run_names,
+        "workflow_run_translator_tests": "Translator Tests" in workflow_run_names,
         "dry_run_on_pull_request": (
             "if: github.event_name == 'pull_request'" in dry_run_step
             and "--dry-run" in dry_run_step
@@ -1405,6 +1510,14 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
                 )
         if not workflow["fail_fast_false"]:
             errors.append("{} must keep fail-fast: false".format(workflow["workflow"]))
+        for field in MATRIX_FAILURE_SUMMARY_FIELDS:
+            if not workflow["failure_summary"][field]:
+                errors.append(
+                    "{} missing pytest failure summary policy: {}".format(
+                        workflow["workflow"],
+                        field,
+                    )
+                )
 
     translator_tests = report["workflows"]["translator_tests"]
     if not translator_tests["general_frontend_suite"]:
@@ -1512,6 +1625,8 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     for field in (
         "hourly_schedule",
         "workflow_run_full_tests",
+        "workflow_run_backend_tests",
+        "workflow_run_translator_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
         "min_desired_issues",
@@ -1810,6 +1925,13 @@ def build_ci_coverage_comparison(
             baseline_workflow["fail_fast_false"],
             current_workflow["fail_fast_false"],
         )
+        for field in MATRIX_FAILURE_SUMMARY_FIELDS:
+            add_bool_change(
+                scope,
+                f"failure_summary.{field}",
+                baseline_workflow["failure_summary"][field],
+                current_workflow["failure_summary"][field],
+            )
         if workflow_key == "translator_tests":
             add_bool_change(
                 scope,
@@ -1993,6 +2115,8 @@ def build_ci_coverage_comparison(
     for dimension in (
         "hourly_schedule",
         "workflow_run_full_tests",
+        "workflow_run_backend_tests",
+        "workflow_run_translator_tests",
         "dry_run_on_pull_request",
         "mutates_outside_pull_request",
         "min_desired_issues",
@@ -2311,6 +2435,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "Python",
                 "OS",
                 "Fail-fast disabled",
+                "Failure summaries",
                 "Frontend suite",
             ],
             [
@@ -2320,6 +2445,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                     dimension_summary(backend_tests["python_versions"]),
                     dimension_summary(backend_tests["oses"]),
                     ok_text(backend_tests["fail_fast_false"]),
+                    ok_text(all(backend_tests["failure_summary"].values())),
                     "n/a",
                 ],
                 [
@@ -2328,6 +2454,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                     dimension_summary(translator_tests["python_versions"]),
                     dimension_summary(translator_tests["oses"]),
                     ok_text(translator_tests["fail_fast_false"]),
+                    ok_text(all(translator_tests["failure_summary"].values())),
                     ok_text(translator_tests["general_frontend_suite"]),
                 ],
             ],
@@ -2666,6 +2793,14 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Full-test workflow_run trigger",
                     ok_text(support_sync["workflow_run_full_tests"]),
+                ],
+                [
+                    "Backend-test workflow_run trigger",
+                    ok_text(support_sync["workflow_run_backend_tests"]),
+                ],
+                [
+                    "Translator-test workflow_run trigger",
+                    ok_text(support_sync["workflow_run_translator_tests"]),
                 ],
                 [
                     "Downloads test failure summaries",

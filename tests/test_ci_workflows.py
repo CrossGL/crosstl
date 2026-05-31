@@ -200,7 +200,9 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         ].values()
     )
     assert report["workflows"]["backend_tests"]["components"]["missing"] == []
+    assert all(report["workflows"]["backend_tests"]["failure_summary"].values())
     assert report["workflows"]["translator_tests"]["components"]["missing"] == []
+    assert all(report["workflows"]["translator_tests"]["failure_summary"].values())
     assert report["workflows"]["translator_tests"]["general_frontend_suite"] is True
     assert all(report["workflows"]["docs"]["required_policies"].values())
     assert report["workflows"]["examples"]["python_versions"]["missing"] == []
@@ -415,6 +417,13 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     )
     assert report["workflows"]["support_issue_sync"]["workflow_run_full_tests"] is True
     assert (
+        report["workflows"]["support_issue_sync"]["workflow_run_backend_tests"] is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"]["workflow_run_translator_tests"]
+        is True
+    )
+    assert (
         report["workflows"]["support_issue_sync"]["downloads_test_failure_summaries"]
         is True
     )
@@ -582,7 +591,7 @@ def test_ci_coverage_summary_command_writes_markdown(tmp_path):
     assert "## Workflow Actions" in text
     assert "## Pull Request Target" in text
     assert (
-        "| Workflow | Components | Python | OS | Fail-fast disabled | Frontend suite |"
+        "| Workflow | Components | Python | OS | Fail-fast disabled | Failure summaries | Frontend suite |"
         in text
     )
     assert "backend-tests.yml" in text
@@ -645,6 +654,26 @@ def test_ci_coverage_reports_missing_translator_frontend_suite():
     errors = module.validation_errors(report)
 
     assert "translator-tests.yml must run the frontend general suite" in errors
+
+
+def test_ci_coverage_reports_missing_matrix_failure_summary_policy():
+    module = _load_ci_coverage_module()
+    report = module.build_report()
+    report["workflows"]["backend_tests"]["failure_summary"]["writes_junit"] = False
+    report["workflows"]["translator_tests"]["failure_summary"][
+        "uploads_failure_summary"
+    ] = False
+
+    errors = module.validation_errors(report)
+
+    assert (
+        "backend-tests.yml missing pytest failure summary policy: writes_junit"
+        in errors
+    )
+    assert (
+        "translator-tests.yml missing pytest failure summary policy: "
+        "uploads_failure_summary"
+    ) in errors
 
 
 def test_ci_coverage_reports_missing_docs_policy():
@@ -803,6 +832,8 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         "support_signal_upload_after_extract"
     ] = False
     report["workflows"]["support_issue_sync"]["workflow_run_full_tests"] = False
+    report["workflows"]["support_issue_sync"]["workflow_run_backend_tests"] = False
+    report["workflows"]["support_issue_sync"]["workflow_run_translator_tests"] = False
     report["workflows"]["support_issue_sync"][
         "downloads_test_failure_summaries"
     ] = False
@@ -923,6 +954,8 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         "support-issue-sync.yml missing support_signal_upload_after_extract" in errors
     )
     assert "support-issue-sync.yml missing workflow_run_full_tests" in errors
+    assert "support-issue-sync.yml missing workflow_run_backend_tests" in errors
+    assert "support-issue-sync.yml missing workflow_run_translator_tests" in errors
     assert "support-issue-sync.yml missing downloads_test_failure_summaries" in errors
     assert (
         "support-issue-sync.yml missing downloads_test_failure_summaries_on_workflow_run"
@@ -1387,6 +1420,25 @@ def test_ci_coverage_comparison_reports_translator_frontend_suite_shrink():
     } in comparison["shrinks"]
 
 
+def test_ci_coverage_comparison_reports_matrix_failure_summary_shrink():
+    module = _load_ci_coverage_module()
+    baseline = module.build_report()
+    current = copy.deepcopy(baseline)
+    current["workflows"]["backend_tests"]["failure_summary"][
+        "uploads_failure_summary"
+    ] = False
+
+    comparison = module.build_ci_coverage_comparison(baseline, current)
+
+    assert comparison["summary"]["ok"] is False
+    assert {
+        "scope": "backend-tests.yml",
+        "dimension": "failure_summary.uploads_failure_summary",
+        "removed": ["failure_summary.uploads_failure_summary"],
+        "added": [],
+    } in comparison["shrinks"]
+
+
 def test_ci_coverage_comparison_reports_examples_backend_shrink():
     module = _load_ci_coverage_module()
     baseline = module.build_report()
@@ -1471,7 +1523,32 @@ def test_backend_test_matrix_matches_support_catalog_and_platform_policy():
     assert "steps.setup_python.outcome == 'failure'" in backend_tests
     assert "workflow=Backend Tests" in backend_tests
     assert "Classification: setup infrastructure before project tests" in backend_tests
-    assert "pytest tests/test_backend/test_${{ matrix.backend }}" in backend_tests
+    assert "id: run_backend_tests" in backend_tests
+    assert "python -m pytest tests/test_backend/test_${{ matrix.backend }}" in (
+        backend_tests
+    )
+    assert (
+        "--junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml"
+        in backend_tests
+    )
+    assert "name: Write backend test failure summary" in backend_tests
+    assert "failure() && steps.run_backend_tests.outcome == 'failure'" in backend_tests
+    assert "python tools/pytest_failure_summary.py" in backend_tests
+    assert (
+        "--json-output support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json"
+        in backend_tests
+    )
+    assert (
+        'cat support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"'
+        in backend_tests
+    )
+    assert "name: Upload backend test failure summary" in backend_tests
+    assert (
+        "name: backend-tests-failure-summary-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}"
+        in backend_tests
+    )
+    assert "if-no-files-found: ignore" in backend_tests
+    assert "retention-days: 30" in backend_tests
 
 
 def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
@@ -1494,16 +1571,42 @@ def test_translator_test_matrix_matches_support_catalog_and_frontend_policy():
     assert "Classification: setup infrastructure before project tests" in (
         translator_tests
     )
+    assert "id: run_translator_tests" in translator_tests
     assert 'if [ "${{ matrix.component }}" == "general" ]; then' in translator_tests
     assert (
-        "pytest tests/test_translator --ignore=tests/test_translator/test_codegen"
+        "python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen"
         in translator_tests
     )
     assert "pytest tests/test_translator/test_lexer.py" not in translator_tests
     assert (
-        "pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py"
+        "python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py"
         in translator_tests
     )
+    assert (
+        "--junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml"
+        in translator_tests
+    )
+    assert "name: Write translator test failure summary" in translator_tests
+    assert (
+        "failure() && steps.run_translator_tests.outcome == 'failure'"
+        in translator_tests
+    )
+    assert "python tools/pytest_failure_summary.py" in translator_tests
+    assert (
+        "--json-output support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json"
+        in translator_tests
+    )
+    assert (
+        'cat support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"'
+        in translator_tests
+    )
+    assert "name: Upload translator test failure summary" in translator_tests
+    assert (
+        "name: translator-tests-failure-summary-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}"
+        in translator_tests
+    )
+    assert "if-no-files-found: ignore" in translator_tests
+    assert "retention-days: 30" in translator_tests
 
 
 def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
@@ -1683,6 +1786,8 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "python tools/support_signals.py extract" in issue_sync
     assert "workflow_run:" in issue_sync
     assert "Complete Test Suite" in issue_sync
+    assert "Backend Tests" in issue_sync
+    assert "Translator Tests" in issue_sync
     assert "name: Download test failure summaries" in issue_sync
     assert "actions/download-artifact@v4" in issue_sync
     assert "run-id: ${{ github.event.workflow_run.id }}" in issue_sync

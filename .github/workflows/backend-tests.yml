@@ -71,4 +71,31 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run backend tests
-        run: pytest tests/test_backend/test_${{ matrix.backend }}
+        id: run_backend_tests
+        shell: bash
+        run: |
+          mkdir -p support/generated
+          python -m pytest tests/test_backend/test_${{ matrix.backend }} \
+            --junitxml support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+
+      - name: Write backend test failure summary
+        if: failure() && steps.run_backend_tests.outcome == 'failure'
+        shell: bash
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml \
+            --json-output support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json \
+            --markdown-output support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+          cat support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload backend test failure summary
+        if: failure() && steps.run_backend_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-tests-failure-summary-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}
+          path: |
+            support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+            support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json
+            support/generated/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30

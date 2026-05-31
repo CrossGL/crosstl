@@ -72,10 +72,36 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run translator tests
+        id: run_translator_tests
         shell: bash
         run: |
+          mkdir -p support/generated
           if [ "${{ matrix.component }}" == "general" ]; then
-            pytest tests/test_translator --ignore=tests/test_translator/test_codegen
+            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen \
+              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           else
-            pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py
+            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py \
+              --junitxml support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
           fi
+
+      - name: Write translator test failure summary
+        if: failure() && steps.run_translator_tests.outcome == 'failure'
+        shell: bash
+        run: |
+          python tools/pytest_failure_summary.py \
+            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml \
+            --json-output support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json \
+            --markdown-output support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+          cat support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload translator test failure summary
+        if: failure() && steps.run_translator_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: translator-tests-failure-summary-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}
+          path: |
+            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
+            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.json
+            support/generated/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}-failure-summary.md
+          if-no-files-found: ignore
+          retention-days: 30
