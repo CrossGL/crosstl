@@ -386,6 +386,28 @@ def validate_string_int_map(
     return None
 
 
+def validate_load_error_object(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_report_field(path, field, dict, value)
+    error = validate_required_fields(value, path, field, ("path", "type", "message"))
+    if error is not None:
+        return error
+    return validate_nested_field_types(
+        value,
+        path,
+        field,
+        {
+            "path": (str, type(None)),
+            "type": str,
+            "message": str,
+        },
+    )
+
+
 def validate_string_list(
     value: Any,
     path: Path | None,
@@ -557,6 +579,14 @@ def validate_support_signals_summary(
                 docs_probe["ok"] + docs_probe["failed"],
             ),
         )["load_error"]
+    if "load_error" in docs_probe:
+        error = validate_load_error_object(
+            docs_probe["load_error"],
+            path,
+            "summary.docs_probe.load_error",
+        )
+        if error is not None:
+            return error
 
     pytest_failures = value["pytest_failures"]
     error = validate_required_fields(
@@ -1149,6 +1179,8 @@ def signals_allow_extracted_closure(signals: dict[str, Any] | None) -> bool:
         return False
     docs_probe = signals.get("summary", {}).get("docs_probe", {})
     if not docs_probe.get("provided"):
+        return False
+    if docs_probe.get("load_error"):
         return False
     return int(docs_probe.get("failed", 0)) == 0
 

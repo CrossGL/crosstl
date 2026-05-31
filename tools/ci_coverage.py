@@ -20,6 +20,7 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ROOT = Path(os.environ.get("CROSSGL_CI_COVERAGE_ROOT", DEFAULT_ROOT)).resolve()
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
 BACKENDS_PATH = ROOT / "support" / "backends.json"
+NODE24_ACTION_RUNTIME_ENV = "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24"
 
 PYTHON_VERSIONS = ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13"]
 RUNNER_OSES = ["ubuntu-latest", "windows-latest", "macOS-latest"]
@@ -475,7 +476,11 @@ def workflow_permissions_report(workflows: dict[str, str]) -> dict[str, Any]:
 
 def workflow_action_refs(workflow: str) -> list[str]:
     refs = []
-    for match in re.finditer(r"^\s*uses:\s+(.+?)\s*$", workflow, re.MULTILINE):
+    for match in re.finditer(
+        r"^\s*(?:-\s*)?uses:\s+(.+?)\s*$",
+        workflow,
+        re.MULTILINE,
+    ):
         action_ref = strip_yaml_scalar(match.group(1))
         if action_ref.startswith("./") or "@" not in action_ref:
             continue
@@ -487,10 +492,29 @@ def action_ref_name(action_ref: str) -> str:
     return action_ref.rsplit("@", 1)[1].strip()
 
 
+def workflow_opts_into_node24_action_runtime(workflow: str) -> bool:
+    return (
+        re.search(
+            r"^env:\s*\n(?:^[ \t]+[A-Za-z0-9_]+:.*\n)*"
+            rf"^[ \t]+{NODE24_ACTION_RUNTIME_ENV}:\s*[\"']?true[\"']?\s*$",
+            workflow,
+            flags=re.MULTILINE,
+        )
+        is not None
+    )
+
+
 def workflow_actions_report(workflows: dict[str, str]) -> dict[str, Any]:
     action_refs = {
         workflow_name: workflow_action_refs(workflow)
         for workflow_name, workflow in workflows.items()
+    }
+    node24_opt_in = {
+        workflow_name: workflow_opts_into_node24_action_runtime(
+            workflows[workflow_name]
+        )
+        for workflow_name, refs in action_refs.items()
+        if refs
     }
     mutable_refs = {}
     for workflow_name, refs in action_refs.items():
@@ -504,6 +528,12 @@ def workflow_actions_report(workflows: dict[str, str]) -> dict[str, Any]:
     return {
         "workflow_count": len(workflows),
         "action_refs": action_refs,
+        "node24_opt_in": node24_opt_in,
+        "missing_node24_opt_in": sorted(
+            workflow_name
+            for workflow_name, enabled in node24_opt_in.items()
+            if not enabled
+        ),
         "mutable_refs": mutable_refs,
     }
 
@@ -1280,6 +1310,13 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         )
 
     actions = report["workflows"]["actions"]
+    for workflow_name in actions["missing_node24_opt_in"]:
+        errors.append(
+            "{} must set {} for JavaScript actions".format(
+                workflow_name,
+                NODE24_ACTION_RUNTIME_ENV,
+            )
+        )
     for workflow_name, action_refs in actions["mutable_refs"].items():
         errors.append(
             "{} has mutable action refs: {}".format(
@@ -1611,8 +1648,14 @@ def workflow_write_policy_presence(permissions: dict[str, Any]) -> dict[str, boo
 
 def workflow_action_policy_presence(actions: dict[str, Any]) -> dict[str, bool]:
     return {
-        workflow_name: not bool(actions["mutable_refs"].get(workflow_name))
-        for workflow_name in actions["action_refs"]
+        workflow_name: (
+            not bool(actions["mutable_refs"].get(workflow_name))
+            and (
+                not bool(action_refs)
+                or bool(actions["node24_opt_in"].get(workflow_name))
+            )
+        )
+        for workflow_name, action_refs in actions["action_refs"].items()
     }
 
 
@@ -2168,11 +2211,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     )
     lines.extend(
         markdown_table(
-            ["Workflow", "Action refs", "Mutable refs"],
+            ["Workflow", "Action refs", "Node 24 opt-in", "Mutable refs"],
             [
                 [
                     workflow_name,
                     len(actions["action_refs"].get(workflow_name, [])),
+                    ok_text(
+                        actions["node24_opt_in"].get(
+                            workflow_name,
+                            not actions["action_refs"].get(workflow_name, []),
+                        )
+                    ),
                     comma_list(actions["mutable_refs"].get(workflow_name, [])),
                 ]
                 for workflow_name in sorted(actions["action_refs"])
