@@ -1071,6 +1071,8 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             and "--sync-summary support/generated/support-issue-sync-summary.json"
             in summary_step
             and "--output support/generated/support-issue-ci-summary.md" in summary_step
+            and "--metrics-output support/generated/support-issue-sync-metrics.json"
+            in summary_step
         ),
         "support_automation_summary_on_failure": "if: always()" in summary_step,
         "appends_support_automation_summary_to_step_summary": (
@@ -1217,6 +1219,8 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             in issue_report_upload_step
             and "support/generated/support-issue-plan.json" in issue_report_upload_step
             and "support/generated/support-issue-sync-summary.json"
+            in issue_report_upload_step
+            and "support/generated/support-issue-sync-metrics.json"
             in issue_report_upload_step
             and "support/generated/support-issue-ci-summary.md"
             in issue_report_upload_step

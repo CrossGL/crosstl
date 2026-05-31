@@ -19,9 +19,13 @@ DEFAULT_ISSUE_PLAN_PATH = ROOT / "support" / "generated" / "support-issue-plan.j
 DEFAULT_SYNC_SUMMARY_PATH = (
     ROOT / "support" / "generated" / "support-issue-sync-summary.json"
 )
+DEFAULT_SYNC_METRICS_PATH = (
+    ROOT / "support" / "generated" / "support-issue-sync-metrics.json"
+)
 MATRIX_CHECK_GENERATOR = "tools/support_matrix.py check"
 EVIDENCE_CHECK_GENERATOR = "tools/support_matrix.py evidence"
 ISSUE_SYNC_GENERATOR = "tools/sync_support_issues.py"
+ISSUE_SYNC_METRICS_GENERATOR = "tools/support_ci_summary.py metrics"
 SUPPORTED_SCHEMA_VERSION = 1
 MATRIX_CHECK_REQUIRED_FIELDS = ("schema_version", "generator", "ok", "summary")
 EVIDENCE_CHECK_REQUIRED_FIELDS = (
@@ -2260,6 +2264,143 @@ def action_reason_rows(
     return rows
 
 
+def action_mutation_total(counts: dict[str, Any] | None) -> int | None:
+    if not isinstance(counts, dict):
+        return None
+    return sum(int(counts.get(action, 0)) for action in ISSUE_ACTION_COUNTERS[:-1])
+
+
+def counter_map_or_none(
+    counts: dict[str, Any] | None,
+    counters: tuple[str, ...],
+) -> dict[str, int] | None:
+    if not isinstance(counts, dict):
+        return None
+    return {counter: int(counts.get(counter, 0)) for counter in counters}
+
+
+def issue_sync_report_reference(
+    report: dict[str, Any] | None,
+    path: Path | None,
+    status: str,
+) -> dict[str, Any]:
+    reference: dict[str, Any] = {
+        "path": display_path(path),
+        "status": status,
+        "provided": report is not None,
+    }
+    if report and report.get("load_error"):
+        reference["load_error"] = report["load_error"]
+    return reference
+
+
+def build_issue_sync_metrics(
+    issue_plan: dict[str, Any] | None,
+    issue_plan_path: Path | None,
+    sync_summary: dict[str, Any] | None,
+    sync_summary_path: Path | None,
+) -> dict[str, Any]:
+    plan_valid = issue_plan is not None and not issue_plan.get("load_error")
+    sync_valid = sync_summary is not None and not sync_summary.get("load_error")
+    plan_status = issue_plan_status(issue_plan)
+    sync_status = issue_sync_status(sync_summary)
+    planned_actions = (
+        counter_map_or_none(issue_plan.get("planned_actions"), ISSUE_ACTION_COUNTERS)
+        if plan_valid
+        else None
+    )
+    planned_closures = (
+        counter_map_or_none(issue_plan.get("planned_closures"), ISSUE_CLOSURE_COUNTERS)
+        if plan_valid
+        else None
+    )
+    actual_actions = (
+        counter_map_or_none(sync_summary.get("sync_summary"), ISSUE_ACTION_COUNTERS)
+        if sync_valid
+        else None
+    )
+    reconciliation = (
+        sync_summary.get("operation_reconciliation", {}) if sync_valid else {}
+    )
+    actual_closures = counter_map_or_none(
+        reconciliation.get("actual_closures"),
+        ISSUE_CLOSURE_COUNTERS,
+    )
+    actual_action_reasons = (
+        reconciliation.get("actual_action_reasons")
+        if isinstance(reconciliation.get("actual_action_reasons"), dict)
+        else None
+    )
+    planned_action_total = action_mutation_total(planned_actions)
+    actual_action_total = action_mutation_total(actual_actions)
+    action_reason_total = (
+        sum(
+            sum(int(count) for count in reasons.values())
+            for reasons in actual_action_reasons.values()
+        )
+        if actual_action_reasons is not None
+        else None
+    )
+    metrics: dict[str, Any] = {
+        "schema_version": SUPPORTED_SCHEMA_VERSION,
+        "generator": ISSUE_SYNC_METRICS_GENERATOR,
+        "reports": {
+            "issue_plan": issue_sync_report_reference(
+                issue_plan,
+                issue_plan_path,
+                plan_status,
+            ),
+            "issue_sync": issue_sync_report_reference(
+                sync_summary,
+                sync_summary_path,
+                sync_status,
+            ),
+        },
+        "summary": {
+            "issue_plan_status": plan_status,
+            "issue_sync_status": sync_status,
+            "planned_action_total": planned_action_total,
+            "actual_action_total": actual_action_total,
+            "planned_closure_total": (
+                planned_closures.get("total") if planned_closures is not None else None
+            ),
+            "actual_closure_total": (
+                actual_closures.get("total") if actual_closures is not None else None
+            ),
+            "action_overrun_count": len(reconciliation.get("action_overruns", [])),
+            "action_shortfall_count": len(reconciliation.get("action_shortfalls", [])),
+            "closure_overrun_count": len(reconciliation.get("closure_overruns", [])),
+            "closure_shortfall_count": len(
+                reconciliation.get("closure_shortfalls", [])
+            ),
+            "action_reason_total": action_reason_total,
+            "no_op_sync": (
+                actual_action_total == 0 if actual_action_total is not None else None
+            ),
+        },
+        "planned_actions": planned_actions,
+        "planned_closures": planned_closures,
+        "actual_actions": actual_actions,
+        "actual_action_reasons": actual_action_reasons,
+        "actual_closures": actual_closures,
+    }
+    workflow_source = None
+    if sync_valid:
+        workflow_source = sync_summary.get("workflow_source")
+    if workflow_source is None and plan_valid:
+        workflow_source = issue_plan.get("workflow_source")
+    if isinstance(workflow_source, dict):
+        metrics["workflow_source"] = workflow_source
+    return metrics
+
+
+def write_json_report(path: Path, report: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
 def render_operation_ledger(entries: list[dict[str, Any]] | None) -> list[str]:
     if not entries:
         return []
@@ -3256,6 +3397,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, help="Optional Markdown output path")
     parser.add_argument(
+        "--metrics-output",
+        type=Path,
+        default=None,
+        help="Optional JSON metrics output path for issue sync trend tracking",
+    )
+    parser.add_argument(
         "--step-summary",
         type=Path,
         help="Optional GitHub Step Summary path to append the Markdown output to",
@@ -3325,6 +3472,19 @@ def main(argv: list[str] | None = None) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
         print(f"Wrote {display_path(output)}")
+
+    metrics_output = resolve_path(args.metrics_output)
+    if metrics_output is not None:
+        write_json_report(
+            metrics_output,
+            build_issue_sync_metrics(
+                issue_plan,
+                issue_plan_path,
+                sync_summary,
+                sync_summary_path,
+            ),
+        )
+        print(f"Wrote {display_path(metrics_output)}")
 
     if args.step_summary is not None:
         args.step_summary.parent.mkdir(parents=True, exist_ok=True)

@@ -634,6 +634,61 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     ) in text
 
 
+def test_build_issue_sync_metrics_summarizes_action_churn():
+    module = load_summary_module()
+
+    metrics = module.build_issue_sync_metrics(
+        issue_plan_report(),
+        Path("support/generated/support-issue-plan.json"),
+        sync_summary_report(),
+        Path("support/generated/support-issue-sync-summary.json"),
+    )
+
+    assert metrics["schema_version"] == 1
+    assert metrics["generator"] == "tools/support_ci_summary.py metrics"
+    assert metrics["workflow_source"] == {
+        "event": "workflow_run",
+        "workflow": "Backend Tests",
+        "run_id": "26722241319",
+        "conclusion": "success",
+        "head_sha": "731cb899d2cab99dd328e4299eb65d13a97d31e3",
+    }
+    assert metrics["summary"] == {
+        "issue_plan_status": "fail",
+        "issue_sync_status": "fail",
+        "planned_action_total": 10,
+        "actual_action_total": 5,
+        "planned_closure_total": 3,
+        "actual_closure_total": 0,
+        "action_overrun_count": 2,
+        "action_shortfall_count": 1,
+        "closure_overrun_count": 0,
+        "closure_shortfall_count": 0,
+        "action_reason_total": 5,
+        "no_op_sync": False,
+    }
+    assert metrics["planned_actions"] == {
+        "created": 2,
+        "updated": 3,
+        "closed": 1,
+        "attached": 4,
+        "unchanged": 35,
+    }
+    assert metrics["actual_actions"] == {
+        "created": 0,
+        "updated": 2,
+        "closed": 0,
+        "attached": 3,
+        "unchanged": 44,
+    }
+    assert metrics["actual_action_reasons"] == {
+        "created": {},
+        "updated": {"desired_issue_drift": 2},
+        "closed": {},
+        "attached": {"missing_sub_issue_relationship": 3},
+    }
+
+
 def test_render_summary_handles_missing_reports():
     module = load_summary_module()
 
@@ -2955,6 +3010,7 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
     plan_path = tmp_path / "support-issue-plan.json"
     sync_path = tmp_path / "support-issue-sync-summary.json"
     output_path = tmp_path / "support-issue-ci-summary.md"
+    metrics_path = tmp_path / "support-issue-sync-metrics.json"
     matrix_path.write_text(json.dumps(matrix_check_report(ok=True)), encoding="utf-8")
     evidence_path.write_text(json.dumps(evidence_check_report()), encoding="utf-8")
     plan_path.write_text(json.dumps(issue_plan_report()), encoding="utf-8")
@@ -2974,6 +3030,8 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
             str(sync_path),
             "--output",
             str(output_path),
+            "--metrics-output",
+            str(metrics_path),
         ],
         cwd=str(ROOT),
         capture_output=True,
@@ -2987,3 +3045,7 @@ def test_support_ci_summary_cli_writes_markdown(tmp_path):
     assert "| Rows missing evidence | 2 |" in text
     assert "| Status | pass |" in text
     assert "| Sync updated | 2 |" in text
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert metrics["summary"]["planned_action_total"] == 10
+    assert metrics["summary"]["actual_action_total"] == 5
+    assert metrics["summary"]["action_reason_total"] == 5

@@ -1932,11 +1932,16 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         "--sync-summary support/generated/support-issue-sync-summary.json" in issue_sync
     )
     assert "--output support/generated/support-issue-ci-summary.md" in issue_sync
+    assert (
+        "--metrics-output support/generated/support-issue-sync-metrics.json"
+        in issue_sync
+    )
     assert '--step-summary "$GITHUB_STEP_SUMMARY"' in issue_sync
     assert "--github-annotations" in issue_sync
     assert "--fail-on-attention" in issue_sync
     assert "support/generated/support-issue-plan.json" in issue_sync
     assert "support/generated/support-issue-sync-summary.json" in issue_sync
+    assert "support/generated/support-issue-sync-metrics.json" in issue_sync
     assert "support/generated/support-issue-ci-summary.md" in issue_sync
 
 

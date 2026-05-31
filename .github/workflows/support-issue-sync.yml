@@ -317,6 +317,7 @@ jobs:
             --issue-plan support/generated/support-issue-plan.json \
             --sync-summary support/generated/support-issue-sync-summary.json \
             --output support/generated/support-issue-ci-summary.md \
+            --metrics-output support/generated/support-issue-sync-metrics.json \
             --step-summary "$GITHUB_STEP_SUMMARY" \
             --github-annotations \
             --fail-on-attention
@@ -331,6 +332,7 @@ jobs:
             support/generated/support-evidence-check.json
             support/generated/support-issue-plan.json
             support/generated/support-issue-sync-summary.json
+            support/generated/support-issue-sync-metrics.json
             support/generated/support-issue-ci-summary.md
           if-no-files-found: ignore
           retention-days: 30
