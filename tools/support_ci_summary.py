@@ -1065,6 +1065,83 @@ def validate_operation_ledger_contract(
     return None
 
 
+def operation_ledger_action_counts(
+    entries: list[dict[str, Any]],
+) -> dict[str, int]:
+    counts = {action: 0 for action in ISSUE_ACTION_COUNTERS[:-1]}
+    for entry in entries:
+        action = entry.get("action")
+        if action in counts:
+            counts[action] += 1
+    return counts
+
+
+def operation_ledger_closure_counts(
+    entries: list[dict[str, Any]],
+) -> dict[str, int]:
+    counts = {counter: 0 for counter in ISSUE_CLOSURE_COUNTERS}
+    for entry in entries:
+        if entry.get("action") != "closed":
+            continue
+        key = str(entry.get("key", ""))
+        reason = entry.get("reason")
+        if reason == "duplicate_managed_marker":
+            category = "duplicate_marker"
+        elif key.startswith("parent:"):
+            category = "stale_parent"
+        elif key.startswith("backlog:"):
+            category = "stale_backlog"
+        elif key.startswith("extracted:"):
+            category = "stale_extracted"
+        else:
+            continue
+        counts[category] += 1
+        counts["total"] += 1
+    return counts
+
+
+def counter_difference_rows(
+    planned: dict[str, int],
+    actual: dict[str, int],
+    key_field: str,
+    *,
+    comparison: str,
+) -> list[dict[str, int | str]]:
+    rows = []
+    for key in sorted(actual):
+        actual_count = actual[key]
+        planned_count = planned.get(key, 0)
+        if comparison == "overrun" and actual_count <= planned_count:
+            continue
+        if comparison == "shortfall" and actual_count >= planned_count:
+            continue
+        rows.append(
+            {
+                key_field: key,
+                "actual": actual_count,
+                "planned": planned_count,
+            }
+        )
+    return rows
+
+
+def counter_map_mismatch_error(
+    path: Path | None,
+    field: str,
+    actual: dict[str, int],
+    expected: dict[str, int],
+) -> dict[str, Any]:
+    return load_error(
+        path,
+        "InvalidReportField",
+        "{} must match operation ledger: {} != {}".format(
+            field,
+            actual,
+            expected,
+        ),
+    )
+
+
 def validate_reconciliation_differences(
     reconciliation: dict[str, Any],
     path: Path | None,
@@ -1205,6 +1282,104 @@ def validate_operation_reconciliation_contract(
         )
         if error is not None:
             return error
+
+    operation_ledger = report.get("operation_ledger")
+    if isinstance(operation_ledger, list):
+        expected_actual_actions = operation_ledger_action_counts(operation_ledger)
+        actual_actions = reconciliation.get("actual_actions")
+        if actual_actions is not None and actual_actions != expected_actual_actions:
+            return counter_map_mismatch_error(
+                path,
+                "operation_reconciliation.actual_actions",
+                actual_actions,
+                expected_actual_actions,
+            )
+
+        expected_actual_closures = operation_ledger_closure_counts(operation_ledger)
+        actual_closures = reconciliation.get("actual_closures")
+        if actual_closures is not None and actual_closures != expected_actual_closures:
+            return counter_map_mismatch_error(
+                path,
+                "operation_reconciliation.actual_closures",
+                actual_closures,
+                expected_actual_closures,
+            )
+
+    planned_actions = reconciliation.get("planned_actions")
+    actual_actions = reconciliation.get("actual_actions")
+    if planned_actions is not None and actual_actions is not None:
+        expected_action_overruns = counter_difference_rows(
+            planned_actions,
+            actual_actions,
+            "action",
+            comparison="overrun",
+        )
+        if reconciliation["action_overruns"] != expected_action_overruns:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.action_overruns must match counters",
+            )
+        expected_action_shortfalls = counter_difference_rows(
+            planned_actions,
+            actual_actions,
+            "action",
+            comparison="shortfall",
+        )
+        if reconciliation["action_shortfalls"] != expected_action_shortfalls:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.action_shortfalls must match counters",
+            )
+
+    planned_closures = reconciliation.get("planned_closures")
+    actual_closures = reconciliation.get("actual_closures")
+    if planned_closures is not None and actual_closures is not None:
+        expected_closure_overruns = counter_difference_rows(
+            planned_closures,
+            actual_closures,
+            "category",
+            comparison="overrun",
+        )
+        if reconciliation["closure_overruns"] != expected_closure_overruns:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.closure_overruns must match counters",
+            )
+        expected_closure_shortfalls = counter_difference_rows(
+            planned_closures,
+            actual_closures,
+            "category",
+            comparison="shortfall",
+        )
+        if reconciliation["closure_shortfalls"] != expected_closure_shortfalls:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.closure_shortfalls must match counters",
+            )
+
+    if reconciliation.get("evaluated"):
+        expected_ok = not (
+            reconciliation["action_overruns"]
+            or reconciliation["action_shortfalls"]
+            or reconciliation["closure_overruns"]
+            or reconciliation["closure_shortfalls"]
+        )
+        if reconciliation.get("ok") != expected_ok:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.ok must match reconciliation differences",
+            )
+    elif reconciliation.get("ok") is not None:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "operation_reconciliation.ok must be null when not evaluated",
+        )
     return None
 
 
@@ -1236,6 +1411,21 @@ def validate_sync_summary_contract(
         error = validator()
         if error is not None:
             return error
+    operation_ledger = report.get("operation_ledger")
+    if isinstance(operation_ledger, list):
+        expected_actual_actions = operation_ledger_action_counts(operation_ledger)
+        sync_summary = report["sync_summary"]
+        for action, expected_count in expected_actual_actions.items():
+            if sync_summary[action] != expected_count:
+                return load_error(
+                    path,
+                    "InvalidReportField",
+                    "sync_summary.{} must match operation ledger: {} != {}".format(
+                        action,
+                        sync_summary[action],
+                        expected_count,
+                    ),
+                )
     return None
 
 

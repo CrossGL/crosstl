@@ -271,7 +271,7 @@ def sync_summary_report():
         "generator": "tools/sync_support_issues.py",
         "mode": "sync",
         "sync_summary": {
-            "created": 1,
+            "created": 0,
             "updated": 2,
             "closed": 0,
             "attached": 3,
@@ -287,11 +287,33 @@ def sync_summary_report():
                 "reasons": ["body", "labels"],
             },
             {
+                "action": "updated",
+                "key": "parent:metal",
+                "number": 18,
+                "title": "Metal parent",
+                "state": "open",
+                "reasons": ["body"],
+            },
+            {
                 "action": "attached",
                 "parent_key": "parent:directx",
                 "parent_number": 17,
                 "child_key": "backlog:directx:textures.gather",
                 "child_number": 22,
+            },
+            {
+                "action": "attached",
+                "parent_key": "parent:directx",
+                "parent_number": 17,
+                "child_key": "backlog:directx:resources.buffers",
+                "child_number": 23,
+            },
+            {
+                "action": "attached",
+                "parent_key": "parent:metal",
+                "parent_number": 18,
+                "child_key": "backlog:metal:resources.buffers",
+                "child_number": 24,
             },
         ],
         "operation_reconciliation": {
@@ -475,7 +497,7 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     ) in text
     assert "| Embedded matrix check | fail |" in text
     assert "| Sync attached | 3 |" in text
-    assert "| Operation ledger entries | 2 |" in text
+    assert "| Operation ledger entries | 5 |" in text
     assert "| Operation reconciliation | fail |" in text
     assert "| Operation action overruns | 2 |" in text
     assert "| Operation action shortfalls | 1 |" in text
@@ -1540,6 +1562,27 @@ def test_load_optional_json_reports_invalid_operation_ledger_contract(tmp_path):
     }
 
 
+def test_load_optional_json_rejects_sync_summary_ledger_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_summary"]["updated"] = 99
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "sync_summary.updated must match operation ledger: 99 != 2",
+    }
+
+
 def test_load_optional_json_reports_invalid_reconciliation_counter_contract(tmp_path):
     module = load_summary_module()
     sync_path = tmp_path / "support-issue-sync-summary.json"
@@ -1559,6 +1602,58 @@ def test_load_optional_json_reports_invalid_reconciliation_counter_contract(tmp_
         "type": "InvalidReportField",
         "message": (
             "operation_reconciliation.actual_actions.updated must be int, got str"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_ledger_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["actual_actions"]["updated"] = 99
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "operation_reconciliation.actual_actions must match operation ledger: "
+            "{'created': 0, 'updated': 99, 'closed': 0, 'attached': 3} != "
+            "{'created': 0, 'updated': 2, 'closed': 0, 'attached': 3}"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_closure_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["actual_closures"]["stale_parent"] = 1
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "operation_reconciliation.actual_closures must match operation ledger: "
+            "{'total': 0, 'stale_parent': 1, 'stale_backlog': 0, "
+            "'stale_extracted': 0, 'duplicate_marker': 0} != "
+            "{'total': 0, 'stale_parent': 0, 'stale_backlog': 0, "
+            "'stale_extracted': 0, 'duplicate_marker': 0}"
         ),
     }
 
@@ -1606,6 +1701,48 @@ def test_load_optional_json_reports_invalid_reconciliation_difference_contract(
         "path": str(sync_path),
         "type": "InvalidReportField",
         "message": "action_shortfalls[0].planned must be int, got str",
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_difference_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["action_overruns"] = []
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "operation_reconciliation.action_overruns must match counters",
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_ok_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["ok"] = True
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "operation_reconciliation.ok must match reconciliation differences",
     }
 
 
