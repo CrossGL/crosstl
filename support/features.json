@@ -474,11 +474,16 @@
           ]
         },
         "opengl": {
-          "status": "partial",
-          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
+          "status": "supported",
+          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement, local-size layouts, mesh output topology/count layouts, taskPayloadSharedEXT payload storage, DispatchMesh payload assignment, native EmitMeshTasksEXT/SetMeshOutputsEXT calls, mesh output signatures for vertices/indices/primitives, helper forwarding through SetVertex/SetPrimitive, and topology-specific primitive index builtins. The backend validates layout aliases/conflicts, positive count constants, DispatchMesh arity/count/payload shapes, mesh output parameter shapes/counts, SetMeshOutputCounts arity/count bounds, output literal/dynamic indices, whole-output assignment shapes, helper arity/value types, and expression-context misuse.",
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_output_signature_parameters_reject_malformed_shapes",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_set_vertex_and_set_primitive_helpers_lower_to_builtins",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_helpers_reject_expression_contexts"
           ]
         },
         "metal": {

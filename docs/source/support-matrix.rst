@@ -36,13 +36,13 @@ implicitly supported.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "38", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "39", "4", "0", "0", "0", "0"
+   "OpenGL / GLSL", "40", "3", "0", "0", "0", "0"
    "Metal", "40", "3", "0", "0", "0", "0"
    "Vulkan SPIR-V", "27", "12", "0", "0", "0", "4"
    "CUDA", "23", "5", "0", "0", "0", "15"
    "HIP", "21", "6", "0", "0", "1", "15"
    "Mojo", "22", "21", "0", "0", "0", "0"
-   "Rust", "21", "1", "0", "0", "2", "19"
+   "Rust", "22", "1", "0", "0", "1", "19"
    "Slang", "23", "12", "0", "0", "0", "8"
 
 Graphics Backend Focus
@@ -55,14 +55,13 @@ scope for graphics backend completion work.
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
 
    "DirectX / HLSL", "38", "5", "0", "0", "0", "0"
-   "OpenGL / GLSL", "39", "4", "0", "0", "0", "0"
+   "OpenGL / GLSL", "40", "3", "0", "0", "0", "0"
    "Metal", "40", "3", "0", "0", "0", "0"
 
 .. csv-table:: DirectX/OpenGL/Metal backlog
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete."
-   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete."
    "DirectX / HLSL", "resources", "GLSL buffer block lowering", "partial", "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via ByteAddressBuffer, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly SRV lowering, block arrays, and deterministic diagnostics for unsupported layouts/types."
    "Metal", "resources", "GLSL buffer block lowering", "partial", "Covers std140/std430 fixed-only blocks and mixed metadata plus final runtime-array blocks via explicit pointer/offset lowering, including bool/int/uint/float scalars, vectors, matrices, nested struct leaf fields, struct arrays, layout-distinct aggregate helpers, readonly aggregate helpers, nested aggregate leaf compound stores, aggregate struct load/store with fixed array fields, fixed arrays, int/uint scalar and runtime-array atomics, global-constant fixed sizes, readonly const-device lowering, block arrays, and deterministic diagnostics for unsupported layouts/types."
    "DirectX / HLSL", "textures", "Projected texture operations", "partial", "Covers planar projected texture and shadow compare forms plus non-offset cube color and cube-shadow projection. Cube-array projection and target-invalid offset forms remain deterministic diagnostics."
@@ -98,8 +97,8 @@ Each category below uses the status codes from the legend.
    "Fragment/pixel stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Compute stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
    "Geometry stage", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
-   "Tessellation stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "U", "Y"
-   "Mesh/task/amplification stages", "P", "P", "Y", "Y", "Y", "U", "Y", "U", "Y"
+   "Tessellation stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
+   "Mesh/task/amplification stages", "P", "Y", "Y", "Y", "Y", "U", "Y", "U", "Y"
    "Ray tracing stages", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y", "Y"
 
 .. csv-table:: stage I/O
@@ -167,9 +166,7 @@ need an audit before implementation work can be scoped accurately.
 .. csv-table:: Non-supported or unaudited feature rows
    :header: "Backend", "Category", "Feature", "Status", "Notes"
 
-   "Rust", "stages", "Tessellation stages", "unsupported", "Rust codegen rejects tessellation control and evaluation stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only."
    "DirectX / HLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete."
-   "OpenGL / GLSL", "stages", "Mesh/task/amplification stages", "partial", "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete."
    "HIP", "stages", "Mesh/task/amplification stages", "unsupported", "HIP codegen rejects mesh, task, object, and amplification-style stages explicitly because HIP has no mesh shader-stage equivalent."
    "Rust", "stages", "Mesh/task/amplification stages", "unsupported", "Rust codegen rejects mesh, task, object, and amplification-style stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only."
    "CUDA", "resources", "Constant/uniform buffers", "partial", ""

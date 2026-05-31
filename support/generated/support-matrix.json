@@ -1049,30 +1049,12 @@
   ],
   "backlog": [
     {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "stages",
-      "feature": "Tessellation stages",
-      "feature_id": "stage.tessellation",
-      "notes": "Rust codegen rejects tessellation control and evaluation stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
-      "status": "unsupported"
-    },
-    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "stages",
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
       "notes": "Entry points lower to HLSL mesh/amplification shader attributes with deterministic stage names, numthreads from local-size layouts or @numthreads, and optional mesh output topology attributes. Full mesh payload/output signature validation remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "stages",
-      "feature": "Mesh/task/amplification stages",
-      "feature_id": "stage.mesh_task",
-      "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
       "status": "partial"
     },
     {
@@ -2962,10 +2944,11 @@
         },
         "rust": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_tessellation_stages_validate_metadata_and_patch_shapes"
           ],
-          "notes": "Rust codegen rejects tessellation control and evaluation stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
-          "status": "unsupported"
+          "notes": "Rust tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, patchconstantfunc, and patch parameter metadata, maps patch parameter types to placeholder containers, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, validates partitioning values, and rejects invalid patch generic shapes/counts.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
@@ -3067,10 +3050,15 @@
         "opengl": {
           "evidence": [
             "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_entries_use_distinct_names",
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_task_stage_extensions_and_local_size_layouts",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_task_dispatch_mesh_payload_argument_assigns_shared_payload_storage",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_output_signature_parameters_lower_to_native_outputs",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_output_signature_parameters_reject_malformed_shapes",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_set_vertex_and_set_primitive_helpers_lower_to_builtins",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_mesh_helpers_reject_expression_contexts"
           ],
-          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
-          "status": "partial"
+          "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement, local-size layouts, mesh output topology/count layouts, taskPayloadSharedEXT payload storage, DispatchMesh payload assignment, native EmitMeshTasksEXT/SetMeshOutputsEXT calls, mesh output signatures for vertices/indices/primitives, helper forwarding through SetVertex/SetPrimitive, and topology-specific primitive index builtins. The backend validates layout aliases/conflicts, positive count constants, DispatchMesh arity/count/payload shapes, mesh output parameter shapes/counts, SetMeshOutputCounts arity/count bounds, output literal/dynamic indices, whole-output assignment shapes, helper arity/value types, and expression-context misuse.",
+          "status": "supported"
         },
         "rust": {
           "evidence": [
@@ -5960,7 +5948,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 133,
+    "backlog_count": 131,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
@@ -6005,8 +5993,8 @@
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 4,
-        "supported": 39,
+        "partial": 3,
+        "supported": 40,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
@@ -6014,9 +6002,9 @@
       "rust": {
         "diagnostic": 0,
         "partial": 1,
-        "supported": 21,
+        "supported": 22,
         "unknown": 19,
-        "unsupported": 2,
+        "unsupported": 1,
         "validated_rejection": 0
       },
       "slang": {
