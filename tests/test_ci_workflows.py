@@ -183,6 +183,11 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["pull_request_target"]["support_traceability"].values()
     )
     assert all(
+        report["workflows"]["pull_request_target"][
+            "support_traceability_enforcement"
+        ].values()
+    )
+    assert all(
         report["workflows"]["pull_request_target"]["support_closure_sync"].values()
     )
     assert all(
@@ -212,6 +217,17 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     assert (
         report["workflows"]["support_matrix"]["uploads_check_report_artifact"] is True
     )
+    assert report["workflows"]["support_matrix"]["evidence_audit_on_failure"] is True
+    assert (
+        report["workflows"]["support_matrix"]["evidence_audit_after_validate"] is True
+    )
+    assert (
+        report["workflows"]["support_matrix"]["evidence_audit_fails_on_missing"] is True
+    )
+    assert (
+        report["workflows"]["support_matrix"]["uploads_evidence_report_artifact"]
+        is True
+    )
     assert (
         report["workflows"]["support_matrix"][
             "uploads_check_report_artifact_on_failure"
@@ -223,6 +239,12 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     )
     assert (
         report["workflows"]["support_matrix"]["check_report_upload_after_validate"]
+        is True
+    )
+    assert (
+        report["workflows"]["support_matrix"][
+            "check_report_upload_after_evidence_audit"
+        ]
         is True
     )
     assert report["workflows"]["support_matrix"]["uploads_docs_probe_artifact"] is True
@@ -253,7 +275,31 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         is True
     )
     assert (
+        report["workflows"]["support_issue_sync"]["writes_support_evidence_report"]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "support_evidence_report_fails_on_missing"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "support_evidence_report_after_validate"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"]["support_evidence_report_on_failure"]
+        is True
+    )
+    assert (
         report["workflows"]["support_issue_sync"]["uploads_support_matrix_check_report"]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"]["uploads_support_evidence_report"]
         is True
     )
     assert (
@@ -483,11 +529,13 @@ def test_ci_coverage_summary_command_writes_markdown(tmp_path):
     assert "Backend-specific failures are fatal" in text
     assert "## Support Matrix" in text
     assert "Support matrix check artifact" in text
+    assert "Support evidence artifact" in text
     assert "Check artifact upload on failure" in text
     assert "Documentation probe artifact" in text
     assert "Documentation probe upload on failure" in text
     assert "CI coverage artifact upload on failure" in text
     assert "Support matrix check report" in text
+    assert "Support evidence report" in text
     assert "Issue sync uses support matrix check" in text
     assert "Support automation summary" in text
     assert "Support automation summary in step summary" in text
@@ -621,9 +669,20 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     report["workflows"]["support_issue_sync"][
         "writes_support_matrix_check_report"
     ] = False
+    report["workflows"]["support_issue_sync"]["writes_support_evidence_report"] = False
+    report["workflows"]["support_issue_sync"][
+        "support_evidence_report_fails_on_missing"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "support_evidence_report_after_validate"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "support_evidence_report_on_failure"
+    ] = False
     report["workflows"]["support_issue_sync"][
         "uploads_support_matrix_check_report"
     ] = False
+    report["workflows"]["support_issue_sync"]["uploads_support_evidence_report"] = False
     report["workflows"]["support_issue_sync"][
         "uploads_support_matrix_check_report_on_failure"
     ] = False
@@ -728,9 +787,20 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     )
     assert "support-issue-sync.yml missing ci_coverage_artifact_retention" in errors
     assert "support-issue-sync.yml missing writes_support_matrix_check_report" in errors
+    assert "support-issue-sync.yml missing writes_support_evidence_report" in errors
+    assert (
+        "support-issue-sync.yml missing support_evidence_report_fails_on_missing"
+        in errors
+    )
+    assert (
+        "support-issue-sync.yml missing support_evidence_report_after_validate"
+        in errors
+    )
+    assert "support-issue-sync.yml missing support_evidence_report_on_failure" in errors
     assert (
         "support-issue-sync.yml missing uploads_support_matrix_check_report" in errors
     )
+    assert "support-issue-sync.yml missing uploads_support_evidence_report" in errors
     assert (
         "support-issue-sync.yml missing uploads_support_matrix_check_report_on_failure"
         in errors
@@ -831,11 +901,18 @@ def test_ci_coverage_reports_missing_support_matrix_policy():
         "docs_probe_command"
     ] = False
     report["workflows"]["support_matrix"]["uploads_check_report_artifact"] = False
+    report["workflows"]["support_matrix"]["evidence_audit_on_failure"] = False
+    report["workflows"]["support_matrix"]["evidence_audit_after_validate"] = False
+    report["workflows"]["support_matrix"]["evidence_audit_fails_on_missing"] = False
+    report["workflows"]["support_matrix"]["uploads_evidence_report_artifact"] = False
     report["workflows"]["support_matrix"][
         "uploads_check_report_artifact_on_failure"
     ] = False
     report["workflows"]["support_matrix"]["check_report_artifact_retention"] = False
     report["workflows"]["support_matrix"]["check_report_upload_after_validate"] = False
+    report["workflows"]["support_matrix"][
+        "check_report_upload_after_evidence_audit"
+    ] = False
     report["workflows"]["support_matrix"]["uploads_docs_probe_artifact"] = False
     report["workflows"]["support_matrix"][
         "uploads_docs_probe_artifact_on_failure"
@@ -846,9 +923,16 @@ def test_ci_coverage_reports_missing_support_matrix_policy():
 
     assert "support-matrix.yml missing policy: docs_probe_command" in errors
     assert "support-matrix.yml missing check report artifact upload" in errors
+    assert "support-matrix.yml evidence audit must run on failure" in errors
+    assert "support-matrix.yml evidence audit must run after validation" in errors
+    assert "support-matrix.yml evidence audit must fail on missing evidence" in errors
+    assert "support-matrix.yml missing evidence report artifact upload" in errors
     assert "support-matrix.yml check report artifact must upload on failure" in errors
     assert "support-matrix.yml check report artifact must set retention-days" in errors
     assert "support-matrix.yml check report upload must run after validation" in errors
+    assert (
+        "support-matrix.yml check report upload must run after evidence audit" in errors
+    )
     assert "support-matrix.yml missing docs probe artifact upload" in errors
     assert "support-matrix.yml docs probe artifact must upload on failure" in errors
     assert "support-matrix.yml docs probe artifact must set retention-days" in errors
@@ -895,6 +979,7 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     target["checkout_credentials_persist"]["pr-issue-links.yml"] = True
     target["head_context_markers"]["pr-issue-links.yml"] = ["github.head_ref"]
     target["support_traceability"]["pr-issue-links.yml"] = False
+    target["support_traceability_enforcement"]["pr-issue-links.yml"] = False
     target["support_closure_sync"]["pr-issue-links.yml"] = False
     target["support_reference_sync"]["pr-issue-links.yml"] = False
     target["github_token_scoped_to_sync"]["pr-issue-links.yml"] = False
@@ -913,6 +998,10 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     )
     assert (
         "pr-issue-links.yml pull_request_target must check support traceability"
+        in errors
+    )
+    assert (
+        "pr-issue-links.yml pull_request_target must enforce support traceability"
         in errors
     )
     assert (
@@ -1345,9 +1434,14 @@ def test_support_matrix_workflow_runs_daily_checks_and_docs_probe():
     assert "workflow_dispatch:" in support_matrix
     assert "python tools/support_matrix.py check" in support_matrix
     assert "--output support/generated/support-matrix-check.json" in support_matrix
-    assert "name: Upload support matrix check report" in support_matrix
+    assert "python tools/support_matrix.py evidence" in support_matrix
+    assert "--status supported" in support_matrix
+    assert "--evidence missing" in support_matrix
+    assert "--output support/generated/support-evidence-check.json" in support_matrix
+    assert "name: Upload support matrix check reports" in support_matrix
     assert "name: support-matrix-check-report" in support_matrix
     assert "support/generated/support-matrix-check.json" in support_matrix
+    assert "support/generated/support-evidence-check.json" in support_matrix
     assert "docs-probe:" in support_matrix
     assert "github.event_name == 'schedule'" in support_matrix
     assert "github.event_name == 'workflow_dispatch'" in support_matrix
@@ -1452,9 +1546,17 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
         "python tools/support_matrix.py check --output "
         "support/generated/support-matrix-check.json"
     ) in issue_sync
+    assert "python tools/support_matrix.py evidence" in issue_sync
+    assert "--status supported" in issue_sync
+    assert "--evidence missing" in issue_sync
+    assert "--output support/generated/support-evidence-check.json" in issue_sync
     assert "name: Upload support matrix check report" in issue_sync
     assert "name: support-matrix-check-report" in issue_sync
     assert "support/generated/support-matrix-check.json" in issue_sync
+    assert "support/generated/support-evidence-check.json" in issue_sync
+    assert "--support-evidence support/generated/support-evidence-check.json" in (
+        issue_sync
+    )
     assert (
         "python tools/ci_coverage.py report --output "
         "support/generated/ci-coverage-report.json"
@@ -1570,7 +1672,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "support/generated/support-issue-ci-summary.md" in issue_sync
 
 
-def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
+def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability():
     workflows = _workflow_texts()
     pr_issue_links = workflows.get("pr-issue-links.yml", "")
 
@@ -1582,8 +1684,8 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
     assert "python tools/sync_pr_issue_links.py" in pr_issue_links
     assert "--sync-support-closures" in pr_issue_links
     assert "--sync-support-references" in pr_issue_links
-    assert "--check-support-traceability" in pr_issue_links
-    assert "--enforce-support-traceability" not in pr_issue_links
+    assert "--check-support-traceability" not in pr_issue_links
+    assert "--enforce-support-traceability" in pr_issue_links
 
 
 def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():

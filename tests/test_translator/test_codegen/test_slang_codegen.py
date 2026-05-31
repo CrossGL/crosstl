@@ -19041,6 +19041,38 @@ def test_binary_expression_precedence_preserves_grouping_in_slang():
     assert "float divisor = a / b * c;" not in generated_code
 
 
+def test_bitwise_operators_emit_slang_syntax():
+    code = """
+    shader BitwiseOps {
+        compute {
+            void main() {
+                uint flags = 6u;
+                uint masked = flags & 3u;
+                uint merged = masked | 8u;
+                uint toggled = merged ^ 1u;
+                uint shiftedLeft = toggled << 2u;
+                uint shiftedRight = shiftedLeft >> 1u;
+                flags &= shiftedRight;
+                flags |= 4u;
+                flags ^= 2u;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint masked = flags & 3u;" in generated_code
+    assert "uint merged = masked | 8u;" in generated_code
+    assert "uint toggled = merged ^ 1u;" in generated_code
+    assert "uint shiftedLeft = toggled << 2u;" in generated_code
+    assert "uint shiftedRight = shiftedLeft >> 1u;" in generated_code
+    assert "flags &= shiftedRight;" in generated_code
+    assert "flags |= 4u;" in generated_code
+    assert "flags ^= 2u;" in generated_code
+
+
 def test_prefix_and_postfix_unary_operators_preserve_position():
     code = """
     shader main {

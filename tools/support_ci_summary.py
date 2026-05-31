@@ -12,14 +12,25 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX_CHECK_PATH = ROOT / "support" / "generated" / "support-matrix-check.json"
+DEFAULT_EVIDENCE_CHECK_PATH = (
+    ROOT / "support" / "generated" / "support-evidence-check.json"
+)
 DEFAULT_ISSUE_PLAN_PATH = ROOT / "support" / "generated" / "support-issue-plan.json"
 DEFAULT_SYNC_SUMMARY_PATH = (
     ROOT / "support" / "generated" / "support-issue-sync-summary.json"
 )
 MATRIX_CHECK_GENERATOR = "tools/support_matrix.py check"
+EVIDENCE_CHECK_GENERATOR = "tools/support_matrix.py evidence"
 ISSUE_SYNC_GENERATOR = "tools/sync_support_issues.py"
 SUPPORTED_SCHEMA_VERSION = 1
 MATRIX_CHECK_REQUIRED_FIELDS = ("schema_version", "generator", "ok", "summary")
+EVIDENCE_CHECK_REQUIRED_FIELDS = (
+    "schema_version",
+    "generator",
+    "filters",
+    "summary",
+    "rows",
+)
 ISSUE_PLAN_REQUIRED_FIELDS = (
     "schema_version",
     "generator",
@@ -39,6 +50,11 @@ MATRIX_CHECK_SUMMARY_COUNTERS = (
     "stale_count",
     "total_diff_line_count",
 )
+EVIDENCE_CHECK_SUMMARY_COUNTERS = (
+    "row_count",
+    "missing_evidence_count",
+    "present_evidence_count",
+)
 ISSUE_DESIRED_COUNTERS = ("total", "parents", "backlog", "extracted")
 ISSUE_EXISTING_COUNTERS = ("managed", "duplicates")
 ISSUE_ACTION_COUNTERS = ("created", "updated", "closed", "attached", "unchanged")
@@ -50,6 +66,7 @@ ISSUE_CLOSURE_COUNTERS = (
     "duplicate_marker",
 )
 OPERATION_LEDGER_SUMMARY_LIMIT = 12
+EVIDENCE_ROW_SUMMARY_LIMIT = 12
 
 
 def display_path(path: Path | None) -> str:
@@ -358,6 +375,80 @@ def validate_matrix_check_contract(
         diff = artifact.get("diff")
         if diff is not None and not isinstance(diff, list):
             return invalid_field_error(path, f"artifacts[{index}].diff", list, diff)
+    return None
+
+
+def validate_evidence_check_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    error = validate_field_types(
+        report,
+        path,
+        {
+            "schema_version": int,
+            "generator": str,
+            "filters": dict,
+            "summary": dict,
+            "rows": list,
+        },
+    )
+    if error is not None:
+        return error
+    error = validate_counter_map(
+        report,
+        path,
+        "summary",
+        EVIDENCE_CHECK_SUMMARY_COUNTERS,
+    )
+    if error is not None:
+        return error
+
+    by_backend = report["summary"].get("by_backend", {})
+    if not isinstance(by_backend, dict):
+        return invalid_field_error(path, "summary.by_backend", dict, by_backend)
+    for backend_id, counts in by_backend.items():
+        if not isinstance(counts, dict):
+            return invalid_field_error(
+                path, f"summary.by_backend.{backend_id}", dict, counts
+            )
+        for counter in ("rows", "present", "missing"):
+            if counter not in counts:
+                return load_error(
+                    path,
+                    "MissingReportFields",
+                    f"summary.by_backend.{backend_id} missing required counter: {counter}",
+                )
+            if not value_matches_type(counts[counter], int):
+                return invalid_field_error(
+                    path,
+                    f"summary.by_backend.{backend_id}.{counter}",
+                    int,
+                    counts[counter],
+                )
+
+    for index, row in enumerate(report["rows"]):
+        if not isinstance(row, dict):
+            return invalid_field_error(path, f"rows[{index}]", dict, row)
+        error = validate_nested_field_types(
+            row,
+            path,
+            f"rows[{index}]",
+            {
+                "backend": str,
+                "backend_id": str,
+                "category": str,
+                "feature": str,
+                "feature_id": str,
+                "status": str,
+                "evidence_count": int,
+            },
+        )
+        if error is not None:
+            return error
+        evidence = row.get("evidence")
+        if evidence is not None and not isinstance(evidence, list):
+            return invalid_field_error(path, f"rows[{index}].evidence", list, evidence)
     return None
 
 
@@ -775,6 +866,17 @@ def matrix_check_status(report: dict[str, Any] | None) -> str:
     return status_label(report.get("ok"))
 
 
+def evidence_check_status(report: dict[str, Any] | None) -> str:
+    if report is None:
+        return "missing"
+    if report.get("load_error"):
+        return "load-error"
+    summary = report.get("summary", {})
+    if summary.get("missing_evidence_count", 0):
+        return "warning"
+    return "pass"
+
+
 def issue_plan_status(report: dict[str, Any] | None) -> str:
     if report is None:
         return "missing"
@@ -830,36 +932,57 @@ def summary_status(
     matrix_check: dict[str, Any] | None,
     issue_plan: dict[str, Any] | None,
     sync_summary: dict[str, Any] | None,
+    evidence_check: dict[str, Any] | None = None,
+    evidence_required: bool = False,
 ) -> dict[str, str]:
     matrix_status = matrix_check_status(matrix_check)
+    evidence_status = evidence_check_status(evidence_check)
     plan_status = issue_plan_status(issue_plan)
     sync_status = issue_sync_status(sync_summary)
-    return {
-        "overall": overall_status(matrix_status, plan_status, sync_status),
+    overall_inputs = [matrix_status, plan_status, sync_status]
+    if evidence_required or evidence_check is not None:
+        overall_inputs.append(evidence_status)
+    statuses = {
+        "overall": overall_status(*overall_inputs),
         "matrix": matrix_status,
         "issue_plan": plan_status,
         "sync": sync_status,
     }
+    if evidence_required or evidence_check is not None:
+        statuses["evidence"] = evidence_status
+    return statuses
 
 
 def render_overall_summary(
     matrix_check: dict[str, Any] | None,
     issue_plan: dict[str, Any] | None,
     sync_summary: dict[str, Any] | None,
+    evidence_check: dict[str, Any] | None = None,
+    evidence_required: bool = False,
 ) -> list[str]:
-    statuses = summary_status(matrix_check, issue_plan, sync_summary)
+    statuses = summary_status(
+        matrix_check,
+        issue_plan,
+        sync_summary,
+        evidence_check=evidence_check,
+        evidence_required=evidence_required,
+    )
+    rows = [
+        ["Overall", statuses["overall"]],
+        ["Support matrix", statuses["matrix"]],
+    ]
+    if "evidence" in statuses:
+        rows.append(["Support evidence", statuses["evidence"]])
+    rows.extend(
+        [
+            ["Issue plan", statuses["issue_plan"]],
+            ["Issue sync", statuses["sync"]],
+        ]
+    )
     return [
         "## Overall",
         "",
-        markdown_table(
-            ["Field", "Value"],
-            [
-                ["Overall", statuses["overall"]],
-                ["Support matrix", statuses["matrix"]],
-                ["Issue plan", statuses["issue_plan"]],
-                ["Issue sync", statuses["sync"]],
-            ],
-        ),
+        markdown_table(["Field", "Value"], rows),
     ]
 
 
@@ -891,6 +1014,89 @@ def render_matrix_check(report: dict[str, Any] | None, path: Path | None) -> lis
                 "- `{}`: {} diff lines".format(
                     artifact.get("path", "<unknown>"),
                     artifact.get("diff_line_count", 0),
+                )
+            )
+    return lines
+
+
+def evidence_backend_rows(summary: dict[str, Any]) -> list[list[Any]]:
+    rows = []
+    for backend_id, counts in sorted(
+        (summary.get("by_backend") or {}).items(),
+        key=lambda item: (-int(item[1].get("missing", 0)), item[0]),
+    ):
+        rows.append(
+            [
+                backend_id,
+                counts.get("rows", 0),
+                counts.get("present", 0),
+                counts.get("missing", 0),
+            ]
+        )
+    return rows
+
+
+def render_evidence_check(
+    report: dict[str, Any] | None,
+    path: Path | None,
+) -> list[str]:
+    if path is None and report is None:
+        return []
+    if not report:
+        return [
+            "## Support Evidence",
+            "",
+            f"Report: not available at `{display_path(path)}`.",
+        ]
+    if report.get("load_error"):
+        return render_load_error("Support Evidence", report, path)
+
+    summary = report.get("summary", {})
+    lines = [
+        "## Support Evidence",
+        "",
+        markdown_table(
+            ["Field", "Value"],
+            [
+                ["Report", f"`{display_path(path)}`"],
+                ["Status", evidence_check_status(report)],
+                ["Rows", summary.get("row_count", 0)],
+                ["Rows with evidence", summary.get("present_evidence_count", 0)],
+                ["Rows missing evidence", summary.get("missing_evidence_count", 0)],
+            ],
+        ),
+    ]
+
+    backend_rows = evidence_backend_rows(summary)
+    if backend_rows:
+        lines.extend(
+            [
+                "",
+                "Missing evidence by backend:",
+                markdown_table(
+                    ["Backend", "Rows", "With evidence", "Missing evidence"],
+                    backend_rows,
+                ),
+            ]
+        )
+
+    missing_rows = [
+        row for row in report.get("rows", []) if row.get("evidence_count", 0) == 0
+    ]
+    if missing_rows:
+        lines.extend(["", "Missing evidence samples:"])
+        for row in missing_rows[:EVIDENCE_ROW_SUMMARY_LIMIT]:
+            lines.append(
+                "- {backend}: {feature} [{status}]".format(
+                    backend=row.get("backend", row.get("backend_id", "unknown")),
+                    feature=row.get("feature", row.get("feature_id", "unknown")),
+                    status=row.get("status", "unknown"),
+                )
+            )
+        if len(missing_rows) > EVIDENCE_ROW_SUMMARY_LIMIT:
+            lines.append(
+                "Additional missing-evidence rows omitted from summary: {}".format(
+                    len(missing_rows) - EVIDENCE_ROW_SUMMARY_LIMIT
                 )
             )
     return lines
@@ -1181,6 +1387,23 @@ def report_load_error_annotation(
     ]
 
 
+def evidence_gap_message(report: dict[str, Any]) -> str:
+    summary = report.get("summary", {})
+    missing = summary.get("missing_evidence_count", 0)
+    backend_counts = [
+        "{}={}".format(backend_id, counts.get("missing", 0))
+        for backend_id, counts in sorted(
+            (summary.get("by_backend") or {}).items(),
+            key=lambda item: (-int(item[1].get("missing", 0)), item[0]),
+        )
+        if counts.get("missing", 0)
+    ]
+    suffix = ""
+    if backend_counts:
+        suffix = " ({})".format(", ".join(backend_counts[:8]))
+    return f"{missing} supported support-matrix rows are missing evidence{suffix}."
+
+
 def github_annotation_lines(
     matrix_check: dict[str, Any] | None,
     matrix_check_path: Path | None,
@@ -1188,6 +1411,8 @@ def github_annotation_lines(
     issue_plan_path: Path | None,
     sync_summary: dict[str, Any] | None,
     sync_summary_path: Path | None,
+    evidence_check: dict[str, Any] | None = None,
+    evidence_check_path: Path | None = None,
 ) -> list[str]:
     lines: list[str] = []
     lines.extend(
@@ -1218,6 +1443,27 @@ def github_annotation_lines(
                         file=artifact.get("path") or display_path(matrix_check_path),
                     )
                 )
+
+    lines.extend(
+        report_load_error_annotation(
+            "Support evidence report load error",
+            evidence_check,
+            evidence_check_path,
+        )
+    )
+    if (
+        evidence_check
+        and not evidence_check.get("load_error")
+        and evidence_check.get("summary", {}).get("missing_evidence_count", 0)
+    ):
+        lines.append(
+            github_annotation(
+                "Support matrix evidence gaps",
+                evidence_gap_message(evidence_check),
+                file=display_path(evidence_check_path),
+                level="warning",
+            )
+        )
 
     lines.extend(
         report_load_error_annotation(
@@ -1359,11 +1605,26 @@ def render_summary(
     issue_plan_path: Path | None,
     sync_summary: dict[str, Any] | None,
     sync_summary_path: Path | None,
+    evidence_check: dict[str, Any] | None = None,
+    evidence_check_path: Path | None = None,
 ) -> str:
     lines = ["# Support Automation Summary", ""]
-    lines.extend(render_overall_summary(matrix_check, issue_plan, sync_summary))
+    evidence_required = evidence_check_path is not None
+    lines.extend(
+        render_overall_summary(
+            matrix_check,
+            issue_plan,
+            sync_summary,
+            evidence_check=evidence_check,
+            evidence_required=evidence_required,
+        )
+    )
     lines.extend([""])
     lines.extend(render_matrix_check(matrix_check, matrix_check_path))
+    evidence_lines = render_evidence_check(evidence_check, evidence_check_path)
+    if evidence_lines:
+        lines.extend([""])
+        lines.extend(evidence_lines)
     lines.extend([""])
     lines.extend(render_issue_plan(issue_plan, issue_plan_path))
     lines.extend([""])
@@ -1378,6 +1639,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         default=DEFAULT_MATRIX_CHECK_PATH,
         help="support_matrix.py check JSON report",
+    )
+    parser.add_argument(
+        "--support-evidence",
+        type=Path,
+        help=(
+            "Optional support_matrix.py evidence JSON report. "
+            "When provided, missing support evidence is summarized but not fatal."
+        ),
     )
     parser.add_argument(
         "--issue-plan",
@@ -1413,6 +1682,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     matrix_check_path = resolve_path(args.matrix_check)
+    evidence_check_path = resolve_path(args.support_evidence)
     issue_plan_path = resolve_path(args.issue_plan)
     sync_summary_path = resolve_path(args.sync_summary)
     matrix_check = load_optional_json(
@@ -1420,6 +1690,16 @@ def main(argv: list[str] | None = None) -> int:
         expected_generator=MATRIX_CHECK_GENERATOR,
         required_fields=MATRIX_CHECK_REQUIRED_FIELDS,
         contract_validator=validate_matrix_check_contract,
+    )
+    evidence_check = (
+        load_optional_json(
+            evidence_check_path,
+            expected_generator=EVIDENCE_CHECK_GENERATOR,
+            required_fields=EVIDENCE_CHECK_REQUIRED_FIELDS,
+            contract_validator=validate_evidence_check_contract,
+        )
+        if evidence_check_path is not None
+        else None
     )
     issue_plan = load_optional_json(
         issue_plan_path,
@@ -1440,6 +1720,8 @@ def main(argv: list[str] | None = None) -> int:
         issue_plan_path,
         sync_summary,
         sync_summary_path,
+        evidence_check=evidence_check,
+        evidence_check_path=evidence_check_path,
     )
 
     output = resolve_path(args.output)
@@ -1464,10 +1746,18 @@ def main(argv: list[str] | None = None) -> int:
             issue_plan_path,
             sync_summary,
             sync_summary_path,
+            evidence_check=evidence_check,
+            evidence_check_path=evidence_check_path,
         ):
             print(annotation)
 
-    statuses = summary_status(matrix_check, issue_plan, sync_summary)
+    statuses = summary_status(
+        matrix_check,
+        issue_plan,
+        sync_summary,
+        evidence_check=evidence_check,
+        evidence_required=evidence_check_path is not None,
+    )
     if args.fail_on_attention and statuses["overall"] == "attention":
         return 1
     return 0

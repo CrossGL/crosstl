@@ -30,7 +30,7 @@ implicitly supported.
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "484", "71", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "568", "95", "Mojo manual"
    "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "642", "53", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "476", "351", "Slang user guide"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "477", "351", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"

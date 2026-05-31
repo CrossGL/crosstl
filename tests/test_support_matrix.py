@@ -92,6 +92,23 @@ def test_support_matrix_generated_artifacts_are_current():
     assert "generated artifacts are current" in result.stdout
 
 
+def test_current_supported_rows_have_evidence():
+    module = load_support_matrix_module()
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    rows = module.filtered_support_rows(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+    )
+
+    assert rows == []
+
+
 def test_support_matrix_check_writes_machine_readable_report(tmp_path):
     report_path = tmp_path / "support-matrix-check.json"
 
@@ -303,6 +320,68 @@ def test_audit_rejects_unknown_status_filters():
 
     with pytest.raises(module.SupportMatrixError, match="Unknown status filter"):
         module.audit(matrix, [], statuses=["partial,nope"])
+
+
+def test_evidence_audit_reports_supported_rows_missing_evidence(tmp_path, capsys):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    output_path = tmp_path / "evidence.json"
+
+    result = module.evidence_audit(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+        output=output_path,
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result == 0
+    assert "Evidence rows: 1" in captured.out
+    assert "directx: present=0, missing=1" in captured.out
+    assert report["generator"] == "tools/support_matrix.py evidence"
+    assert report["filters"] == {
+        "backend_ids": [],
+        "categories": [],
+        "statuses": ["supported"],
+        "evidence": "missing",
+    }
+    assert report["summary"]["row_count"] == 1
+    assert report["summary"]["missing_evidence_count"] == 1
+    assert report["summary"]["present_evidence_count"] == 0
+    assert report["summary"]["by_backend"]["directx"] == {
+        "rows": 1,
+        "present": 0,
+        "missing": 1,
+    }
+    assert report["rows"][0]["backend_id"] == "directx"
+    assert report["rows"][0]["feature_id"] == "target.codegen"
+    assert report["rows"][0]["evidence_count"] == 0
+
+
+def test_evidence_audit_can_fail_on_missing_evidence():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    result = module.evidence_audit(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+        fail_on_missing=True,
+    )
+
+    assert result == 1
+
+
+def test_evidence_audit_rejects_unknown_evidence_filter():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    with pytest.raises(module.SupportMatrixError, match="Unknown evidence filter"):
+        module.evidence_audit(matrix, evidence="stale")
 
 
 def test_support_matrix_covers_all_cataloged_backends():

@@ -169,6 +169,11 @@ SUPPORT_MATRIX_REQUIRED_POLICIES = {
     "workflow_dispatch": "workflow_dispatch:",
     "matrix_check": "python tools/support_matrix.py check",
     "matrix_check_report": "--output support/generated/support-matrix-check.json",
+    "evidence_audit": "python tools/support_matrix.py evidence",
+    "evidence_audit_status_filter": "--status supported",
+    "evidence_audit_missing_filter": "--evidence missing",
+    "evidence_audit_fail_on_missing": "--fail-on-missing",
+    "evidence_audit_report": "--output support/generated/support-evidence-check.json",
     "docs_probe_job": "docs-probe:",
     "docs_probe_on_schedule": "github.event_name == 'schedule'",
     "docs_probe_on_dispatch": "github.event_name == 'workflow_dispatch'",
@@ -184,7 +189,7 @@ PR_ISSUE_LINK_REQUIRED_POLICIES = {
     "pull_requests_write": "pull-requests: write",
     "trusted_base_checkout": "Checkout trusted base",
     "sync_command": "python tools/sync_pr_issue_links.py",
-    "support_traceability": "--check-support-traceability",
+    "support_traceability": "--enforce-support-traceability",
     "support_closure_sync": "--sync-support-closures",
     "support_reference_sync": "--sync-support-references",
 }
@@ -530,6 +535,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
     checkout_credentials_persist = {}
     head_context_markers = {}
     support_traceability = {}
+    support_traceability_enforcement = {}
     support_closure_sync = {}
     support_reference_sync = {}
     github_token_scoped_to_sync = {}
@@ -551,7 +557,14 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
             head_context_markers[workflow_name] = markers
         support_traceability[workflow_name] = (
             "python tools/sync_pr_issue_links.py" in sync_step
-            and "--check-support-traceability" in sync_step
+            and (
+                "--check-support-traceability" in sync_step
+                or "--enforce-support-traceability" in sync_step
+            )
+        )
+        support_traceability_enforcement[workflow_name] = (
+            "python tools/sync_pr_issue_links.py" in sync_step
+            and "--enforce-support-traceability" in sync_step
         )
         support_closure_sync[workflow_name] = (
             "python tools/sync_pr_issue_links.py" in sync_step
@@ -573,6 +586,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
         "checkout_credentials_persist": checkout_credentials_persist,
         "head_context_markers": head_context_markers,
         "support_traceability": support_traceability,
+        "support_traceability_enforcement": support_traceability_enforcement,
         "support_closure_sync": support_closure_sync,
         "support_reference_sync": support_reference_sync,
         "github_token_scoped_to_sync": github_token_scoped_to_sync,
@@ -799,6 +813,9 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
     support_matrix_check_step = workflow_step_section(
         workflow, "Validate support matrix artifacts"
     )
+    support_evidence_step = workflow_step_section(
+        workflow, "Audit support matrix evidence"
+    )
     support_matrix_check_upload_step = workflow_step_section(
         workflow, "Upload support matrix check report"
     )
@@ -853,10 +870,32 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "python tools/support_matrix.py check --output support/generated/support-matrix-check.json"
             in support_matrix_check_step
         ),
+        "writes_support_evidence_report": (
+            "python tools/support_matrix.py evidence" in support_evidence_step
+            and "--status supported" in support_evidence_step
+            and "--evidence missing" in support_evidence_step
+            and "--fail-on-missing" in support_evidence_step
+            and "--output support/generated/support-evidence-check.json"
+            in support_evidence_step
+        ),
+        "support_evidence_report_fails_on_missing": (
+            "--fail-on-missing" in support_evidence_step
+        ),
+        "support_evidence_report_after_validate": workflow_step_after(
+            workflow,
+            "Audit support matrix evidence",
+            "Validate support matrix artifacts",
+        ),
+        "support_evidence_report_on_failure": "if: always()" in support_evidence_step,
         "uploads_support_matrix_check_report": (
             "actions/upload-artifact@v4" in support_matrix_check_upload_step
             and "name: support-matrix-check-report" in support_matrix_check_upload_step
             and "support/generated/support-matrix-check.json"
+            in support_matrix_check_upload_step
+        ),
+        "uploads_support_evidence_report": (
+            "actions/upload-artifact@v4" in support_matrix_check_upload_step
+            and "support/generated/support-evidence-check.json"
             in support_matrix_check_upload_step
         ),
         "uploads_support_matrix_check_report_on_failure": (
@@ -884,6 +923,8 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
         "writes_support_automation_summary": (
             "python tools/support_ci_summary.py" in summary_step
             and "--matrix-check support/generated/support-matrix-check.json"
+            in summary_step
+            and "--support-evidence support/generated/support-evidence-check.json"
             in summary_step
             and "--issue-plan support/generated/support-issue-plan.json" in summary_step
             and "--sync-summary support/generated/support-issue-sync-summary.json"
@@ -1042,8 +1083,9 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
 
 def support_matrix_report(workflow: str) -> dict[str, Any]:
     check_upload_step = workflow_step_section(
-        workflow, "Upload support matrix check report"
+        workflow, "Upload support matrix check reports"
     )
+    evidence_step = workflow_step_section(workflow, "Audit support matrix evidence")
     docs_probe_upload_step = workflow_step_section(
         workflow, "Upload documentation probe report"
     )
@@ -1057,12 +1099,28 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
             "actions/upload-artifact@v4" in check_upload_step
             and "support/generated/support-matrix-check.json" in check_upload_step
         ),
+        "evidence_audit_on_failure": "if: always()" in evidence_step,
+        "evidence_audit_after_validate": workflow_step_after(
+            workflow,
+            "Audit support matrix evidence",
+            "Validate support matrix",
+        ),
+        "evidence_audit_fails_on_missing": "--fail-on-missing" in evidence_step,
+        "uploads_evidence_report_artifact": (
+            "actions/upload-artifact@v4" in check_upload_step
+            and "support/generated/support-evidence-check.json" in check_upload_step
+        ),
         "uploads_check_report_artifact_on_failure": "if: always()" in check_upload_step,
         "check_report_artifact_retention": "retention-days: 30" in check_upload_step,
         "check_report_upload_after_validate": workflow_step_after(
             workflow,
-            "Upload support matrix check report",
+            "Upload support matrix check reports",
             "Validate support matrix",
+        ),
+        "check_report_upload_after_evidence_audit": workflow_step_after(
+            workflow,
+            "Upload support matrix check reports",
+            "Audit support matrix evidence",
         ),
         "uploads_docs_probe_artifact": (
             "actions/upload-artifact@v4" in docs_probe_upload_step
@@ -1078,17 +1136,10 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
 def pr_issue_links_report(workflow: str) -> dict[str, Any]:
     return {
         "workflow": "pr-issue-links.yml",
-        "required_policies": (
-            {
-                name: marker in workflow
-                for name, marker in PR_ISSUE_LINK_REQUIRED_POLICIES.items()
-            }
-            | {
-                "support_traceability_not_enforced": (
-                    "--enforce-support-traceability" not in workflow
-                ),
-            }
-        ),
+        "required_policies": {
+            name: marker in workflow
+            for name, marker in PR_ISSUE_LINK_REQUIRED_POLICIES.items()
+        },
     }
 
 
@@ -1270,6 +1321,15 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
                     workflow_name
                 )
             )
+    for workflow_name, enabled in pull_request_target[
+        "support_traceability_enforcement"
+    ].items():
+        if not enabled:
+            errors.append(
+                "{} pull_request_target must enforce support traceability".format(
+                    workflow_name
+                )
+            )
     for workflow_name, enabled in pull_request_target["support_closure_sync"].items():
         if not enabled:
             errors.append(
@@ -1377,6 +1437,14 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
             errors.append(f"support-matrix.yml missing policy: {policy}")
     if not support_matrix["uploads_check_report_artifact"]:
         errors.append("support-matrix.yml missing check report artifact upload")
+    if not support_matrix["evidence_audit_on_failure"]:
+        errors.append("support-matrix.yml evidence audit must run on failure")
+    if not support_matrix["evidence_audit_after_validate"]:
+        errors.append("support-matrix.yml evidence audit must run after validation")
+    if not support_matrix["evidence_audit_fails_on_missing"]:
+        errors.append("support-matrix.yml evidence audit must fail on missing evidence")
+    if not support_matrix["uploads_evidence_report_artifact"]:
+        errors.append("support-matrix.yml missing evidence report artifact upload")
     if not support_matrix["uploads_check_report_artifact_on_failure"]:
         errors.append("support-matrix.yml check report artifact must upload on failure")
     if not support_matrix["check_report_artifact_retention"]:
@@ -1386,6 +1454,10 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
     if not support_matrix["check_report_upload_after_validate"]:
         errors.append(
             "support-matrix.yml check report upload must run after validation"
+        )
+    if not support_matrix["check_report_upload_after_evidence_audit"]:
+        errors.append(
+            "support-matrix.yml check report upload must run after evidence audit"
         )
     if not support_matrix["uploads_docs_probe_artifact"]:
         errors.append("support-matrix.yml missing docs probe artifact upload")
@@ -1407,7 +1479,12 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "mutates_outside_pull_request",
         "min_desired_issues",
         "writes_support_matrix_check_report",
+        "writes_support_evidence_report",
+        "support_evidence_report_fails_on_missing",
+        "support_evidence_report_after_validate",
+        "support_evidence_report_on_failure",
         "uploads_support_matrix_check_report",
+        "uploads_support_evidence_report",
         "uploads_support_matrix_check_report_on_failure",
         "support_matrix_check_report_ignores_missing_files",
         "support_matrix_check_report_retention",
@@ -1553,6 +1630,10 @@ def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, boo
         presence[f"{workflow_name}:no_pr_head_context"] = not bool(markers)
     for workflow_name, enabled in report["support_traceability"].items():
         presence[f"{workflow_name}:support_traceability"] = enabled
+    for workflow_name, enabled in report.get(
+        "support_traceability_enforcement", {}
+    ).items():
+        presence[f"{workflow_name}:support_traceability_enforcement"] = enabled
     for workflow_name, enabled in report["support_closure_sync"].items():
         presence[f"{workflow_name}:support_closure_sync"] = enabled
     for workflow_name, enabled in report["support_reference_sync"].items():
@@ -1790,6 +1871,30 @@ def build_ci_coverage_comparison(
     )
     add_bool_change(
         "support-matrix.yml",
+        "evidence_audit_on_failure",
+        baseline_matrix["evidence_audit_on_failure"],
+        current_matrix["evidence_audit_on_failure"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "evidence_audit_after_validate",
+        baseline_matrix["evidence_audit_after_validate"],
+        current_matrix["evidence_audit_after_validate"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "evidence_audit_fails_on_missing",
+        baseline_matrix["evidence_audit_fails_on_missing"],
+        current_matrix["evidence_audit_fails_on_missing"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "uploads_evidence_report_artifact",
+        baseline_matrix["uploads_evidence_report_artifact"],
+        current_matrix["uploads_evidence_report_artifact"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
         "uploads_check_report_artifact_on_failure",
         baseline_matrix["uploads_check_report_artifact_on_failure"],
         current_matrix["uploads_check_report_artifact_on_failure"],
@@ -1805,6 +1910,12 @@ def build_ci_coverage_comparison(
         "check_report_upload_after_validate",
         baseline_matrix["check_report_upload_after_validate"],
         current_matrix["check_report_upload_after_validate"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
+        "check_report_upload_after_evidence_audit",
+        baseline_matrix["check_report_upload_after_evidence_audit"],
+        current_matrix["check_report_upload_after_evidence_audit"],
     )
     add_bool_change(
         "support-matrix.yml",
@@ -1843,7 +1954,12 @@ def build_ci_coverage_comparison(
         "mutates_outside_pull_request",
         "min_desired_issues",
         "writes_support_matrix_check_report",
+        "writes_support_evidence_report",
+        "support_evidence_report_fails_on_missing",
+        "support_evidence_report_after_validate",
+        "support_evidence_report_on_failure",
         "uploads_support_matrix_check_report",
+        "uploads_support_evidence_report",
         "uploads_support_matrix_check_report_on_failure",
         "support_matrix_check_report_ignores_missing_files",
         "support_matrix_check_report_retention",
@@ -2078,6 +2194,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "No persisted credentials",
                 "No PR head context",
                 "Traceability",
+                "Traceability gate",
                 "Support closures",
                 "Support refs",
                 "Token scoped",
@@ -2102,6 +2219,11 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ),
                     ok_text(
                         pull_request_target["support_traceability"].get(
+                            workflow_name, False
+                        )
+                    ),
+                    ok_text(
+                        pull_request_target["support_traceability_enforcement"].get(
                             workflow_name, False
                         )
                     ),
@@ -2275,6 +2397,22 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(support_matrix["uploads_check_report_artifact"]),
                 ],
                 [
+                    "Support evidence audit on failure",
+                    ok_text(support_matrix["evidence_audit_on_failure"]),
+                ],
+                [
+                    "Support evidence audit after validation",
+                    ok_text(support_matrix["evidence_audit_after_validate"]),
+                ],
+                [
+                    "Support evidence audit fails on missing evidence",
+                    ok_text(support_matrix["evidence_audit_fails_on_missing"]),
+                ],
+                [
+                    "Support evidence artifact",
+                    ok_text(support_matrix["uploads_evidence_report_artifact"]),
+                ],
+                [
                     "Check artifact upload on failure",
                     ok_text(support_matrix["uploads_check_report_artifact_on_failure"]),
                 ],
@@ -2285,6 +2423,10 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Check artifact upload after validation",
                     ok_text(support_matrix["check_report_upload_after_validate"]),
+                ],
+                [
+                    "Check artifact upload after evidence audit",
+                    ok_text(support_matrix["check_report_upload_after_evidence_audit"]),
                 ],
                 [
                     "Documentation probe artifact",
@@ -2345,8 +2487,28 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(support_sync["writes_support_matrix_check_report"]),
                 ],
                 [
+                    "Support evidence report",
+                    ok_text(support_sync["writes_support_evidence_report"]),
+                ],
+                [
+                    "Support evidence report fails on missing evidence",
+                    ok_text(support_sync["support_evidence_report_fails_on_missing"]),
+                ],
+                [
+                    "Support evidence report after validation",
+                    ok_text(support_sync["support_evidence_report_after_validate"]),
+                ],
+                [
+                    "Support evidence report on failure",
+                    ok_text(support_sync["support_evidence_report_on_failure"]),
+                ],
+                [
                     "Support matrix check artifact",
                     ok_text(support_sync["uploads_support_matrix_check_report"]),
+                ],
+                [
+                    "Support evidence artifact",
+                    ok_text(support_sync["uploads_support_evidence_report"]),
                 ],
                 [
                     "Support matrix check upload on failure",

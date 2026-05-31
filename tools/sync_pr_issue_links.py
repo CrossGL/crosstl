@@ -414,11 +414,11 @@ def support_matrix_issue_numbers(
     client: GitHubClient,
     pr: PullRequestContext,
     repo: str,
-) -> tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int]] | None:
     if not pr.head_repo or not pr.head_sha:
-        return [], []
+        return None
     if not SUPPORT_MATRIX_PATH.exists():
-        return [], []
+        return None
 
     base_matrix = json.loads(SUPPORT_MATRIX_PATH.read_text(encoding="utf-8"))
     try:
@@ -429,7 +429,7 @@ def support_matrix_issue_numbers(
         )
     except (GitHubApiError, ValueError, json.JSONDecodeError, OSError) as exc:
         print(f"::warning::Could not inspect PR support matrix links: {exc}")
-        return [], []
+        return None
 
     base_backlog_keys = support_backlog_keys(base_matrix)
     head_backlog_keys = support_backlog_keys(head_matrix)
@@ -460,7 +460,10 @@ def support_closure_issue_numbers(
     pr: PullRequestContext,
     repo: str,
 ) -> list[int]:
-    closure_numbers, _reference_numbers = support_matrix_issue_numbers(client, pr, repo)
+    issue_numbers = support_matrix_issue_numbers(client, pr, repo)
+    if issue_numbers is None:
+        return []
+    closure_numbers, _reference_numbers = issue_numbers
     return closure_numbers
 
 
@@ -493,14 +496,16 @@ def sync_pr_issue_links(
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
     support_closures: list[int] = []
     support_references: list[int] = []
+    support_links_inspected = True
     if sync_support_closures or sync_support_references:
-        support_closures, support_references = support_matrix_issue_numbers(
-            client, pr, repo
-        )
-        if not sync_support_closures:
-            support_closures = []
-        if not sync_support_references:
-            support_references = []
+        support_issue_numbers = support_matrix_issue_numbers(client, pr, repo)
+        support_links_inspected = support_issue_numbers is not None
+        if support_issue_numbers is not None:
+            support_closures, support_references = support_issue_numbers
+            if not sync_support_closures:
+                support_closures = []
+            if not sync_support_references:
+                support_references = []
     issue_numbers = dedupe_issue_numbers(issue_numbers + support_closures)
     reference_issue_numbers = dedupe_issue_numbers(
         [number for number in support_references if number not in set(issue_numbers)]
@@ -539,15 +544,16 @@ def sync_pr_issue_links(
                 continue
             raise
 
-    new_body = update_body_with_managed_section(
-        pr.body,
-        valid_issue_numbers,
-        reference_issue_numbers,
-    )
-    if new_body != (pr.body or ""):
-        summary["body_updated"] = 1
-        if not dry_run:
-            client.update_pull_body(pr.number, new_body)
+    if support_links_inspected:
+        new_body = update_body_with_managed_section(
+            pr.body,
+            valid_issue_numbers,
+            reference_issue_numbers,
+        )
+        if new_body != (pr.body or ""):
+            summary["body_updated"] = 1
+            if not dry_run:
+                client.update_pull_body(pr.number, new_body)
 
     if check_support_traceability or enforce_support_traceability:
         changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
