@@ -361,8 +361,33 @@ def is_support_relevant_path(path: str) -> bool:
     )
 
 
-def support_relevant_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
-    return [path for path in paths if is_support_relevant_path(path)]
+def support_relevant_path_decision(path: str) -> dict[str, str] | None:
+    normalized = normalize_repo_path(path)
+    if normalized in SUPPORT_RELEVANT_PATHS:
+        return {
+            "path": normalized,
+            "reason": "exact_path",
+            "matched": normalized,
+        }
+    for prefix in SUPPORT_RELEVANT_PATH_PREFIXES:
+        if normalized.startswith(prefix):
+            return {
+                "path": normalized,
+                "reason": "prefix",
+                "matched": prefix,
+            }
+    return None
+
+
+def support_relevant_path_decisions(
+    paths: list[str] | tuple[str, ...],
+) -> list[dict[str, str]]:
+    decisions = []
+    for path in paths:
+        decision = support_relevant_path_decision(path)
+        if decision is not None:
+            decisions.append(decision)
+    return decisions
 
 
 def support_matrix_artifact_changed(paths: list[str] | tuple[str, ...]) -> bool:
@@ -379,6 +404,53 @@ def has_support_traceability_opt_out(body: str) -> bool:
         return False
     value = match.group("value").strip().lower().rstrip(".")
     return value in SUPPORT_TRACEABILITY_OPT_OUTS
+
+
+def support_traceability_sources(
+    valid_issue_numbers: list[int],
+    reference_issue_numbers: list[int],
+    body: str,
+) -> list[str]:
+    sources = []
+    if valid_issue_numbers:
+        sources.append("same_repo_closing_issue")
+    if reference_issue_numbers:
+        sources.append("managed_support_issue_reference")
+    if has_support_traceability_opt_out(body):
+        sources.append("explicit_opt_out")
+    return sources
+
+
+def support_traceability_audit(
+    changed_files: list[str] | tuple[str, ...],
+    valid_issue_numbers: list[int],
+    reference_issue_numbers: list[int],
+    body: str,
+) -> dict[str, Any]:
+    relevant_file_decisions = support_relevant_path_decisions(changed_files)
+    sources = support_traceability_sources(
+        valid_issue_numbers, reference_issue_numbers, body
+    )
+    required = bool(relevant_file_decisions)
+    satisfied = bool(required and sources)
+    failure_reason = None
+    if required and not satisfied:
+        failure_reason = "missing_issue_or_opt_out"
+    elif not required:
+        failure_reason = "no_support_relevant_files"
+    return {
+        "required": required,
+        "satisfied": satisfied,
+        "satisfaction_sources": sources,
+        "failure_reason": failure_reason,
+        "support_relevant_files": relevant_file_decisions,
+        "support_relevant_count": len(relevant_file_decisions),
+        "support_matrix_artifact_changed": support_matrix_artifact_changed(
+            changed_files
+        ),
+        "closing_issue_numbers": list(valid_issue_numbers),
+        "managed_reference_issue_numbers": list(reference_issue_numbers),
+    }
 
 
 def managed_section(
@@ -749,7 +821,15 @@ def sync_pr_issue_links(
 
     if check_support_traceability or enforce_support_traceability:
         changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
-        relevant_paths = support_relevant_paths(changed_files)
+        traceability_audit = support_traceability_audit(
+            changed_files,
+            valid_issue_numbers,
+            reference_issue_numbers,
+            pr.body,
+        )
+        relevant_paths = [
+            entry["path"] for entry in traceability_audit["support_relevant_files"]
+        ]
         if support_link_audit is not None:
             support_link_audit["changed_files"] = {
                 "support_relevant": len(relevant_paths),
@@ -757,10 +837,8 @@ def sync_pr_issue_links(
                     support_matrix_artifact_changed(changed_files)
                 ),
             }
-        traceability_required = bool(relevant_paths)
-        traceability_satisfied = bool(
-            valid_issue_numbers or reference_issue_numbers
-        ) or has_support_traceability_opt_out(pr.body)
+        traceability_required = bool(traceability_audit["required"])
+        traceability_satisfied = bool(traceability_audit["satisfaction_sources"])
         summary["traceability_required"] = int(traceability_required)
         summary["traceability_satisfied"] = int(
             traceability_required and traceability_satisfied
@@ -769,6 +847,7 @@ def sync_pr_issue_links(
             traceability_required and not traceability_satisfied
         )
         summary["support_relevant_files"] = len(relevant_paths)
+        summary["traceability_audit"] = traceability_audit
 
     return summary
 
@@ -856,6 +935,99 @@ def format_support_link_keys(keys: list[str], limit: int = 8) -> str:
     if remaining > 0:
         rendered.append(f"... +{remaining} more")
     return "; ".join(rendered)
+
+
+def format_issue_numbers(issue_numbers: list[int]) -> str:
+    if not issue_numbers:
+        return "none"
+    return ", ".join(f"#{number}" for number in issue_numbers)
+
+
+def format_traceability_sources(sources: list[str]) -> str:
+    return ", ".join(sources) if sources else "none"
+
+
+def format_traceability_files(entries: list[dict[str, str]], limit: int = 12) -> str:
+    if not entries:
+        return "none"
+    rendered = [
+        "{path} ({reason}:{matched})".format(**entry) for entry in entries[:limit]
+    ]
+    remaining = len(entries) - limit
+    if remaining > 0:
+        rendered.append(f"... +{remaining} more")
+    return "; ".join(rendered)
+
+
+def traceability_status(summary: dict[str, Any]) -> str:
+    if summary.get("traceability_failed"):
+        return "failed"
+    if summary.get("traceability_satisfied"):
+        return "satisfied"
+    if summary.get("traceability_required"):
+        return "unsatisfied"
+    return "not required"
+
+
+def emit_support_traceability_audit(summary: dict[str, Any]) -> None:
+    audit = summary.get("traceability_audit")
+    if not audit:
+        return
+    print(
+        "Support traceability audit: status={status}, sources={sources}, "
+        "failure_reason={failure_reason}, closing_issues={closing_issues}, "
+        "managed_refs={managed_refs}".format(
+            status=traceability_status(summary),
+            sources=format_traceability_sources(audit["satisfaction_sources"]),
+            failure_reason=audit.get("failure_reason") or "none",
+            closing_issues=format_issue_numbers(audit["closing_issue_numbers"]),
+            managed_refs=format_issue_numbers(audit["managed_reference_issue_numbers"]),
+        )
+    )
+    print(
+        "Support traceability files: "
+        + format_traceability_files(audit["support_relevant_files"])
+    )
+
+
+def write_support_traceability_step_summary(summary: dict[str, Any]) -> None:
+    audit = summary.get("traceability_audit")
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not audit or not step_summary:
+        return
+    with open(step_summary, "a", encoding="utf-8") as handle:
+        handle.write("## Support Traceability\n\n")
+        handle.write(f"- Status: {traceability_status(summary)}\n")
+        handle.write(
+            "- Satisfaction sources: {}\n".format(
+                format_traceability_sources(audit["satisfaction_sources"])
+            )
+        )
+        handle.write(
+            "- Support-relevant files: {support_relevant_count}\n".format(**audit)
+        )
+        handle.write(
+            "- Support matrix artifact changed: {}\n".format(
+                "yes" if audit["support_matrix_artifact_changed"] else "no"
+            )
+        )
+        handle.write(
+            "- Closing issue refs: {}\n".format(
+                format_issue_numbers(audit["closing_issue_numbers"])
+            )
+        )
+        handle.write(
+            "- Managed support refs: {}\n".format(
+                format_issue_numbers(audit["managed_reference_issue_numbers"])
+            )
+        )
+        if audit.get("failure_reason"):
+            handle.write(f"- Failure reason: {audit['failure_reason']}\n")
+        if audit["support_relevant_files"]:
+            handle.write("- Files:\n")
+            for entry in audit["support_relevant_files"]:
+                handle.write("  - `{path}` ({reason}: `{matched}`)\n".format(**entry))
+        handle.write("\n")
 
 
 def emit_support_link_audit(summary: dict[str, Any]) -> None:
@@ -1104,6 +1276,8 @@ def main(argv: list[str] | None = None) -> int:
                 **summary
             )
         )
+        emit_support_traceability_audit(summary)
+        write_support_traceability_step_summary(summary)
         if summary.get("traceability_failed"):
             warning = (
                 "Support-relevant PR changes have no same-repo closing issue "
@@ -1111,17 +1285,6 @@ def main(argv: list[str] | None = None) -> int:
                 "'Support issue traceability: no issue closed' marker."
             )
             print(f"::warning::{warning}")
-            step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-            if step_summary:
-                with open(step_summary, "a", encoding="utf-8") as handle:
-                    handle.write("## Support Traceability\n\n")
-                    handle.write("- Status: advisory warning\n")
-                    handle.write(
-                        "- Support-relevant files: {support_relevant_files}\n".format(
-                            **summary
-                        )
-                    )
-                    handle.write(f"- Action: {warning}\n")
     if summary.get("traceability_failed"):
         if not args.enforce_support_traceability:
             return 0

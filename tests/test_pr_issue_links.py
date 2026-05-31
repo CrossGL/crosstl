@@ -1036,6 +1036,23 @@ def test_traceability_policy_passes_with_valid_closing_issue_for_support_files()
     assert summary["traceability_satisfied"] == 1
     assert summary["traceability_failed"] == 0
     assert summary["support_relevant_files"] == 1
+    assert summary["traceability_audit"] == {
+        "required": True,
+        "satisfied": True,
+        "satisfaction_sources": ["same_repo_closing_issue"],
+        "failure_reason": None,
+        "support_relevant_files": [
+            {
+                "path": "crosstl/backend/DirectX/DirectxCrossGLCodeGen.py",
+                "reason": "prefix",
+                "matched": "crosstl/backend/",
+            }
+        ],
+        "support_relevant_count": 1,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [10],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_policy_passes_with_explicit_no_issue_marker():
@@ -1059,6 +1076,8 @@ def test_traceability_policy_passes_with_explicit_no_issue_marker():
     assert summary["traceability_required"] == 1
     assert summary["traceability_satisfied"] == 1
     assert summary["traceability_failed"] == 0
+    assert summary["traceability_audit"]["satisfaction_sources"] == ["explicit_opt_out"]
+    assert summary["traceability_audit"]["failure_reason"] is None
 
 
 def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
@@ -1082,6 +1101,23 @@ def test_traceability_policy_fails_for_support_files_without_issue_or_marker():
     assert summary["traceability_required"] == 1
     assert summary["traceability_satisfied"] == 0
     assert summary["traceability_failed"] == 1
+    assert summary["traceability_audit"] == {
+        "required": True,
+        "satisfied": False,
+        "satisfaction_sources": [],
+        "failure_reason": "missing_issue_or_opt_out",
+        "support_relevant_files": [
+            {
+                "path": "tests/test_translator/test_codegen/test_metal_codegen.py",
+                "reason": "prefix",
+                "matched": "tests/test_translator/test_codegen/",
+            }
+        ],
+        "support_relevant_count": 1,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
@@ -1110,6 +1146,28 @@ def test_traceability_policy_treats_frontend_ir_paths_as_support_relevant():
     assert summary["traceability_required"] == 1
     assert summary["traceability_failed"] == 1
     assert summary["support_relevant_files"] == 4
+    assert summary["traceability_audit"]["support_relevant_files"] == [
+        {
+            "path": "crosstl/translator/parser.py",
+            "reason": "exact_path",
+            "matched": "crosstl/translator/parser.py",
+        },
+        {
+            "path": "tests/test_translator/test_frontend_parser_property_contracts.py",
+            "reason": "prefix",
+            "matched": "tests/test_translator/test_frontend_",
+        },
+        {
+            "path": "docs/source/support-matrix.rst",
+            "reason": "exact_path",
+            "matched": "docs/source/support-matrix.rst",
+        },
+        {
+            "path": "examples/test.py",
+            "reason": "exact_path",
+            "matched": "examples/test.py",
+        },
+    ]
 
 
 def test_traceability_policy_ignores_non_support_paths():
@@ -1133,6 +1191,17 @@ def test_traceability_policy_ignores_non_support_paths():
     assert summary["traceability_required"] == 0
     assert summary["traceability_satisfied"] == 0
     assert summary["traceability_failed"] == 0
+    assert summary["traceability_audit"] == {
+        "required": False,
+        "satisfied": False,
+        "satisfaction_sources": [],
+        "failure_reason": "no_support_relevant_files",
+        "support_relevant_files": [],
+        "support_relevant_count": 0,
+        "support_matrix_artifact_changed": False,
+        "closing_issue_numbers": [],
+        "managed_reference_issue_numbers": [],
+    }
 
 
 def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, capsys):
@@ -1171,8 +1240,24 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
     captured = capsys.readouterr()
     assert result == 0
     assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert (
+        "Support traceability audit: status=failed, sources=none, "
+        "failure_reason=missing_issue_or_opt_out"
+    ) in captured.out
+    assert (
+        "Support traceability files: "
+        "tests/test_translator/test_codegen/test_metal_codegen.py "
+        "(prefix:tests/test_translator/test_codegen/)"
+    ) in captured.out
     assert "::warning::Support-relevant PR changes" in captured.out
-    assert "Support Traceability" in summary_path.read_text(encoding="utf-8")
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "Support Traceability" in summary_text
+    assert "- Status: failed" in summary_text
+    assert "- Failure reason: missing_issue_or_opt_out" in summary_text
+    assert (
+        "- `tests/test_translator/test_codegen/test_metal_codegen.py` "
+        "(prefix: `tests/test_translator/test_codegen/`)"
+    ) in summary_text
 
 
 def test_traceability_enforcement_cli_fails_when_opted_in(
@@ -1211,4 +1296,5 @@ def test_traceability_enforcement_cli_fails_when_opted_in(
     captured = capsys.readouterr()
     assert result == 1
     assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
+    assert "Support traceability audit: status=failed" in captured.out
     assert "Support-relevant PR changes must include" in captured.err
