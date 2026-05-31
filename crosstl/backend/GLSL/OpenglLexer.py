@@ -1,7 +1,7 @@
 """Lexer for importing GLSL source into CrossGL Translator."""
 
 import re
-from typing import Iterator, Tuple, List, Optional, Dict
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from .preprocessor import GLSLPreprocessor
 
@@ -311,7 +311,7 @@ class GLSLLexer:
         max_expansion_depth: int = 64,
     ) -> "GLSLLexer":
         """Create a lexer instance from a GLSL source file."""
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             return cls(
                 f.read(),
                 preprocess=preprocess,

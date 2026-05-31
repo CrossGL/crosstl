@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.backend.Mojo.MojoAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -524,7 +526,7 @@ def test_import_parsing():
     import simd as s
     from tensor import Tensor
     from package.module import A, B as C
-    
+
     fn main():
         let result = math.sin(0.5)
     """
@@ -864,7 +866,7 @@ def test_member_access_parsing():
         var x: Float32
         var y: Float32
         var z: Float32
-    
+
     fn main():
         var v: Vector3
         v.x = 1.0
@@ -883,10 +885,10 @@ def test_function_with_parameters_parsing():
     code = """
     fn add(a: Float32, b: Float32) -> Float32:
         return a + b
-    
+
     fn multiply(x: Float32, y: Float32, z: Float32) -> Float32:
         return x * y * z
-    
+
     fn main():
         let result1 = add(1.0, 2.0)
         let result2 = multiply(2.0, 3.0, 4.0)

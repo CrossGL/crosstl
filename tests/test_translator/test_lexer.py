@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.translator.lexer import Lexer
 
 
@@ -132,7 +134,7 @@ def test_else_if_statement_tokenization():
     code = """
     if (!a) {
         return b;
-    } 
+    }
     if (!b) {
         return a;
     } else if (a < b) {
@@ -153,12 +155,12 @@ def test_else_if_statement_tokenization():
 def test_function_call_tokenization():
     code = """
 shader main {
-    
+
     // Perlin Noise Function
     float perlinNoise(vec2 p) {
         return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
     }
-    
+
     fragment {
         vec4 main(VSOutput input) @ gl_FragColor {
             float brightness = texture(iChannel0, input.color.xy).r;
@@ -230,12 +232,12 @@ def test_bitwise_operator_tokenization():
     int a = 60; // 60 = 0011 1100
     int b = 13; // 13 = 0000 1101
     int c = 0;
-    c = a & b; 
-    c = a | b; 
-    c = a ^ b; 
-    c = ~a; 
-    c = a << 2; 
-    c = a >> 2; 
+    c = a & b;
+    c = a | b;
+    c = a ^ b;
+    c = ~a;
+    c = a << 2;
+    c = a >> 2;
     """
     try:
         tokens = tokenize_code(code)
@@ -292,10 +294,10 @@ def test_operators_tokenization():
 
 def test_logical_operators_tokenization():
     code = """
-    if (0.8 > 0.7 || 0.6 > 0.7) {    
+    if (0.8 > 0.7 || 0.6 > 0.7) {
         return 0;
-    } else if(0.8 > 0.7 && 0.8> 0.7) {        
-        return 1;  
+    } else if(0.8 > 0.7 && 0.8> 0.7) {
+        return 1;
     }
     """
     try:

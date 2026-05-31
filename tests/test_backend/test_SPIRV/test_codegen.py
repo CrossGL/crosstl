@@ -1,8 +1,10 @@
+from typing import List
+
+import pytest
+
 from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
-import pytest
-from typing import List
 
 
 def generate_code(ast_node):
@@ -1507,7 +1509,7 @@ def test_else_if_codegen():
     void main() {
         float value = 0.7;
         vec4 color;
-        
+
         if (value > 0.8) {
             color = vec4(1.0, 0.0, 0.0, 1.0);
         } else if (value > 0.5) {
@@ -1515,7 +1517,7 @@ def test_else_if_codegen():
         } else {
             color = vec4(0.0, 0.0, 1.0, 1.0);
         }
-        
+
         gl_FragColor = color;
     }
     """
@@ -1533,7 +1535,7 @@ def test_switch_case_codegen():
     void main() {
         int value = 2;
         vec4 color;
-        
+
         switch (value) {
             case 0:
                 color = vec4(1.0, 0.0, 0.0, 1.0);
@@ -1548,7 +1550,7 @@ def test_switch_case_codegen():
                 color = vec4(0.5, 0.5, 0.5, 1.0);
                 break;
         }
-        
+
         gl_FragColor = color;
     }
     """

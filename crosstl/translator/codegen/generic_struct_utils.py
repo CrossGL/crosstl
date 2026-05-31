@@ -5,9 +5,9 @@ from .array_utils import format_c_style_array_declaration, split_array_type_suff
 from .enum_utils import (
     collect_generic_parameter_names,
     default_value_expression,
+    generator_type_name_string,
     generic_type_depth,
     generic_type_parts,
-    generator_type_name_string,
     sanitize_type_name,
     substitute_generic_type_name,
     type_node_contains_generic_parameter,

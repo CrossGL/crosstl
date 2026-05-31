@@ -2,38 +2,38 @@
 
 import re
 
+from ..common_ast import (
+    ArrayAccessNode,
+    AttributeNode,
+    BreakNode,
+    CastNode,
+    ContinueNode,
+    PreprocessorNode,
+    TextureSampleNode,
+)
 from .DirectxAst import (
     AssignmentNode,
     BinaryOpNode,
-    ForNode,
-    WhileNode,
+    CaseNode,
     DoWhileNode,
+    EnumNode,
+    ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
+    IncludeNode,
     MemberAccessNode,
+    PragmaNode,
     ReturnNode,
     ShaderNode,
     StructNode,
-    EnumNode,
+    SwitchNode,
+    TernaryOpNode,
     TypeAliasNode,
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
-    PragmaNode,
-    IncludeNode,
-    SwitchNode,
-    CaseNode,
-    TernaryOpNode,
-)
-from ..common_ast import (
-    BreakNode,
-    ContinueNode,
-    ArrayAccessNode,
-    CastNode,
-    AttributeNode,
-    PreprocessorNode,
-    TextureSampleNode,
+    WhileNode,
 )
 
 TYPE_TOKENS = {

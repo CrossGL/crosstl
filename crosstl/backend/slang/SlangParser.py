@@ -1,7 +1,7 @@
 """Parser for Slang source AST construction."""
 
-from .SlangLexer import *
 from .SlangAst import *
+from .SlangLexer import *
 
 
 class SlangParser:

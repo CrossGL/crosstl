@@ -6,10 +6,10 @@ from crosstl.backend.DirectX import DirectxCrossGLCodeGen
 from crosstl.backend.DirectX.DirectxLexer import HLSLLexer
 from crosstl.backend.DirectX.DirectxParser import HLSLParser
 from crosstl.translator.ast import ShaderStage
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import (
     HLSLCodeGen as TranslatorHLSLCodeGen,
 )
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
@@ -2979,6 +2979,205 @@ def test_codegen_sample_cmp_infers_shadow_arrays_cubes_and_helper_args():
     )
     assert "shadowCube.sample_compare(compareSampler, direction, depth)" in metal
     assert "localShadow.sample_compare(localSampler, uv, depth)" in metal
+
+
+def test_codegen_sample_cmp_infers_shadow_struct_members():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float> shadow;
+            Texture2D<float4> color;
+        };
+
+        ResourceBundle resources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1) : SV_Target0 {
+            float sampled = resources.shadow.SampleCmpLevelZero(
+                compareSampler, uv, depth
+            );
+            float4 color = resources.color.Sample(linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadow;" in crossgl
+    assert "sampler2D color;" in crossgl
+    assert "sampler2DShadow color;" not in crossgl
+    assert "textureCompare(resources.shadow, compareSampler, uv, depth)" in crossgl
+    assert "texture(resources.color, linearSampler, uv)" in crossgl
+
+    ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(ast)
+    assert "sampler2DShadow shadow;" in glsl
+    assert "sampler2D color;" in glsl
+    assert "texture(resources.shadow, vec3(uv, depth))" in glsl
+    assert "texture(resources.color, uv)" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+    hlsl = TranslatorHLSLCodeGen().generate(ast)
+    assert "Texture2D shadow" in hlsl
+    assert "Texture2D color" in hlsl
+    assert "resources.shadow.SampleCmp(compareSampler, uv, depth)" in hlsl
+    assert "resources.color.Sample(linearSampler, uv)" in hlsl
+    assert "textureCompare(" not in hlsl
+
+
+def test_codegen_shadow_struct_member_inference_is_scoped_by_struct_type():
+    code = textwrap.dedent("""
+        struct ShadowBundle {
+            Texture2D<float> texture;
+        };
+
+        struct ColorBundle {
+            Texture2D<float4> texture;
+        };
+
+        ShadowBundle shadowResources;
+        ColorBundle colorResources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1) : SV_Target0 {
+            float sampled = shadowResources.texture.SampleCmpLevelZero(
+                compareSampler, uv, depth
+            );
+            float4 color = colorResources.texture.Sample(linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "struct ShadowBundle {\n        sampler2DShadow texture;" in crossgl
+    assert "struct ColorBundle {\n        sampler2D texture;" in crossgl
+    assert "struct ColorBundle {\n        sampler2DShadow texture;" not in crossgl
+    assert "textureCompare(shadowResources.texture, compareSampler, uv, depth)" in (
+        crossgl
+    )
+    assert "texture(colorResources.texture, linearSampler, uv)" in crossgl
+
+
+def test_codegen_sample_cmp_infers_shadow_struct_members_through_helpers():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float> shadow;
+            Texture2D<float4> color;
+        };
+
+        ResourceBundle resources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float readShadow(
+            Texture2D<float> source,
+            SamplerComparisonState cmpSampler,
+            float2 uv,
+            float depth
+        ) {
+            return source.SampleCmpLevelZero(cmpSampler, uv, depth);
+        }
+
+        float readShadowWrapper(
+            Texture2D<float> source,
+            SamplerComparisonState cmpSampler,
+            float2 uv,
+            float depth
+        ) {
+            return readShadow(source, cmpSampler, uv, depth);
+        }
+
+        float4 readColor(
+            Texture2D<float4> source,
+            SamplerState texSampler,
+            float2 uv
+        ) {
+            return source.Sample(texSampler, uv);
+        }
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1) : SV_Target0 {
+            float sampled = readShadowWrapper(
+                resources.shadow, compareSampler, uv, depth
+            );
+            float4 color = readColor(resources.color, linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadow;" in crossgl
+    assert "sampler2D color;" in crossgl
+    assert "sampler2DShadow color;" not in crossgl
+    assert "float readShadow(sampler2DShadow source" in crossgl
+    assert "float readShadowWrapper(sampler2DShadow source" in crossgl
+    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "readShadowWrapper(resources.shadow, compareSampler, uv, depth)" in crossgl
+    assert "readColor(resources.color, linearSampler, uv)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "sampler2DShadow shadow;" in glsl
+    assert "sampler2D color;" in glsl
+    assert "readShadowWrapper(resources.shadow, uv, depth)" in glsl
+    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
+
+
+def test_codegen_sample_cmp_infers_shadow_struct_member_arrays_through_helpers():
+    code = textwrap.dedent("""
+        struct ResourceBundle {
+            Texture2D<float> shadows[2];
+            Texture2D<float4> colors[2];
+        };
+
+        ResourceBundle resources;
+        SamplerComparisonState compareSampler : register(s0);
+        SamplerState linearSampler : register(s1);
+
+        float readShadow(
+            Texture2D<float> source,
+            SamplerComparisonState cmpSampler,
+            float2 uv,
+            float depth
+        ) {
+            return source.SampleCmpLevelZero(cmpSampler, uv, depth);
+        }
+
+        float4 readColor(
+            Texture2D<float4> source,
+            SamplerState texSampler,
+            float2 uv
+        ) {
+            return source.Sample(texSampler, uv);
+        }
+
+        float4 main(float2 uv : TEXCOORD0, float depth : TEXCOORD1, uint index : TEXCOORD2) : SV_Target0 {
+            float sampled = readShadow(
+                resources.shadows[index], compareSampler, uv, depth
+            );
+            float4 color = readColor(resources.colors[index], linearSampler, uv);
+            return color + float4(sampled);
+        }
+    """).strip()
+
+    crossgl = generate_crossgl(code)
+
+    assert "sampler2DShadow shadows[2];" in crossgl
+    assert "sampler2D colors[2];" in crossgl
+    assert "sampler2DShadow colors[2];" not in crossgl
+    assert "float readShadow(sampler2DShadow source" in crossgl
+    assert "vec4 readColor(sampler2D source" in crossgl
+    assert "readShadow(resources.shadows[index], compareSampler, uv, depth)" in crossgl
+    assert "readColor(resources.colors[index], linearSampler, uv)" in crossgl
+
+    glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert "sampler2DShadow shadows[2];" in glsl
+    assert "sampler2D colors[2];" in glsl
+    assert "readShadow(resources.shadows[index], uv, depth)" in glsl
+    assert "texture(source, vec3(uv, depth))" in glsl
+    assert "unsupported GLSL texture compare" not in glsl
 
 
 def test_codegen_helper_propagation_keeps_mixed_texture_non_shadow():

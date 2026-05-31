@@ -2,13 +2,13 @@ import textwrap
 
 import pytest
 
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.translator.ast import ShaderStage
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
 VERTEX_GLSL = textwrap.dedent("""
     #version 450 core
@@ -393,6 +393,7 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
     code = textwrap.dedent("""
         #version 460 core
         uniform sampler2D tex;
+        uniform sampler2DArrayShadow shadowArray;
         layout(location = 0) out vec4 fragColor;
 
         void main() {
@@ -408,9 +409,17 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
                 ivec2(-1, 1),
                 ivec2(1, 1)
             );
+            const ivec2 nested[2][2] = {
+                { ivec2(-1, 0), ivec2(1, 0) },
+                { ivec2(0, -1), ivec2(0, 1) },
+            };
             vec2 uv = vec2(0.5, 0.5);
+            vec3 uvLayer = vec3(uv, 0.0);
+            ivec2 selected = nested[1][0];
             fragColor = textureGatherOffsets(tex, uv, offsets, 0)
-                + textureGatherOffsets(tex, uv, ctorOffsets, 1);
+                + textureGatherOffsets(tex, uv, ctorOffsets, 1)
+                + textureGatherCompareOffsets(shadowArray, uvLayer, 0.4, ctorOffsets)
+                + vec4(selected, 0, 0) * 0.0;
         }
         """).strip()
 
@@ -419,13 +428,22 @@ def test_codegen_const_gather_offset_arrays_roundtrip():
     assert "InitializerListNode" not in crossgl
     assert "const ivec2 offsets[4] = {" in crossgl
     assert "const ivec2 ctorOffsets[4] = {" in crossgl
+    assert "const ivec2 nested[2][2] = {" in crossgl
+    assert "ivec2 selected = nested[1][0]" in crossgl
     assert "textureGatherOffsets(tex, uv, offsets, 0)" in crossgl
     assert "textureGatherOffsets(tex, uv, ctorOffsets, 1)" in crossgl
+    assert (
+        "textureGatherCompareOffsets(shadowArray, uvLayer, 0.4, ctorOffsets)" in crossgl
+    )
 
     shader_ast = parse_crossgl(crossgl)
     glsl = GLSLCodeGen().generate(shader_ast)
     assert "textureGatherOffsets(" not in glsl
+    assert "textureGatherCompareOffsets(" not in glsl
     assert "textureGatherOffset(tex" in glsl
+    assert "textureGatherOffset(shadowArray" in glsl
+    assert "const ivec2 nested[2][2] = {" in glsl
+    assert "ivec2 selected = nested[1][0];" in glsl
 
 
 def test_codegen_compute_roundtrip():
@@ -447,6 +465,57 @@ def test_codegen_interface_block_roundtrip():
     assert "struct VertexOut" in output
     assert "struct Globals" in output
     assert "cbuffer Uniforms" in output
+
+
+def test_codegen_multidimensional_interface_and_parameter_arrays_roundtrip():
+    code = textwrap.dedent("""
+        #version 460 core
+        in VertexIn {
+            vec3 positions[2][3];
+            ivec2 ids[2][2];
+        } vin[2][3];
+
+        out VertexOut {
+            vec4 colors[2][3];
+        } vout;
+
+        struct PatchData {
+            vec4 control[2][3];
+        };
+
+        vec4 pickColor(in vec4 table[2][3], inout PatchData patches[2][2], int i, int j) {
+            patches[0][1].control[i][j] = table[i][j];
+            return patches[0][1].control[i][j];
+        }
+
+        void main() {
+            PatchData patches[2][2];
+            vec4 table[2][3];
+            vout.colors[1][2] = pickColor(table, patches, 1, 2);
+            gl_Position = vec4(vin[1][2].positions[0][1], 1.0);
+        }
+        """).strip()
+
+    crossgl = generate_crossgl(code, "vertex")
+    assert "@glsl_interface_instance(vin) @glsl_interface_array(2, 3)" in crossgl
+    assert "vec3 positions[2][3];" in crossgl
+    assert "ivec2 ids[2][2];" in crossgl
+    assert "vec4 colors[2][3];" in crossgl
+    assert (
+        "vec4 pickColor(in vec4 table[2][3], inout PatchData patches[2][2]" in crossgl
+    )
+    assert "PatchData patches[2][2];" in crossgl
+    assert "vec4 table[2][3];" in crossgl
+
+    shader_ast = parse_crossgl(crossgl)
+    glsl = GLSLCodeGen().generate(shader_ast)
+    assert "} vin[2][3];" in glsl
+    assert "vec3 positions[2][3];" in glsl
+    assert "ivec2 ids[2][2];" in glsl
+    assert "vec4 colors[2][3];" in glsl
+    assert "vec4 pickColor(vec4 table[2][3], PatchData patches[2][2]" in glsl
+    assert "vec4[2][3] table" not in glsl
+    assert "PatchData[2][2] patches" not in glsl
 
 
 def test_codegen_compute_atomics_and_barriers():

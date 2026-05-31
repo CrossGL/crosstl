@@ -3,13 +3,15 @@ import subprocess
 from typing import List
 
 import pytest
+
 import crosstl.translator
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
 from crosstl.translator.ast import (
-    AtomicOpNode,
+    ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayType,
     AssignmentNode,
+    AtomicOpNode,
+    BinaryOpNode,
     BlockNode,
     BufferOpNode,
     BuiltinVariableNode,
@@ -18,16 +20,23 @@ from crosstl.translator.ast import (
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
-    LiteralPatternNode,
+    IdentifierPatternNode,
     LiteralNode,
+    LiteralPatternNode,
     MatchArmNode,
     MatchNode,
+    MatrixType,
+    MemberAccessNode,
     MeshOpNode,
+    NamedType,
     PrimitiveType,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReturnNode,
+    StructPatternNode,
     SwizzleNode,
     SyncNode,
+    TernaryOpNode,
     TextureNode,
     TextureOpNode,
     VariableNode,
@@ -36,6 +45,8 @@ from crosstl.translator.ast import (
     WildcardPatternNode,
 )
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -788,12 +799,126 @@ def test_basic_shader():
         ast = parse_code(tokens)
         generated_code = generate_code(ast)
         assert generated_code is not None
-        assert "fn main(" in generated_code
-        assert "@vertex_shader" in generated_code
-        assert "@fragment_shader" in generated_code
+        assert "fn vertex_main(" in generated_code
+        assert "fn fragment_main(" in generated_code
+        assert "fn main(" not in generated_code
+        assert "# CrossGL shader stage: vertex" in generated_code
+        assert "# CrossGL shader stage: fragment" in generated_code
+        assert "@vertex_shader" not in generated_code
+        assert "@fragment_shader" not in generated_code
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo basic shader codegen not implemented.")
+
+
+def test_vertex_fragment_shader_entries_compile_as_mojo_package(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader main {
+        struct VSInput {
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 color @ COLOR;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.color = vec4(input.texCoord, 0.0, 1.0);
+                return output;
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return input.color;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn vertex_main(input: VSInput) -> VSOutput:" in generated_code
+    assert "fn fragment_main(input: VSOutput) -> SIMD[DType.float32, 4]:" in (
+        generated_code
+    )
+    assert "fn main(" not in generated_code
+
+    package_dir = tmp_path / "vf_shader_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "vf_shader_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
+
+
+def test_compute_non_executable_main_signatures_compile_as_mojo_package(tmp_path):
+    mojo = find_mojo_compiler()
+
+    cases = [
+        (
+            "compute_param_main",
+            """
+            shader ComputeParamMain {
+                compute {
+                    void main(uvec3 globalId @ gl_GlobalInvocationID) {
+                        uint x = globalId.x;
+                    }
+                }
+            }
+            """,
+            "fn compute_main(globalId: SIMD[DType.uint32, 4]) -> None:",
+            (
+                "# CrossGL parameter semantic: stage=compute name=globalId "
+                "semantic=global_invocation_id source=gl_GlobalInvocationID"
+            ),
+        ),
+        (
+            "compute_return_main",
+            """
+            shader ComputeReturnMain {
+                compute {
+                    float main() {
+                        return 1.0;
+                    }
+                }
+            }
+            """,
+            "fn compute_main() -> Float32:",
+            None,
+        ),
+    ]
+
+    for package_name, code, signature, semantic_comment in cases:
+        generated_code = generate_code(parse_code(tokenize_code(code)))
+
+        assert "# CrossGL shader stage: compute" in generated_code
+        assert signature in generated_code
+        assert "fn main(" not in generated_code
+        if semantic_comment is not None:
+            assert semantic_comment in generated_code
+            assert "globalId: SIMD[DType.uint32, 4]  #" not in generated_code
+
+        package_dir = tmp_path / package_name
+        package_dir.mkdir()
+        (package_dir / "__init__.mojo").write_text(generated_code)
+        output_path = tmp_path / f"{package_name}.mojopkg"
+        result = subprocess.run(
+            [mojo, "package", str(package_dir), "-o", str(output_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert output_path.exists()
 
 
 def test_return_semantic_metadata_and_validation_for_mojo_codegen():
@@ -992,10 +1117,27 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     vertex_output = generate_code(parse_code(tokenize_code(vertex_code)))
 
-    assert "vertexId: UInt32  # vertex_id" in vertex_output
-    assert "instanceId: UInt32  # instance_id" in vertex_output
-    assert "position: SIMD[DType.float32, 4]  # position" in vertex_output
-    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in vertex_output
+    assert "vertexId: UInt32" in vertex_output
+    assert "instanceId: UInt32" in vertex_output
+    assert "position: SIMD[DType.float32, 4]" in vertex_output
+    assert "uv: SIMD[DType.float32, 2]" in vertex_output
+    assert "vertexId: UInt32  #" not in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=vertexId "
+        "semantic=vertex_id source=gl_VertexID"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=instanceId "
+        "semantic=instance_id source=SV_InstanceID"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=position "
+        "semantic=position source=POSITION"
+    ) in vertex_output
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in vertex_output
 
     fragment_code = """
     shader FragmentParameterSemantics {
@@ -1013,10 +1155,27 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     fragment_output = generate_code(parse_code(tokenize_code(fragment_code)))
 
-    assert "coord: SIMD[DType.float32, 4]  # position" in fragment_output
-    assert "front: Bool  # front_facing" in fragment_output
-    assert "point: SIMD[DType.float32, 2]  # point_coord" in fragment_output
-    assert "uv: SIMD[DType.float32, 2]  # texcoord0" in fragment_output
+    assert "coord: SIMD[DType.float32, 4]" in fragment_output
+    assert "front: Bool" in fragment_output
+    assert "point: SIMD[DType.float32, 2]" in fragment_output
+    assert "uv: SIMD[DType.float32, 2]" in fragment_output
+    assert "coord: SIMD[DType.float32, 4]  #" not in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=coord "
+        "semantic=position source=gl_FragCoord"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=front "
+        "semantic=front_facing source=gl_FrontFacing"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=point "
+        "semantic=point_coord source=gl_PointCoord"
+    ) in fragment_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=uv "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in fragment_output
 
     fragment_position_code = """
     shader FragmentPositionParameterSemantic {
@@ -1031,7 +1190,12 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
         parse_code(tokenize_code(fragment_position_code))
     )
 
-    assert "pos: SIMD[DType.float32, 4]  # position" in fragment_position_output
+    assert "pos: SIMD[DType.float32, 4]" in fragment_position_output
+    assert "pos: SIMD[DType.float32, 4]  #" not in fragment_position_output
+    assert (
+        "# CrossGL parameter semantic: stage=fragment name=pos "
+        "semantic=position source=gl_Position"
+    ) in fragment_position_output
 
     compute_code = """
     shader ComputeParameterSemantics {
@@ -1047,9 +1211,24 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
     """
     compute_output = generate_code(parse_code(tokenize_code(compute_code)))
 
-    assert "globalId: SIMD[DType.uint32, 4]  # global_invocation_id" in compute_output
-    assert "localId: SIMD[DType.uint32, 4]  # local_invocation_id" in compute_output
-    assert "groupIndex: UInt32  # group_index" in compute_output
+    assert "fn compute_main(" in compute_output
+    assert "fn main(" not in compute_output
+    assert "globalId: SIMD[DType.uint32, 4]" in compute_output
+    assert "localId: SIMD[DType.uint32, 4]" in compute_output
+    assert "groupIndex: UInt32" in compute_output
+    assert "globalId: SIMD[DType.uint32, 4]  #" not in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=globalId "
+        "semantic=global_invocation_id source=gl_GlobalInvocationID"
+    ) in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=localId "
+        "semantic=local_invocation_id source=SV_GroupThreadID"
+    ) in compute_output
+    assert (
+        "# CrossGL parameter semantic: stage=compute name=groupIndex "
+        "semantic=group_index source=SV_GroupIndex"
+    ) in compute_output
 
     invalid_cases = [
         (
@@ -1129,6 +1308,149 @@ def test_stage_parameter_semantic_validation_for_mojo_codegen():
             generate_code(parse_code(tokenize_code(shader)))
 
 
+def test_struct_member_position_normal_texcoord_semantics_produce_annotations():
+    code = """
+    struct VertexInput {
+        vec4 position @ POSITION;
+        vec3 normal @ NORMAL;
+        vec2 texCoord @ TEXCOORD;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var position: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var normal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var texCoord: SIMD[DType.float32, 2]  # texcoord" in generated_code
+
+
+def test_stage_input_output_structs_with_sv_position_emit_mojo_annotations():
+    code = """
+    shader VertexPipeline {
+        struct VSOutput {
+            vec4 pos @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput out;
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var pos: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var uv: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "# CrossGL shader stage: vertex" in generated_code
+
+
+def test_direct_function_return_semantic_sv_target_produces_output_annotation():
+    code = """
+    shader FragmentOutput {
+        fragment {
+            vec4 main() @ SV_Target {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL return semantic: stage=fragment semantic=color(0) "
+        "source=SV_Target" in generated_code
+    )
+    assert "fn fragment_main() -> SIMD[DType.float32, 4]:" in generated_code
+
+
+def test_multiple_stage_parameters_with_different_semantics_all_handled():
+    code = """
+    shader MultiParam {
+        vertex {
+            vec4 main(
+                vec3 pos @ POSITION,
+                vec3 norm @ NORMAL,
+                vec2 uv0 @ TEXCOORD0,
+                vec2 uv1 @ TEXCOORD1,
+                uint vid @ gl_VertexID
+            ) @ gl_Position {
+                return vec4(pos, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pos: SIMD[DType.float32, 4]" in generated_code
+    assert "norm: SIMD[DType.float32, 4]" in generated_code
+    assert "uv0: SIMD[DType.float32, 2]" in generated_code
+    assert "uv1: SIMD[DType.float32, 2]" in generated_code
+    assert "vid: UInt32" in generated_code
+    assert "pos: SIMD[DType.float32, 4]  #" not in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=pos "
+        "semantic=position source=POSITION"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=norm "
+        "semantic=normal source=NORMAL"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv0 "
+        "semantic=texcoord0 source=TEXCOORD0"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=uv1 "
+        "semantic=texcoord1 source=TEXCOORD1"
+    ) in generated_code
+    assert (
+        "# CrossGL parameter semantic: stage=vertex name=vid "
+        "semantic=vertex_id source=gl_VertexID"
+    ) in generated_code
+    assert (
+        "# CrossGL return semantic: stage=vertex semantic=position "
+        "source=gl_Position" in generated_code
+    )
+
+
+def test_vertex_stage_full_input_struct_position_normal_texcoord():
+    code = """
+    shader FullVertexInput {
+        struct VSInput {
+            vec4 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texCoord0 @ TEXCOORD0;
+            vec2 texCoord1 @ TEXCOORD1;
+        };
+
+        struct VSOutput {
+            vec4 clipPos @ SV_Position;
+            vec3 worldNormal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput out;
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var position: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var normal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var texCoord0: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "var texCoord1: SIMD[DType.float32, 2]  # texcoord1" in generated_code
+    assert "var clipPos: SIMD[DType.float32, 4]  # position" in generated_code
+    assert "var worldNormal: SIMD[DType.float32, 4]  # normal" in generated_code
+    assert "var uv: SIMD[DType.float32, 2]  # texcoord0" in generated_code
+    assert "# CrossGL shader stage: vertex" in generated_code
+
+
 def test_compute_stage_local_helper_functions_emit_before_entry_point():
     code = """
     shader StageLocalMojo {
@@ -1202,12 +1524,6 @@ def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
         "amplification",
         "object",
         "mesh",
-        "ray_generation",
-        "ray_intersection",
-        "ray_closest_hit",
-        "ray_any_hit",
-        "ray_miss",
-        "ray_callable",
     ],
 )
 def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
@@ -1226,6 +1542,170 @@ def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
         generate_code(parse_code(tokenize_code(code)))
 
 
+def test_ray_tracing_stages_emit_mojo_metadata_and_hooks(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(3) @set(2);
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchWidth = gl_LaunchSizeEXT.x;
+                RayDesc ray = RayDesc(
+                    vec3(0.0, 0.0, 0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                float hitT @ gl_HitTEXT
+            ) {
+                payload.color = vec3(1.0, 0.0, hitT);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                uint hitKind @ gl_HitKindEXT
+            ) {
+                payload.color = vec3(0.5, 0.0, float(hitKind));
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = ReportHit(1.0, 0, attributes);
+                bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=scene kind=acceleration_structure "
+        "set=2 binding=3 binding_source=explicit" in generated_code
+    )
+    assert "struct RayTracingAccelerationStructure" in generated_code
+    assert "struct RayDesc" in generated_code
+    assert "# CrossGL shader stage: ray_generation" in generated_code
+    assert "# CrossGL shader stage: ray_closest_hit" in generated_code
+    assert "# CrossGL shader stage: ray_any_hit" in generated_code
+    assert "# CrossGL shader stage: ray_miss" in generated_code
+    assert "# CrossGL shader stage: ray_callable" in generated_code
+    assert "# CrossGL shader stage: ray_intersection" in generated_code
+    assert "fn ray_generation_main() -> None:" in generated_code
+    assert "fn ray_closest_hit_main(" in generated_code
+    assert "semantic=ray_payload source=payload" in generated_code
+    assert "semantic=hit_attribute source=hit_attribute" in generated_code
+    assert "semantic=callable_data source=callableDataInEXT" in generated_code
+    assert "var launch: SIMD[DType.uint32, 4] = ray_launch_id()" in generated_code
+    assert "var launchWidth: UInt32 = ray_launch_size()[0]" in generated_code
+    assert "trace_ray(scene, 0, 255, 0, 1, 0, ray, payload)" in generated_code
+    assert "call_shader(0, data)" in generated_code
+    assert "ignore_hit()" in generated_code
+    assert "accept_hit_and_end_search()" in generated_code
+    assert "var accepted: Bool = report_hit(1.0, 0, attributes)" in generated_code
+    assert (
+        "var acceptedWithoutAttributes: Bool = report_hit(2.0, 1, False)"
+        in generated_code
+    )
+
+    package_dir = tmp_path / "mojo_ray_stages_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_ray_stages_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+    assert output_path.exists()
+
+
+def test_mojo_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_type = """
+    shader InvalidMojoRayBuiltinType {
+        ray_generation {
+            void main(float launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*integer vec3-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader InvalidMojoRayBuiltinStage {
+        fragment {
+            void main(uvec3 launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    duplicate = """
+    shader DuplicateMojoRayBuiltin {
+        ray_generation {
+            void main(
+                uvec3 launch @ gl_LaunchIDEXT,
+                uvec3 launchAgain @ SV_DispatchRaysIndex
+            ) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Conflicting Mojo ray_generation"):
+        generate_code(parse_code(tokenize_code(duplicate)))
+
+
 def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -1234,6 +1714,12 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
         barrier();
         workgroupBarrier();
         memoryBarrier();
+        memoryBarrierShared();
+        memoryBarrierBuffer();
+        memoryBarrierImage();
+        groupMemoryBarrier();
+        allMemoryBarrier();
+        deviceMemoryBarrier();
     }
     """
 
@@ -1241,11 +1727,27 @@ def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
 
     assert "fn _crossgl_workgroup_barrier():" in generated_code
     assert "fn _crossgl_memory_barrier():" in generated_code
+    for helper in [
+        "_crossgl_memory_barrier_shared",
+        "_crossgl_memory_barrier_buffer",
+        "_crossgl_memory_barrier_image",
+        "_crossgl_group_memory_barrier",
+        "_crossgl_all_memory_barrier",
+        "_crossgl_device_memory_barrier",
+    ]:
+        assert f"fn {helper}():" in generated_code
+        assert generated_code.count(f"{helper}()") == 2
     assert generated_code.count("_crossgl_workgroup_barrier()") == 3
     assert generated_code.count("_crossgl_memory_barrier()") == 2
     assert "\n    barrier()" not in generated_code
     assert "workgroupBarrier()" not in generated_code
     assert "memoryBarrier()" not in generated_code
+    assert "memoryBarrierShared()" not in generated_code
+    assert "memoryBarrierBuffer()" not in generated_code
+    assert "memoryBarrierImage()" not in generated_code
+    assert "groupMemoryBarrier()" not in generated_code
+    assert "allMemoryBarrier()" not in generated_code
+    assert "deviceMemoryBarrier()" not in generated_code
     generated_code += "\nfn main():\n    sync()\n"
 
     source_path = tmp_path / "synchronization_builtins.mojo"
@@ -1291,19 +1793,22 @@ def test_direct_sync_nodes_emit_mojo_helpers_without_ast_repr():
 
     workgroup_stmt = codegen.generate_statement(SyncNode("barrier"), indent=1)
     memory_stmt = codegen.generate_statement(SyncNode("memoryBarrier"))
+    shared_stmt = codegen.generate_statement(SyncNode("memoryBarrierShared"))
 
     assert workgroup_stmt == "    _crossgl_workgroup_barrier()\n"
     assert memory_stmt == "_crossgl_memory_barrier()\n"
+    assert shared_stmt == "_crossgl_memory_barrier_shared()\n"
     assert "SyncNode(" not in workgroup_stmt
     assert "_crossgl_workgroup_barrier" in codegen.required_sync_helpers
     assert "_crossgl_memory_barrier" in codegen.required_sync_helpers
+    assert "_crossgl_memory_barrier_shared" in codegen.required_sync_helpers
 
 
 def test_direct_sync_nodes_reject_unknown_or_argument_forms():
     codegen = MojoCodeGen()
 
     with pytest.raises(
-        ValueError, match="Unsupported Mojo synchronization operation deviceBarrier"
+        ValueError, match="Invalid Mojo synchronization operation deviceBarrier"
     ):
         codegen.generate_statement(SyncNode("deviceBarrier"))
 
@@ -1815,14 +2320,27 @@ def test_resource_placeholders_emit_for_sampler_types():
         "fn sample_grad(tex: Texture2D, coord: SIMD[DType.float32, 2], "
         "ddx: SIMD[DType.float32, 2], ddy: SIMD[DType.float32, 2])" in generated_code
     )
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
+    )
+    assert (
+        "fn sample_lod_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], lod: Float32)" in generated_code
+    )
+    assert (
+        "fn sample_grad_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2], ddx: SIMD[DType.float32, 2], "
+        "ddy: SIMD[DType.float32, 2])" in generated_code
+    )
     assert "return sample_lod(tex, uv, 1.0)" in generated_code
     assert "return sample_grad(tex, uv, uv, uv)" in generated_code
     assert "sample(tex, uv)" in generated_code
     assert "sample_lod(tex, uv, 1.0)" in generated_code
     assert "sample_grad(tex, uv, uv, uv)" in generated_code
-    assert "sample(tex, state, uv)" not in generated_code
-    assert "sample_lod(tex, state, uv, 1.0)" not in generated_code
-    assert "sample_grad(tex, state, uv, uv, uv)" not in generated_code
+    assert "sample_sampler(tex, state, uv)" in generated_code
+    assert "sample_lod_sampler(tex, state, uv, 1.0)" in generated_code
+    assert "sample_grad_sampler(tex, state, uv, uv, uv)" in generated_code
     assert "fn noop() -> None:\n    pass" in generated_code
     assert "sampler1D" not in generated_code
     assert "sampler1DArray" not in generated_code
@@ -1944,14 +2462,23 @@ def test_hlsl_sampled_texture_aliases_compile_with_mojo(tmp_path):
         "# CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
         "binding=0 binding_source=explicit register=s0" in generated_code
     )
-    assert "return sample(colorMap, uv)" in generated_code
-    assert "return sample_lod(colorMap, uv, 1.0)" in generated_code
-    assert "return sample_grad(colorMap, uv, uv, uv)" in generated_code
+    assert "return sample_sampler(colorMap, linearSampler, uv)" in generated_code
+    assert "return sample_lod_sampler(colorMap, linearSampler, uv, 1.0)" in (
+        generated_code
+    )
+    assert "return sample_grad_sampler(colorMap, linearSampler, uv, uv, uv)" in (
+        generated_code
+    )
     assert "return texture_size(colorMap)" in generated_code
-    assert "_crossgl_calculate_level_of_detail_Texture2D" in generated_code
-    assert "_crossgl_calculate_level_of_detail_unclamped_Texture2D" in generated_code
+    assert "_crossgl_calculate_level_of_detail_sampler_Texture2D_Sampler" in (
+        generated_code
+    )
+    assert (
+        "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2D_Sampler"
+        in generated_code
+    )
     assert "return texel_fetch(samples, pixel, sampleIndex)" in generated_code
-    assert "return sample(shadowMap, uvDepth)" in generated_code
+    assert "return sample_sampler(shadowMap, compareSampler, uvDepth)" in generated_code
     assert "Texture2D<float4>" not in generated_code
     assert "Texture2DMS<float4>" not in generated_code
     assert "SamplerState" not in generated_code
@@ -3419,6 +3946,9 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
     }
+    vec4 fetchTexOffset(sampler2D tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
     ivec2 imgSize(image2D image) {
         return imageSize(image);
     }
@@ -3464,6 +3994,10 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
         "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
         in generated_code
     )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
+    )
     assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
     assert (
         "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> "
@@ -3482,6 +4016,7 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "return texture_samples(tex)" in generated_code
     assert "return image_samples(image)" in generated_code
     assert "return texel_fetch(tex, pixel, 0)" in generated_code
+    assert "return texel_fetch_offset(tex, pixel, 0, offset)" in generated_code
     assert "return image_size(image)" in generated_code
     assert "return image_load(image, pixel)" in generated_code
     assert "image_store(image, pixel, value)" in generated_code
@@ -3490,6 +4025,7 @@ def test_resource_query_and_image_placeholders_emit_mojo_helpers():
     assert "textureSamples" not in generated_code
     assert "imageSamples" not in generated_code
     assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
     assert "imageLoad" not in generated_code
     assert "imageStore" not in generated_code
 
@@ -4133,6 +4669,30 @@ def test_match_expression_lowers_payload_enum_destructuring_patterns():
     assert "MatchNode" not in generated_code
 
 
+def test_match_expression_lowers_unqualified_payload_enum_patterns():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int inspect(MaybeInt value) {
+        return match value {
+            Some(payload) => payload,
+            None => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if value.variant == MaybeInt_Some:" in generated_code
+    assert "__cgl_match_value_0 = value.Some_0" in generated_code
+    assert "else:\n        __cgl_match_value_0 = 0" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
 def test_match_expression_payload_enum_destructuring_patterns_compile_with_mojo(
     tmp_path,
 ):
@@ -4711,8 +5271,14 @@ def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
         "Sampler(), InlineArray[Image2D, 2](Image2D(), Image2D())" in generated_code
     )
     assert "Ok_0=ResourceSet()" not in generated_code
-    assert "sample(value.Ok_0.textures[int(slot)], uv)" in generated_code
-    assert "sample(value.Ok_0.singleTexture, uv)" in generated_code
+    assert (
+        "sample_sampler(value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)"
+        in generated_code
+    )
+    assert (
+        "sample_sampler(value.Ok_0.singleTexture, value.Ok_0.state, uv)"
+        in generated_code
+    )
     assert "image_load(value.Ok_0.inputs[int(slot)], pixel)" in generated_code
     assert "image_load(value.Ok_0.singleInput, pixel)" in generated_code
     assert "buffer_load(value.Ok_0.values[int(slot)], index)" in generated_code
@@ -4726,13 +5292,17 @@ def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
         in generated_code
     )
     assert "buffer_store4(value.Ok_0.singleRaw, offset, data)" in generated_code
-    assert "sample(value.Ok_0[int(index)].textures[int(slot)], uv)" in generated_code
+    assert (
+        "sample_sampler(value.Ok_0[int(index)].textures[int(slot)], "
+        "value.Ok_0[int(index)].state, uv)" in generated_code
+    )
     assert (
         "buffer_load(value.Ok_0[int(index)].values[int(slot)], bufferIndex)"
         in generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -5364,7 +5934,7 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "var Ok_0: InlineArray[RWByteAddressBuffer, 2]" in generated_code
     assert "texture_size(value.Ok_0, 0)" in generated_code
     assert "image_size(value.Ok_0)" in generated_code
-    assert "sample(value.Ok_0, uv)" in generated_code
+    assert "sample_sampler(value.Ok_0, state, uv)" in generated_code
     assert "image_load(value.Ok_0, pixel)" in generated_code
     assert "image_store(value.Ok_0, pixel, color)" in generated_code
     assert "texture_samples(value.Ok_0)" in generated_code
@@ -5379,7 +5949,7 @@ def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
     assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
     assert "buffer_load4(value.Ok_0, offset)" in generated_code
     assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
-    assert "sample(value.Ok_0[int(slot)], uv)" in generated_code
+    assert "sample_sampler(value.Ok_0[int(slot)], state, uv)" in generated_code
     assert "image_load(value.Ok_0[int(slot)], pixel)" in generated_code
     assert "image_store(value.Ok_0[int(slot)], pixel, color)" in generated_code
     assert "texel_fetch(value.Ok_0[int(slot)], pixel, sampleIndex)" in generated_code
@@ -6380,7 +6950,7 @@ def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
     assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
     assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
     assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2D_Sampler" in generated_code
     assert "texture_size(value.Ok_0.textures[int(slot)], 0)" in generated_code
     assert "texture_query_levels(value.Ok_0.textures[int(slot)])" in generated_code
     assert "texture_samples(value.Ok_0.msTextures[int(slot)])" in generated_code
@@ -6391,8 +6961,8 @@ def test_generic_payload_enum_resource_query_bindings_for_mojo_codegen():
         in generated_code
     )
     assert (
-        "_crossgl_texture_query_lod_Texture2D_SIMD_DType_float32_2("
-        "value.Ok_0.textures[int(slot)], uv)" in generated_code
+        "_crossgl_texture_query_lod_sampler_Texture2D_Sampler_SIMD_DType_float32_2("
+        "value.Ok_0.textures[int(slot)], value.Ok_0.state, uv)" in generated_code
     )
     assert (
         "texture_size(value.Ok_0[int(index)].textures[int(slot)], 0)" in generated_code
@@ -6790,6 +7360,97 @@ def test_generic_payload_enum_match_expression_uses_single_subject_call():
     assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
     assert "else:" in generated_code
     assert "Result<" not in generated_code
+
+
+def test_generic_payload_enum_match_expression_lowers_unqualified_patterns():
+    code = """
+    generic<T, E> struct Result {
+        enum ResultType {
+            Ok(T),
+            Err(E)
+        }
+        ResultType variant;
+    }
+
+    enum MathError {
+        DivisionByZero
+    };
+
+    Result<vec3, MathError> makeResult(bool ok) {
+        match ok {
+            true => { return Result::Ok(vec3(1.0, 2.0, 3.0)); }
+            _ => { return Result::Err(MathError::DivisionByZero); }
+        }
+    }
+
+    vec3 read(bool ok, vec3 fallback) {
+        let value = match makeResult(ok) {
+            Ok(actual) => actual,
+            Err(_) => fallback
+        };
+        return value;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "var __cgl_match_subject_0: Result_vec3_MathError = makeResult(ok)"
+        in generated_code
+    )
+    assert generated_code.count("makeResult(ok)") == 1
+    assert "if __cgl_match_subject_0.variant == Result_Ok:" in generated_code
+    assert "__cgl_match_value_0 = __cgl_match_subject_0.Ok_0" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = fallback" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "Result<" not in generated_code
+
+
+def test_nested_generic_payload_enum_field_patterns_lower_unqualified_variants():
+    code = """
+    generic<T> struct Option {
+        enum OptionType {
+            Some(T),
+            None
+        }
+        OptionType variant;
+    }
+
+    enum RenderCommand {
+        Draw {
+            material: Option<int>,
+            value: int
+        },
+        Clear
+    };
+
+    int inspect(RenderCommand command) {
+        return match command {
+            Draw { material: Some(mat), value } => mat + value,
+            Draw { material: None, value } => value,
+            Clear => 0
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "if command.variant == RenderCommand_Draw and "
+        "command.material.variant == Option_Some:" in generated_code
+    )
+    assert (
+        "elif command.variant == RenderCommand_Draw and "
+        "command.material.variant == Option_None:" in generated_code
+    )
+    assert (
+        "__cgl_match_value_0 = (command.material.Some_0 + command.value)"
+        in generated_code
+    )
+    assert "__cgl_match_value_0 = command.value" in generated_code
+    assert "constructor patterns cannot be lowered" not in generated_code
+    assert "struct destructuring patterns cannot be lowered" not in generated_code
 
 
 def test_nested_generic_payload_enum_field_patterns_compile_with_mojo(tmp_path):
@@ -7520,6 +8181,9 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
     vec4 fetchTex(sampler2D tex, ivec2 pixel) {
         return texelFetch(tex, pixel, 0);
     }
+    vec4 fetchTexOffset(sampler2D tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
     ivec2 imgSize(image2D image) {
         return imageSize(image);
     }
@@ -7558,6 +8222,26 @@ def test_resource_query_and_image_placeholders_compile_with_mojo(tmp_path):
 
 
 def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
+    missing_texture_samples = """
+    int invalidSamples() {
+        return textureSamples();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_samples.*texture resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_texture_samples)))
+
+    extra_texture_samples = """
+    sampler2DMS msTex;
+
+    int invalidSamples(sampler2DMS tex) {
+        return textureSamples(tex, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_samples.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_texture_samples)))
+
     non_multisample_texture_samples = """
     sampler2D colorMap;
 
@@ -7580,6 +8264,26 @@ def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
     with pytest.raises(ValueError, match="image_samples.*multisample image required"):
         generate_code(parse_code(tokenize_code(non_multisample_image_samples)))
 
+    missing_image_samples = """
+    int invalidSamples() {
+        return imageSamples();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="image_samples.*image resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_image_samples)))
+
+    extra_image_samples = """
+    image2DMS image;
+
+    int invalidSamples(image2DMS image) {
+        return imageSamples(image, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="image_samples.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_image_samples)))
+
     wrong_resource_for_texture_samples = """
     image2D image;
 
@@ -7601,6 +8305,26 @@ def test_resource_sample_count_and_query_level_diagnostics_for_mojo_codegen():
         ValueError, match="texture_query_levels.*non-multisample texture required"
     ):
         generate_code(parse_code(tokenize_code(multisample_query_levels)))
+
+    missing_query_levels = """
+    int invalidLevels() {
+        return textureQueryLevels();
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texture_query_levels.*texture resource required: <missing>"
+    ):
+        generate_code(parse_code(tokenize_code(missing_query_levels)))
+
+    extra_query_levels = """
+    sampler2D colorMap;
+
+    int invalidLevels(sampler2D tex) {
+        return textureQueryLevels(tex, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texture_query_levels.*expected 0 argument"):
+        generate_code(parse_code(tokenize_code(extra_query_levels)))
 
     image_query_levels = """
     image2D image;
@@ -7827,6 +8551,89 @@ def test_resource_arrays_compile_with_mojo(tmp_path):
 
     generated_code += "\nfn main():\n    pass\n"
     source_path = tmp_path / "resource_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_unsized_resource_arrays_use_mojo_lists_bindings_and_compile(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoUnsizedResourceArrays {
+        @set(1) @binding(4) sampler2D textures[];
+        @binding(2) sampler samplers[];
+        image2D images[];
+        StructuredBuffer<float> weights[];
+        RWStructuredBuffer<int> values[];
+        ByteAddressBuffer rawBytes[];
+        RWByteAddressBuffer rawOut[];
+
+        fragment {
+            vec4 main(
+                int index,
+                vec2 uv,
+                ivec2 pixel,
+                uint offset,
+                int value
+            ) @ gl_FragColor {
+                let sampled = texture(textures[index], samplers[index], uv);
+                let color = imageLoad(images[index], pixel);
+                imageStore(images[index], pixel, color);
+                let loaded = buffer_load(values[index], offset);
+                let weight = buffer_load(weights[index], offset);
+                let raw = buffer_load(rawBytes[index], offset);
+                buffer_store(values[index], offset, loaded + value);
+                buffer_store(rawOut[index], offset, raw);
+                return sampled + color
+                    + vec4(float(loaded) + weight + float(raw));
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "var textures = List[Texture2D]()" in generated_code
+    assert "var samplers = List[Sampler]()" in generated_code
+    assert "var images = List[Image2D]()" in generated_code
+    assert "var weights = List[StructuredBuffer[Float32]]()" in generated_code
+    assert "var values = List[RWStructuredBuffer[Int32]]()" in generated_code
+    assert "var rawBytes = List[ByteAddressBuffer]()" in generated_code
+    assert "var rawOut = List[RWByteAddressBuffer]()" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=textures kind=texture set=1 "
+        "binding=4 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=samplers kind=sampler set=0 "
+        "binding=2 binding_source=explicit" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=images kind=image set=0 "
+        "binding=0 binding_source=automatic" in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=values kind=buffer set=0 "
+        "binding=1 binding_source=automatic" in generated_code
+    )
+    assert "sample_sampler(textures[int(index)], samplers[int(index)], uv)" in (
+        generated_code
+    )
+    assert "image_load(images[int(index)], pixel)" in generated_code
+    assert "buffer_load(values[int(index)], offset)" in generated_code
+    assert "buffer_load(rawBytes[int(index)], offset)" in generated_code
+    assert "buffer_store(rawOut[int(index)], offset, raw)" in generated_code
+    assert "texture(textures" not in generated_code
+    assert "imageLoad(images" not in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "unsized_resource_arrays.mojo"
     source_path.write_text(generated_code)
     result = subprocess.run(
         [mojo, "run", str(source_path)],
@@ -9660,6 +10467,87 @@ def test_image_prefixed_struct_array_return_aliases_remain_field_specific():
     assert ".Store(" not in generated_code
 
 
+@pytest.mark.parametrize(
+    ("source", "reserved_name"),
+    [
+        (
+            """
+            struct Texture2D {
+                int value;
+            };
+            Texture2D globalTexture;
+            int read(Texture2D tex) {
+                return tex.value + globalTexture.value;
+            }
+            """,
+            "Texture2D",
+        ),
+        (
+            """
+            struct Sampler {
+                float gain;
+            };
+            Sampler globalSampler;
+            float read(Sampler state) {
+                return state.gain + globalSampler.gain;
+            }
+            """,
+            "Sampler",
+        ),
+        (
+            """
+            generic<T> struct RWBuffer {
+                T value;
+                int tag;
+            };
+            RWBuffer<int> globalBuffer;
+            int read(RWBuffer<int> buf) {
+                return buf.value + globalBuffer.value;
+            }
+            """,
+            "RWBuffer",
+        ),
+        (
+            """
+            struct Image2DFloat2 {
+                float2 value;
+            };
+            Image2DFloat2 globalImage;
+            float2 read(Image2DFloat2 image) {
+                return image.value;
+            }
+            """,
+            "Image2DFloat2",
+        ),
+    ],
+)
+def test_reserved_mojo_resource_struct_names_are_diagnostic(source, reserved_name):
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"Mojo struct name '{reserved_name}'.*"
+            f"reserved resource type '{reserved_name}'"
+        ),
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_reserved_mojo_resource_enum_names_are_diagnostic():
+    source = """
+    enum Texture2D {
+        Linear,
+        Nearest
+    };
+    Texture2D mode;
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="Mojo enum name 'Texture2D'.*reserved resource type 'Texture2D'",
+    ):
+        generate_code(parse_code(tokenize_code(source)))
+
+
 def test_resource_prefixed_generic_user_types_do_not_become_resources():
     source = """
     generic<T> struct TextureBox {
@@ -9708,17 +10596,1343 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
     assert not codegen.resource_access_aliasable_type("TextureBox<int>")
     assert not codegen.resource_access_aliasable_type("BufferBox<int>")
     assert not codegen.resource_access_aliasable_type("SamplerBox<float>")
-    assert "struct TextureBox:" in generated_code
-    assert "struct BufferBox:" in generated_code
-    assert "struct SamplerBox:" in generated_code
+    assert "struct TextureBox[T: Copyable]:" in generated_code
+    assert "struct BufferBox[T: Copyable]:" in generated_code
+    assert "struct SamplerBox[T: Copyable]:" in generated_code
     assert "alias TextureMode = Int32" in generated_code
-    assert "var globalTextureBox: TextureBox<int>" in generated_code
-    assert "var globalBufferBox: BufferBox<int>" in generated_code
-    assert "var globalSamplerBox: SamplerBox<float>" in generated_code
+    assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
+    assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
+    assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
+    assert "TextureBox<int>" not in generated_code
+    assert "BufferBox<int>" not in generated_code
+    assert "SamplerBox<float>" not in generated_code
     assert "# CrossGL resource metadata: name=globalTextureBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalBufferBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalSamplerBox" not in generated_code
     assert "# CrossGL resource metadata: name=globalMode" not in generated_code
+
+
+def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+    Box<int> globalBox;
+    Pair<float> globalPair;
+
+    int readBox(Box<int> payload) {
+        return payload.value + globalBox.value;
+    }
+
+    float readPair(Pair<float> payload) {
+        return payload.left.value + payload.right.value;
+    }
+    """
+    codegen = MojoCodeGen()
+    generated_code = codegen.generate(parse_code(tokenize_code(source)))
+
+    assert "struct Box[T: Copyable]:" in generated_code
+    assert "struct Pair[T: Copyable]:" in generated_code
+    assert "var left: Box[T]" in generated_code
+    assert "var right: Box[T]" in generated_code
+    assert "var globalBox = Box[Int32](0, 0)" in generated_code
+    assert (
+        "var globalPair = Pair[Float32](Box[Float32](0.0, 0), " "Box[Float32](0.0, 0))"
+    ) in generated_code
+    assert "fn readBox(payload: Box[Int32]) -> Int32:" in generated_code
+    assert "fn readPair(payload: Pair[Float32]) -> Float32:" in generated_code
+    assert "return (payload.value + globalBox.value)" in generated_code
+    assert "return (payload.left.value + payload.right.value)" in generated_code
+    assert codegen.generic_struct_fields_for_type("Pair<float>") == {
+        "left": "Box<float>",
+        "right": "Box<float>",
+    }
+    assert codegen.expression_path_result_type("globalPair.left.value") == "float"
+    assert "Box<int>" not in generated_code
+    assert "Pair<float>" not in generated_code
+
+
+def test_generic_user_struct_constructor_nodes_use_specialized_field_types():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    """
+    codegen = MojoCodeGen()
+    codegen.generate(parse_code(tokenize_code(source)))
+
+    constructor_type = NamedType("Box", [PrimitiveType("int")])
+    full_constructor = ConstructorNode(
+        constructor_type,
+        [
+            LiteralNode(3, PrimitiveType("int")),
+            LiteralNode(1, PrimitiveType("int")),
+        ],
+    )
+    partial_constructor = ConstructorNode(
+        constructor_type,
+        [LiteralNode(3, PrimitiveType("int"))],
+    )
+
+    assert (
+        codegen.generate_constructor_node(full_constructor, "Box<int>")
+        == "Box[Int32](3, 1)"
+    )
+    assert (
+        codegen.generate_constructor_node(partial_constructor, "Box<int>")
+        == "Box[Int32](value=3, tag=0)"
+    )
+
+
+def test_generic_user_struct_resource_fields_are_aliasable_after_specialization():
+    source = """
+    generic<T> struct Wrapper {
+        T value;
+        int tag;
+    };
+    """
+    codegen = MojoCodeGen()
+    codegen.generate(parse_code(tokenize_code(source)))
+
+    assert not codegen.resource_access_aliasable_type("Wrapper<int>")
+    assert codegen.resource_access_aliasable_type("Wrapper<RWTexture2D<float4>>")
+    assert codegen.resource_aliasable_field_paths_for_type(
+        "Wrapper<RWTexture2D<float4>>"
+    ) == ["value"]
+
+
+def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+    Box<int> globalBox;
+    Pair<float> globalPair;
+
+    int readBox(Box<int> payload) {
+        return payload.value + globalBox.value;
+    }
+
+    float readPair(Pair<float> payload) {
+        return payload.left.value + payload.right.value;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_specializations.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_function_body_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+
+    Box<int> makeBox(int v) {}
+    Pair<int> makePair(int a, int b) {}
+
+    int readPair(Pair<int> pair) {
+        Box<int> picked = pair.left;
+        return picked.value + pair.right.tag;
+    }
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+    pair_int = NamedType("Pair", [PrimitiveType("int")])
+
+    functions["makeBox"].body = BlockNode(
+        [
+            VariableNode(
+                "local",
+                box_int,
+                ConstructorNode(
+                    box_int,
+                    [
+                        IdentifierNode("v"),
+                        LiteralNode(7, PrimitiveType("int")),
+                    ],
+                ),
+            ),
+            ReturnNode(IdentifierNode("local")),
+        ]
+    )
+    functions["makePair"].body = BlockNode(
+        [
+            ReturnNode(
+                ConstructorNode(
+                    pair_int,
+                    [
+                        ConstructorNode(
+                            box_int,
+                            [
+                                IdentifierNode("a"),
+                                LiteralNode(1, PrimitiveType("int")),
+                            ],
+                        ),
+                        ConstructorNode(
+                            box_int,
+                            [
+                                IdentifierNode("b"),
+                                LiteralNode(2, PrimitiveType("int")),
+                            ],
+                        ),
+                    ],
+                )
+            )
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_function_bodies_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_function_body_ast())
+
+    assert "fn makeBox(v: Int32) -> Box[Int32]:" in generated_code
+    assert "    var local: Box[Int32] = Box[Int32](v, 7)" in generated_code
+    assert "    return local" in generated_code
+    assert "fn makePair(a: Int32, b: Int32) -> Pair[Int32]:" in generated_code
+    assert (
+        "    return Pair[Int32](Box[Int32](a, 1), Box[Int32](b, 2))" in generated_code
+    )
+    assert "fn readPair(pair: Pair[Int32]) -> Int32:" in generated_code
+    assert "    var picked: Box[Int32] = pair.left" in generated_code
+    assert "    return (picked.value + pair.right.tag)" in generated_code
+    assert "Box<int>" not in generated_code
+    assert "Pair<int>" not in generated_code
+
+
+def test_generic_user_struct_function_bodies_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_function_body_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_function_bodies.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_array_and_ternary_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+
+    int chooseBox(bool useLeft) {}
+    int readBoxArray(int index) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    def box_constructor(value, tag):
+        return ConstructorNode(box_int, [value, tag])
+
+    def member(expr, name):
+        return MemberAccessNode(expr, name)
+
+    functions["chooseBox"].body = BlockNode(
+        [
+            VariableNode(
+                "left", box_int, box_constructor(int_literal(1), int_literal(2))
+            ),
+            VariableNode(
+                "right",
+                box_int,
+                box_constructor(int_literal(3), int_literal(4)),
+            ),
+            VariableNode(
+                "chosen",
+                box_int,
+                TernaryOpNode(
+                    IdentifierNode("useLeft"),
+                    IdentifierNode("left"),
+                    IdentifierNode("right"),
+                ),
+            ),
+            ReturnNode(
+                BinaryOpNode(
+                    member(IdentifierNode("chosen"), "value"),
+                    "+",
+                    member(IdentifierNode("chosen"), "tag"),
+                )
+            ),
+        ]
+    )
+    functions["readBoxArray"].body = BlockNode(
+        [
+            VariableNode(
+                "boxes",
+                ArrayType(box_int, 2),
+                ArrayLiteralNode(
+                    [
+                        box_constructor(int_literal(1), int_literal(2)),
+                        box_constructor(int_literal(3), int_literal(4)),
+                    ]
+                ),
+            ),
+            ReturnNode(
+                BinaryOpNode(
+                    member(
+                        ArrayAccessNode(
+                            IdentifierNode("boxes"), IdentifierNode("index")
+                        ),
+                        "value",
+                    ),
+                    "+",
+                    member(
+                        ArrayAccessNode(IdentifierNode("boxes"), int_literal(0)),
+                        "tag",
+                    ),
+                )
+            ),
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_arrays_and_ternaries_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
+
+    assert "fn chooseBox(useLeft: Bool) -> Int32:" in generated_code
+    assert "    var left: Box[Int32] = Box[Int32](1, 2)" in generated_code
+    assert "    var right: Box[Int32] = Box[Int32](3, 4)" in generated_code
+    assert "    var chosen: Box[Int32] = (left if useLeft else right)" in generated_code
+    assert "    return (chosen.value + chosen.tag)" in generated_code
+    assert "fn readBoxArray(index: Int32) -> Int32:" in generated_code
+    assert (
+        "    var boxes: InlineArray[Box[Int32], 2] = "
+        "InlineArray[Box[Int32], 2](Box[Int32](1, 2), Box[Int32](3, 4))"
+        in generated_code
+    )
+    assert "    return (boxes[int(index)].value + boxes[0].tag)" in generated_code
+    assert "Box<int>" not in generated_code
+
+
+def test_generic_user_struct_arrays_and_ternaries_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_array_and_ternary_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_arrays_and_ternaries.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_match_context_ast():
+    source = """
+    generic<T> struct Box {
+        T value;
+        int tag;
+    };
+    generic<T> struct Pair {
+        Box<T> left;
+        Box<T> right;
+    };
+
+    Pair<int> choosePair(int mode) {}
+    int readChosenPair(int mode) {}
+    int destructureConstructedPair() {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    box_int = NamedType("Box", [PrimitiveType("int")])
+    pair_int = NamedType("Pair", [PrimitiveType("int")])
+
+    def int_literal(value):
+        return LiteralNode(value, PrimitiveType("int"))
+
+    def box_constructor(value, tag):
+        return ConstructorNode(box_int, [int_literal(value), int_literal(tag)])
+
+    def pair_constructor(left_value, left_tag, right_value, right_tag):
+        return ConstructorNode(
+            pair_int,
+            [
+                box_constructor(left_value, left_tag),
+                box_constructor(right_value, right_tag),
+            ],
+        )
+
+    def pair_match():
+        return MatchNode(
+            IdentifierNode("mode"),
+            [
+                MatchArmNode(
+                    LiteralPatternNode(int_literal(0)),
+                    None,
+                    pair_constructor(1, 2, 3, 4),
+                ),
+                MatchArmNode(
+                    WildcardPatternNode(),
+                    None,
+                    pair_constructor(5, 6, 7, 8),
+                ),
+            ],
+        )
+
+    def nested_member(name, *members):
+        expression = IdentifierNode(name)
+        for member in members:
+            expression = MemberAccessNode(expression, member)
+        return expression
+
+    functions["choosePair"].body = BlockNode([ReturnNode(pair_match())])
+    functions["readChosenPair"].body = BlockNode(
+        [
+            VariableNode("selected", pair_int, pair_match()),
+            ReturnNode(
+                BinaryOpNode(
+                    nested_member("selected", "left", "value"),
+                    "+",
+                    nested_member("selected", "right", "tag"),
+                )
+            ),
+        ]
+    )
+
+    constructed_subject = pair_constructor(10, 20, 30, 40)
+    functions["destructureConstructedPair"].body = BlockNode(
+        [
+            ReturnNode(
+                MatchNode(
+                    constructed_subject,
+                    [
+                        MatchArmNode(
+                            StructPatternNode(
+                                "Pair",
+                                {
+                                    "left": IdentifierPatternNode("left"),
+                                    "right": IdentifierPatternNode("right"),
+                                },
+                            ),
+                            None,
+                            BinaryOpNode(
+                                nested_member("left", "value"),
+                                "+",
+                                nested_member("right", "tag"),
+                            ),
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+    return ast
+
+
+def test_generic_user_struct_match_contexts_emit_specialized_types():
+    generated_code = generate_code(_generic_user_struct_match_context_ast())
+
+    assert "fn choosePair(mode: Int32) -> Pair[Int32]:" in generated_code
+    assert (
+        "    var __cgl_match_value_0: Pair[Int32] = "
+        "Pair[Int32](Box[Int32](0, 0), Box[Int32](0, 0))" in generated_code
+    )
+    assert (
+        "        __cgl_match_value_0 = Pair[Int32](Box[Int32](1, 2), "
+        "Box[Int32](3, 4))" in generated_code
+    )
+    assert (
+        "        __cgl_match_value_0 = Pair[Int32](Box[Int32](5, 6), "
+        "Box[Int32](7, 8))" in generated_code
+    )
+    assert "    return __cgl_match_value_0" in generated_code
+    assert "fn readChosenPair(mode: Int32) -> Int32:" in generated_code
+    assert "    var selected: Pair[Int32] = __cgl_match_value_1" in generated_code
+    assert "    return (selected.left.value + selected.right.tag)" in generated_code
+    assert "fn destructureConstructedPair() -> Int32:" in generated_code
+    assert (
+        "    var __cgl_match_subject_0: Pair[Int32] = "
+        "Pair[Int32](Box[Int32](10, 20), Box[Int32](30, 40))" in generated_code
+    )
+    assert (
+        "    __cgl_match_value_2 = (__cgl_match_subject_0.left.value + "
+        "__cgl_match_subject_0.right.tag)" in generated_code
+    )
+    assert "Box<int>" not in generated_code
+    assert "Pair<int>" not in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_generic_user_struct_match_contexts_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_match_context_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_match_contexts.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_vector_matrix_payload_ast():
+    source = """
+    generic<T> struct Holder {
+        T value;
+        int tag;
+    };
+    Holder<vec3> globalVec;
+    Holder<mat2> globalMat;
+
+    Holder<vec3> makeVecHolder(vec3 value) {}
+    Holder<mat2> makeMatHolder(mat2 value) {}
+    vec3 readVec(Holder<vec3> holder) {}
+    mat2 readMat(Holder<mat2> holder) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    vec3 = VectorType(PrimitiveType("float"), 3)
+    mat2 = MatrixType(PrimitiveType("float"), 2, 2)
+    holder_vec3 = NamedType("Holder", [vec3])
+    holder_mat2 = NamedType("Holder", [mat2])
+
+    functions["makeVecHolder"].body = BlockNode(
+        [
+            VariableNode(
+                "local",
+                holder_vec3,
+                ConstructorNode(holder_vec3, [IdentifierNode("value")]),
+            ),
+            ReturnNode(IdentifierNode("local")),
+        ]
+    )
+    functions["makeMatHolder"].body = BlockNode(
+        [
+            ReturnNode(
+                ConstructorNode(
+                    holder_mat2,
+                    [
+                        IdentifierNode("value"),
+                        LiteralNode(9, PrimitiveType("int")),
+                    ],
+                )
+            )
+        ]
+    )
+    functions["readVec"].body = BlockNode(
+        [ReturnNode(MemberAccessNode(IdentifierNode("holder"), "value"))]
+    )
+    functions["readMat"].body = BlockNode(
+        [ReturnNode(MemberAccessNode(IdentifierNode("holder"), "value"))]
+    )
+    return ast
+
+
+def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
+    codegen = MojoCodeGen()
+    generated_code = codegen.generate(_generic_user_struct_vector_matrix_payload_ast())
+
+    assert "struct Holder[T: Copyable]:" in generated_code
+    assert "struct CrossGLMatrixF32C2R2:" in generated_code
+    assert (
+        "var globalVec = Holder[SIMD[DType.float32, 4]]("
+        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)" in generated_code
+    )
+    assert (
+        "var globalMat = Holder[CrossGLMatrixF32C2R2]("
+        "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
+        "SIMD[DType.float32, 2](0.0, 0.0)), 0)" in generated_code
+    )
+    assert (
+        "fn makeVecHolder(value: SIMD[DType.float32, 4]) -> "
+        "Holder[SIMD[DType.float32, 4]]:" in generated_code
+    )
+    assert (
+        "var local: Holder[SIMD[DType.float32, 4]] = "
+        "Holder[SIMD[DType.float32, 4]](value=value, tag=0)" in generated_code
+    )
+    assert (
+        "fn makeMatHolder(value: CrossGLMatrixF32C2R2) -> "
+        "Holder[CrossGLMatrixF32C2R2]:" in generated_code
+    )
+    assert "return Holder[CrossGLMatrixF32C2R2](value, 9)" in generated_code
+    assert (
+        "fn readVec(holder: Holder[SIMD[DType.float32, 4]]) -> "
+        "SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert (
+        "fn readMat(holder: Holder[CrossGLMatrixF32C2R2]) -> "
+        "CrossGLMatrixF32C2R2:" in generated_code
+    )
+    assert "return holder.value" in generated_code
+    assert codegen.generic_struct_fields_for_type("Holder<vec3>") == {
+        "value": "vec3",
+        "tag": "int",
+    }
+    assert codegen.generic_struct_fields_for_type("Holder<mat2>") == {
+        "value": "mat2",
+        "tag": "int",
+    }
+    assert codegen.expression_path_result_type("globalVec.value") == "vec3"
+    assert codegen.expression_path_result_type("globalMat.value") == "mat2"
+    assert "Holder<vec3>" not in generated_code
+    assert "Holder<mat2>" not in generated_code
+    assert "MatrixType(" not in generated_code
+    assert "VectorType(" not in generated_code
+
+
+def test_generic_user_struct_vector_matrix_payloads_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    generated_code = generate_code(_generic_user_struct_vector_matrix_payload_ast())
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "generic_user_struct_vector_matrix_payloads.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _generic_user_struct_constructor_diagnostic_ast(function_name, statements):
+    source = """
+    generic<T> struct Holder {
+        T value;
+        int tag;
+    };
+
+    void badExtra() {}
+    void badVectorPayload() {}
+    void badMatrixPayload() {}
+    void badFunctionStylePayload() {}
+    Holder<mat2> badReturn() {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    functions[function_name].body = BlockNode(statements)
+    return ast
+
+
+def test_generic_user_struct_constructor_field_diagnostics():
+    holder_vec3 = NamedType("Holder", [VectorType(PrimitiveType("float"), 3)])
+    ast = _generic_user_struct_constructor_diagnostic_ast(
+        "badExtra",
+        [
+            VariableNode(
+                "badValue",
+                holder_vec3,
+                ConstructorNode(
+                    holder_vec3,
+                    [
+                        LiteralNode(1.0, PrimitiveType("float")),
+                        LiteralNode(2, PrimitiveType("int")),
+                        LiteralNode(3, PrimitiveType("int")),
+                    ],
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"too many positional fields.*declaration badValue.*field 3.*Holder",
+    ):
+        generate_code(ast)
+
+
+@pytest.mark.parametrize(
+    "function_name, statements, pattern",
+    [
+        (
+            "badVectorPayload",
+            [
+                VariableNode(
+                    "badValue",
+                    NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                    ConstructorNode(
+                        NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                        [
+                            FunctionCallNode(
+                                "vec2",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    ),
+                )
+            ],
+            r"aggregate target.*declaration badValue field Holder\.value"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            "badFunctionStylePayload",
+            [
+                VariableNode(
+                    "badValue",
+                    NamedType("Holder", [VectorType(PrimitiveType("float"), 3)]),
+                    FunctionCallNode(
+                        "Holder",
+                        [
+                            FunctionCallNode(
+                                "vec2",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    ),
+                )
+            ],
+            r"aggregate target.*declaration badValue field Holder\.value"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            "badReturn",
+            [
+                ReturnNode(
+                    ConstructorNode(
+                        NamedType("Holder", [MatrixType(PrimitiveType("float"), 2, 2)]),
+                        [
+                            FunctionCallNode(
+                                "vec3",
+                                [
+                                    LiteralNode(1.0, PrimitiveType("float")),
+                                    LiteralNode(2.0, PrimitiveType("float")),
+                                    LiteralNode(3.0, PrimitiveType("float")),
+                                ],
+                            ),
+                            LiteralNode(1, PrimitiveType("int")),
+                        ],
+                    )
+                )
+            ],
+            r"aggregate target.*return value field Holder\.value"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_generic_user_struct_constructor_aggregate_payload_diagnostics(
+    function_name, statements, pattern
+):
+    ast = _generic_user_struct_constructor_diagnostic_ast(function_name, statements)
+
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(ast)
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badAssignment() {
+                vec3 value;
+                value = vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptVec3(vec3 value) {
+            }
+
+            void badArgument() {
+                acceptVec3(vec2(1.0, 2.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptVec3.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptVec3(vec3 value) {
+            }
+
+            void badMatrixArgument() {
+                acceptVec3(mat2(1.0, 0.0, 0.0, 1.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptVec3.*expects vec3.*got mat2",
+        ),
+        (
+            """
+            void acceptMat2(mat2 value) {
+            }
+
+            void badVectorArgument() {
+                acceptMat2(vec3(1.0, 2.0, 3.0));
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptMat2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_assignment_and_arguments(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_explicit_vector_constructors():
+    source = """
+    void acceptVec3(vec3 value) {
+    }
+
+    vec3 okConstructor() {
+        return vec3(vec2(1.0, 2.0), 3.0);
+    }
+
+    void okArgument() {
+        acceptVec3(vec3(vec2(1.0, 2.0), 3.0));
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "return _crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "acceptVec3(_crossgl_construct_f32_4_vf322_01_s" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badArrayAssignment() {
+                vec3 values[2];
+                values = {vec3(1.0, 2.0, 3.0), vec2(4.0, 5.0)};
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 2"
+            r".*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void acceptGrid(vec3[2][2] grid) {
+            }
+
+            void badNestedArgument() {
+                acceptGrid({
+                    {vec3(1.0, 2.0, 3.0), vec2(4.0, 5.0)},
+                    {vec3(6.0, 7.0, 8.0), vec3(9.0, 10.0, 11.0)}
+                });
+            }
+            """,
+            r"aggregate target.*argument 1 for acceptGrid array literal element 1"
+            r" array literal element 2.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badCompoundAssignment() {
+                vec3 value;
+                value += vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badArrayElementAssignment() {
+                vec3 values[2];
+                values[0] = vec2(1.0, 2.0);
+            }
+            """,
+            r"aggregate target.*assignment target.*expects vec3.*got vec2",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_nested_arrays_and_compound(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_explicit_vector_compound_assignment():
+    source = """
+    void okCompoundAssignment() {
+        vec3 value;
+        value += vec3(vec2(1.0, 2.0), 3.0);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "value += _crossgl_construct_f32_4_vf322_01_s" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badTernaryArrayAssignment(bool choose) {
+                vec3 values[2];
+                values = {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badMatchArrayAssignment(int mode) {
+                vec3 values[2];
+                values = {
+                    match mode {
+                        0 => vec2(1.0, 2.0),
+                        _ => vec3(1.0, 2.0, 3.0)
+                    },
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 1"
+            r" match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badMatrixArrayAssignment() {
+                mat2 transforms[2];
+                transforms = {
+                    mat2(1.0, 0.0, 0.0, 1.0),
+                    vec3(1.0, 2.0, 3.0)
+                };
+            }
+            """,
+            r"aggregate target.*assignment target array literal element 2"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_branching_array_elements(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_nested_explicit_constructors():
+    source = """
+    void okNestedConstructors(bool choose, int mode) {
+        vec3 values[2];
+        values = {
+            choose ? vec3(vec2(1.0, 2.0), 3.0) : vec3(4.0, 5.0, 6.0),
+            match mode {
+                0 => vec3(vec2(7.0, 8.0), 9.0),
+                _ => vec3(10.0, 11.0, 12.0)
+            }
+        };
+        mat2 transforms[1];
+        transforms = {mat2(vec2(1.0, 0.0), vec2(0.0, 1.0))};
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "var values = InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "var transforms = InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            vec3[2] badReturn(bool choose) {
+                return {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*return value array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct VecBox {
+                vec3 values[2];
+                int tag;
+            };
+
+            VecBox badBox(int mode) {
+                return VecBox(
+                    {
+                        match mode {
+                            0 => vec2(1.0, 2.0),
+                            _ => vec3(1.0, 2.0, 3.0)
+                        },
+                        vec3(4.0, 5.0, 6.0)
+                    },
+                    1
+                );
+            }
+            """,
+            r"aggregate target.*return value field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct VecBox {
+                vec3 values[2];
+                int tag;
+            };
+
+            VecBox badNamedBox(int mode) {
+                return VecBox {
+                    values: {
+                        match mode {
+                            0 => vec2(1.0, 2.0),
+                            _ => vec3(1.0, 2.0, 3.0)
+                        },
+                        vec3(4.0, 5.0, 6.0)
+                    },
+                    tag: 1
+                };
+            }
+            """,
+            r"aggregate target.*return value field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            struct MatrixBox {
+                mat2 transforms[2];
+                int tag;
+            };
+
+            MatrixBox badMatrixBox() {
+                return MatrixBox(
+                    {
+                        mat2(1.0, 0.0, 0.0, 1.0),
+                        vec3(1.0, 2.0, 3.0)
+                    },
+                    1
+                );
+            }
+            """,
+            r"aggregate target.*return value field MatrixBox\.transforms"
+            r" array literal element 2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_return_and_struct_fields(
+    source, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def test_aggregate_target_shape_preserves_return_struct_field_constructors():
+    source = """
+    struct AggregateBox {
+        vec3 values[2];
+        mat2 transforms[1];
+        int tag;
+    };
+
+    AggregateBox okBox(bool choose, int mode) {
+        return AggregateBox {
+            values: {
+                choose ? vec3(vec2(1.0, 2.0), 3.0) : vec3(4.0, 5.0, 6.0),
+                match mode {
+                    0 => vec3(vec2(7.0, 8.0), 9.0),
+                    _ => vec3(10.0, 11.0, 12.0)
+                }
+            },
+            transforms: {mat2(vec2(1.0, 0.0), vec2(0.0, 1.0))},
+            tag: 1
+        };
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert "_crossgl_construct_f32_4_vf322_01_s" in generated_code
+    assert "struct AggregateBox:" in generated_code
+    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            void badLocalArrayDeclaration(bool choose) {
+                vec3 values[2] = {
+                    choose ? vec2(1.0, 2.0) : vec3(1.0, 2.0, 3.0),
+                    vec3(4.0, 5.0, 6.0)
+                };
+            }
+            """,
+            r"aggregate target.*declaration values array literal element 1"
+            r" true branch.*expects vec3.*got vec2",
+        ),
+        (
+            """
+            void badLocalMatrixArrayDeclaration() {
+                mat2 transforms[2] = {
+                    mat2(1.0, 0.0, 0.0, 1.0),
+                    vec3(1.0, 2.0, 3.0)
+                };
+            }
+            """,
+            r"aggregate target.*declaration transforms array literal element 2"
+            r".*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_local_declarations(source, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
+
+
+def _aggregate_target_shape_local_struct_alias_ast(function_name):
+    source = """
+    struct VecBox {
+        vec3 values[2];
+        int tag;
+    };
+    struct MatrixBox {
+        mat2 transforms[2];
+        int tag;
+    };
+    struct AggregateBox {
+        vec3 values[2];
+        mat2 transforms[1];
+        int tag;
+    };
+
+    void badPositionalAlias(int mode) {}
+    void badNamedAlias() {}
+    void okAlias(bool choose, int mode) {}
+    """
+    ast = parse_code(tokenize_code(source))
+    functions = {function.name: function for function in ast.functions}
+    float_type = PrimitiveType("float")
+    int_type = PrimitiveType("int")
+    vec_box = NamedType("VecBox")
+    matrix_box = NamedType("MatrixBox")
+    aggregate_box = NamedType("AggregateBox")
+
+    def float_literal(value):
+        return LiteralNode(value, float_type)
+
+    def int_literal(value):
+        return LiteralNode(value, int_type)
+
+    def call(name, *args):
+        return FunctionCallNode(name, list(args))
+
+    def vec2(x, y):
+        return call("vec2", float_literal(x), float_literal(y))
+
+    def vec3(x, y, z):
+        return call("vec3", float_literal(x), float_literal(y), float_literal(z))
+
+    def mat2_scalars():
+        return call(
+            "mat2",
+            float_literal(1.0),
+            float_literal(0.0),
+            float_literal(0.0),
+            float_literal(1.0),
+        )
+
+    def mat2_vectors():
+        return call(
+            "mat2",
+            vec2(1.0, 0.0),
+            vec2(0.0, 1.0),
+        )
+
+    bad_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                vec2(1.0, 2.0),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                vec3(1.0, 2.0, 3.0),
+            ),
+        ],
+    )
+    good_match = MatchNode(
+        IdentifierNode("mode"),
+        [
+            MatchArmNode(
+                LiteralPatternNode(int_literal(0)),
+                None,
+                vec3(7.0, 8.0, 9.0),
+            ),
+            MatchArmNode(
+                WildcardPatternNode(),
+                None,
+                vec3(10.0, 11.0, 12.0),
+            ),
+        ],
+    )
+
+    if function_name == "badPositionalAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    vec_box,
+                    FunctionCallNode(
+                        "VecBox",
+                        [
+                            ArrayLiteralNode([bad_match, vec3(4.0, 5.0, 6.0)]),
+                            int_literal(1),
+                        ],
+                    ),
+                )
+            ]
+        )
+    elif function_name == "badNamedAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    matrix_box,
+                    ConstructorNode(
+                        matrix_box,
+                        [],
+                        {
+                            "transforms": ArrayLiteralNode(
+                                [mat2_scalars(), vec3(1.0, 2.0, 3.0)]
+                            ),
+                            "tag": int_literal(1),
+                        },
+                    ),
+                )
+            ]
+        )
+    elif function_name == "okAlias":
+        functions[function_name].body = BlockNode(
+            [
+                VariableNode(
+                    "box",
+                    aggregate_box,
+                    ConstructorNode(
+                        aggregate_box,
+                        [],
+                        {
+                            "values": ArrayLiteralNode(
+                                [
+                                    TernaryOpNode(
+                                        IdentifierNode("choose"),
+                                        vec3(1.0, 2.0, 3.0),
+                                        vec3(4.0, 5.0, 6.0),
+                                    ),
+                                    good_match,
+                                ]
+                            ),
+                            "transforms": ArrayLiteralNode([mat2_vectors()]),
+                            "tag": int_literal(1),
+                        },
+                    ),
+                )
+            ]
+        )
+    return ast
+
+
+@pytest.mark.parametrize(
+    ("function_name", "pattern"),
+    [
+        (
+            "badPositionalAlias",
+            r"aggregate target.*declaration box field VecBox\.values"
+            r" array literal element 1 match arm 1.*expects vec3.*got vec2",
+        ),
+        (
+            "badNamedAlias",
+            r"aggregate target.*declaration box field MatrixBox\.transforms"
+            r" array literal element 2.*expects mat2.*got vec3",
+        ),
+    ],
+)
+def test_aggregate_target_shape_diagnostics_for_local_struct_aliases(
+    function_name, pattern
+):
+    with pytest.raises(ValueError, match=pattern):
+        generate_code(_aggregate_target_shape_local_struct_alias_ast(function_name))
+
+
+def test_aggregate_target_shape_preserves_local_struct_alias_constructors():
+    generated_code = generate_code(
+        _aggregate_target_shape_local_struct_alias_ast("okAlias")
+    )
+
+    assert "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01" in generated_code
+    assert "var box: AggregateBox = AggregateBox(" in generated_code
+    assert "values=InlineArray[SIMD[DType.float32, 4], 2]" in generated_code
+    assert "transforms=InlineArray[CrossGLMatrixF32C2R2, 1]" in generated_code
 
 
 def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_metadata():
@@ -9789,7 +12003,10 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
     assert "# CrossGL resource metadata: name=BufferBundle" not in generated_code
     assert "TextureBundle kind=texture" not in generated_code
     assert "BufferBundle kind=buffer" not in generated_code
-    assert "sample(__cgl_match_subject_0.Ok_0.texture, uv)" in generated_code
+    assert (
+        "sample_sampler(__cgl_match_subject_0.Ok_0.texture, "
+        "__cgl_match_subject_0.Ok_0.samplerState, uv)" in generated_code
+    )
     assert "buffer_store(__cgl_match_subject_1.Ok_0.values, index, value)" in (
         generated_code
     )
@@ -10348,7 +12565,10 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
         "fn cloneSets(sets: InlineArray[ResourceSet, 2]) -> "
         "InlineArray[ResourceSet, 2]:" in generated_code
     )
-    assert "return sample(copied[0].textures[int(slot)], uv)" in generated_code
+    assert (
+        "return sample_sampler(copied[0].textures[int(slot)], copied[0].state, uv)"
+        in generated_code
+    )
     assert "return image_load(copied[0].inputs[int(slot)], pixel)" in generated_code
     assert "image_store(copied[0].outputs[int(slot)], pixel, value)" in (generated_code)
     assert "return buffer_load(copied[0].values[int(slot)], index)" in generated_code
@@ -10359,8 +12579,9 @@ def test_resource_struct_array_member_operations_after_copy_compile_with_mojo(
     assert "buffer_store4(copied[0].rawBuffers[int(slot)], offset, data)" in (
         generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -10513,8 +12734,9 @@ def test_resource_struct_array_branch_value_operations_compile_with_mojo(
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "return sample((left if useLeft else right).textures[int(slot)], uv)" in (
-        generated_code
+    assert (
+        "return sample_sampler((left if useLeft else right).textures[int(slot)], "
+        "(left if useLeft else right).state, uv)" in generated_code
     )
     assert (
         "return image_load((left if useLeft else right)[0].inputs[int(slot)], pixel)"
@@ -10546,8 +12768,9 @@ def test_resource_struct_array_branch_value_operations_compile_with_mojo(
     assert "return buffer_load(__cgl_match_value_1.values[int(slot)], index)" in (
         generated_code
     )
-    assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
-        generated_code
+    assert (
+        "fn sample_sampler(tex: Texture2D, sampler: Sampler, "
+        "coord: SIMD[DType.float32, 2])" in generated_code
     )
     assert "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
         generated_code
@@ -10658,7 +12881,10 @@ def test_nested_sampled_image_resource_array_containers_preserve_mojo_placeholde
     assert "image_store(bundle.resources.outputs[int(slot)], pixel, value)" in (
         generated_code
     )
-    assert "return sample(resources.textures[int(slot)], uv)" in generated_code
+    assert (
+        "return sample_sampler(resources.textures[int(slot)], "
+        "resources.states[int(slot)], uv)" in generated_code
+    )
     assert "image_store(resources.outputs[int(slot)], pixel, value)" in generated_code
     assert "fn sample(tex: Texture2D, coord: SIMD[DType.float32, 2])" in (
         generated_code
@@ -11876,6 +14102,98 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(overlapping_binding)))
 
 
+def test_glsl_buffer_block_runtime_arrays_and_atomics_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    layout(std430, set = 2, binding = 1) buffer CounterBlock {
+        uint counters[];
+        int signedCounters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+
+    uint swapCounter(uint index, uint expected, uint replacement) {
+        return atomicCompSwap(counters.counters[index], expected, replacement);
+    }
+
+    int maxSigned(uint index, int value) {
+        return atomicMax(counters.signedCounters[index], value);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=counters kind=glsl_buffer_block "
+        "set=2 binding=1 binding_source=explicit layout=std430" in generated_code
+    )
+    assert "var counters: List[UInt32]" in generated_code
+    assert "var signedCounters: List[Int32]" in generated_code
+    assert "var __cgl_atomic_0: UInt32 = counters.counters[int(index)]" in (
+        generated_code
+    )
+    assert "counters.counters[int(index)] = (__cgl_atomic_0 + value)" in (
+        generated_code
+    )
+    assert "if __cgl_atomic_1 == expected:" in generated_code
+    assert "counters.counters[int(index)] = replacement" in generated_code
+    assert "counters.signedCounters[int(index)] = max(__cgl_atomic_2, value)" in (
+        generated_code
+    )
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "glsl_buffer_block_runtime_arrays_and_atomics.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_glsl_buffer_block_atomic_diagnostics_for_mojo_codegen():
+    readonly_atomic = """
+    layout(std430, binding = 1) readonly buffer CounterBlock {
+        uint counters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*readonly"):
+        generate_code(parse_code(tokenize_code(readonly_atomic)))
+
+    writeonly_atomic = """
+    layout(std430, binding = 1) writeonly buffer CounterBlock {
+        uint counters[];
+    } counters;
+
+    uint addCounter(uint index, uint value) {
+        return atomicAdd(counters.counters[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*writeonly"):
+        generate_code(parse_code(tokenize_code(writeonly_atomic)))
+
+    float_atomic = """
+    layout(std430, binding = 1) buffer CounterBlock {
+        float values[];
+    } counters;
+
+    float addCounter(uint index, float value) {
+        return atomicAdd(counters.values[index], value);
+    }
+    """
+    with pytest.raises(ValueError, match="atomicAdd.*scalar integer target"):
+        generate_code(parse_code(tokenize_code(float_atomic)))
+
+
 def test_structured_buffer_placeholders_compile_with_mojo(tmp_path):
     mojo = find_mojo_compiler()
 
@@ -12212,12 +14530,14 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_intrinsics_are_rejected_for_mojo_codegen():
+def test_wave_intrinsics_lower_to_mojo_subgroup_helpers():
     code = """
     shader ComputeWaveDiagnostics {
         compute {
             void main() {
                 uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool first = WaveIsFirstLane();
                 uint sumValue = WaveActiveSum(lane);
                 bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
                 uvec4 ballot = WaveActiveBallot(anyLane);
@@ -12227,15 +14547,134 @@ def test_wave_intrinsics_are_rejected_for_mojo_codegen():
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported Mojo wave intrinsic Wave"):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL wave/subgroup placeholders" in generated_code
+    assert "fn _crossgl_wave_get_lane_index() -> UInt32:" in generated_code
+    assert "fn _crossgl_wave_get_lane_count() -> UInt32:" in generated_code
+    assert "fn _crossgl_wave_is_first_lane() -> Bool:" in generated_code
+    assert "fn _crossgl_wave_active_sum(value: UInt32) -> UInt32:" in generated_code
+    assert (
+        "fn _crossgl_wave_active_any_true(predicate: Bool) -> Bool:" in generated_code
+    )
+    assert (
+        "fn _crossgl_wave_active_ballot(predicate: Bool) -> SIMD[DType.uint32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn _crossgl_wave_read_lane_at(value: UInt32, lane: UInt32) -> UInt32:"
+        in generated_code
+    )
+    assert "var lane: UInt32 = _crossgl_wave_get_lane_index()" in generated_code
+    assert "var count: UInt32 = _crossgl_wave_get_lane_count()" in generated_code
+    assert "var first: Bool = _crossgl_wave_is_first_lane()" in generated_code
+    assert "var sumValue: UInt32 = _crossgl_wave_active_sum(lane)" in generated_code
+    assert (
+        "var anyLane: Bool = _crossgl_wave_active_any_true((sumValue > 0))"
+        in generated_code
+    )
+    assert (
+        "var ballot: SIMD[DType.uint32, 4] = _crossgl_wave_active_ballot(anyLane)"
+        in generated_code
+    )
+    assert (
+        "var broadcast: UInt32 = _crossgl_wave_read_lane_at(sumValue, 0)"
+        in generated_code
+    )
+    assert "Unsupported Mojo wave intrinsic" not in generated_code
+    assert "WaveOpNode(" not in generated_code
+
+
+def test_wave_match_count_quad_and_multi_prefix_lower_to_mojo_helpers():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool equal = WaveActiveAllEqual(lane);
+                uint bitCount = WaveActiveCountBits(equal);
+                uint prefixCount = WavePrefixCountBits(equal);
+                uvec4 mask = WaveMatch(lane);
+                uint quadLane = QuadReadLaneAt(lane, 1u);
+                uint quadX = QuadReadAcrossX(lane);
+                uint quadY = QuadReadAcrossY(lane);
+                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+                uint sum = WaveMultiPrefixSum(lane, mask);
+                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint count = WaveMultiPrefixCountBits(equal, mask);
+                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_wave_active_all_equal(lane)" in generated_code
+    assert "_crossgl_wave_active_count_bits(equal)" in generated_code
+    assert "_crossgl_wave_prefix_count_bits(equal)" in generated_code
+    assert "_crossgl_wave_match(lane)" in generated_code
+    assert "_crossgl_quad_read_lane_at(lane, 1)" in generated_code
+    assert "_crossgl_quad_read_across_x(lane)" in generated_code
+    assert "_crossgl_quad_read_across_y(lane)" in generated_code
+    assert "_crossgl_quad_read_across_diagonal(lane)" in generated_code
+    assert "_crossgl_wave_multi_prefix_sum(lane, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_product((lane + 1), mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_count_bits(equal, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_and(product, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_or(bitAnd, mask)" in generated_code
+    assert "_crossgl_wave_multi_prefix_bit_xor(bitOr, mask)" in generated_code
+    assert "fn _crossgl_wave_match(value: UInt32) -> SIMD[DType.uint32, 4]:" in (
+        generated_code
+    )
+    assert (
+        "fn _crossgl_wave_multi_prefix_sum(value: UInt32, "
+        "mask: SIMD[DType.uint32, 4]) -> UInt32:" in generated_code
+    )
+    assert "Unsupported Mojo wave intrinsic" not in generated_code
+
+
+def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    uint waveHelpers(uint lane, bool active, uvec4 mask) {
+        uint sumValue = WaveActiveSum(lane);
+        bool anyLane = WaveActiveAnyTrue(active);
+        uvec4 matched = WaveMatch(sumValue);
+        uint multi = WaveMultiPrefixSum(sumValue, mask);
+        uint quad = QuadReadLaneAt(multi, 1u);
+        return WaveReadLaneAt(quad, 0u);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "_crossgl_wave_active_sum(lane)" in generated_code
+    assert "_crossgl_wave_match(sumValue)" in generated_code
+    assert "_crossgl_wave_multi_prefix_sum(sumValue, mask)" in generated_code
+    assert "_crossgl_quad_read_lane_at(multi, 1)" in generated_code
+    assert "_crossgl_wave_read_lane_at(quad, 0)" in generated_code
+
+    package_dir = tmp_path / "mojo_wave_helpers_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_wave_helpers_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
 
 
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
-        ("TraceRay(1, 2, 3, 4, 5, 6, 7, 8);", "ray tracing intrinsic TraceRay"),
-        ("ReportHit(1.0, 0);", "ray tracing intrinsic ReportHit"),
         ("SetMeshOutputCounts(1, 1);", "mesh intrinsic SetMeshOutputCounts"),
         ("DispatchMesh(1, 1, 1);", "mesh intrinsic DispatchMesh"),
     ],
@@ -12255,56 +14694,57 @@ def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen(statement, messag
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_ray_query_methods_are_rejected_for_mojo_codegen():
+def test_ray_query_methods_lower_to_mojo_hooks():
     code = """
     void queryRay(RayQuery query) {
         bool active = query.Proceed();
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported Mojo ray query method Proceed"):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct RayQuery" in generated_code
+    assert "fn ray_query_proceed" in generated_code
+    assert "var active: Bool = ray_query_proceed(query)" in generated_code
 
 
-def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr():
+def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr():
     codegen = MojoCodeGen()
     query = VariableNode("query", PrimitiveType("RayQuery"))
     scene = VariableNode("scene", PrimitiveType("RaytracingAccelerationStructure"))
     ray = VariableNode("ray", PrimitiveType("RayDesc"))
 
+    trace_expr = codegen.generate_expression(
+        RayTracingOpNode(
+            "TraceRay",
+            [
+                scene,
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(255, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                ray,
+                LiteralNode(0, PrimitiveType("uint")),
+            ],
+        )
+    )
+    assert trace_expr == "trace_ray(scene, 0, 255, 0, 0, 0, ray, 0)"
+    assert "trace_ray" in codegen.required_ray_helpers
+
+    inline_expr = codegen.generate_expression(
+        RayQueryOpNode("TraceRayInline", query, [scene, 0, 255, ray])
+    )
+    assert inline_expr == "ray_query_trace_ray_inline(query, scene, 0, 255, ray)"
+    assert "ray_query_trace_ray_inline" in codegen.required_ray_helpers
+
+    candidate_expr = codegen.generate_expression(
+        RayQueryOpNode("CandidateRayT", query, [])
+    )
+    assert candidate_expr == "ray_query_candidate_ray_t(query)"
+    assert "ray_query_candidate_ray_t" in codegen.required_ray_helpers
+
     cases = [
-        (
-            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))]),
-            "Unsupported Mojo wave intrinsic WaveActiveSum",
-            "WaveOpNode(",
-        ),
-        (
-            RayTracingOpNode(
-                "TraceRay",
-                [
-                    scene,
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(255, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    ray,
-                    LiteralNode(0, PrimitiveType("uint")),
-                ],
-            ),
-            "Unsupported Mojo ray tracing intrinsic TraceRay",
-            "RayTracingOpNode(",
-        ),
-        (
-            RayQueryOpNode("TraceRayInline", query, [scene, 0, 255, ray]),
-            "Unsupported Mojo ray query method TraceRayInline",
-            "RayQueryOpNode(",
-        ),
-        (
-            RayQueryOpNode("CandidateRayT", query, []),
-            "Unsupported Mojo ray query method CandidateRayT",
-            "RayQueryOpNode(",
-        ),
         (
             MeshOpNode("SetMeshOutputCounts", [1, 1]),
             "Unsupported Mojo mesh intrinsic SetMeshOutputCounts",
@@ -12321,6 +14761,22 @@ def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr
         with pytest.raises(ValueError, match=message) as excinfo:
             codegen.generate_expression(expr)
         assert repr_marker not in str(excinfo.value)
+
+
+def test_direct_wave_ir_node_lowers_to_mojo_helper_without_ast_repr():
+    codegen = MojoCodeGen()
+
+    generated_expr = codegen.generate_expression(
+        WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+    )
+
+    assert generated_expr == "_crossgl_wave_active_sum(1)"
+    assert (
+        "_crossgl_wave_active_sum",
+        ("UInt32",),
+        "UInt32",
+        "WaveActiveSum",
+    ) in codegen.required_wave_helpers
 
 
 def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen():
@@ -12532,15 +14988,24 @@ def test_advanced_texture_placeholder_builtins_compile_with_mojo(tmp_path):
     assert "struct Texture2DShadow:" in generated_code
     assert "struct Texture2DArray:" in generated_code
     assert "struct Texture2DArrayShadow:" in generated_code
-    assert "_crossgl_sample_offset_Texture2D" in generated_code
-    assert "_crossgl_texture_gather_Texture2D" in generated_code
-    assert "_crossgl_sample_proj_Texture2D" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2D" in generated_code
-    assert "_crossgl_texture_query_lod_Texture2DArray" in generated_code
-    assert "_crossgl_texture_compare_Texture2DShadow" in generated_code
-    assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
-    assert "_crossgl_texture_compare_Texture2DArrayShadow" in generated_code
-    assert "_crossgl_texture_gather_compare_Texture2DArrayShadow" in generated_code
+    assert "_crossgl_sample_offset_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_gather_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_sample_proj_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2D_Sampler" in generated_code
+    assert "_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler" in generated_code
+    assert "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler" in generated_code
+    assert (
+        "_crossgl_texture_gather_compare_sampler_Texture2DShadow_Sampler"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_compare_sampler_Texture2DArrayShadow_Sampler"
+        in generated_code
+    )
+    assert (
+        "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
+        in generated_code
+    )
     assert "textureOffset" not in generated_code
     assert "textureLodOffset" not in generated_code
     assert "textureGradOffset" not in generated_code
@@ -12669,6 +15134,70 @@ def test_texture_coordinate_and_argument_diagnostics_for_mojo_codegen():
     """
     with pytest.raises(ValueError, match="texel_fetch.*texture resource required"):
         generate_code(parse_code(tokenize_code(image_texel_fetch)))
+
+    shadow_texel_fetch = """
+    sampler2DShadow shadowMap;
+
+    vec4 invalidFetch(sampler2DShadow shadow, ivec2 pixel) {
+        return texelFetch(shadow, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch.*non-shadow texture required"):
+        generate_code(parse_code(tokenize_code(shadow_texel_fetch)))
+
+    missing_texel_offset = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel) {
+        return texelFetchOffset(tex, pixel, 0);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*expected 3 argument"):
+        generate_code(parse_code(tokenize_code(missing_texel_offset)))
+
+    multisample_texel_offset = """
+    sampler2DMS msTexture;
+
+    vec4 invalidFetch(sampler2DMS tex, ivec2 pixel, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texel_fetch_offset.*texel-fetch-offset texture required"
+    ):
+        generate_code(parse_code(tokenize_code(multisample_texel_offset)))
+
+    cube_texel_offset = """
+    samplerCube cubeMap;
+
+    vec4 invalidFetch(samplerCube tex, ivec4 cubePixel, ivec2 offset) {
+        return texelFetchOffset(tex, cubePixel, 0, offset);
+    }
+    """
+    with pytest.raises(
+        ValueError, match="texel_fetch_offset.*texel-fetch-offset texture required"
+    ):
+        generate_code(parse_code(tokenize_code(cube_texel_offset)))
+
+    bad_offset_rank = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel, ivec3 offset) {
+        return texelFetchOffset(tex, pixel, 0, offset);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*offset.*Texture2D"):
+        generate_code(parse_code(tokenize_code(bad_offset_rank)))
+
+    bad_fetch_lod = """
+    sampler2D colorMap;
+
+    vec4 invalidFetch(sampler2D tex, ivec2 pixel, float lod, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
+    """
+    with pytest.raises(ValueError, match="texel_fetch_offset.*lod_or_sample"):
+        generate_code(parse_code(tokenize_code(bad_fetch_lod)))
 
 
 def test_advanced_texture_placeholder_argument_diagnostics_for_mojo_codegen():
@@ -12904,11 +15433,11 @@ def test_shadow_sampler_texture_calls_return_float_and_compile_with_mojo(tmp_pat
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert (
-        "fn sample(tex: Texture2DShadow, "
+        "fn sample_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4]) -> Float32:" in generated_code
     )
     assert (
-        "fn sample_lod(tex: Texture2DShadow, "
+        "fn sample_lod_sampler(tex: Texture2DShadow, sampler: Sampler, "
         "coord: SIMD[DType.float32, 4], lod: Float32) -> Float32:" in generated_code
     )
     assert "fn sampleShadow(" in generated_code
@@ -14191,14 +16720,18 @@ def test_direct_texture_nodes_emit_mojo_sample_helpers_without_ast_repr():
     lod_expr = TextureNode(tex, state, uv, level=lod)
     shadow_expr = TextureNode(shadow, state, uv)
 
-    assert codegen.generate_expression(sample_expr) == "sample(tex, uv)"
+    assert codegen.generate_expression(sample_expr) == "sample_sampler(tex, state, uv)"
     assert codegen.generate_expression(no_sampler_expr) == "sample(tex, uv)"
-    assert codegen.generate_expression(lod_expr) == "sample_lod(tex, uv, lod)"
+    assert (
+        codegen.generate_expression(lod_expr)
+        == "sample_lod_sampler(tex, state, uv, lod)"
+    )
     assert "TextureNode(" not in codegen.generate_expression(sample_expr)
     assert codegen.expression_result_type(sample_expr) == "vec4"
     assert codegen.expression_result_type(shadow_expr) == "float"
     assert "Texture2D" in codegen.required_resource_sample_types
-    assert "Texture2D" in codegen.required_resource_lod_types
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
 
 
 def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
@@ -14222,12 +16755,14 @@ def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
         TextureNode(tex, state, uv, level=lod, offset=offset)
     )
 
-    assert offset_call.startswith("_crossgl_sample_offset_Texture2D")
-    assert offset_call.endswith("(tex, uv, offset)")
-    assert lod_offset_call.startswith("_crossgl_sample_lod_offset_Texture2D")
-    assert lod_offset_call.endswith("(tex, uv, lod, offset)")
+    assert offset_call.startswith("_crossgl_sample_offset_sampler_Texture2D_Sampler")
+    assert offset_call.endswith("(tex, state, uv, offset)")
+    assert lod_offset_call.startswith(
+        "_crossgl_sample_lod_offset_sampler_Texture2D_Sampler"
+    )
+    assert lod_offset_call.endswith("(tex, state, uv, lod, offset)")
     assert "TextureNode(" not in offset_call
-    assert "state" not in offset_call
+    assert "state" in offset_call
     assert (
         codegen.expression_result_type(TextureNode(tex, state, uv, offset=offset))
         == "vec4"
@@ -14236,10 +16771,12 @@ def test_direct_texture_nodes_emit_mojo_offset_helpers_without_ast_repr():
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_sample_offset_Texture2D") for name in helper_names
+        name.startswith("_crossgl_sample_offset_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_sample_lod_offset_Texture2D") for name in helper_names
+        name.startswith("_crossgl_sample_lod_offset_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
 
 
@@ -14269,9 +16806,9 @@ def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
         TextureOpNode("SampleGrad", tex, [uv, ddx, ddy], sampler_expr=state)
     )
 
-    assert sample_call == "sample(tex, uv)"
-    assert lod_call == "sample_lod(tex, uv, lod)"
-    assert grad_call == "sample_grad(tex, uv, ddx, ddy)"
+    assert sample_call == "sample_sampler(tex, state, uv)"
+    assert lod_call == "sample_lod_sampler(tex, state, uv, lod)"
+    assert grad_call == "sample_grad_sampler(tex, state, uv, ddx, ddy)"
     assert "TextureOpNode(" not in sample_call
     assert (
         codegen.expression_result_type(
@@ -14279,9 +16816,9 @@ def test_direct_texture_op_nodes_emit_mojo_sample_helpers_without_ast_repr():
         )
         == "vec4"
     )
-    assert "Texture2D" in codegen.required_resource_sample_types
-    assert "Texture2D" in codegen.required_resource_lod_types
-    assert "Texture2D" in codegen.required_resource_grad_types
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
+    assert "Texture2D" in codegen.required_resource_grad_sampler_types
 
 
 def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
@@ -14321,10 +16858,12 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
 
     assert load_call == "texel_fetch(tex, coord, 0)"
     assert size_call == "texture_size(tex)"
-    assert gather_call.startswith("_crossgl_texture_gather_Texture2D")
-    assert gather_call.endswith("(tex, uv)")
-    assert compare_call.startswith("_crossgl_texture_compare_Texture2DShadow")
-    assert compare_call.endswith("(shadow, uv, depth)")
+    assert gather_call.startswith("_crossgl_texture_gather_sampler_Texture2D_Sampler")
+    assert gather_call.endswith("(tex, state, uv)")
+    assert compare_call.startswith(
+        "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_call.endswith("(shadow, state, uv, depth)")
     assert texture_samples_call == "texture_samples(msTex)"
     assert image_samples_call == "image_samples(msImage)"
     assert "TextureOpNode(" not in gather_call
@@ -14351,10 +16890,11 @@ def test_direct_texture_op_nodes_emit_mojo_resource_helpers_without_ast_repr():
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_texture_gather_Texture2D") for name in helper_names
+        name.startswith("_crossgl_texture_gather_sampler_Texture2D_Sampler")
+        for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_Texture2DShadow")
+        name.startswith("_crossgl_texture_compare_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert ("texture_samples", "Texture2DMS") in (
@@ -14478,49 +17018,63 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         )
     )
 
-    assert bias_call.startswith("_crossgl_sample_bias_Texture2D")
-    assert bias_call.endswith("(tex, uv, bias)")
-    assert bias_offset_call.startswith("_crossgl_sample_bias_offset_Texture2D")
-    assert bias_offset_call.endswith("(tex, uv, bias, offset)")
-    assert compare_lod_call.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
-    assert compare_lod_call.endswith("(shadow, uv, depth, lod)")
+    assert bias_call.startswith("_crossgl_sample_bias_sampler_Texture2D_Sampler")
+    assert bias_call.endswith("(tex, state, uv, bias)")
+    assert bias_offset_call.startswith(
+        "_crossgl_sample_bias_offset_sampler_Texture2D_Sampler"
+    )
+    assert bias_offset_call.endswith("(tex, state, uv, bias, offset)")
+    assert compare_lod_call.startswith(
+        "_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_lod_call.endswith("(shadow, state, uv, depth, lod)")
     assert compare_lod_offset_call.startswith(
-        "_crossgl_texture_compare_lod_offset_Texture2DShadow"
+        "_crossgl_texture_compare_lod_offset_sampler_Texture2DShadow_Sampler"
     )
-    assert compare_lod_offset_call.endswith("(shadow, uv, depth, lod, offset)")
-    assert compare_grad_call.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
-    assert compare_grad_call.endswith("(shadow, uv, depth, ddx, ddy)")
+    assert compare_lod_offset_call.endswith("(shadow, state, uv, depth, lod, offset)")
+    assert compare_grad_call.startswith(
+        "_crossgl_texture_compare_grad_sampler_Texture2DShadow_Sampler"
+    )
+    assert compare_grad_call.endswith("(shadow, state, uv, depth, ddx, ddy)")
     assert compare_grad_offset_call.startswith(
-        "_crossgl_texture_compare_grad_offset_Texture2DShadow"
+        "_crossgl_texture_compare_grad_offset_sampler_Texture2DShadow_Sampler"
     )
-    assert compare_grad_offset_call.endswith("(shadow, uv, depth, ddx, ddy, offset)")
-    assert gather_offsets_call.startswith("_crossgl_texture_gather_offsets_Texture2D")
-    assert gather_offsets_call.endswith("(tex, uv, offset, offset, offset, offset)")
+    assert compare_grad_offset_call.endswith(
+        "(shadow, state, uv, depth, ddx, ddy, offset)"
+    )
+    assert gather_offsets_call.startswith(
+        "_crossgl_texture_gather_offsets_sampler_Texture2D_Sampler"
+    )
+    assert gather_offsets_call.endswith(
+        "(tex, state, uv, offset, offset, offset, offset)"
+    )
     assert compare_proj_grad_offset_call.startswith(
-        "_crossgl_texture_compare_proj_grad_offset_Texture2DShadow"
+        "_crossgl_texture_compare_proj_grad_offset_sampler_Texture2DShadow_Sampler"
     )
     assert compare_proj_grad_offset_call.endswith(
-        "(shadow, uv, depth, ddx, ddy, offset)"
+        "(shadow, state, uv, depth, ddx, ddy, offset)"
     )
-    assert query_lod_call.startswith("_crossgl_texture_query_lod_Texture2DArray")
-    assert query_lod_call.endswith("(arrayTex, uvLayer)")
+    assert query_lod_call.startswith(
+        "_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler"
+    )
+    assert query_lod_call.endswith("(arrayTex, state, uvLayer)")
     assert calculate_lod_call.startswith(
-        "_crossgl_calculate_level_of_detail_Texture2DArray"
+        "_crossgl_calculate_level_of_detail_sampler_Texture2DArray_Sampler"
     )
-    assert calculate_lod_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_call.endswith("(arrayTex, state, uvLayer)")
     assert calculate_lod_unclamped_call.startswith(
-        "_crossgl_calculate_level_of_detail_unclamped_Texture2DArray"
+        "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2DArray_Sampler"
     )
-    assert calculate_lod_unclamped_call.endswith("(arrayTex, uvLayer)")
+    assert calculate_lod_unclamped_call.endswith("(arrayTex, state, uvLayer)")
     assert gather_cmp_red_call.startswith(
-        "_crossgl_texture_gather_compare_Texture2DArrayShadow"
+        "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
     )
-    assert gather_cmp_red_call.endswith("(arrayShadow, uvLayer, depth)")
+    assert gather_cmp_red_call.endswith("(arrayShadow, state, uvLayer, depth)")
     assert gather_cmp_alpha_offset_call.startswith(
-        "_crossgl_texture_gather_compare_offset_Texture2DArrayShadow"
+        "_crossgl_texture_gather_compare_offset_sampler_Texture2DArrayShadow_Sampler"
     )
     assert gather_cmp_alpha_offset_call.endswith(
-        "(arrayShadow, uvLayer, depth, offset)"
+        "(arrayShadow, state, uvLayer, depth, offset)"
     )
     assert "TextureOpNode(" not in "\n".join(
         [
@@ -14582,42 +17136,51 @@ def test_direct_texture_op_nodes_emit_advanced_mojo_resource_helpers_without_ast
         helper["name"] for helper in codegen.required_resource_builtin_helpers.values()
     }
     assert any(
-        name.startswith("_crossgl_sample_bias_Texture2D") for name in helper_names
-    )
-    assert any(
-        name.startswith("_crossgl_sample_bias_offset_Texture2D")
+        name.startswith("_crossgl_sample_bias_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_lod_Texture2DShadow")
+        name.startswith("_crossgl_sample_bias_offset_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_grad_Texture2DShadow")
+        name.startswith("_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_gather_offsets_Texture2D")
+        name.startswith("_crossgl_texture_compare_grad_sampler_Texture2DShadow_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_compare_proj_grad_offset_Texture2DShadow")
+        name.startswith("_crossgl_texture_gather_offsets_sampler_Texture2D_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_query_lod_Texture2DArray")
+        name.startswith(
+            "_crossgl_texture_compare_proj_grad_offset_sampler_Texture2DShadow_Sampler"
+        )
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_calculate_level_of_detail_Texture2DArray")
+        name.startswith("_crossgl_texture_query_lod_sampler_Texture2DArray_Sampler")
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_calculate_level_of_detail_unclamped_Texture2DArray")
+        name.startswith(
+            "_crossgl_calculate_level_of_detail_sampler_Texture2DArray_Sampler"
+        )
         for name in helper_names
     )
     assert any(
-        name.startswith("_crossgl_texture_gather_compare_Texture2DArrayShadow")
+        name.startswith(
+            "_crossgl_calculate_level_of_detail_unclamped_sampler_Texture2DArray_Sampler"
+        )
+        for name in helper_names
+    )
+    assert any(
+        name.startswith(
+            "_crossgl_texture_gather_compare_sampler_Texture2DArrayShadow_Sampler"
+        )
         for name in helper_names
     )
 
@@ -20729,6 +23292,531 @@ def test_match_guarded_literal_arm_lowers_for_mojo_codegen():
     assert "Unsupported match arm" not in generated_code
 
 
+def test_mojo_compute_shader_synchronization_barriers():
+    code = """
+    shader BarrierCompute {
+        compute {
+            void main() {
+                int sharedVal = 0;
+                sharedVal = 1;
+                barrier();
+                int result = sharedVal + 1;
+                memoryBarrier();
+                sharedVal = result;
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "_crossgl_memory_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "# CrossGL shader stage: compute" in generated_code
+    assert "@compute_shader" not in generated_code
+    assert "\n    barrier()" not in generated_code
+    assert "memoryBarrier()" not in generated_code
+    assert "workgroupBarrier()" not in generated_code
+
+
+def test_mojo_compute_shader_synchronization_barriers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader BarrierCompute {
+        compute {
+            void main() {
+                int sharedVal = 0;
+                sharedVal = 1;
+                barrier();
+                int result = sharedVal + 1;
+                memoryBarrier();
+                sharedVal = result;
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "# CrossGL shader stage: compute" in generated_code
+    assert "@compute_shader" not in generated_code
+
+    source_path = tmp_path / "compute_barrier_shader.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_mojo_multisample_storage_image_load_store_in_compute():
+    code = """
+    image2DMS msColor;
+    uimage2DMS msCounter;
+    iimage2DMSArray msSignedLayers;
+
+    shader MultisampleCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                int sampleIdx = 0;
+                vec4 color = imageLoad(msColor, pixel, sampleIdx);
+                imageStore(msColor, pixel, sampleIdx, color);
+                uint count = imageLoad(msCounter, pixel, sampleIdx);
+                imageStore(msCounter, pixel, sampleIdx, count);
+                ivec3 layerPixel = ivec3(0, 0, 0);
+                int signedVal = imageLoad(msSignedLayers, layerPixel, sampleIdx);
+                imageStore(msSignedLayers, layerPixel, sampleIdx, signedVal);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2DMS:" in generated_code
+    assert "struct UImage2DMS:" in generated_code
+    assert "struct IImage2DMSArray:" in generated_code
+    assert "image_load(msColor, pixel, sampleIdx)" in generated_code
+    assert "image_store(msColor, pixel, sampleIdx, color)" in generated_code
+    assert "image_load(msCounter, pixel, sampleIdx)" in generated_code
+    assert "image_store(msCounter, pixel, sampleIdx, count)" in generated_code
+    assert "image_load(msSignedLayers, layerPixel, sampleIdx)" in generated_code
+    assert (
+        "image_store(msSignedLayers, layerPixel, sampleIdx, signedVal)"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], sample: Int32"
+        in generated_code
+    )
+
+
+def test_mojo_image_atomics_in_compute_shader():
+    code = """
+    uimage2D counterImage;
+
+    shader AtomicCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint oldVal = imageAtomicAdd(counterImage, pixel, 1u);
+                uint maxVal = imageAtomicMax(counterImage, pixel, oldVal);
+                uint minVal = imageAtomicMin(counterImage, pixel, 0u);
+                uint andVal = imageAtomicAnd(counterImage, pixel, 0xFFu);
+                uint orVal = imageAtomicOr(counterImage, pixel, 0x01u);
+                uint xorVal = imageAtomicXor(counterImage, pixel, 0x0Fu);
+                uint exchVal = imageAtomicExchange(counterImage, pixel, 42u);
+                uint cmpVal = imageAtomicCompSwap(counterImage, pixel, 42u, 100u);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_and_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_or_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_xor_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+
+
+def test_mojo_storage_image_load_store_operations():
+    code = """
+    image2D colorImage;
+    iimage2D signedImage;
+    uimage2D counterImage;
+    image3D volumeImage;
+
+    shader StorageImageCompute {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                vec4 color = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, color);
+                int signedVal = imageLoad(signedImage, pixel);
+                imageStore(signedImage, pixel, signedVal);
+                uint counterVal = imageLoad(counterImage, pixel);
+                imageStore(counterImage, pixel, counterVal);
+                ivec3 voxel = ivec3(0, 0, 0);
+                vec4 volumeColor = imageLoad(volumeImage, voxel);
+                imageStore(volumeImage, voxel, volumeColor);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage2D:" in generated_code
+    assert "struct Image3D:" in generated_code
+    assert "image_load(colorImage, pixel)" in generated_code
+    assert "image_store(colorImage, pixel, color)" in generated_code
+    assert "image_load(signedImage, pixel)" in generated_code
+    assert "image_store(signedImage, pixel, signedVal)" in generated_code
+    assert "image_load(counterImage, pixel)" in generated_code
+    assert "image_store(counterImage, pixel, counterVal)" in generated_code
+    assert "image_load(volumeImage, voxel)" in generated_code
+    assert "image_store(volumeImage, voxel, volumeColor)" in generated_code
+    assert (
+        "fn image_load(image: Image2D, coord: SIMD[DType.int32, 2]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: IImage2D, coord: SIMD[DType.int32, 2]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: Image3D, coord: SIMD[DType.int32, 4]) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_advanced_texture_gather_operations():
+    code = """
+    sampler2D colorMap;
+    samplerCubeArray cubeArrayMap;
+    sampler2DArray layeredMap;
+    sampler2DShadow shadowMap;
+
+    vec4 gatherColor(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv);
+    }
+    vec4 gatherCubeArray(samplerCubeArray tex, vec4 dir) {
+        return textureGather(tex, dir);
+    }
+    vec4 gatherWithOffset(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset);
+    }
+    vec4 gatherCompare(sampler2DShadow tex, vec2 uv, float refDepth) {
+        return textureGatherCompare(tex, uv, refDepth);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_TextureCubeArray" in generated_code
+    assert "_crossgl_texture_gather_offset_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_compare_Texture2DShadow" in generated_code
+    assert "struct Texture2D:" in generated_code
+    assert "struct TextureCubeArray:" in generated_code
+    assert "struct Texture2DShadow:" in generated_code
+    assert "textureGather(" not in generated_code
+    assert "textureGatherOffset(" not in generated_code
+    assert "textureGatherCompare(" not in generated_code
+
+
+def test_mojo_multisample_texture_operations():
+    code = """
+    sampler2DMS msTexture;
+    sampler2DMSArray msArrayTexture;
+
+    vec4 fetchSample(sampler2DMS tex, ivec2 pixel, int sampleIdx) {
+        return texelFetch(tex, pixel, sampleIdx);
+    }
+    vec4 fetchArraySample(sampler2DMSArray tex, ivec3 pixelLayer, int sampleIdx) {
+        return texelFetch(tex, pixelLayer, sampleIdx);
+    }
+    int getMsSampleCount(sampler2DMS tex) {
+        return textureSamples(tex);
+    }
+    ivec2 getMsSize(sampler2DMS tex) {
+        return textureSize(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DMS:" in generated_code
+    assert "struct Texture2DMSArray:" in generated_code
+    assert "texel_fetch(tex, pixel, sampleIdx)" in generated_code
+    assert "texel_fetch(tex, pixelLayer, sampleIdx)" in generated_code
+    assert "texture_samples(tex)" in generated_code
+    assert "texture_size(tex)" in generated_code
+    assert "fn texel_fetch(tex: Texture2DMS" in generated_code
+    assert "fn texel_fetch(tex: Texture2DMSArray" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2DMS) -> SIMD[DType.int32, 2]:" in generated_code
+    )
+    assert "texelFetch" not in generated_code
+    assert "textureSamples" not in generated_code
+
+
+def test_mojo_texel_fetch_operations():
+    code = """
+    sampler2D colorMap;
+    sampler1D lineMap;
+    sampler2DArray layerMap;
+
+    vec4 fetchPixel(sampler2D tex, ivec2 pixel, int lod) {
+        return texelFetch(tex, pixel, lod);
+    }
+    vec4 fetchPixelOffset(sampler2D tex, ivec2 pixel, int lod, ivec2 offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
+    vec4 fetchLine(sampler1D tex, int pixel, int lod) {
+        return texelFetch(tex, pixel, lod);
+    }
+    vec4 fetchLineOffset(sampler1D tex, int pixel, int lod, int offset) {
+        return texelFetchOffset(tex, pixel, lod, offset);
+    }
+    vec4 fetchLayer(sampler2DArray tex, ivec3 pixelLayer, int lod) {
+        return texelFetch(tex, pixelLayer, lod);
+    }
+    vec4 fetchLayerOffset(
+        sampler2DArray tex,
+        ivec3 pixelLayer,
+        int lod,
+        ivec2 offset
+    ) {
+        return texelFetchOffset(tex, pixelLayer, lod, offset);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texel_fetch(tex, pixel, lod)" in generated_code
+    assert "texel_fetch_offset(tex, pixel, lod, offset)" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2D, coord: SIMD[DType.int32, 2], lod: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2D, coord: SIMD[DType.int32, 2], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
+    )
+    assert "fn texel_fetch(tex: Texture1D, coord: Int32, lod: Int32)" in generated_code
+    assert (
+        "fn texel_fetch_offset(tex: Texture1D, coord: Int32, lod: Int32, "
+        "offset: Int32)" in generated_code
+    )
+    assert (
+        "fn texel_fetch(tex: Texture2DArray, coord: SIMD[DType.int32, 4], lod: Int32)"
+        in generated_code
+    )
+    assert (
+        "fn texel_fetch_offset(tex: Texture2DArray, coord: SIMD[DType.int32, 4], "
+        "lod: Int32, offset: SIMD[DType.int32, 2])" in generated_code
+    )
+    assert "struct Texture2D:" in generated_code
+    assert "struct Texture1D:" in generated_code
+    assert "struct Texture2DArray:" in generated_code
+    assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
+
+
+def test_mojo_texture_query_operations():
+    code = """
+    sampler1D strip;
+    sampler2D colorMap;
+    sampler2DArray layers;
+    sampler3D volume;
+    samplerCube cubeMap;
+
+    int getStripWidth(sampler1D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec2 getMapSize(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec3 getLayerSize(sampler2DArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec3 getVolumeSize(sampler3D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    ivec2 getCubeSize(samplerCube tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_size(tex, lod)" in generated_code
+    assert "texture_query_levels(tex)" in generated_code
+    assert "fn texture_size(tex: Texture1D, lod: Int32) -> Int32:" in generated_code
+    assert (
+        "fn texture_size(tex: Texture2D, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture2DArray, lod: Int32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: Texture3D, lod: Int32) -> SIMD[DType.int32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn texture_size(tex: TextureCube, lod: Int32) -> SIMD[DType.int32, 2]:"
+        in generated_code
+    )
+    assert "fn texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
+    assert "textureSize" not in generated_code
+    assert "textureQueryLevels" not in generated_code
+
+
+def test_mojo_image_size_query_for_storage_images():
+    code = """
+    image2D colorImage;
+    iimage3D signedVolume;
+    uimage2DArray counterLayers;
+
+    ivec2 getImgSize(image2D image) {
+        return imageSize(image);
+    }
+    ivec3 getSignedVolumeSize(iimage3D image) {
+        return imageSize(image);
+    }
+    ivec3 getCounterLayerSize(uimage2DArray image) {
+        return imageSize(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_size(image)" in generated_code
+    assert "fn image_size(image: Image2D) -> SIMD[DType.int32, 2]:" in generated_code
+    assert "fn image_size(image: IImage3D) -> SIMD[DType.int32, 4]:" in generated_code
+    assert (
+        "fn image_size(image: UImage2DArray) -> SIMD[DType.int32, 4]:" in generated_code
+    )
+    assert "imageSize" not in generated_code
+
+
+def test_mojo_image_samples_query_for_multisample_images():
+    code = """
+    uimage2DMS msCounter;
+    image2DMS msColor;
+
+    int getCounterSamples(uimage2DMS image) {
+        return imageSamples(image);
+    }
+    int getColorSamples(image2DMS image) {
+        return imageSamples(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_samples(image)" in generated_code
+    assert "fn image_samples(image: UImage2DMS) -> Int32:" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "imageSamples" not in generated_code
+
+
+def test_mojo_texture_and_image_query_helpers_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+    code = """
+    sampler1D strip;
+    sampler2D colorMap;
+    sampler2DArray layers;
+    sampler3D volume;
+    samplerCube cubeMap;
+    image2D colorImage;
+    iimage3D signedVolume;
+    uimage2DArray counterLayers;
+    uimage2DMS msCounter;
+    image2DMS msColor;
+
+    int getStripWidth(sampler1D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec2 getMapSize(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec3 getLayerSize(sampler2DArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec3 getVolumeSize(sampler3D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    ivec2 getCubeSize(samplerCube tex, int lod) {
+        return textureSize(tex, lod);
+    }
+
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+
+    ivec2 getImgSize(image2D image) {
+        return imageSize(image);
+    }
+
+    ivec3 getSignedVolumeSize(iimage3D image) {
+        return imageSize(image);
+    }
+
+    ivec3 getCounterLayerSize(uimage2DArray image) {
+        return imageSize(image);
+    }
+
+    int getCounterSamples(uimage2DMS image) {
+        return imageSamples(image);
+    }
+
+    int getColorSamples(image2DMS image) {
+        return imageSamples(image);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += """
+fn main():
+    print(getStripWidth(Texture1D(), 0))
+    print(getMapSize(Texture2D(), 0))
+    print(getLayerSize(Texture2DArray(), 0))
+    print(getVolumeSize(Texture3D(), 0))
+    print(getCubeSize(TextureCube(), 0))
+    print(getLevelCount(Texture2D()))
+    print(getImgSize(Image2D()))
+    print(getSignedVolumeSize(IImage3D()))
+    print(getCounterLayerSize(UImage2DArray()))
+    print(getCounterSamples(UImage2DMS()))
+    print(getColorSamples(Image2DMS()))
+"""
+
+    source_path = tmp_path / "texture_and_image_query_helpers.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "[0, 0]" in result.stdout
+    assert "[0, 0, 0, 0]" in result.stdout
+    assert result.stdout.count("1\n") >= 3
+
+
 def test_mojo_imports():
     code = """
     shader main {
@@ -20749,6 +23837,767 @@ def test_mojo_imports():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Mojo imports not generated")
+
+
+def test_barrier_emits_mojo_sync_primitive():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                barrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "barrier()" not in generated_code.replace("_crossgl_workgroup_barrier()", "")
+
+
+def test_memory_barrier_emits_mojo_memory_barrier():
+    code = """
+    shader ComputeMemSync {
+        compute {
+            void main() {
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_memory_barrier()" in generated_code
+    assert "fn _crossgl_memory_barrier():" in generated_code
+    assert "memoryBarrier()" not in generated_code
+
+
+def test_workgroup_barrier_emits_threadgroup_sync():
+    code = """
+    shader ComputeWorkgroup {
+        compute {
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_workgroup_barrier()" in generated_code
+    assert "fn _crossgl_workgroup_barrier():" in generated_code
+    assert "workgroupBarrier()" not in generated_code
+
+
+def test_texture_size_emits_dimension_query():
+    code = """
+    sampler2D myTexture;
+
+    ivec2 getDimensions(sampler2D tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_size(tex, lod)" in generated_code
+    assert "fn texture_size(" in generated_code
+    assert "-> SIMD[DType.int32, 2]:" in generated_code
+    assert "textureSize" not in generated_code
+
+
+def test_texture_query_levels_emits_level_count_query():
+    code = """
+    sampler2D myTexture;
+
+    int getLevelCount(sampler2D tex) {
+        return textureQueryLevels(tex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_query_levels(tex)" in generated_code
+    assert "fn texture_query_levels(" in generated_code
+    assert "-> Int32:" in generated_code
+    assert "textureQueryLevels" not in generated_code
+
+
+def test_texel_fetch_emits_direct_texel_read():
+    code = """
+    sampler2D myTexture;
+
+    vec4 readTexel(sampler2D tex, ivec2 coord, int lod) {
+        return texelFetch(tex, coord, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texel_fetch(tex, coord, lod)" in generated_code
+    assert "fn texel_fetch(" in generated_code
+    assert "SIMD[DType.int32, 2]" in generated_code
+    assert "texelFetch" not in generated_code
+
+
+def test_mojo_storage_image_load_on_1d_and_array_types():
+    code = """
+    image1D rowImage;
+    iimage1DArray signedRows;
+    uimage2DArray counterLayers;
+
+    shader StorageLoad1D {
+        compute {
+            void main() {
+                int coord1d = 0;
+                vec4 row = imageLoad(rowImage, coord1d);
+                ivec2 coord1dArr = ivec2(0, 0);
+                int signedRow = imageLoad(signedRows, coord1dArr);
+                ivec3 coordArr = ivec3(0, 0, 0);
+                uint layerCounter = imageLoad(counterLayers, coordArr);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1D:" in generated_code
+    assert "struct IImage1DArray:" in generated_code
+    assert "struct UImage2DArray:" in generated_code
+    assert "image_load(rowImage, coord1d)" in generated_code
+    assert "image_load(signedRows, coord1dArr)" in generated_code
+    assert "image_load(counterLayers, coordArr)" in generated_code
+    assert (
+        "fn image_load(image: Image1D, coord: Int32) -> SIMD[DType.float32, 4]:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: IImage1DArray, coord: SIMD[DType.int32, 2]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "fn image_load(image: UImage2DArray, coord: SIMD[DType.int32, 4]) -> UInt32:"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+
+
+def test_mojo_storage_image_store_on_various_formats():
+    code = """
+    image1D rowImage;
+    iimage2D signedImage;
+    uimage3D volumeCounters;
+
+    shader StorageStoreFormats {
+        compute {
+            void main() {
+                int x = 0;
+                vec4 color = vec4(1.0, 0.0, 0.0, 1.0);
+                imageStore(rowImage, x, color);
+                ivec2 pixel = ivec2(0, 0);
+                int signedVal = 42;
+                imageStore(signedImage, pixel, signedVal);
+                ivec3 voxel = ivec3(0, 0, 0);
+                uint counter = 1u;
+                imageStore(volumeCounters, voxel, counter);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Image1D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "struct UImage3D:" in generated_code
+    assert "image_store(rowImage, x, color)" in generated_code
+    assert "image_store(signedImage, pixel, signedVal)" in generated_code
+    assert "image_store(volumeCounters, voxel, counter)" in generated_code
+    assert (
+        "fn image_store(image: Image1D, coord: Int32, value: SIMD[DType.float32, 4]):"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: IImage2D, coord: SIMD[DType.int32, 2], value: Int32):"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage3D, coord: SIMD[DType.int32, 4], value: UInt32):"
+        in generated_code
+    )
+    assert "imageStore" not in generated_code
+
+
+def test_mojo_image_atomic_add_min_max_emit_helpers():
+    code = """
+    uimage2D counterImage;
+    iimage2D signedImage;
+
+    shader AtomicAddMinMax {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint added = imageAtomicAdd(counterImage, pixel, 5u);
+                uint minResult = imageAtomicMin(counterImage, pixel, 0u);
+                uint maxResult = imageAtomicMax(counterImage, pixel, 100u);
+                int signedAdd = imageAtomicAdd(signedImage, pixel, 1);
+                int lo = 0;
+                int signedMin = imageAtomicMin(signedImage, pixel, lo);
+                int hi = 50;
+                int signedMax = imageAtomicMax(signedImage, pixel, hi);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_add_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_min_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_IImage2D" in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMin" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+
+
+def test_mojo_image_atomic_exchange_and_comp_swap_emit_helpers():
+    code = """
+    uimage2D counterImage;
+    iimage2D signedImage;
+
+    shader AtomicExchangeCompSwap {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint exchanged = imageAtomicExchange(counterImage, pixel, 99u);
+                uint swapped = imageAtomicCompSwap(counterImage, pixel, 99u, 200u);
+                int replaceVal = 5;
+                int signedExch = imageAtomicExchange(signedImage, pixel, replaceVal);
+                int cmpVal = 5;
+                int newVal = 0;
+                int signedSwap = imageAtomicCompSwap(signedImage, pixel, cmpVal, newVal);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "struct IImage2D:" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_IImage2D" in generated_code
+    assert "_crossgl_image_atomic_comp_swap_IImage2D" in generated_code
+    assert "imageAtomicExchange" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+
+
+def test_mojo_storage_image_combined_load_store_and_atomics():
+    """Issues #475 and #480: Combined load/store with atomics on the same image."""
+    code = """
+    uimage2D counterImage;
+
+    shader CombinedOps {
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(0, 0);
+                uint current = imageLoad(counterImage, pixel);
+                uint incremented = imageAtomicAdd(counterImage, pixel, 1u);
+                uint newMax = imageAtomicMax(counterImage, pixel, current);
+                uint exchanged = imageAtomicExchange(counterImage, pixel, 0u);
+                imageStore(counterImage, pixel, exchanged);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct UImage2D:" in generated_code
+    assert "image_load(counterImage, pixel)" in generated_code
+    assert "image_store(counterImage, pixel, exchanged)" in generated_code
+    assert "_crossgl_image_atomic_add_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_max_UImage2D" in generated_code
+    assert "_crossgl_image_atomic_exchange_UImage2D" in generated_code
+    assert (
+        "fn image_load(image: UImage2D, coord: SIMD[DType.int32, 2]) -> UInt32:"
+        in generated_code
+    )
+    assert (
+        "fn image_store(image: UImage2D, coord: SIMD[DType.int32, 2], value: UInt32):"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "imageAtomicAdd" not in generated_code
+    assert "imageAtomicMax" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+
+
+def test_match_literal_patterns_emit_if_elif_chain_for_mojo_codegen():
+    code = """
+    int classify(int mode) {
+        match mode {
+            0 => { return 10; }
+            1 => { return 20; }
+            2 => { return 30; }
+        }
+        return -1;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if mode == 0:" in generated_code
+    assert "elif mode == 1:" in generated_code
+    assert "elif mode == 2:" in generated_code
+    assert "return 10" in generated_code
+    assert "return 20" in generated_code
+    assert "return 30" in generated_code
+    assert "switch" not in generated_code
+    assert "case" not in generated_code
+
+
+def test_match_wildcard_pattern_emits_else_clause_for_mojo_codegen():
+    code = """
+    int classify(int mode) {
+        match mode {
+            0 => { return 10; }
+            1 => { return 20; }
+            _ => { return -1; }
+        }
+        return 0;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "if mode == 0:" in generated_code
+    assert "elif mode == 1:" in generated_code
+    assert "else:" in generated_code
+    assert "return (-1)" in generated_code or "return -1" in generated_code
+    assert "match" not in generated_code.replace("__cgl_match", "")
+
+
+def test_match_constructor_pattern_emits_variant_check_for_mojo_codegen():
+    code = """
+    enum MaybeInt {
+        Some(int),
+        None
+    };
+
+    int unwrap(MaybeInt value) {
+        return match value {
+            MaybeInt::Some(x) => x,
+            _ => 0
+        };
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "variant ==" in generated_code or ".variant ==" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0" in generated_code
+
+
+def test_match_expression_with_literal_patterns_for_mojo_codegen():
+    code = """
+    int decode(int flag) {
+        int result = match flag {
+            0 => 100,
+            1 => 200,
+            _ => 999
+        };
+        return result;
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "__cgl_match_value_0" in generated_code
+    assert "if flag == 0:" in generated_code
+    assert "elif flag == 1:" in generated_code
+    assert "else:" in generated_code
+    assert "__cgl_match_value_0 = 100" in generated_code
+    assert "__cgl_match_value_0 = 200" in generated_code
+    assert "__cgl_match_value_0 = 999" in generated_code
+
+
+def test_multisample_texture_fetch_with_sample_index_for_mojo_codegen():
+    code = """
+    sampler2DMS msTexture;
+
+    vec4 fetchSample(ivec2 pixel, int sampleIdx) {
+        return texelFetch(msTexture, pixel, sampleIdx);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2DMS:" in generated_code
+    assert "texel_fetch(msTexture, pixel, sampleIdx)" in generated_code
+    assert (
+        "fn texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
+        "lod: Int32) -> SIMD[DType.float32, 4]:" in generated_code
+    )
+    assert "texelFetch" not in generated_code
+
+
+def test_multisample_texture_samples_query_for_mojo_codegen():
+    code = """
+    sampler2DMS msTexture;
+
+    int getSamples() {
+        return textureSamples(msTexture);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "texture_samples(msTexture)" in generated_code
+    assert "fn texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
+    assert "textureSamples" not in generated_code
+
+
+def test_multisample_image_samples_query_for_mojo_codegen():
+    code = """
+    image2DMS msImage;
+
+    int getImageSamples() {
+        return imageSamples(msImage);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "image_samples(msImage)" in generated_code
+    assert "fn image_samples(image: Image2DMS) -> Int32:" in generated_code
+    assert "imageSamples" not in generated_code
+
+
+def test_mojo_texture_gather_with_component_selection():
+    code = """
+    sampler2D colorMap;
+    sampler2DArray layeredMap;
+
+    vec4 gatherRed(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 0);
+    }
+    vec4 gatherGreen(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 1);
+    }
+    vec4 gatherBlue(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 2);
+    }
+    vec4 gatherAlpha(sampler2D tex, vec2 uv) {
+        return textureGather(tex, uv, 3);
+    }
+    vec4 gatherLayeredComponent(sampler2DArray tex, vec3 uvLayer) {
+        return textureGather(tex, uvLayer, 2);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_Texture2D" in generated_code
+    assert "_crossgl_texture_gather_Texture2DArray" in generated_code
+    assert "texture_gather" in generated_code
+    assert "(tex, uv, 0)" in generated_code
+    assert "(tex, uv, 1)" in generated_code
+    assert "(tex, uv, 2)" in generated_code
+    assert "(tex, uv, 3)" in generated_code
+    assert "(tex, uvLayer, 2)" in generated_code
+    assert "textureGather(" not in generated_code
+
+
+def test_mojo_texture_gather_offset_with_component_selection():
+    code = """
+    sampler2D colorMap;
+
+    vec4 gatherOffsetRed(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset, 0);
+    }
+    vec4 gatherOffsetGreen(sampler2D tex, vec2 uv, ivec2 offset) {
+        return textureGatherOffset(tex, uv, offset, 1);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "_crossgl_texture_gather_offset_Texture2D" in generated_code
+    assert "(tex, uv, offset, 0)" in generated_code
+    assert "(tex, uv, offset, 1)" in generated_code
+    assert "textureGatherOffset(" not in generated_code
+
+
+def test_mojo_cube_array_texture_operations():
+    code = """
+    samplerCubeArray cubeArrayMap;
+    samplerCubeArrayShadow cubeArrayShadow;
+
+    vec4 sampleCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return texture(tex, dirLayer);
+    }
+    vec4 gatherCubeArray(samplerCubeArray tex, vec4 dirLayer) {
+        return textureGather(tex, dirLayer);
+    }
+    vec4 gatherCubeArrayComponent(samplerCubeArray tex, vec4 dirLayer) {
+        return textureGather(tex, dirLayer, 1);
+    }
+    float compareCubeArray(samplerCubeArrayShadow tex, vec4 dirLayer, float depth) {
+        return textureCompare(tex, dirLayer, depth);
+    }
+    ivec3 cubeArraySize(samplerCubeArray tex, int lod) {
+        return textureSize(tex, lod);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct TextureCubeArray:" in generated_code
+    assert "struct TextureCubeArrayShadow:" in generated_code
+    assert "var cubeArrayMap: TextureCubeArray = TextureCubeArray()" in generated_code
+    assert (
+        "var cubeArrayShadow: TextureCubeArrayShadow = TextureCubeArrayShadow()"
+        in generated_code
+    )
+    assert "_crossgl_texture_gather_TextureCubeArray" in generated_code
+    assert "_crossgl_texture_compare_TextureCubeArrayShadow" in generated_code
+    assert "texture_size(tex, lod)" in generated_code
+    assert "samplerCubeArray" not in generated_code
+    assert "samplerCubeArrayShadow" not in generated_code
+
+
+def test_mojo_readonly_qualifier_on_storage_images():
+    code = """
+    readonly image2D inputImage;
+    readonly image2D inputImages[4];
+
+    vec4 readPixel(ivec2 pixel) {
+        return imageLoad(inputImage, pixel);
+    }
+    vec4 readArrayPixel(int slot, ivec2 pixel) {
+        return imageLoad(inputImages[slot], pixel);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "access=readonly" in generated_code
+    assert "image_load(inputImage, pixel)" in generated_code
+    assert "image_load(inputImages[int(slot)], pixel)" in generated_code
+
+    invalid_write = """
+    readonly image2D inputImage;
+
+    void invalidWrite(ivec2 pixel, vec4 color) {
+        imageStore(inputImage, pixel, color);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_write)))
+
+
+def test_mojo_writeonly_qualifier_on_storage_images():
+    code = """
+    writeonly image2D outputImage;
+    writeonly image2D outputImages[4];
+
+    void writePixel(ivec2 pixel, vec4 color) {
+        imageStore(outputImage, pixel, color);
+    }
+    void writeArrayPixel(int slot, ivec2 pixel, vec4 color) {
+        imageStore(outputImages[slot], pixel, color);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "access=writeonly" in generated_code
+    assert "image_store(outputImage, pixel, color)" in generated_code
+    assert "image_store(outputImages[int(slot)], pixel, color)" in generated_code
+
+    invalid_read = """
+    writeonly image2D outputImage;
+
+    vec4 invalidRead(ivec2 pixel) {
+        return imageLoad(outputImage, pixel);
+    }
+    """
+    with pytest.raises(ValueError, match="imageLoad.*writeonly"):
+        generate_code(parse_code(tokenize_code(invalid_read)))
+
+
+def test_mojo_coherent_qualifier_produces_memory_annotation():
+    code = """
+    coherent image2D sharedImage;
+    coherent readonly image2D sharedReadonly;
+    coherent writeonly image2D sharedWriteonly;
+
+    vec4 loadShared(ivec2 pixel) {
+        return imageLoad(sharedImage, pixel);
+    }
+    vec4 loadSharedReadonly(ivec2 pixel) {
+        return imageLoad(sharedReadonly, pixel);
+    }
+    void storeSharedWriteonly(ivec2 pixel, vec4 color) {
+        imageStore(sharedWriteonly, pixel, color);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "memory=coherent" in generated_code
+    assert "image_load(sharedImage, pixel)" in generated_code
+    assert "image_load(sharedReadonly, pixel)" in generated_code
+    assert "image_store(sharedWriteonly, pixel, color)" in generated_code
+    assert "access=readonly" in generated_code and "memory=coherent" in generated_code
+
+    invalid_coherent_write = """
+    coherent readonly image2D sharedReadonly;
+
+    void invalidWrite(ivec2 pixel, vec4 color) {
+        imageStore(sharedReadonly, pixel, color);
+    }
+    """
+    with pytest.raises(ValueError, match="imageStore.*readonly"):
+        generate_code(parse_code(tokenize_code(invalid_coherent_write)))
+
+
+def test_cbuffer_produces_mojo_struct_with_value_decorator():
+    code = """
+    cbuffer Transforms {
+        mat4 world;
+        mat4 viewProjection;
+        vec4 cameraPos;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Transforms:" in generated_code
+    assert "var world: CrossGLMatrixF32C4R4" in generated_code
+    assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
+    assert "var cameraPos: SIMD[DType.float32, 4]" in generated_code
+    assert "# Constant Buffers" in generated_code
+    assert "# CrossGL resource metadata: name=Transforms kind=cbuffer" in generated_code
+
+
+def test_multiple_cbuffers_in_one_shader():
+    code = """
+    cbuffer PerFrame {
+        mat4 viewProjection;
+        float time;
+    };
+
+    cbuffer PerObject {
+        mat4 world;
+        vec4 color;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct PerFrame:" in generated_code
+    assert "var viewProjection: CrossGLMatrixF32C4R4" in generated_code
+    assert "var time: Float32" in generated_code
+    assert "@value\nstruct PerObject:" in generated_code
+    assert "var world: CrossGLMatrixF32C4R4" in generated_code
+    assert "var color: SIMD[DType.float32, 4]" in generated_code
+    assert "# CrossGL resource metadata: name=PerFrame kind=cbuffer" in generated_code
+    assert "# CrossGL resource metadata: name=PerObject kind=cbuffer" in generated_code
+
+
+def test_cbuffer_with_array_members():
+    code = """
+    cbuffer LightData {
+        vec4 lightPositions[8];
+        float intensities[8];
+        int activeLightCount;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct LightData:" in generated_code
+    assert (
+        "var lightPositions: InlineArray[SIMD[DType.float32, 4], 8]" in generated_code
+    )
+    assert "var intensities: InlineArray[Float32, 8]" in generated_code
+    assert "var activeLightCount: Int32" in generated_code
+    assert "# CrossGL resource metadata: name=LightData kind=cbuffer" in generated_code
+
+
+def test_texture2d_sampler2d_resource_declarations_produce_mojo_types():
+    code = """
+    sampler2D diffuseMap;
+    sampler2D normalMap;
+    samplerCube envMap;
+
+    vec4 sampleDiffuse(vec2 uv) {
+        return texture(diffuseMap, uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Texture2D:" in generated_code
+    assert "struct TextureCube:" in generated_code
+    assert "var diffuseMap: Texture2D" in generated_code
+    assert "var normalMap: Texture2D" in generated_code
+    assert "var envMap: TextureCube" in generated_code
+    assert "sample(diffuseMap, uv)" in generated_code
+    assert "fn sample(tex: Texture2D" in generated_code
+
+
+def test_combined_texture_sampler_sampling_in_mojo():
+    codegen = MojoCodeGen()
+    tex = VariableNode("albedo", PrimitiveType("sampler2D"))
+    sampler = VariableNode("linearSampler", PrimitiveType("sampler"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+    lod = VariableNode("lod", PrimitiveType("float"))
+
+    codegen.register_variable_type("albedo", "sampler2D")
+    codegen.register_variable_type("linearSampler", "sampler")
+    codegen.register_variable_type("uv", "vec2")
+    codegen.register_variable_type("lod", "float")
+
+    combined_sample = codegen.generate_expression(TextureNode(tex, sampler, uv))
+    lod_sample = codegen.generate_expression(TextureNode(tex, sampler, uv, level=lod))
+
+    assert combined_sample == "sample_sampler(albedo, linearSampler, uv)"
+    assert lod_sample == "sample_lod_sampler(albedo, linearSampler, uv, lod)"
+    assert "Texture2D" in codegen.required_resource_sample_sampler_types
+    assert "Texture2D" in codegen.required_resource_lod_sampler_types
+    assert codegen.expression_result_type(TextureNode(tex, sampler, uv)) == "vec4"
+
+
+def test_separate_texture_and_sampler_objects_for_mojo():
+    codegen = MojoCodeGen()
+    tex = VariableNode("myTexture", PrimitiveType("sampler2D"))
+    sampler_a = VariableNode("samplerA", PrimitiveType("sampler"))
+    sampler_b = VariableNode("samplerB", PrimitiveType("SamplerState"))
+    uv = VariableNode("uv", VectorType(PrimitiveType("float"), 2))
+
+    codegen.register_variable_type("myTexture", "sampler2D")
+    codegen.register_variable_type("samplerA", "sampler")
+    codegen.register_variable_type("samplerB", "SamplerState")
+    codegen.register_variable_type("uv", "vec2")
+
+    sample_a = codegen.generate_expression(TextureNode(tex, sampler_a, uv))
+    sample_b = codegen.generate_expression(TextureNode(tex, sampler_b, uv))
+    no_sampler = codegen.generate_expression(TextureNode(tex, None, uv))
+
+    assert sample_a == "sample_sampler(myTexture, samplerA, uv)"
+    assert sample_b == "sample_sampler(myTexture, samplerB, uv)"
+    assert no_sampler == "sample(myTexture, uv)"
+    assert "samplerA" in sample_a
+    assert "samplerB" in sample_b
+    assert codegen.expression_result_type(TextureNode(tex, sampler_a, uv)) == "vec4"
+
+
+def test_buffer_block_with_structured_buffer_resource():
+    codegen = MojoCodeGen()
+    buf = VariableNode("particles", PrimitiveType("StructuredBuffer<float>"))
+    idx = VariableNode("idx", PrimitiveType("uint"))
+    count = VariableNode("count", PrimitiveType("uint"))
+
+    codegen.register_variable_type("particles", "StructuredBuffer<float>")
+    codegen.register_variable_type("idx", "uint")
+    codegen.register_variable_type("count", "uint")
+
+    load_expr = codegen.generate_expression(BufferOpNode("Load", buf, [idx]))
+    dims_expr = codegen.generate_expression(BufferOpNode("GetDimensions", buf, [count]))
+
+    assert load_expr == "buffer_load(particles, idx)"
+    assert dims_expr == "buffer_dimensions(particles, count)"
+    assert ("StructuredBuffer", "float") in codegen.required_buffer_load_helpers
+    assert ("StructuredBuffer", "float") in codegen.required_buffer_dimensions_helpers
+    assert codegen.expression_result_type(BufferOpNode("Load", buf, [idx])) == "float"
 
 
 if __name__ == "__main__":

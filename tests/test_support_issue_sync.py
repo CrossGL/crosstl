@@ -1,7 +1,8 @@
 import importlib.util
 import io
-from pathlib import Path
+import json
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "sync_support_issues.py"
@@ -18,6 +19,8 @@ def load_sync_module():
 
 def sample_matrix():
     return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py",
         "summary": {
             "status_counts": {
                 "directx": {
@@ -85,6 +88,8 @@ def sample_matrix():
 
 def sample_signals():
     return {
+        "schema_version": 1,
+        "generator": "tools/support_signals.py",
         "summary": {
             "docs_probe": {
                 "provided": True,
@@ -178,6 +183,38 @@ def sample_signals():
                     "tests": [],
                     "unsupported": [],
                 },
+            },
+        ],
+    }
+
+
+def sample_matrix_check_report(ok=True):
+    return {
+        "schema_version": 1,
+        "generator": "tools/support_matrix.py check",
+        "ok": ok,
+        "summary": {
+            "artifact_count": 3,
+            "stale_count": 0 if ok else 1,
+        },
+        "artifacts": [
+            {
+                "path": "support/generated/support-matrix.json",
+                "exists": True,
+                "stale": not ok,
+                "actual_sha256": "actual",
+                "expected_sha256": "expected",
+                "diff_line_count": 0 if ok else 12,
+                "diff": [] if ok else ["--- actual", "+++ expected"],
+            },
+            {
+                "path": "docs/source/support-matrix.rst",
+                "exists": True,
+                "stale": False,
+                "actual_sha256": "same",
+                "expected_sha256": "same",
+                "diff_line_count": 0,
+                "diff": [],
             },
         ],
     }
@@ -297,6 +334,139 @@ def test_build_desired_issues_includes_generated_support_signal_issues():
     assert "test_gather" in child.body
 
 
+def test_build_desired_issues_renders_pytest_failure_signals():
+    module = load_sync_module()
+    signals = sample_signals()
+    signals["issues"].append(
+        {
+            "key": "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+            "kind": "pytest_failure_summary",
+            "title": "Investigate CI pytest failures for backend codegen",
+            "backend_id": "directx",
+            "backend": "DirectX / HLSL",
+            "feature_id": "ci.pytest.backend-codegen",
+            "feature": "CI pytest backend codegen failures",
+            "category": "ci",
+            "status": "failing",
+            "state": "ci_failure",
+            "signal": {
+                "state": "ci_failure",
+                "catalog_evidence_count": 0,
+                "docs": [],
+                "implementation": [],
+                "tests": [],
+                "unsupported": [],
+                "failures": [
+                    {
+                        "nodeid": "tests.test_directx_codegen::test_texture",
+                        "path": (
+                            "tests/test_translator/test_codegen/"
+                            "test_directx_codegen.py"
+                        ),
+                        "kind": "failure",
+                        "category": "backend_codegen",
+                        "backend": "directx",
+                        "message": "generated HLSL assertion failed",
+                        "matched_terms": ["backend_codegen"],
+                    }
+                ],
+            },
+        }
+    )
+
+    desired = module.build_desired_issues(sample_matrix(), signals)
+    issue = desired[
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary"
+    ]
+
+    assert issue.parent_key == "parent:directx"
+    assert module.LABEL_EXTRACTED in issue.labels
+    assert "Pytest failures" in issue.body
+    assert "tests.test_directx_codegen::test_texture" in issue.body
+    assert "generated HLSL assertion failed" in issue.body
+
+
+def test_build_desired_issues_ignores_signal_issues_for_backends_missing_from_matrix():
+    module = load_sync_module()
+    signals = sample_signals()
+    foreign_signal_keys = [
+        "extracted:cuda:source.lexing:supported_without_detected_tests",
+        "extracted:hip:source.lexing:supported_without_detected_tests",
+        "extracted:slang:source.lexing:supported_without_detected_tests",
+    ]
+    for key in foreign_signal_keys:
+        backend_id = key.split(":", maxsplit=2)[1]
+        signals["issues"].append(
+            {
+                "key": key,
+                "kind": "supported_without_detected_tests",
+                "title": "Extractor did not find tests for supported row",
+                "backend_id": backend_id,
+                "backend": backend_id.upper(),
+                "feature_id": "source.lexing",
+                "feature": "Lexing",
+                "category": "source",
+                "status": "supported",
+                "state": "not_detected",
+            }
+        )
+
+    desired = module.build_desired_issues(sample_matrix(), signals)
+    errors = module.validate_desired_issues(
+        sample_matrix(),
+        signals,
+        desired,
+        min_desired_issues=5,
+    )
+
+    for key in foreign_signal_keys:
+        assert key not in desired
+    assert errors == []
+
+
+def test_pytest_failure_issues_are_preserved_without_failure_summary_input():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix(), sample_signals())
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+
+    preserved_actions = module.planned_issue_actions(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=False,
+    )
+    preserved_closures = module.planned_issue_closures(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=False,
+    )
+    preserved_samples = module.planned_issue_action_samples(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=False,
+    )
+
+    assert preserved_actions["closed"] == 0
+    assert preserved_closures["total"] == 0
+    assert preserved_samples["preserved"][0]["reason"] == (
+        "stale_pytest_failure_preserved"
+    )
+
+    closing_closures = module.planned_issue_closures(
+        desired,
+        [stale_pytest],
+        close_extracted_issues=True,
+        close_pytest_failure_issues=True,
+    )
+    assert closing_closures["stale_extracted"] == 1
+
+
 def test_desired_issue_counts_summarizes_planned_parent_backlog_and_signal_issues():
     module = load_sync_module()
 
@@ -382,6 +552,7 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
     existing_parent = issue(1, "parent:directx")
     stale_child = issue(2, "backlog:directx:old.feature")
     client = FakeClient(existing=[existing_parent, stale_child])
+    operation_ledger = []
 
     summary = module.sync_issues(
         client,
@@ -389,6 +560,7 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
         dry_run=False,
         manage_sub_issues=True,
         throttle_seconds=0,
+        operation_ledger=operation_ledger,
     )
 
     assert summary["updated"] == 1
@@ -398,6 +570,1102 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
     assert client.updated[0]["number"] == existing_parent["number"]
     assert client.closed[0]["number"] == stale_child["number"]
     assert client.attached == [(existing_parent["number"], client.created[1]["number"])]
+    assert [entry["action"] for entry in operation_ledger] == [
+        "updated",
+        "created",
+        "created",
+        "attached",
+        "closed",
+    ]
+    assert operation_ledger[0]["key"] == "parent:directx"
+    assert operation_ledger[0]["reasons"] == ["title", "body", "labels"]
+    assert operation_ledger[1]["key"] == "parent:frontend"
+    assert operation_ledger[2]["key"] == "backlog:directx:textures.gather"
+    assert operation_ledger[3] == {
+        "action": "attached",
+        "parent_key": "parent:directx",
+        "parent_number": existing_parent["number"],
+        "child_key": "backlog:directx:textures.gather",
+        "child_number": client.created[1]["number"],
+    }
+    assert operation_ledger[4]["key"] == "backlog:directx:old.feature"
+    assert operation_ledger[4]["reason"] == "stale_managed_marker"
+
+
+def test_sync_issues_reports_partial_summary_on_mutation_failure():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing_parent = issue(1, "parent:directx")
+
+    class FailingCreateClient(FakeClient):
+        def create_issue(self, desired_issue):
+            if desired_issue.key == "parent:frontend":
+                raise RuntimeError("create failed")
+            return super().create_issue(desired_issue)
+
+    client = FailingCreateClient(existing=[existing_parent])
+
+    try:
+        module.sync_issues(
+            client,
+            desired,
+            dry_run=False,
+            manage_sub_issues=False,
+            throttle_seconds=0,
+        )
+    except module.SupportIssueSyncMutationError as exc:
+        assert exc.phase == "create_issue"
+        assert exc.operation == {
+            "key": "parent:frontend",
+            "title": "[Support Matrix] Frontend / IR / Parser coverage",
+        }
+        assert exc.summary == {
+            "created": 0,
+            "updated": 1,
+            "closed": 0,
+            "attached": 0,
+            "unchanged": 0,
+        }
+        assert exc.operation_ledger == [
+            {
+                "action": "updated",
+                "key": "parent:directx",
+                "number": 1,
+                "title": "[Support Matrix] DirectX / HLSL coverage",
+                "state": "open",
+                "reasons": ["title", "body", "labels"],
+            }
+        ]
+        assert isinstance(exc.cause, RuntimeError)
+    else:
+        raise AssertionError("Expected SupportIssueSyncMutationError")
+
+
+def test_planned_issue_actions_reports_mutations_without_touching_client():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing_parent = issue(1, "parent:directx")
+    stale_child = issue(2, "backlog:directx:old.feature")
+
+    planned = module.planned_issue_actions(
+        desired,
+        [existing_parent, stale_child],
+        manage_sub_issues=True,
+        close_extracted_issues=True,
+    )
+
+    assert planned == {
+        "created": 2,
+        "updated": 1,
+        "closed": 1,
+        "attached": 1,
+        "unchanged": 0,
+    }
+
+
+def test_planned_issue_action_samples_explain_mutation_plan():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing_parent = issue(1, "parent:directx")
+    stale_child = issue(2, "backlog:directx:old.feature")
+    duplicate_parent = issue(3, "parent:directx")
+
+    samples = module.planned_issue_action_samples(
+        desired,
+        [existing_parent, stale_child, duplicate_parent],
+        manage_sub_issues=True,
+        close_extracted_issues=True,
+        sample_limit=4,
+    )
+
+    assert samples["sample_limit"] == 4
+    assert samples["created"] == [
+        {
+            "key": "parent:frontend",
+            "title": "[Support Matrix] Frontend / IR / Parser coverage",
+        },
+        {
+            "key": "backlog:directx:textures.gather",
+            "title": "[Support Matrix][DirectX / HLSL] Texture gather (partial)",
+            "parent_key": "parent:directx",
+        },
+    ]
+    assert samples["updated"][0]["key"] == "parent:directx"
+    assert set(samples["updated"][0]["reasons"]) == {"title", "body", "labels"}
+    assert samples["closed"] == [
+        {
+            "key": "backlog:directx:old.feature",
+            "number": 2,
+            "title": "stale",
+            "state": "open",
+            "reason": "stale_managed_marker",
+        },
+        {
+            "key": "parent:directx",
+            "number": 3,
+            "title": "stale",
+            "state": "open",
+            "reason": "duplicate_managed_marker",
+        },
+    ]
+    assert samples["attached"] == [
+        {
+            "parent_key": "parent:directx",
+            "child_key": "backlog:directx:textures.gather",
+            "reason": "parent_or_child_will_be_created",
+        }
+    ]
+
+
+def test_planned_issue_closures_summarizes_closure_categories():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    stale_parent = issue(1, "parent:oldbackend")
+    stale_backlog = issue(2, "backlog:directx:old.feature")
+    stale_extracted = issue(
+        3,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+    )
+    duplicate_parent = issue(4, "parent:directx")
+    current_parent = issue(5, "parent:directx")
+
+    closures = module.planned_issue_closures(
+        desired,
+        [
+            stale_parent,
+            stale_backlog,
+            stale_extracted,
+            duplicate_parent,
+            current_parent,
+        ],
+        close_extracted_issues=True,
+    )
+
+    assert closures == {
+        "total": 4,
+        "stale_parent": 1,
+        "stale_backlog": 1,
+        "stale_extracted": 1,
+        "duplicate_marker": 1,
+    }
+    preserved_extracted_closures = module.planned_issue_closures(
+        desired,
+        [stale_extracted],
+        close_extracted_issues=False,
+    )
+    assert preserved_extracted_closures["total"] == 0
+    assert preserved_extracted_closures["stale_extracted"] == 0
+
+
+def test_issue_sync_report_includes_desired_counts_and_planned_actions():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix(), sample_signals())
+    existing_parent = issue(1, "parent:directx")
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        existing_issues=[existing_parent],
+    )
+
+    assert report["schema_version"] == 1
+    assert report["mode"] == "dry-run"
+    assert report["desired"] == {
+        "total": 5,
+        "parents": 2,
+        "backlog": 1,
+        "extracted": 2,
+    }
+    assert report["existing"] == {
+        "inspected": True,
+        "managed": 1,
+        "duplicates": 0,
+        "unmarked": 0,
+    }
+    assert report["planned_actions"]["created"] == 4
+    assert report["planned_actions"]["updated"] == 1
+    assert report["planned_closures"] == {
+        "total": 0,
+        "stale_parent": 0,
+        "stale_backlog": 0,
+        "stale_extracted": 0,
+        "duplicate_marker": 0,
+    }
+    assert report["planned_action_samples"]["created"][0]["key"] == "parent:frontend"
+    assert report["planned_action_samples"]["updated"][0]["key"] == "parent:directx"
+
+
+def test_issue_sync_report_samples_preserved_stale_extracted_issues():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    stale_extracted = issue(
+        5,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+    )
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=False,
+        manage_sub_issues=False,
+        existing_issues=[stale_extracted],
+    )
+
+    assert report["planned_actions"]["closed"] == 0
+    assert report["planned_action_samples"]["preserved"] == [
+        {
+            "key": (
+                "extracted:directx:docs.old-candidate:"
+                "documented_candidate_not_detected"
+            ),
+            "number": 5,
+            "title": "stale",
+            "state": "open",
+            "reason": "stale_extracted_preserved",
+        }
+    ]
+    assert report["managed_issue_audit"]["preserved_extracted"] == {
+        "total": 1,
+        "open": 1,
+        "closed": 0,
+        "samples": [
+            {
+                "key": (
+                    "extracted:directx:docs.old-candidate:"
+                    "documented_candidate_not_detected"
+                ),
+                "number": 5,
+                "title": "stale",
+                "state": "open",
+                "reason": "stale_extracted_preserved",
+            }
+        ],
+    }
+
+
+def test_issue_sync_report_audits_stale_duplicate_and_unknown_managed_issues():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    existing_parent = issue(1, "parent:directx")
+    stale_backlog = issue(2, "backlog:directx:old.feature")
+    closed_stale_parent = issue(3, "parent:oldbackend", state="closed")
+    stale_extracted = issue(
+        4,
+        "extracted:directx:docs.old-candidate:documented_candidate_not_detected",
+    )
+    duplicate_parent = issue(5, "parent:directx")
+    unknown_marker = issue(6, "custom:unknown")
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=False,
+        manage_sub_issues=False,
+        existing_issues=[
+            existing_parent,
+            stale_backlog,
+            closed_stale_parent,
+            stale_extracted,
+            duplicate_parent,
+            unknown_marker,
+        ],
+    )
+
+    audit = report["managed_issue_audit"]
+    assert audit["sample_limit"] == module.PLANNED_ACTION_SAMPLE_LIMIT
+    assert audit["stale"]["total"] == 2
+    assert audit["stale"]["open"] == 1
+    assert audit["stale"]["closed"] == 1
+    assert audit["stale"]["samples"] == [
+        {
+            "key": "backlog:directx:old.feature",
+            "number": 2,
+            "title": "stale",
+            "state": "open",
+            "category": "stale_backlog",
+            "reason": "stale_managed_marker",
+        },
+        {
+            "key": "parent:oldbackend",
+            "number": 3,
+            "title": "stale",
+            "state": "closed",
+            "category": "stale_parent",
+            "reason": "closed_stale_managed_marker",
+        },
+    ]
+    assert audit["duplicates"] == {
+        "total": 1,
+        "open": 1,
+        "closed": 0,
+        "samples": [
+            {
+                "key": "parent:directx",
+                "number": 5,
+                "title": "stale",
+                "state": "open",
+                "reason": "duplicate_managed_marker",
+            }
+        ],
+    }
+    assert audit["preserved_extracted"]["total"] == 1
+    assert audit["ignored_unknown"] == {
+        "total": 1,
+        "open": 1,
+        "closed": 0,
+        "samples": [
+            {
+                "key": "custom:unknown",
+                "number": 6,
+                "title": "stale",
+                "state": "open",
+                "reason": "unknown_managed_marker",
+            }
+        ],
+    }
+
+
+def test_issue_sync_report_summarizes_support_matrix_check_report():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    matrix_check_path = Path("support/generated/support-matrix-check.json")
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        matrix_check_report=sample_matrix_check_report(ok=False),
+        matrix_check_report_path=matrix_check_path,
+    )
+
+    matrix_check = report["support_matrix_check"]
+    assert matrix_check["provided"] is True
+    assert matrix_check["path"] == str(matrix_check_path)
+    assert matrix_check["ok"] is False
+    assert matrix_check["summary"]["stale_count"] == 1
+    assert matrix_check["stale_artifacts"] == [
+        {
+            "path": "support/generated/support-matrix.json",
+            "diff_line_count": 12,
+            "actual_sha256": "actual",
+            "expected_sha256": "expected",
+        }
+    ]
+
+
+def test_load_optional_json_reports_bad_optional_json(tmp_path):
+    module = load_sync_module()
+    malformed_path = tmp_path / "support-matrix-check.json"
+    wrong_shape_path = tmp_path / "wrong-shape.json"
+    malformed_path.write_text("{not json", encoding="utf-8")
+    wrong_shape_path.write_text("[]", encoding="utf-8")
+
+    malformed = module.load_optional_json(malformed_path)
+    wrong_shape = module.load_optional_json(wrong_shape_path)
+
+    assert malformed["load_error"]["path"] == str(malformed_path)
+    assert malformed["load_error"]["type"] == "JSONDecodeError"
+    assert "Expecting property name" in malformed["load_error"]["message"]
+    assert wrong_shape["load_error"] == {
+        "path": str(wrong_shape_path),
+        "type": "InvalidReportType",
+        "message": "expected JSON object, got list",
+    }
+
+
+def test_issue_sync_report_flags_invalid_support_matrix_check_report():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    matrix_check_path = Path("support/generated/support-matrix-check.json")
+    invalid_report = sample_matrix_check_report(ok=True)
+    invalid_report["generator"] = "tools/sync_support_issues.py"
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        matrix_check_report=invalid_report,
+        matrix_check_report_path=matrix_check_path,
+    )
+
+    matrix_check = report["support_matrix_check"]
+    assert matrix_check["provided"] is True
+    assert matrix_check["path"] == str(matrix_check_path)
+    assert matrix_check["ok"] is False
+    assert matrix_check["summary"] == {}
+    assert matrix_check["stale_artifacts"] == []
+    assert matrix_check["load_error"] == {
+        "path": str(matrix_check_path),
+        "type": "UnexpectedReportGenerator",
+        "message": (
+            "expected generator tools/support_matrix.py check, got "
+            "tools/sync_support_issues.py"
+        ),
+    }
+
+
+def test_issue_sync_report_includes_preflight_failure_details():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+
+    failure = module.preflight_failure_summary(
+        module.SupportIssueSyncPreflightError(
+            "list_sub_issues",
+            {
+                "parent_key": "parent:directx",
+                "parent_number": 17,
+            },
+            RuntimeError("read failed"),
+        )
+    )
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        preflight_failure=failure,
+        planned_action_budget_limits={"created": 1},
+    )
+
+    assert report["existing"]["inspected"] is False
+    assert report["planned_action_budget"]["evaluated"] is False
+    assert report["preflight_failure"] == {
+        "phase": "list_sub_issues",
+        "operation": {
+            "parent_key": "parent:directx",
+            "parent_number": 17,
+        },
+        "error": {
+            "type": "RuntimeError",
+            "message": "read failed",
+        },
+    }
+
+
+def test_issue_sync_report_flags_planned_action_budget_violations():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        existing_issues=[],
+        planned_action_budget_limits={
+            "created": 1,
+            "closed": 0,
+            "total": 2,
+        },
+    )
+
+    budget = report["planned_action_budget"]
+    assert budget["provided"] is True
+    assert budget["evaluated"] is True
+    assert budget["ok"] is False
+    assert budget["violations"] == [
+        {
+            "action": "created",
+            "actual": 3,
+            "limit": 1,
+        },
+        {
+            "action": "total",
+            "actual": 4,
+            "limit": 2,
+        },
+    ]
+    assert module.planned_action_budget_errors(budget) == [
+        "planned issue action budget exceeded for created: 3 > 1",
+        "planned issue action budget exceeded for total: 4 > 2",
+    ]
+
+
+def test_issue_sync_report_flags_planned_closure_budget_violations():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+
+    report = module.issue_sync_report(
+        desired,
+        mode="dry-run",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        existing_issues=[
+            issue(1, "parent:oldbackend"),
+            issue(2, "backlog:directx:old.feature"),
+        ],
+        planned_closure_budget_limits={
+            "stale_parent": 0,
+            "stale_backlog": 0,
+        },
+    )
+
+    budget = report["planned_closure_budget"]
+    assert budget["provided"] is True
+    assert budget["evaluated"] is True
+    assert budget["ok"] is False
+    assert budget["violations"] == [
+        {
+            "category": "stale_backlog",
+            "actual": 1,
+            "limit": 0,
+        },
+        {
+            "category": "stale_parent",
+            "actual": 1,
+            "limit": 0,
+        },
+    ]
+    assert module.planned_closure_budget_errors(budget) == [
+        "planned issue closure budget exceeded for stale_backlog: 1 > 0",
+        "planned issue closure budget exceeded for stale_parent: 1 > 0",
+    ]
+
+
+def test_issue_sync_report_reconciles_operation_ledger_with_plan():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+
+    report = module.issue_sync_report(
+        desired,
+        mode="sync",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        existing_issues=[],
+        operation_ledger=[
+            {
+                "action": "created",
+                "key": "parent:directx",
+                "number": 1,
+            },
+            {
+                "action": "created",
+                "key": "parent:frontend",
+                "number": 2,
+            },
+            {
+                "action": "created",
+                "key": "backlog:directx:textures.gather",
+                "number": 3,
+            },
+            {
+                "action": "attached",
+                "parent_key": "parent:directx",
+                "parent_number": 1,
+                "child_key": "backlog:directx:textures.gather",
+                "child_number": 3,
+            },
+        ],
+    )
+
+    reconciliation = report["operation_reconciliation"]
+    assert reconciliation["evaluated"] is True
+    assert reconciliation["ok"] is True
+    assert reconciliation["planned_actions"]["created"] == 3
+    assert reconciliation["actual_actions"] == {
+        "created": 3,
+        "updated": 0,
+        "closed": 0,
+        "attached": 1,
+    }
+    assert reconciliation["actual_closures"] == {
+        "total": 0,
+        "stale_parent": 0,
+        "stale_backlog": 0,
+        "stale_extracted": 0,
+        "duplicate_marker": 0,
+    }
+    assert reconciliation["action_overruns"] == []
+    assert reconciliation["action_shortfalls"] == []
+    assert reconciliation["closure_overruns"] == []
+    assert reconciliation["closure_shortfalls"] == []
+
+
+def test_issue_sync_report_flags_operation_ledger_overruns():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+
+    report = module.issue_sync_report(
+        desired,
+        mode="sync",
+        close_extracted_issues=True,
+        manage_sub_issues=True,
+        existing_issues=[],
+        operation_ledger=[
+            {
+                "action": "closed",
+                "key": "parent:directx",
+                "number": 1,
+                "reason": "duplicate_managed_marker",
+            }
+        ],
+    )
+
+    reconciliation = report["operation_reconciliation"]
+    assert reconciliation["evaluated"] is True
+    assert reconciliation["ok"] is False
+    assert reconciliation["planned_actions"]["closed"] == 0
+    assert reconciliation["actual_actions"]["closed"] == 1
+    assert reconciliation["action_overruns"] == [
+        {
+            "action": "closed",
+            "actual": 1,
+            "planned": 0,
+        }
+    ]
+    assert reconciliation["closure_overruns"] == [
+        {
+            "category": "duplicate_marker",
+            "actual": 1,
+            "planned": 0,
+        },
+        {
+            "category": "total",
+            "actual": 1,
+            "planned": 0,
+        },
+    ]
+    assert reconciliation["action_shortfalls"] == [
+        {
+            "action": "attached",
+            "actual": 0,
+            "planned": 1,
+        },
+        {
+            "action": "created",
+            "actual": 0,
+            "planned": 3,
+        },
+    ]
+    assert reconciliation["closure_shortfalls"] == []
+
+
+def test_issue_sync_report_flags_operation_ledger_shortfalls():
+    module = load_sync_module()
+
+    report = module.issue_sync_report(
+        {},
+        mode="sync",
+        close_extracted_issues=True,
+        manage_sub_issues=False,
+        existing_issues=[issue(1, "parent:oldbackend")],
+        operation_ledger=[],
+    )
+
+    reconciliation = report["operation_reconciliation"]
+    assert reconciliation["evaluated"] is True
+    assert reconciliation["ok"] is False
+    assert reconciliation["planned_actions"]["closed"] == 1
+    assert reconciliation["actual_actions"]["closed"] == 0
+    assert reconciliation["action_overruns"] == []
+    assert reconciliation["action_shortfalls"] == [
+        {
+            "action": "closed",
+            "actual": 0,
+            "planned": 1,
+        }
+    ]
+    assert reconciliation["closure_overruns"] == []
+    assert reconciliation["closure_shortfalls"] == [
+        {
+            "category": "stale_parent",
+            "actual": 0,
+            "planned": 1,
+        },
+        {
+            "category": "total",
+            "actual": 0,
+            "planned": 1,
+        },
+    ]
+
+
+def test_main_writes_dry_run_plan_without_github_access(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_check_path = tmp_path / "support-matrix-check.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    matrix_check_path.write_text(
+        json.dumps(sample_matrix_check_report(ok=True)), encoding="utf-8"
+    )
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["mode"] == "dry-run"
+    assert report["desired"]["total"] == 3
+    assert report["existing"]["inspected"] is False
+    assert report["planned_actions"] is None
+    assert report["support_matrix_check"]["provided"] is True
+    assert report["support_matrix_check"]["ok"] is True
+    assert "Dry run: would manage 3 desired issues" in capsys.readouterr().out
+
+
+def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    matrix_check_path = tmp_path / "support-matrix-check.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    matrix_check_path.write_text("{not json", encoding="utf-8")
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    matrix_check = report["support_matrix_check"]
+    assert matrix_check["provided"] is True
+    assert matrix_check["ok"] is False
+    assert matrix_check["load_error"]["path"] == str(matrix_check_path)
+    assert matrix_check["load_error"]["type"] == "JSONDecodeError"
+    assert "Dry run: would manage 3 desired issues" in capsys.readouterr().out
+
+
+def test_main_writes_plan_on_malformed_matrix_input(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_check_path = tmp_path / "missing-matrix-check.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text("{not json", encoding="utf-8")
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["mode"] == "dry-run"
+    assert report["desired"]["total"] == 0
+    assert report["existing"]["inspected"] is False
+    assert report["planned_actions"] is None
+    assert report["input_failures"][0]["input"] == "matrix"
+    assert report["input_failures"][0]["path"] == str(matrix_path)
+    assert report["input_failures"][0]["error"]["type"] == "JSONDecodeError"
+    stderr = capsys.readouterr().err
+    assert "Support issue input is invalid" in stderr
+    assert "JSONDecodeError" in stderr
+
+
+def test_main_continues_with_malformed_signals_input(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    matrix_check_path = tmp_path / "missing-matrix-check.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text("{not json", encoding="utf-8")
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["desired"]["total"] == 3
+    assert report["close_extracted_issues"] is False
+    assert report["input_failures"][0]["input"] == "signals"
+    assert report["input_failures"][0]["path"] == str(signals_path)
+    assert report["input_failures"][0]["error"]["type"] == "JSONDecodeError"
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "continuing without signals" in captured.err
+
+
+def test_main_writes_plan_on_preflight_inspection_failure(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class FailingInspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__()
+
+        def list_managed_issues(self):
+            raise RuntimeError("inspection failed")
+
+    monkeypatch.setattr(module, "GitHubClient", FailingInspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--max-planned-created",
+            "1",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["mode"] == "dry-run"
+    assert report["existing"]["inspected"] is False
+    assert report["planned_actions"] is None
+    assert report["planned_action_budget"]["evaluated"] is False
+    assert report["preflight_failure"] == {
+        "phase": "list_managed_issues",
+        "operation": {},
+        "error": {
+            "type": "RuntimeError",
+            "message": "inspection failed",
+        },
+    }
+    assert (
+        "support issue sync preflight failed during list_managed_issues"
+        in capsys.readouterr().err
+    )
+
+
+def test_main_writes_plan_before_failing_planned_action_budget(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "missing-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[])
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--max-planned-created",
+            "1",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["planned_action_budget"]["ok"] is False
+    assert report["planned_action_budget"]["violations"] == [
+        {
+            "action": "created",
+            "actual": 3,
+            "limit": 1,
+        }
+    ]
+    assert "planned issue action budget exceeded" in capsys.readouterr().err
+
+
+def test_main_writes_plan_before_failing_planned_closure_budget(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[issue(1, "parent:oldbackend")])
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--max-planned-stale-parent-closures",
+            "0",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["planned_closures"]["stale_parent"] == 1
+    assert report["planned_closure_budget"]["ok"] is False
+    assert report["planned_closure_budget"]["violations"] == [
+        {
+            "category": "stale_parent",
+            "actual": 1,
+            "limit": 0,
+        }
+    ]
+    assert "planned issue closure budget exceeded" in capsys.readouterr().err
+
+
+def test_main_writes_sync_failure_summary_on_mutation_failure(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    summary_path = tmp_path / "support-issue-sync-summary.json"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class FailingCreateClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[issue(1, "parent:directx")])
+
+        def create_issue(self, desired_issue):
+            if desired_issue.key == "parent:frontend":
+                raise RuntimeError("create failed")
+            return super().create_issue(desired_issue)
+
+    monkeypatch.setattr(module, "GitHubClient", FailingCreateClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--throttle-seconds",
+            "0",
+            "--sync-summary-output",
+            str(summary_path),
+        ]
+    )
+
+    assert result == 1
+    report = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert report["mode"] == "sync"
+    assert report["sync_summary"] == {
+        "created": 0,
+        "updated": 1,
+        "closed": 0,
+        "attached": 0,
+        "unchanged": 0,
+    }
+    assert report["operation_ledger"] == [
+        {
+            "action": "updated",
+            "key": "parent:directx",
+            "number": 1,
+            "title": "[Support Matrix] DirectX / HLSL coverage",
+            "state": "open",
+            "reasons": ["title", "body", "labels"],
+        }
+    ]
+    assert report["sync_failure"] == {
+        "phase": "create_issue",
+        "operation": {
+            "key": "parent:frontend",
+            "title": "[Support Matrix] Frontend / IR / Parser coverage",
+        },
+        "partial_summary": {
+            "created": 0,
+            "updated": 1,
+            "closed": 0,
+            "attached": 0,
+            "unchanged": 0,
+        },
+        "operation_ledger": [
+            {
+                "action": "updated",
+                "key": "parent:directx",
+                "number": 1,
+                "title": "[Support Matrix] DirectX / HLSL coverage",
+                "state": "open",
+                "reasons": ["title", "body", "labels"],
+            }
+        ],
+        "error": {
+            "type": "RuntimeError",
+            "message": "create failed",
+        },
+        "recovery": {
+            "rerun_safe": True,
+            "strategy": (
+                "Rerun support issue sync after correcting the failure; "
+                "managed issue markers make completed create, update, close, "
+                "and attach operations idempotent."
+            ),
+        },
+    }
+    assert "support issue sync failed during create_issue" in capsys.readouterr().err
 
 
 def test_sync_issues_skips_existing_sub_issue_relationships():
@@ -441,6 +1709,36 @@ def test_sync_issues_closes_duplicate_managed_markers():
     assert client.closed[0]["number"] == duplicate_parent["number"]
     assert "# Duplicate Managed Support Issue" in client.closed[0]["body"]
     assert module.marker_for("parent:directx") in client.closed[0]["body"]
+
+
+def test_sync_issues_prefers_open_duplicate_marker_over_closed_issue():
+    module = load_sync_module()
+    desired = module.build_desired_issues(sample_matrix())
+    target = desired["parent:directx"]
+    closed_parent = issue(1, "parent:directx", state="closed")
+    open_parent = {
+        "id": 1002,
+        "number": 2,
+        "title": target.title,
+        "body": target.body,
+        "state": "open",
+        "labels": [{"name": label} for label in target.labels],
+    }
+    client = FakeClient(existing=[closed_parent, open_parent])
+
+    summary = module.sync_issues(
+        client,
+        desired,
+        dry_run=False,
+        manage_sub_issues=False,
+        throttle_seconds=0,
+    )
+
+    assert summary["updated"] == 0
+    assert summary["closed"] == 0
+    assert summary["unchanged"] == 2
+    assert client.updated[0]["number"] == open_parent["number"]
+    assert client.closed == []
 
 
 def test_sync_issues_preserves_stale_extracted_issues_when_signals_are_not_clean():
@@ -589,6 +1887,33 @@ def test_parse_args_exposes_rate_limit_controls():
             "2",
             "--min-desired-issues",
             "10",
+            "--inspect-existing",
+            "--matrix-check-report",
+            "support/generated/support-matrix-check.json",
+            "--planned-action-budget-mode",
+            "warn",
+            "--max-planned-created",
+            "300",
+            "--max-planned-updated",
+            "300",
+            "--max-planned-closed",
+            "50",
+            "--max-planned-attached",
+            "300",
+            "--max-planned-total",
+            "600",
+            "--max-planned-stale-parent-closures",
+            "0",
+            "--max-planned-stale-backlog-closures",
+            "100",
+            "--max-planned-stale-extracted-closures",
+            "100",
+            "--max-planned-duplicate-marker-closures",
+            "25",
+            "--plan-output",
+            "support/generated/support-issue-plan.json",
+            "--sync-summary-output",
+            "support/generated/support-issue-sync-summary.json",
         ]
     )
 
@@ -597,3 +1922,21 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.retry_max_seconds == 600
     assert args.throttle_seconds == 2
     assert args.min_desired_issues == 10
+    assert args.inspect_existing is True
+    assert args.matrix_check_report == Path(
+        "support/generated/support-matrix-check.json"
+    )
+    assert args.planned_action_budget_mode == "warn"
+    assert args.max_planned_created == 300
+    assert args.max_planned_updated == 300
+    assert args.max_planned_closed == 50
+    assert args.max_planned_attached == 300
+    assert args.max_planned_total == 600
+    assert args.max_planned_stale_parent_closures == 0
+    assert args.max_planned_stale_backlog_closures == 100
+    assert args.max_planned_stale_extracted_closures == 100
+    assert args.max_planned_duplicate_marker_closures == 25
+    assert args.plan_output == Path("support/generated/support-issue-plan.json")
+    assert args.sync_summary_output == Path(
+        "support/generated/support-issue-sync-summary.json"
+    )

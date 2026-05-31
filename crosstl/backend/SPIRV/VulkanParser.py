@@ -1,7 +1,7 @@
 """Parser for Vulkan SPIR-V source AST construction."""
 
-from .VulkanLexer import *
 from .VulkanAst import *
+from .VulkanLexer import *
 
 
 class VulkanParser:

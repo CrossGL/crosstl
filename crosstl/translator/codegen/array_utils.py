@@ -4,7 +4,7 @@ This module provides common functions for handling array types, array access,
 and type detection across different code generators.
 """
 
-from typing import Optional, Tuple, Dict, Any
+from typing import Any, Dict, Optional, Tuple
 
 
 def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:

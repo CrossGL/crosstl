@@ -1,8 +1,5 @@
 """Reverse code generator that emits CrossGL from HLSL AST nodes."""
 
-from .DirectxAst import *
-from .DirectxParser import *
-from .DirectxLexer import *
 from ..common_ast import (
     ArrayAccessNode,
     BreakNode,
@@ -10,6 +7,9 @@ from ..common_ast import (
     ContinueNode,
     TextureSampleNode,
 )
+from .DirectxAst import *
+from .DirectxLexer import *
+from .DirectxParser import *
 
 
 class HLSLToCrossGLConverter:
@@ -1495,15 +1495,12 @@ class HLSLToCrossGLConverter:
         if node is None or isinstance(node, (str, int, float, bool)):
             return
         if isinstance(node, dict):
-            for value in node.values():
-                yield value
+            yield from node.values()
             return
         if isinstance(node, (list, tuple, set)):
-            for value in node:
-                yield value
+            yield from node
             return
-        for value in getattr(node, "__dict__", {}).values():
-            yield value
+        yield from getattr(node, "__dict__", {}).values()
 
     def collect_direct_texture_method_usage_names(self, root):
         comparison_names = set()
@@ -1595,6 +1592,130 @@ class HLSLToCrossGLConverter:
 
         return comparison_names, regular_names
 
+    def collect_variable_types_from_nodes(self, nodes, type_map):
+        for node in nodes or []:
+            if isinstance(node, VariableNode) and getattr(node, "name", None):
+                type_map[node.name] = getattr(node, "vtype", None)
+            for child in self.iter_ast_children(node):
+                self.collect_variable_types_from_nodes([child], type_map)
+
+    def expression_raw_type_from_map(self, expr, variable_types):
+        if isinstance(expr, MemberAccessNode):
+            object_type = self.expression_raw_type_from_map(expr.object, variable_types)
+            member_type = self.member_access_raw_type(object_type, expr.member)
+            return member_type if member_type is not None else object_type
+        if isinstance(expr, ArrayAccessNode):
+            return self.expression_raw_type_from_map(expr.array, variable_types)
+        if isinstance(expr, VariableNode):
+            return variable_types.get(expr.name)
+        if isinstance(expr, str):
+            return variable_types.get(expr)
+        return None
+
+    def expression_struct_member_key(self, expr, variable_types):
+        while isinstance(expr, ArrayAccessNode):
+            expr = expr.array
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        owner_type = self.expression_raw_type_from_map(expr.object, variable_types)
+        owner_base = self.raw_type_base(owner_type)
+        if owner_base not in self.struct_member_types:
+            return None
+        return owner_base, expr.member
+
+    def collect_direct_texture_member_usage_keys(self, root, variable_types):
+        comparison_keys = set()
+        regular_keys = set()
+
+        def visit(node):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            if isinstance(node, FunctionCallNode) and isinstance(
+                node.name, MemberAccessNode
+            ):
+                resource_type = self.expression_raw_type_from_map(
+                    node.name.object, variable_types
+                )
+                descriptor = self.resource_method_descriptor(
+                    node.name.member,
+                    len(getattr(node, "args", []) or []),
+                    resource_type,
+                )
+                usage = (
+                    descriptor["usage"]
+                    if descriptor and descriptor["resource"] == "texture"
+                    else None
+                )
+                member_key = self.expression_struct_member_key(
+                    node.name.object, variable_types
+                )
+                if member_key and usage == "comparison":
+                    comparison_keys.add(member_key)
+                elif member_key and usage == "regular":
+                    regular_keys.add(member_key)
+            for child in self.iter_ast_children(node):
+                visit(child)
+
+        visit(root)
+        return comparison_keys, regular_keys
+
+    def collect_texture_member_usage_keys(self, root):
+        comparison_keys = set()
+        regular_keys = set()
+        global_variable_types = {
+            getattr(node, "name", None): getattr(node, "vtype", None)
+            for node in getattr(root, "global_variables", []) or []
+        }
+        global_variable_types.pop(None, None)
+
+        for node in getattr(root, "global_variables", []) or []:
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_member_usage_keys(
+                    node, global_variable_types
+                )
+            )
+            comparison_keys.update(direct_comparison)
+            regular_keys.update(direct_regular)
+
+        for func in getattr(root, "functions", []) or []:
+            function_variable_types = dict(global_variable_types)
+            for param in getattr(func, "params", []) or []:
+                if getattr(param, "name", None):
+                    function_variable_types[param.name] = getattr(param, "vtype", None)
+            self.collect_variable_types_from_nodes(
+                getattr(func, "body", []), function_variable_types
+            )
+            direct_comparison, direct_regular = (
+                self.collect_direct_texture_member_usage_keys(
+                    getattr(func, "body", []), function_variable_types
+                )
+            )
+            comparison_keys.update(direct_comparison)
+            regular_keys.update(direct_regular)
+
+        return comparison_keys, regular_keys
+
+    def function_variable_type_maps(self, root):
+        global_variable_types = {
+            getattr(node, "name", None): getattr(node, "vtype", None)
+            for node in getattr(root, "global_variables", []) or []
+        }
+        global_variable_types.pop(None, None)
+        type_maps = {}
+
+        for func in getattr(root, "functions", []) or []:
+            function_variable_types = dict(global_variable_types)
+            for param in getattr(func, "params", []) or []:
+                if getattr(param, "name", None):
+                    function_variable_types[param.name] = getattr(param, "vtype", None)
+            self.collect_variable_types_from_nodes(
+                getattr(func, "body", []), function_variable_types
+            )
+            type_maps[getattr(func, "name", None)] = function_variable_types
+
+        type_maps.pop(None, None)
+        return type_maps
+
     def propagate_function_texture_usage(
         self, root, function_usage, comparison_names, regular_names
     ):
@@ -1647,13 +1768,60 @@ class HLSLToCrossGLConverter:
 
         return changed
 
+    def propagate_function_texture_member_usage(
+        self, root, function_usage, member_comparison_keys, member_regular_keys
+    ):
+        type_maps = self.function_variable_type_maps(root)
+        changed = False
+
+        def apply_call_usage(node, caller_function_name):
+            nonlocal changed
+            if not isinstance(node, FunctionCallNode) or not isinstance(node.name, str):
+                return
+            callee_usage = function_usage.get(node.name)
+            if not callee_usage:
+                return
+            variable_types = type_maps.get(caller_function_name, {})
+            for usage_kind, usage_keys in (
+                ("comparison", member_comparison_keys),
+                ("regular", member_regular_keys),
+            ):
+                for param_index in callee_usage[usage_kind]:
+                    if param_index >= len(node.args):
+                        continue
+                    member_key = self.expression_struct_member_key(
+                        node.args[param_index], variable_types
+                    )
+                    if member_key and member_key not in usage_keys:
+                        usage_keys.add(member_key)
+                        changed = True
+
+        def visit(node, caller_function_name):
+            if node is None or isinstance(node, (str, int, float, bool)):
+                return
+            apply_call_usage(node, caller_function_name)
+            for child in self.iter_ast_children(node):
+                visit(child, caller_function_name)
+
+        for func in getattr(root, "functions", []) or []:
+            visit(getattr(func, "body", []), getattr(func, "name", None))
+
+        return changed
+
     def collect_shadow_texture_names(self, root):
         comparison_names, regular_names = self.collect_nonparameter_texture_usage_names(
             root
         )
+        member_comparison_keys, member_regular_keys = (
+            self.collect_texture_member_usage_keys(root)
+        )
         function_usage = self.collect_function_texture_parameter_usage(root)
         while self.propagate_function_texture_usage(
             root, function_usage, comparison_names, regular_names
+        ):
+            pass
+        while self.propagate_function_texture_member_usage(
+            root, function_usage, member_comparison_keys, member_regular_keys
         ):
             pass
 
@@ -1671,6 +1839,14 @@ class HLSLToCrossGLConverter:
             for index, param in enumerate(getattr(func, "params", []) or []):
                 if index in shadow_indices:
                     self.shadow_texture_declaration_ids.add(id(param))
+
+        shadow_member_keys = member_comparison_keys - member_regular_keys
+        for struct in getattr(root, "structs", []) or []:
+            if not isinstance(struct, StructNode):
+                continue
+            for member in getattr(struct, "members", []) or []:
+                if (struct.name, getattr(member, "name", None)) in shadow_member_keys:
+                    self.shadow_texture_declaration_ids.add(id(member))
 
         return shadow_names
 
@@ -1702,12 +1878,12 @@ class HLSLToCrossGLConverter:
 
     def generate(self, ast):
         """Generate a complete CrossGL shader from a parsed HLSL AST."""
+        self.struct_member_types = self.collect_struct_member_types(ast.structs)
         self.shadow_texture_names = self.collect_shadow_texture_names(ast)
         self.global_variable_types = {}
         self.global_resource_array_dims = {}
         self.current_variable_types = {}
         self.current_resource_array_dims = {}
-        self.struct_member_types = self.collect_struct_member_types(ast.structs)
         code = "shader main {\n"
         typedefs = getattr(ast, "typedefs", []) or []
         enums = getattr(ast, "enums", []) or []

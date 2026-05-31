@@ -1,9 +1,7 @@
 import pytest
+
 import crosstl
 import crosstl.translator
-from crosstl.backend.Rust.RustLexer import RustLexer
-from crosstl.backend.Rust.RustParser import RustParser
-from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustAst import (
     BinaryOpNode,
     BlockNode,
@@ -15,6 +13,9 @@ from crosstl.backend.Rust.RustAst import (
     ShaderNode,
     VariableNode,
 )
+from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
+from crosstl.backend.Rust.RustLexer import RustLexer
+from crosstl.backend.Rust.RustParser import RustParser
 
 
 def parse_and_generate(code: str) -> str:
@@ -3368,6 +3369,64 @@ def test_gpu_image_and_buffer_helper_calls_convert_to_crossgl_intrinsics():
     assert "image_atomic_xor" not in result
     assert "image_atomic_exchange" not in result
     assert "image_atomic_comp_swap" not in result
+
+
+def test_gpu_multisample_image_sample_helpers_convert_to_crossgl_intrinsics():
+    code = """
+    fn multisample_image_helpers(
+        ms_image: Image2DMS<Vec4<f32>>,
+        ms_array_image: Image2DMSArray<Vec4<f32>>,
+        ms_counter: Image2DMS<Vec4<u32>>,
+        ms_signed_layers: Image2DMSArray<Vec4<i32>>,
+        pixel: Vec2<i32>,
+        pixel_layer: Vec3<i32>,
+        sample_index: i32,
+        amount: u32,
+    ) -> Vec4<f32> {
+        let color = image_load_sample(ms_image, pixel, sample_index);
+        image_store_sample(ms_image, pixel, sample_index, color);
+        let layer = image_load_sample(ms_array_image, pixel_layer, sample_index);
+        image_store_sample(ms_array_image, pixel_layer, sample_index, layer);
+        let previous = image_atomic_add_sample(
+            ms_counter,
+            pixel,
+            sample_index,
+            amount
+        );
+        let swapped = image_atomic_comp_swap_sample(
+            ms_signed_layers,
+            pixel_layer,
+            sample_index,
+            0,
+            previous as i32
+        );
+        return color + layer + Vec4::<f32>::new(swapped as f32, 0.0, 0.0, 0.0);
+    }
+    """
+
+    result = parse_and_generate(code)
+
+    assert (
+        "vec4 multisample_image_helpers(image2DMS ms_image, "
+        "image2DMSArray ms_array_image, uimage2DMS ms_counter, "
+        "iimage2DMSArray ms_signed_layers, ivec2 pixel, ivec3 pixel_layer, "
+        "int sample_index, uint amount)"
+    ) in result
+    assert "color = imageLoad(ms_image, pixel, sample_index);" in result
+    assert "imageStore(ms_image, pixel, sample_index, color);" in result
+    assert "layer = imageLoad(ms_array_image, pixel_layer, sample_index);" in result
+    assert "imageStore(ms_array_image, pixel_layer, sample_index, layer);" in result
+    assert (
+        "previous = imageAtomicAdd(ms_counter, pixel, sample_index, amount);" in result
+    )
+    assert (
+        "swapped = imageAtomicCompSwap("
+        "ms_signed_layers, pixel_layer, sample_index, 0, (int)previous);" in result
+    )
+    assert "image_load_sample" not in result
+    assert "image_store_sample" not in result
+    assert "image_atomic_add_sample" not in result
+    assert "image_atomic_comp_swap_sample" not in result
 
 
 def test_aliased_reference_resource_helpers_convert_to_crossgl_intrinsics():

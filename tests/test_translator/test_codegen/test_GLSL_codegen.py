@@ -2427,6 +2427,34 @@ def test_glsl_stage_interface_extended_layout_qualifiers():
     assert "layout(location = 0, index = 1) out vec4 fragColor;" in fragment_code
 
 
+def test_glsl_stage_interface_unsized_array_suffix_locations_are_reserved():
+    conflict = """
+    shader TessellationEvaluationInterfaceLocationConflict {
+        in vec3 tcGrid[][2] @location(0);
+        in vec3 other[] @location(1);
+
+        tessellation_evaluation {
+            void main() @domain(quad) @partitioning(equal) @ccw {
+                gl_Position = vec4(tcGrid[0][0] + other[0], 1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="locations 0-1"):
+        GLSLCodeGen().generate_stage(
+            crosstl.translator.parse(conflict), "tessellation_evaluation"
+        )
+
+    non_conflicting = conflict.replace("@location(1)", "@location(2)")
+    generated_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(non_conflicting), "tessellation_evaluation"
+    )
+
+    assert "layout(location = 0) in vec3 tcGrid[][2];" in generated_code
+    assert "layout(location = 2) in vec3 other[];" in generated_code
+
+
 def test_glsl_fragment_blend_support_layout_qualifiers():
     code = """
     shader AdvancedBlendOutput {
@@ -2485,6 +2513,134 @@ def test_glsl_fragment_component_packed_output_layouts():
     assert "velocity = vec2(0.5);" in fragment_code
     assert "coverage = 0.25;" in fragment_code
     assert "fragColor" not in fragment_code
+
+
+def test_glsl_fragment_component_packed_output_overlap_raises():
+    code = """
+    shader ComponentPackedOutputOverlap {
+        out float luminance @location(0) @component(0);
+        out vec2 velocity @location(0) @component(0);
+
+        fragment {
+            void main() {
+                luminance = 1.0;
+                velocity = vec2(0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting OpenGL fragment output location for 'velocity': "
+            "location 0 components 0-1 overlaps 'luminance' "
+            "location 0 component 0"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_glsl_fragment_component_packed_outputs_reserve_auto_locations():
+    code = """
+    shader ComponentPackedOutputAutoLocation {
+        struct PSOutput {
+            float luminance @location(0) @component(0);
+            vec2 velocity @location(0) @component(1);
+            vec4 color;
+        };
+
+        fragment {
+            PSOutput main() {
+                PSOutput output;
+                output.luminance = 1.0;
+                output.velocity = vec2(0.5);
+                output.color = vec4(0.25);
+                return output;
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, component = 0) out float luminance;" in fragment_code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in fragment_code
+    assert "layout(location = 1) out vec4 color;" in fragment_code
+
+
+def test_glsl_fragment_indexed_outputs_reject_same_index_location_overlap():
+    code = """
+    shader IndexedOutputOverlap {
+        out vec4 accum @location(0) @index(1);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Conflicting OpenGL fragment output location for 'revealage': "
+            "location 0 components 0-3 overlaps 'accum' "
+            "location 0 components 0-3"
+        ),
+    ):
+        GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
+
+
+def test_glsl_fragment_indexed_outputs_allow_different_indices():
+    code = """
+    shader IndexedOutputValid {
+        out vec4 accum @location(0) @index(0);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0, index = 0) out vec4 accum;" in fragment_code
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in fragment_code
+
+
+def test_glsl_fragment_indexed_outputs_allow_default_and_secondary_index():
+    code = """
+    shader IndexedOutputDefaultValid {
+        out vec4 accum @location(0);
+        out vec4 revealage @location(0) @index(1);
+
+        fragment {
+            void main() {
+                accum = vec4(1.0);
+                revealage = vec4(0.5);
+            }
+        }
+    }
+    """
+
+    fragment_code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(code), "fragment"
+    )
+
+    assert "layout(location = 0) out vec4 accum;" in fragment_code
+    assert "layout(location = 0, index = 1) out vec4 revealage;" in fragment_code
 
 
 def test_glsl_fragment_sample_mask_output_aliases_to_builtin():
@@ -8506,6 +8662,214 @@ def test_glsl_shader_record_buffer_rejects_binding_layout():
         GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
 
+def test_glsl_ray_generation_shader_emits_ray_tracing_extension():
+    shader = """
+    shader RayGenExtension {
+        struct RayPayload {
+            vec4 color;
+        };
+
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        ray_generation {
+            layout(location = 0) @rayPayloadEXT RayPayload payload;
+
+            void main() {
+                TraceRay(
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    0xff,
+                    0,
+                    1,
+                    0,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    1000.0,
+                    0
+                );
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "ray_generation")
+
+    assert generated_code.lstrip().startswith("#version 460 core")
+    assert "#extension GL_EXT_ray_tracing : require" in generated_code
+    assert "#extension GL_EXT_ray_query : require" not in generated_code
+    assert "layout(location = 0) rayPayloadEXT RayPayload payload;" in generated_code
+    assert (
+        "layout(binding = 0) uniform accelerationStructureEXT topLevelAS;"
+        in generated_code
+    )
+    assert "traceRayEXT(" in generated_code
+    assert "TraceRay" not in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_ray_query_in_compute_shader_emits_ray_query_extension():
+    shader = """
+    shader RayQueryComputeExtension {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                if (active) {
+                    uint primitiveIndex = rq.CandidatePrimitiveIndex();
+                }
+                rq.Abort();
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "compute")
+
+    assert "#extension GL_EXT_ray_query : require" in generated_code
+    assert "#extension GL_EXT_ray_tracing : require" not in generated_code
+    assert "rayQueryEXT rq;" in generated_code
+    assert "rayQueryInitializeEXT(" in generated_code
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert "if (active_)" in generated_code
+    assert (
+        "uint primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);"
+        in generated_code
+    )
+    assert "rayQueryTerminateEXT(rq);" in generated_code
+    assert "active" not in generated_code.replace("active_", "")
+
+
+def test_glsl_mesh_shader_emits_extension_and_layout():
+    shader = """
+    shader MeshShaderLayout {
+        mesh {
+            layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+            layout(triangles, max_vertices = 64, max_primitives = 126) out;
+            out vec4 vertexColor[64];
+            void main() {
+                SetMeshOutputCounts(64, 126);
+                vertexColor[gl_LocalInvocationIndex] = vec4(1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "mesh")
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert (
+        "layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert (
+        "layout(triangles, max_vertices = 64, max_primitives = 126) out;"
+        in generated_code
+    )
+    assert "out vec4 vertexColor[64];" in generated_code
+    assert "SetMeshOutputsEXT(64, 126);" in generated_code
+    assert "SetMeshOutputCounts" not in generated_code
+    assert "vertexColor[gl_LocalInvocationIndex] = vec4(1.0);" in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_task_shader_with_work_group_id_and_dispatch_mesh():
+    shader = """
+    shader TaskShaderDispatch {
+        struct TaskPayload {
+            uint meshletIndices[32];
+            uint meshletCount;
+        };
+
+        task {
+            layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+            @taskPayloadSharedEXT TaskPayload payload;
+            void main() {
+                uint gid = gl_WorkGroupID.x;
+                payload.meshletCount = gid;
+                payload.meshletIndices[gl_LocalInvocationIndex] = gl_LocalInvocationIndex;
+                DispatchMesh(payload.meshletCount, 1, 1);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "task")
+
+    assert "#extension GL_EXT_mesh_shader : require" in generated_code
+    assert (
+        "layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;"
+        in generated_code
+    )
+    assert "taskPayloadSharedEXT TaskPayload payload;" in generated_code
+    assert "uint gid = gl_WorkGroupID.x;" in generated_code
+    assert "payload.meshletCount = gid;" in generated_code
+    assert (
+        "payload.meshletIndices[gl_LocalInvocationIndex] = gl_LocalInvocationIndex;"
+        in generated_code
+    )
+    assert "EmitMeshTasksEXT(payload.meshletCount, 1, 1);" in generated_code
+    assert "DispatchMesh" not in generated_code
+    assert "void main()" in generated_code
+
+
+def test_glsl_ray_query_reserved_active_variable_renamed():
+    shader = """
+    shader RayQueryActiveReserved {
+        accelerationStructureEXT topLevelAS @binding(0);
+
+        compute {
+            void main() {
+                RayQuery<RAY_FLAG_NONE> rq;
+                rayQueryInitializeEXT(
+                    rq,
+                    topLevelAS,
+                    gl_RayFlagsNoneEXT,
+                    255u,
+                    vec3(0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                bool active = rq.Proceed();
+                float notReserved = 1.0;
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    generated_code = GLSLCodeGen().generate_stage(ast, "compute")
+
+    assert "bool active_ = rayQueryProceedEXT(rq);" in generated_code
+    assert "float notReserved = 1.0;" in generated_code
+    lines = generated_code.splitlines()
+    active_uses = [
+        line.strip()
+        for line in lines
+        if "active" in line and "active_" not in line and "extension" not in line
+    ]
+    assert (
+        active_uses == []
+    ), f"Found bare 'active' (without underscore) in output: {active_uses}"
+
+
 def test_glsl_stage_local_helpers_emit_before_entrypoint():
     shader = """
     shader StageLocalHelperOrder {
@@ -9534,6 +9898,151 @@ def test_flattened_vertex_output_struct_is_kept_when_helper_uses_type():
     assert "return VertexOutput" not in generated_code
 
 
+def test_glsl_stage_io_multidimensional_arrays_use_c_style_declarators():
+    shader = """
+    shader StageIOMultidimensionalArrays {
+        vertex {
+            struct VertexInput {
+                vec3 positions[2][3];
+                ivec2 ids[2][2];
+            }
+
+            struct VertexOutput {
+                vec4 colors[2][3];
+                vec4 position @ gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.colors[1][2] = vec4(input.positions[0][1], 1.0);
+                output.position = output.colors[1][2];
+                return output;
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "in vec3 positions[2][3];" in generated_code
+    assert "in ivec2 ids[2][2];" in generated_code
+    assert "out vec4 colors[2][3];" in generated_code
+    assert "vec3[2][3] positions" not in generated_code
+    assert "ivec2[2][2] ids" not in generated_code
+    assert "vec4[2][3] colors" not in generated_code
+
+
+def test_glsl_interface_block_instance_preserves_all_array_dimensions():
+    shader = """
+    shader GLSLInterfaceBlockInstanceArray {
+        @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array(2, 3)
+        struct VertexIn {
+            ivec2 ids[2][2];
+            vec3 positions[2][3];
+        };
+
+        @glsl_interface_block(out) @glsl_interface_instance(fragmentOut)
+        struct FragmentOut {
+            vec4 colors[2][3];
+        };
+
+        vertex {
+            void main() {
+                gl_Position = vec4(vertexIn[1][2].positions[0][1], 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+    assert "} vertexIn[2][3];" in generated_code
+    assert "ivec2 ids[2][2];" in generated_code
+    assert "vec3 positions[2][3];" in generated_code
+    assert "vec4 colors[2][3];" in generated_code
+
+
+def test_glsl_stage_io_multidimensional_array_locations_are_reserved():
+    shader = """
+    shader StageIOMultidimensionalArrayLocationConflict {
+        vertex {
+            struct VertexInput {
+                vec4 first[2][3] @location(0);
+                vec4 second @location(5);
+            }
+
+            void main(VertexInput input) {
+                gl_Position = input.first[0][0] + input.second;
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="locations 0-5"):
+        GLSLCodeGen().generate(crosstl.translator.parse(shader))
+
+
+def test_glsl_stage_io_multidimensional_arrays_keep_interpolation_qualifiers():
+    shader = """
+    shader StageIOInterpolationArrays {
+        vertex {
+            struct VertexInput {
+                vec3 position @location(0);
+            }
+
+            struct VertexOutput {
+                ivec2 ids[2][2] @location(1);
+                vec4 samples[2] @location(5) @sample;
+                vec3 centers[2] @location(7) @centroid;
+                vec2 noPersp[2] @location(9) @noperspective;
+                vec4 position @gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.ids[0][0] = ivec2(1, 2);
+                output.samples[0] = vec4(input.position, 1.0);
+                output.centers[0] = input.position;
+                output.noPersp[0] = input.position.xy;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                ivec2 ids[2][2] @location(1),
+                vec4 samples[2] @location(5) @sample,
+                vec3 centers[2] @location(7) @centroid,
+                vec2 noPersp[2] @location(9) @noperspective
+            ) @gl_FragColor {
+                return samples[0]
+                    + vec4(centers[0], 1.0)
+                    + vec4(noPersp[0], 0.0, 1.0)
+                    + vec4(ids[0][0], 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    assert "layout(location = 1) flat out ivec2 ids[2][2];" in vertex_code
+    assert "layout(location = 5) sample out vec4 samples[2];" in vertex_code
+    assert "layout(location = 7) centroid out vec3 centers[2];" in vertex_code
+    assert "layout(location = 9) noperspective out vec2 noPersp[2];" in vertex_code
+    assert "layout(location = 1) flat in ivec2 ids[2][2];" in fragment_code
+    assert "layout(location = 5) sample in vec4 samples[2];" in fragment_code
+    assert "layout(location = 7) centroid in vec3 centers[2];" in fragment_code
+    assert "layout(location = 9) noperspective in vec2 noPersp[2];" in fragment_code
+    assert "ivec2[2][2] ids" not in vertex_code
+    assert "vec4[2] samples" not in vertex_code
+    assert "ivec2[2][2] ids" not in fragment_code
+    assert "vec4[2] samples" not in fragment_code
+
+
 def test_trait_self_return_does_not_emit_generic_enum_specialization():
     shader = """
     shader TraitSelfOption {
@@ -9879,7 +10388,7 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
         "bool anyLane = subgroupAny((prefixSum > 0u));",
         "bool allLane = subgroupAll((prefixProduct > 0u));",
         "uvec4 ballot = subgroupBallot(anyLane);",
-        "uint broadcast = subgroupBroadcast(prefixSum, 0u);",
+        "uint broadcast = subgroupShuffle(prefixSum, 0u);",
         "uint firstValue = subgroupBroadcastFirst(broadcast);",
         "uint quadX = subgroupQuadSwapHorizontal(firstValue);",
         "uint quadY = subgroupQuadSwapVertical(quadX);",
@@ -9894,7 +10403,7 @@ def test_glsl_wave_intrinsics_lower_to_khr_subgroup_builtins():
     assert "QuadRead" not in generated
 
 
-def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
+def test_glsl_wave_intrinsic_invalid_arities_and_wave_match_lowering():
     code = """
     shader GLSLWaveDiagnostics {
         compute {
@@ -9918,10 +10427,8 @@ def test_glsl_wave_intrinsic_invalid_or_unsupported_forms_emit_diagnostics():
         "uint missing = /* GLSL wave intrinsic diagnostic: WaveReadLaneAt "
         "expects 2 arguments, got 1 */ 0u;" in generated
     )
-    assert (
-        "uvec4 matchMask = /* GLSL wave intrinsic diagnostic: WaveMatch "
-        "has no GL_KHR_shader_subgroup equivalent */ uvec4(0u);" in generated
-    )
+    assert "uvec4 crossglWaveMatch(uint value)" in generated
+    assert "uvec4 matchMask = crossglWaveMatch(lane);" in generated
     assert "WaveOpNode" not in generated
 
 
@@ -9933,10 +10440,14 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
                 bool flag;
                 float value;
                 vec2 values;
+                mat2 transform;
                 float badSum = WaveActiveSum(flag);
                 uint badBits = WaveActiveBitAnd(value);
                 bool badVote = WaveActiveAnyTrue(values);
                 uint badLane = WaveReadLaneAt(1u, value);
+                uvec4 badMatch = WaveMatch(transform);
+                uint badMultiMask = WaveMultiPrefixSum(1u, values);
+                uint badMultiCount = WaveMultiPrefixCountBits(value, uvec4(1u));
             }
         }
     }
@@ -9962,13 +10473,28 @@ def test_glsl_wave_intrinsic_type_mismatches_emit_diagnostics():
             "WaveReadLaneAt requires a scalar integer lane argument: "
             "value has type float"
         ),
+        (
+            "WaveMatch requires a scalar or vector value argument: "
+            "transform has type mat2"
+        ),
+        (
+            "WaveMultiPrefixSum requires a uvec4 partition mask argument: "
+            "values has type vec2"
+        ),
+        (
+            "WaveMultiPrefixCountBits requires a boolean scalar value argument: "
+            "value has type float"
+        ),
     ]:
         assert expected in generated
 
     assert "subgroupAdd(flag)" not in generated
     assert "subgroupAnd(value)" not in generated
     assert "subgroupAny(values)" not in generated
-    assert "subgroupBroadcast(1u, value)" not in generated
+    assert "subgroupShuffle(1u, value)" not in generated
+    assert "crossglWaveMatch(transform)" not in generated
+    assert "crossglWaveMultiPrefixSum(1u, values)" not in generated
+    assert "crossglWaveMultiPrefixCountBits(value, uvec4(1u))" not in generated
 
 
 def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
@@ -10018,15 +10544,17 @@ def test_glsl_additional_wave_ballot_count_intrinsics_lower_or_diagnose():
     assert "WavePrefixCountBits(" not in generated
 
 
-def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
+def test_glsl_wave_match_and_multiprefix_forms_lower_to_helpers():
     code = """
     shader GLSLWaveMultiPrefixDiagnostics {
         compute {
             void main() {
                 uint lane = WaveGetLaneIndex();
                 uvec4 mask = WaveActiveBallot(lane > 0u);
+                uvec4 matchMask = WaveMatch(lane);
                 uint sumValue = WaveMultiPrefixSum(lane, mask);
                 uint productValue = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint countValue = WaveMultiPrefixCountBits(lane > 1u, mask);
                 uint andValue = WaveMultiPrefixBitAnd(lane, mask);
                 uint orValue = WaveMultiPrefixBitOr(lane, mask);
                 uint xorValue = WaveMultiPrefixBitXor(lane, mask);
@@ -10039,22 +10567,27 @@ def test_glsl_wave_multiprefix_forms_emit_partition_diagnostics():
     generated = generate_code(ast)
 
     assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
     assert "uvec4 mask = subgroupBallot((lane > 0u));" in generated
-    for operation in [
-        "WaveMultiPrefixSum",
-        "WaveMultiPrefixProduct",
-        "WaveMultiPrefixBitAnd",
-        "WaveMultiPrefixBitOr",
-        "WaveMultiPrefixBitXor",
+    for expected in [
+        "bool crossglWaveMaskContains(uvec4 mask, uint lane)",
+        "void crossglWaveMaskSet(inout uvec4 mask, uint lane)",
+        "uvec4 crossglWaveMatch(uint value)",
+        "uint crossglWaveMultiPrefixCountBits(bool value, uvec4 mask)",
+        "uvec4 matchMask = crossglWaveMatch(lane);",
+        "uint sumValue = crossglWaveMultiPrefixSum(lane, mask);",
+        "uint productValue = crossglWaveMultiPrefixProduct((lane + 1u), mask);",
+        "uint countValue = crossglWaveMultiPrefixCountBits((lane > 1u), mask);",
+        "uint andValue = crossglWaveMultiPrefixBitAnd(lane, mask);",
+        "uint orValue = crossglWaveMultiPrefixBitOr(lane, mask);",
+        "uint xorValue = crossglWaveMultiPrefixBitXor(lane, mask);",
+        "result += subgroupShuffle(value, lane);",
+        "result += subgroupShuffle(laneValue, lane);",
     ]:
-        assert (
-            f"{operation} requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ) in generated
+        assert expected in generated
 
     assert "subgroupClustered" not in generated
     assert "subgroupInclusive" not in generated
-    assert "subgroupExclusive" not in generated
     assert "WaveOpNode" not in generated
 
 
@@ -10138,7 +10671,7 @@ def test_function_call():
     vec2 perlinNoise(vec2 uv) {
         return vec2(0.0, 0.0);
     }
-    
+
     sampler2D iChannel0;
 
     vertex {
@@ -10321,23 +10854,23 @@ def test_opengl_array_handling(array_test_data):
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
-            
+
             // Array access in various forms
             float value = weights[2];
             int index = indices[5];
-            
+
             // Array member access
             Material material;
             float x = material.values[0];
             vec3 color = material.colors[index];
-            
+
             // Nested array access
             Particle particles[10];
             vec3 pos = particles[3].position;
-            
+
             // Array access in expressions
             float sum = weights[0] + weights[1] + weights[2];
-            
+
             return output;
         }
     }
@@ -25133,6 +25666,212 @@ def test_glsl_storage_image_access_rejects_incompatible_helper_calls(shader, mat
 
     with pytest.raises(ValueError, match=match):
         GLSLCodeGen().generate(ast)
+
+
+def test_glsl_wave_subgroup_ballot_and_shuffle_in_fragment_shader():
+    code = """
+    shader SubgroupFragment {
+        struct FSInput {
+            float value @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                uint lane = WaveGetLaneIndex();
+                uvec4 ballot = WaveActiveBallot(input.value > 0.5);
+                float shuffled = WaveReadLaneAt(input.value, 0u);
+                float first = WaveReadLaneFirst(input.value);
+                return vec4(shuffled, first, float(lane), 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_ballot : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_shuffle : require" in generated
+    assert "uint lane = gl_SubgroupInvocationID;" in generated
+    assert "uvec4 ballot = subgroupBallot((value > 0.5));" in generated
+    assert "float shuffled = subgroupShuffle(value, 0u);" in generated
+    assert "float first = subgroupBroadcastFirst(value);" in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "WaveActiveBallot" not in generated
+    assert "WaveReadLaneAt" not in generated
+    assert "WaveReadLaneFirst" not in generated
+
+
+def test_glsl_texture_gather_basic_emits_texture_gather():
+    code = """
+    shader TextureGatherBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGather(colorMap, linearSampler, input.uv);
+                vec4 greenChannel = textureGather(colorMap, linearSampler, input.uv, 1);
+                return gathered + greenChannel;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGather(colorMap, uv)" in generated
+    assert "textureGather(colorMap, uv, 1)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_gather_offset_emits_texture_gather_offset():
+    code = """
+    shader TextureGatherOffsetBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGatherOffset(colorMap, linearSampler, input.uv, ivec2(1, 0));
+                return gathered;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGatherOffset(colorMap, uv, ivec2(1, 0))" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_proj_basic_emits_texture_proj():
+    code = """
+    shader TextureProjBasic {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+            vec4 projCoord4 @ TEXCOORD1;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 proj2d = textureProj(colorMap, linearSampler, input.projCoord);
+                vec4 proj2d4 = textureProj(colorMap, linearSampler, input.projCoord4);
+                return proj2d + proj2d4;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureProj(colorMap, projCoord)" in generated
+    assert "textureProj(colorMap, projCoord4)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_texture_proj_lod_emits_texture_proj_lod():
+    code = """
+    shader TextureProjLod {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec3 projCoord @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 projLod = textureProjLod(colorMap, linearSampler, input.projCoord, 2.0);
+                return projLod;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureProjLod(colorMap, projCoord, 2.0)" in generated
+    assert "linearSampler" not in generated
+
+
+def test_glsl_wave_ops_with_active_variable_name_reservation():
+    code = """
+    shader WaveWithActiveVar {
+        compute {
+            void main() {
+                uint active = WaveGetLaneIndex();
+                uint sum = WaveActiveSum(active);
+                bool isActive = WaveActiveAnyTrue(sum > 0u);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_vote : require" in generated
+    assert "uint active_ = gl_SubgroupInvocationID;" in generated
+    assert "uint sum = subgroupAdd(active_);" in generated
+    assert "bool isActive = subgroupAny((sum > 0u));" in generated
+    assert "WaveGetLaneIndex" not in generated
+    assert "WaveActiveSum" not in generated
+    assert "WaveActiveAnyTrue" not in generated
+
+
+def test_glsl_subgroup_ops_combined_with_texture_gather():
+    code = """
+    shader SubgroupTextureGather {
+        sampler2D colorMap;
+        sampler linearSampler;
+
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                vec4 gathered = textureGather(colorMap, linearSampler, input.uv);
+                float avg = WaveActiveSum(gathered.r);
+                uint laneCount = WaveGetLaneCount();
+                float normalized = avg / float(laneCount);
+                return vec4(normalized, normalized, normalized, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated = generate_code(ast)
+
+    assert "textureGather(colorMap, uv)" in generated
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in generated
+    assert "#extension GL_KHR_shader_subgroup_arithmetic : require" in generated
+    assert "float avg = subgroupAdd(gathered.r);" in generated
+    assert "uint laneCount = gl_SubgroupSize;" in generated
+    assert "linearSampler" not in generated
+    assert "WaveActiveSum" not in generated
+    assert "WaveGetLaneCount" not in generated
 
 
 if __name__ == "__main__":

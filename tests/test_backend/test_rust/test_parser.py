@@ -1,33 +1,40 @@
 import pytest
-from crosstl.backend.Rust.RustLexer import RustLexer
-from crosstl.backend.Rust.RustParser import RustParser
+
 from crosstl.backend.Rust.RustAst import (
-    AssociatedTypeNode,
+    ArrayAccessNode,
+    ArrayNode,
     AssignmentNode,
+    AssociatedTypeNode,
     AsyncBlockNode,
     AwaitNode,
     BinaryOpNode,
+    BlockNode,
+    BreakNode,
     CastNode,
     ClosureNode,
     ClosureParameterNode,
     ConditionChainNode,
     ConstBlockNode,
     ConstNode,
+    ContinueNode,
+    DereferenceNode,
     EnumNode,
     EnumVariantNode,
+    ForNode,
     FunctionCallNode,
     FunctionNode,
     IfNode,
     ImplNode,
     LetNode,
     LetPatternConditionNode,
-    MemberAccessNode,
+    LoopNode,
     MatchBindingPatternNode,
+    MatchesMacroNode,
     MatchNode,
     MatchOrPatternNode,
     MatchRestPatternNode,
     MatchStructPatternNode,
-    MatchesMacroNode,
+    MemberAccessNode,
     RangeNode,
     ReferenceNode,
     ReturnNode,
@@ -35,23 +42,17 @@ from crosstl.backend.Rust.RustAst import (
     StructInitializationNode,
     StructNode,
     TernaryOpNode,
-    TypeAliasNode,
-    TupleNode,
     TryBlockNode,
     TryNode,
+    TupleNode,
+    TypeAliasNode,
     UnaryOpNode,
     UnsafeBlockNode,
     UseNode,
-    ArrayNode,
-    ArrayAccessNode,
-    BlockNode,
-    BreakNode,
-    ContinueNode,
-    DereferenceNode,
-    ForNode,
-    LoopNode,
     WhileNode,
 )
+from crosstl.backend.Rust.RustLexer import RustLexer
+from crosstl.backend.Rust.RustParser import RustParser
 
 
 def parse_code(code: str):
@@ -3435,8 +3436,8 @@ def test_try_block_expression_parsing():
 
 def test_generics_parsing():
     code = """
-    fn generic_function<T, U>(a: T, b: U) -> T 
-    where 
+    fn generic_function<T, U>(a: T, b: U) -> T
+    where
         T: Clone,
         U: Debug,
     {

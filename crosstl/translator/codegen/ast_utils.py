@@ -1,26 +1,25 @@
 """AST utilities for CrossGL code generators."""
 
-from typing import Optional, List
+from typing import List, Optional
+
 from ..ast import (
-    TypeNode,
-    PrimitiveType,
-    VectorType,
-    MatrixType,
     ArrayType,
-    PointerType,
-    ReferenceType,
+    AttributeNode,
+    BlockNode,
+    ExpressionNode,
+    FunctionNode,
     FunctionType,
     GenericType,
+    MatrixType,
     NamedType,
-    StructMemberNode,
-    VariableNode,
     ParameterNode,
-    AttributeNode,
-    FunctionNode,
-    StructNode,
-    ExpressionNode,
-    StatementNode,
-    BlockNode,
+    PointerType,
+    PrimitiveType,
+    ReferenceType,
+    StructMemberNode,
+    TypeNode,
+    VariableNode,
+    VectorType,
 )
 
 

@@ -3,18 +3,17 @@
 import re
 
 from ..ast import (
-    ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
     CaseNode,
-    CbufferNode,
-    ContinueNode,
     ConstructorNode,
     ConstructorPatternNode,
+    ContinueNode,
     DoWhileNode,
     EnumNode,
     ExpressionStatementNode,
@@ -32,19 +31,24 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     PointerAccessNode,
-    ReturnNode,
     RangeNode,
-    ShaderNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
+    ReturnNode,
     StructNode,
     StructPatternNode,
     SwitchNode,
+    SyncNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
-from .array_utils import parse_array_type, format_array_type, get_array_size_from_node
+from .array_utils import get_array_size_from_node
+from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .stage_utils import normalize_stage_name, stage_matches
 
 
 class RustCodeGen:
@@ -171,15 +175,34 @@ class RustCodeGen:
             "ConsumeStructuredBuffer": "ConsumeStructuredBuffer",
             "ByteAddressBuffer": "ByteAddressBuffer",
             "RWByteAddressBuffer": "RwByteAddressBuffer",
+            "accelerationStructureEXT": "RayTracingAccelerationStructure",
+            "AccelerationStructure": "RayTracingAccelerationStructure",
+            "acceleration_structure": "RayTracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "RayTracingAccelerationStructure",
+            "RayTracingAccelerationStructure": "RayTracingAccelerationStructure",
+            "RayDesc": "RayDesc",
+            "RayQuery": "RayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "BuiltInTriangleIntersectionAttributes"
+            ),
         }
 
         self.semantic_map = {
             # Vertex attributes
             "gl_VertexID": "vertex_id",
             "gl_InstanceID": "instance_id",
+            "gl_BaseVertex": "start_vertex_location",
+            "gl_BaseInstance": "start_instance_location",
+            "gl_DrawID": "draw_id",
             "gl_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "SV_Position": "position",
+            "SV_VertexID": "vertex_id",
+            "SV_InstanceID": "instance_id",
+            "SV_StartVertexLocation": "start_vertex_location",
+            "SV_StartInstanceLocation": "start_instance_location",
+            "SV_DrawID": "draw_id",
             # Fragment attributes
             "gl_FragColor": "target(0)",
             "gl_FragColor0": "target(0)",
@@ -190,6 +213,45 @@ class RustCodeGen:
             "gl_FragCoord": "position",
             "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
+            "gl_PrimitiveID": "primitive_id",
+            "gl_SampleID": "sample_index",
+            "SV_Target": "target(0)",
+            "SV_Target0": "target(0)",
+            "SV_Target1": "target(1)",
+            "SV_Target2": "target(2)",
+            "SV_Target3": "target(3)",
+            "SV_Target4": "target(4)",
+            "SV_Target5": "target(5)",
+            "SV_Target6": "target(6)",
+            "SV_Target7": "target(7)",
+            "SV_Depth": "depth(any)",
+            "SV_IsFrontFace": "front_facing",
+            "SV_PrimitiveID": "primitive_id",
+            "SV_SampleIndex": "sample_index",
+            # Compute attributes
+            "gl_WorkGroupID": "workgroup_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_GroupIndex": "local_invocation_index",
+            # Ray tracing attributes
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
             # Standard vertex semantics
             "POSITION": "position",
             "NORMAL": "normal",
@@ -236,6 +298,11 @@ class RustCodeGen:
             "imageAtomicXor": "image_atomic_xor",
             "imageAtomicExchange": "image_atomic_exchange",
             "imageAtomicCompSwap": "image_atomic_comp_swap",
+            "TraceRay": "trace_ray",
+            "CallShader": "call_shader",
+            "ReportHit": "report_hit",
+            "IgnoreHit": "ignore_hit",
+            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
             "textureCompare": "texture_compare",
             "textureCompareOffset": "texture_compare_offset",
             "textureCompareLod": "texture_compare_lod",
@@ -349,11 +416,71 @@ class RustCodeGen:
             "frac": "fract",
             "fract": "fract",
             "mod": "modulo",
+            "barrier": "workgroup_barrier",
+            "workgroupBarrier": "workgroup_barrier",
+            "memoryBarrier": "memory_barrier",
+            "memoryBarrierShared": "memory_barrier_shared",
+            "memoryBarrierBuffer": "memory_barrier_buffer",
+            "memoryBarrierImage": "memory_barrier_image",
+            "groupMemoryBarrier": "group_memory_barrier",
+            "allMemoryBarrier": "all_memory_barrier",
+            "deviceMemoryBarrier": "device_memory_barrier",
+        }
+        self.wave_op_map = {
+            "WaveActiveSum": "subgroup_add",
+            "WaveActiveProduct": "subgroup_mul",
+            "WaveActiveMin": "subgroup_min",
+            "WaveActiveMax": "subgroup_max",
+            "WaveActiveAnyTrue": "subgroup_any",
+            "WaveActiveAllTrue": "subgroup_all",
+            "WaveActiveAllEqual": "subgroup_all_equal",
+            "WaveActiveBallot": "subgroup_ballot",
+            "WaveActiveCountBits": "subgroup_ballot_bit_count",
+            "WaveActiveBitAnd": "subgroup_and",
+            "WaveActiveBitOr": "subgroup_or",
+            "WaveActiveBitXor": "subgroup_xor",
+            "WaveGetLaneCount": "subgroup_size",
+            "WaveGetLaneIndex": "subgroup_invocation_id",
+            "WaveIsFirstLane": "subgroup_elect",
+            "WaveReadLaneFirst": "subgroup_broadcast_first",
+            "WaveReadLaneAt": "subgroup_broadcast",
+            "WavePrefixSum": "subgroup_exclusive_add",
+            "WavePrefixProduct": "subgroup_exclusive_mul",
+            "WavePrefixCountBits": "subgroup_exclusive_ballot_bit_count",
+            "WaveMatch": "subgroup_match",
+            "WaveMultiPrefixSum": "subgroup_partitioned_add",
+            "WaveMultiPrefixProduct": "subgroup_partitioned_mul",
+            "WaveMultiPrefixCountBits": "subgroup_partitioned_ballot_bit_count",
+            "WaveMultiPrefixBitAnd": "subgroup_partitioned_and",
+            "WaveMultiPrefixBitOr": "subgroup_partitioned_or",
+            "WaveMultiPrefixBitXor": "subgroup_partitioned_xor",
+            "QuadReadLaneAt": "subgroup_quad_broadcast",
+            "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
+            "QuadReadAcrossY": "subgroup_quad_swap_vertical",
+            "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
+            "WaveShuffle": "subgroup_shuffle",
+            "WaveShuffleXor": "subgroup_shuffle_xor",
+        }
+        self.sync_map = {
+            "barrier": "workgroup_barrier",
+            "workgroupBarrier": "workgroup_barrier",
+            "memoryBarrier": "memory_barrier",
+            "memoryBarrierShared": "memory_barrier_shared",
+            "memoryBarrierBuffer": "memory_barrier_buffer",
+            "memoryBarrierImage": "memory_barrier_image",
+            "groupMemoryBarrier": "group_memory_barrier",
+            "allMemoryBarrier": "all_memory_barrier",
+            "deviceMemoryBarrier": "device_memory_barrier",
         }
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.rust_resource_binding_cursors = {}
+        self.rust_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_generic_params = {}
         self.static_variable_names = set()
         self.static_symbol_names = {}
@@ -394,10 +521,16 @@ class RustCodeGen:
 
     def generate(self, ast):
         """Generate complete Rust-like shader source for a CrossGL AST."""
+        self.validate_supported_stage_types(ast)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.rust_resource_binding_cursors = {}
+        self.rust_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_generic_params = {}
         self.static_variable_names = self.collect_static_variable_names(ast)
         self.static_symbol_names = self.build_static_symbol_names(
@@ -439,6 +572,7 @@ class RustCodeGen:
         self.lambda_capture_place_alias_stack = []
         self.force_move_lambda_depth = 0
         self.nested_lambda_capture_preclone_depth = 0
+        self.reserve_explicit_rust_resource_bindings(ast)
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
@@ -527,6 +661,60 @@ class RustCodeGen:
 
         code += self.generate_required_generic_math_traits()
         return code
+
+    def unsupported_stage_types(self):
+        return {
+            "amplification",
+            "geometry",
+            "mesh",
+            "object",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }
+
+    def rust_ray_stage_names(self):
+        return {
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+        }
+
+    def rust_ray_stage_metadata_name(self, shader_type):
+        return {
+            "ray_any_hit": "any_hit",
+            "ray_callable": "callable",
+            "ray_closest_hit": "closest_hit",
+            "ray_generation": "ray_generation",
+            "ray_intersection": "intersection",
+            "ray_miss": "miss",
+        }.get(shader_type, shader_type)
+
+    def validate_supported_stage_types(self, ast, target_stage=None):
+        unsupported_stages = set()
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(
+                f"Rust output does not support stage type(s): {stage_list}"
+            )
 
     def stage_entry_name_counts(self, stages):
         """Count entry-point names across shader stages."""
@@ -1281,6 +1469,7 @@ class RustCodeGen:
         wrapper_enum = self.struct_enum_wrapper(node)
         if wrapper_enum is not None:
             self.struct_member_types[node.name] = {}
+            self.struct_member_semantics[node.name] = {}
             self.struct_generic_params[node.name] = self.generic_param_names(node)
             return self.generate_enum(
                 wrapper_enum,
@@ -1299,6 +1488,7 @@ class RustCodeGen:
         code = f"#[repr(C)]\n#[derive({derive_traits})]\n"
         code += f"pub struct {node.name}{self.format_generic_params(node)} {{\n"
         member_types = {}
+        member_semantics = {}
 
         for member in members:
             if isinstance(member, ArrayNode):
@@ -1326,18 +1516,19 @@ class RustCodeGen:
                     member_type = "float"
                 member_types[member.name] = member_type
 
-                semantic = None
-                if hasattr(member, "semantic"):
-                    semantic = member.semantic
-                elif hasattr(member, "attributes"):
-                    semantic = self.extract_semantic_from_attributes(member.attributes)
-
+                semantic = self.node_semantic(member)
+                if semantic:
+                    member_semantics[member.name] = semantic
+                    self.validate_rust_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
                 semantic_comment = (
                     f"  // {self.map_semantic(semantic)}" if semantic else ""
                 )
                 code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_semantics[node.name] = member_semantics
         self.struct_generic_params[node.name] = self.generic_param_names(node)
         code += "}\n\n"
         code += self.generate_struct_constructor_impl(node, member_types)
@@ -1645,35 +1836,257 @@ class RustCodeGen:
 
     def extract_semantic_from_attributes(self, attributes):
         """Extract semantic information from new AST attributes."""
-        semantic_attrs = [
-            "position",
-            "color",
-            "texcoord",
-            "normal",
-            "tangent",
-            "binormal",
-            "POSITION",
-            "COLOR",
-            "TEXCOORD",
-            "NORMAL",
-            "TANGENT",
-            "BINORMAL",
-            "TEXCOORD0",
-            "TEXCOORD1",
-            "TEXCOORD2",
-            "TEXCOORD3",
-        ]
-
         for attr in attributes:
-            if hasattr(attr, "name") and attr.name in semantic_attrs:
+            if hasattr(attr, "name") and attr.name in self.semantic_map:
                 return attr.name
         return None
 
+    def node_semantic(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        return self.extract_semantic_from_attributes(getattr(node, "attributes", []))
+
+    def rust_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        input_only_sources = {
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_instanceid",
+            "gl_pointcoord",
+            "gl_vertexid",
+        }
+        input_only_sv_sources = {
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }
+        if lower_name in input_only_sources or upper_name in input_only_sv_sources:
+            return "input_only"
+
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def is_rust_vec4_float_type(self, type_name):
+        return self.map_type(type_name) == "Vec4<f32>"
+
+    def is_rust_float_scalar_type(self, type_name):
+        return self.map_type(type_name) == "f32"
+
+    def validate_rust_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.rust_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_rust_vec4_float_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "expected vec4-compatible type"
+            )
+
+        if kind == "depth" and not self.is_rust_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "expected float type"
+            )
+
+    def validate_rust_output_semantic_stage(self, shader_type, semantic, context):
+        kind = self.rust_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if shader_type is None:
+            return
+
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def validate_rust_return_semantic(self, shader_type, return_type, semantic):
+        if semantic is None:
+            return
+        if self.map_type(return_type) == "()":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for Rust codegen; "
+                "void return type"
+            )
+        self.validate_rust_output_semantic_stage(
+            shader_type, semantic, "return semantic"
+        )
+        self.validate_rust_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def validate_rust_struct_return_semantics(self, shader_type, return_type):
+        if shader_type is None:
+            return
+        base_type = str(return_type).split("<", 1)[0].split("[", 1)[0].strip()
+        member_semantics = self.struct_member_semantics.get(base_type, {})
+        if not member_semantics:
+            return
+        member_types = self.struct_member_types.get(base_type, {})
+        for member_name, semantic in member_semantics.items():
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_rust_output_semantic_stage(shader_type, semantic, context)
+            self.validate_rust_builtin_semantic_type(
+                semantic, member_types.get(member_name, "float"), context
+            )
+
+    def rust_stage_parameter_semantic_key(self, semantic):
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        if lower_name.startswith("gl_"):
+            return lower_name
+        return semantic_name.upper()
+
+    def rust_stage_parameter_semantic_rules(self):
+        ray_stages = self.rust_ray_stage_names()
+        ray_hit_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        return {
+            "gl_vertexid": ("vertex_id", "u32", {"vertex"}),
+            "gl_instanceid": ("instance_id", "u32", {"vertex"}),
+            "gl_basevertex": ("start_vertex_location", "i32", {"vertex"}),
+            "gl_baseinstance": ("start_instance_location", "u32", {"vertex"}),
+            "gl_drawid": ("draw_id", "u32", {"vertex"}),
+            "SV_VERTEXID": ("vertex_id", "u32", {"vertex"}),
+            "SV_INSTANCEID": ("instance_id", "u32", {"vertex"}),
+            "SV_STARTVERTEXLOCATION": ("start_vertex_location", "i32", {"vertex"}),
+            "SV_STARTINSTANCELOCATION": ("start_instance_location", "u32", {"vertex"}),
+            "SV_DRAWID": ("draw_id", "u32", {"vertex"}),
+            "gl_position": ("position", "Vec4<f32>", {"fragment"}),
+            "gl_fragcoord": ("position", "Vec4<f32>", {"fragment"}),
+            "gl_frontfacing": ("front_facing", "bool", {"fragment"}),
+            "gl_pointcoord": ("point_coord", "Vec2<f32>", {"fragment"}),
+            "gl_primitiveid": ("primitive_id", "u32", {"fragment"} | ray_hit_stages),
+            "gl_sampleid": ("sample_index", "u32", {"fragment"}),
+            "SV_POSITION": ("position", "Vec4<f32>", {"fragment"}),
+            "SV_ISFRONTFACE": ("front_facing", "bool", {"fragment"}),
+            "SV_PRIMITIVEID": ("primitive_id", "u32", {"fragment"} | ray_hit_stages),
+            "SV_SAMPLEINDEX": ("sample_index", "u32", {"fragment"}),
+            "gl_workgroupid": ("workgroup_id", "Vec3<u32>", {"compute"}),
+            "gl_localinvocationid": (
+                "local_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "gl_globalinvocationid": (
+                "global_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "gl_localinvocationindex": (
+                "local_invocation_index",
+                "u32",
+                {"compute"},
+            ),
+            "SV_GROUPID": ("workgroup_id", "Vec3<u32>", {"compute"}),
+            "SV_GROUPTHREADID": ("local_invocation_id", "Vec3<u32>", {"compute"}),
+            "SV_DISPATCHTHREADID": (
+                "global_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "SV_GROUPINDEX": ("local_invocation_index", "u32", {"compute"}),
+            "gl_launchidext": ("launch_id", "Vec3<u32>", ray_stages),
+            "gl_launchsizeext": ("launch_size", "Vec3<u32>", ray_stages),
+            "gl_hittext": ("hit_t", "f32", ray_hit_stages),
+            "gl_hitkindext": ("hit_kind", "u32", {"ray_any_hit"}),
+            "SV_DISPATCHRAYSINDEX": ("launch_id", "Vec3<u32>", ray_stages),
+            "SV_DISPATCHRAYSDIMENSIONS": (
+                "launch_size",
+                "Vec3<u32>",
+                ray_stages,
+            ),
+        }
+
+    def validate_rust_stage_parameter_semantic_type(
+        self, parameter, semantic, expected_type
+    ):
+        actual_type = self.map_type(self.function_parameter_type(parameter))
+        if actual_type == expected_type:
+            return
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for Rust codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_rust_stage_parameter_semantics(self, shader_type, parameters):
+        if shader_type is None:
+            return
+
+        rules = self.rust_stage_parameter_semantic_rules()
+        seen_system_semantics = {}
+        for parameter in parameters or []:
+            semantic = self.node_semantic(parameter)
+            if semantic is None:
+                continue
+
+            semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+            rule = rules.get(semantic_key)
+            if rule is not None:
+                mapped_semantic, expected_type, allowed_stages = rule
+                if shader_type not in allowed_stages:
+                    allowed = ", ".join(sorted(allowed_stages))
+                    raise ValueError(
+                        f"Unsupported {semantic} stage parameter semantic for Rust "
+                        f"{shader_type} stage; valid stage is {allowed}"
+                    )
+                previous_name = seen_system_semantics.get(mapped_semantic)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate Rust stage parameter semantic {mapped_semantic} "
+                        f"on '{previous_name}' and '{parameter.name}'"
+                    )
+                seen_system_semantics[mapped_semantic] = parameter.name
+                self.validate_rust_stage_parameter_semantic_type(
+                    parameter, semantic, expected_type
+                )
+                continue
+
+            kind = self.rust_semantic_output_kind(semantic)
+            if kind in {"color", "depth"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Rust "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def get_member_type(self, member):
         if hasattr(member, "member_type"):
-            return self.convert_type_node_to_string(member.member_type)
+            member_type = self.convert_type_node_to_string(member.member_type)
+            return self.resource_type_with_attributes(member_type, member)
         if hasattr(member, "vtype"):
-            return member.vtype
+            return self.resource_type_with_attributes(member.vtype, member)
         return "float"
 
     def get_cbuffer_nodes(self, ast):
@@ -1733,6 +2146,9 @@ class RustCodeGen:
         cbuffers = self.get_cbuffer_nodes(ast)
         for node in cbuffers:
             if isinstance(node, StructNode):
+                code += self.rust_resource_metadata_comment(
+                    node, getattr(node, "name", None), kind="cbuffer"
+                )
                 members = getattr(node, "members", [])
                 derive_traits = self.derive_traits_for_members(members)
                 code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
@@ -1748,6 +2164,9 @@ class RustCodeGen:
                 code += "}\n\n"
                 code += self.generate_cbuffer_member_statics(members)
             elif hasattr(node, "name") and hasattr(node, "members"):  # CbufferNode
+                code += self.rust_resource_metadata_comment(
+                    node, getattr(node, "name", None), kind="cbuffer"
+                )
                 members = getattr(node, "members", [])
                 derive_traits = self.derive_traits_for_members(members)
                 code += f"#[repr(C)]\n#[derive({derive_traits})]\n"
@@ -1792,6 +2211,7 @@ class RustCodeGen:
         elif hasattr(var_type, "name") or hasattr(var_type, "element_type"):
             var_type = self.convert_type_node_to_string(var_type)
 
+        self.register_glsl_buffer_block_metadata(node)
         self.register_variable_type(node.name, var_type, scope="static")
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
         rust_type = self.map_type(var_type)
@@ -1810,7 +2230,9 @@ class RustCodeGen:
             init_expr = self.rust_static_default_initializer(rust_type)
             lazy_lock = False
 
-        return self.generate_static_declaration(
+        return self.rust_resource_metadata_comment(
+            node, var_type
+        ) + self.generate_static_declaration(
             node.name,
             rust_type,
             init_expr,
@@ -1821,6 +2243,7 @@ class RustCodeGen:
         element_type_name = self.convert_type_node_to_string(
             getattr(node, "element_type", "float")
         )
+        element_type_name = self.resource_type_with_attributes(element_type_name, node)
         element_type = self.map_type(element_type_name)
         size = self.format_array_size(getattr(node, "size", None))
         initial_value = getattr(node, "initial_value", getattr(node, "value", None))
@@ -1855,7 +2278,9 @@ class RustCodeGen:
                 lazy_lock = False
 
         self.register_variable_type(node.name, source_type, scope="static")
-        return self.generate_static_declaration(
+        return self.rust_resource_metadata_comment(
+            node, source_type
+        ) + self.generate_static_declaration(
             node.name, rust_type, initializer, lazy_lock=lazy_lock
         )
 
@@ -1979,6 +2404,8 @@ class RustCodeGen:
         code += "  " * indent
         saved_variable_types = self.variable_types.copy()
         saved_local_variable_names = self.local_variable_names.copy()
+        saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
+        saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         self.local_variable_names = set()
         saved_return_type = self.current_return_type
         saved_generic_param_names = self.current_generic_param_names
@@ -1987,6 +2414,7 @@ class RustCodeGen:
         self.current_generic_param_names = set(self.generic_param_names(func))
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         for p in param_list:
+            self.register_glsl_buffer_block_metadata(p)
             self.register_variable_type(
                 p.name,
                 self.function_parameter_type(p),
@@ -2004,6 +2432,10 @@ class RustCodeGen:
         else:
             return_type = "void"
         self.current_return_type = return_type
+        return_semantic = self.node_semantic(func)
+        self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
+        self.validate_rust_struct_return_semantics(shader_type, return_type)
+        self.validate_rust_stage_parameter_semantics(shader_type, param_list)
 
         param_types = [self.function_parameter_type(p) for p in param_list]
         reference_lifetime = self.function_reference_return_lifetime(
@@ -2014,6 +2446,7 @@ class RustCodeGen:
 
         params = []
         for p, param_type in zip(param_list, param_types):
+            self.register_glsl_buffer_block_metadata(p)
             self.register_variable_type(p.name, param_type, scope="local")
             param_name = p.name
             if param_name in self.current_mutated_names or (
@@ -2036,6 +2469,23 @@ class RustCodeGen:
             code += f"#[fragment_shader]\n"
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
+        elif shader_type in self.rust_ray_stage_names():
+            code += (
+                "// CrossGL ray stage: "
+                f"{self.rust_ray_stage_metadata_name(shader_type)}\n"
+            )
+        if return_semantic:
+            code += (
+                f"// CrossGL return semantic: {self.map_semantic(return_semantic)}\n"
+            )
+        if shader_type:
+            for param in param_list:
+                param_semantic = self.node_semantic(param)
+                if param_semantic:
+                    code += (
+                        f"// CrossGL parameter semantic: {param.name}: "
+                        f"{self.map_semantic(param_semantic)}\n"
+                    )
 
         generic_params = self.format_function_generic_params(
             func,
@@ -2059,6 +2509,8 @@ class RustCodeGen:
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
         self.local_variable_names = saved_local_variable_names
+        self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
+        self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_return_type = saved_return_type
         self.current_generic_param_names = saved_generic_param_names
         self.current_function_generic_constraints = saved_function_generic_constraints
@@ -2753,12 +3205,13 @@ class RustCodeGen:
 
     def function_parameter_type(self, param):
         if hasattr(param, "param_type"):
-            return self.convert_type_node_to_string(param.param_type)
+            param_type = self.convert_type_node_to_string(param.param_type)
+            return self.resource_type_with_attributes(param_type, param)
         if hasattr(param, "vtype"):
             vtype = param.vtype
             if hasattr(vtype, "name") or hasattr(vtype, "element_type"):
-                return self.convert_type_node_to_string(vtype)
-            return vtype
+                vtype = self.convert_type_node_to_string(vtype)
+            return self.resource_type_with_attributes(vtype, param)
         return "float"
 
     def function_parameter_requires_mut_binding(self, param, generic_constraints):
@@ -2848,6 +3301,8 @@ class RustCodeGen:
                     init_expr = self.indent_multiline_expression(init_expr, indent)
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
+            elif self.is_default_constructible_ray_runtime_type(rust_type):
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
             elif default_array_initializer is not None:
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {default_array_initializer};\n"
@@ -2948,6 +3403,9 @@ class RustCodeGen:
             # ArrayAccessNode as statement - likely misclassified
             return f"{indent_str}// Unhandled ArrayAccessNode: {stmt}\n"
 
+        elif isinstance(stmt, SyncNode):
+            return self.generate_sync_statement(stmt, indent)
+
         else:
             # Try to generate as expression
             expr_result = self.generate_expression(stmt)
@@ -2955,6 +3413,24 @@ class RustCodeGen:
                 return f"{indent_str}{expr_result};\n"
             else:
                 return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+
+    def generate_sync_statement(self, stmt, indent):
+        """Render a SyncNode as a Rust synchronization call."""
+        indent_str = "    " * indent
+        sync_type = getattr(stmt, "sync_type", "")
+        rust_name = self.sync_map.get(sync_type)
+        if rust_name is None:
+            return f"{indent_str}/* unsupported sync: {sync_type} */\n"
+        return f"{indent_str}{rust_name}();\n"
+
+    def generate_wave_op_expression(self, expr):
+        """Render a WaveOpNode as a Rust subgroup intrinsic call."""
+        operation = getattr(expr, "operation", "")
+        rust_name = self.wave_op_map.get(operation)
+        if rust_name is None:
+            return f"/* unsupported wave op: {operation} */"
+        args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
+        return f"{rust_name}({args})"
 
     def local_let_keyword(self, stmt):
         """Return `let` or `let mut` for a generated local binding."""
@@ -4007,7 +4483,8 @@ class RustCodeGen:
 
         if self.is_inferred_declaration_type(vtype):
             return None
-        return self.type_name_string(vtype)
+        type_name = self.type_name_string(vtype)
+        return self.resource_type_with_attributes(type_name, node)
 
     def is_inferred_declaration_type(self, type_name):
         if type_name is None:
@@ -5472,6 +5949,23 @@ class RustCodeGen:
         # Handle both old and new AST assignment structures
         if hasattr(node, "target") and hasattr(node, "value"):
             # New AST structure
+            target_expr = node.target
+            value_expr = node.value
+            op = getattr(node, "operator", "=")
+        else:
+            # Old AST structure
+            target_expr = node.left
+            value_expr = node.right
+            op = getattr(node, "operator", "=")
+
+        glsl_block_store = self.generate_glsl_buffer_block_assignment(
+            target_expr, value_expr, op
+        )
+        if glsl_block_store is not None:
+            return glsl_block_store
+
+        if hasattr(node, "target") and hasattr(node, "value"):
+            # New AST structure
             lhs = self.generate_assignment_target_expression(node.target)
             lhs_type = self.expression_result_type(node.target)
             rhs = self.generate_expression_with_type(node.value, lhs_type)
@@ -5488,6 +5982,27 @@ class RustCodeGen:
                 lhs_type, node.right, rhs, getattr(node, "operator", "=")
             )
             op = getattr(node, "operator", "=")
+        return f"{lhs} {op} {rhs}"
+
+    def generate_glsl_buffer_block_assignment(self, target, value, op):
+        access = self.glsl_buffer_block_access(target)
+        if access is None:
+            return None
+        if access == "readonly":
+            return self.unsupported_glsl_buffer_block_statement(
+                "store", "readonly placeholder cannot be written"
+            )
+        root_name = self.glsl_buffer_block_root_name(target)
+        if root_name in self.static_variable_names and root_name not in (
+            self.local_variable_names
+        ):
+            return self.unsupported_glsl_buffer_block_statement(
+                "store", "Rust placeholder storage is immutable"
+            )
+        lhs = self.generate_assignment_target_expression(target)
+        lhs_type = self.expression_result_type(target)
+        rhs = self.generate_expression_with_type(value, lhs_type)
+        rhs = self.normalize_assignment_rhs(lhs_type, value, rhs, op)
         return f"{lhs} {op} {rhs}"
 
     def generate_assignment_target_expression(self, target):
@@ -5862,6 +6377,10 @@ class RustCodeGen:
             return self.generate_constructor_expression(expr)
         elif isinstance(expr, BlockNode):
             return self.generate_block_expression(expr)
+        elif isinstance(expr, RayTracingOpNode):
+            return self.generate_ray_tracing_op_expression(expr)
+        elif isinstance(expr, RayQueryOpNode):
+            return self.generate_ray_query_op_expression(expr)
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
@@ -5921,6 +6440,13 @@ class RustCodeGen:
                     self.generate_user_function_call_args(func_name, args)
                 )
                 return f"{callee}({args_str})"
+
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name,
+                args,
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
 
             enum_variant = self.generate_enum_variant_call_with_typed_args(
                 func_name,
@@ -5987,6 +6513,8 @@ class RustCodeGen:
             return self.generate_member_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOp" in str(expr.__class__):
             return self.generate_ternary_expression(expr)
+        elif isinstance(expr, WaveOpNode):
+            return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
 
@@ -6000,6 +6528,67 @@ class RustCodeGen:
 
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def generate_ray_tracing_op_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        if operation in self.user_function_names:
+            args = ", ".join(
+                self.generate_user_function_call_args(
+                    operation,
+                    getattr(expr, "arguments", []),
+                )
+            )
+            return f"{operation}({args})"
+
+        return self.generate_ray_tracing_call_expression(
+            operation,
+            getattr(expr, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, arguments):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        func_name = self.function_map.get(operation, operation)
+        args = ", ".join(self.generate_expression(arg) for arg in arguments or [])
+        if operation == "TraceRay" and len(arguments or []) == 11:
+            generated_args = [self.generate_expression(arg) for arg in arguments]
+            ray_desc = (
+                "RayDesc { "
+                f"origin: {generated_args[6]}, "
+                f"t_min: {generated_args[7]}, "
+                f"direction: {generated_args[8]}, "
+                f"t_max: {generated_args[9]} "
+                "}"
+            )
+            args = ", ".join(generated_args[:6] + [ray_desc, generated_args[10]])
+        elif operation == "ReportHit" and len(arguments or []) == 2:
+            generated_args = [self.generate_expression(arg) for arg in arguments]
+            args = ", ".join(generated_args + ["()"])
+        return f"{func_name}({args})"
+
+    def generate_ray_query_op_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        receiver = self.generate_expression(getattr(expr, "query_expr", None))
+        args = [receiver]
+        args.extend(
+            self.generate_expression(arg)
+            for arg in getattr(expr, "arguments", []) or []
+        )
+        func_name = f"ray_query_{self.rust_snake_case_name(operation)}"
+        return f"{func_name}({', '.join(args)})"
+
+    def rust_snake_case_name(self, name):
+        name = str(name)
+        name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        return name.replace("__", "_").strip("_").lower()
 
     def mapped_function_name(self, func_name, arg_count=None, arguments=None):
         if not isinstance(func_name, str):
@@ -6066,6 +6655,25 @@ class RustCodeGen:
         }
         if has_sampler and func_name in sampler_texture_map:
             return sampler_texture_map[func_name]
+        if func_name == "imageLoad" and arg_count == 3:
+            return "image_load_sample"
+        if func_name == "imageStore" and arg_count == 4:
+            return "image_store_sample"
+        sample_indexed_atomics = {
+            "imageAtomicAdd": "image_atomic_add_sample",
+            "imageAtomicMin": "image_atomic_min_sample",
+            "imageAtomicMax": "image_atomic_max_sample",
+            "imageAtomicAnd": "image_atomic_and_sample",
+            "imageAtomicOr": "image_atomic_or_sample",
+            "imageAtomicXor": "image_atomic_xor_sample",
+            "imageAtomicExchange": "image_atomic_exchange_sample",
+        }
+        if func_name in sample_indexed_atomics and arg_count == 4:
+            return sample_indexed_atomics[func_name]
+        if func_name in {"imageAtomicCompSwap", "imageAtomicCompareExchange"} and (
+            arg_count == 5
+        ):
+            return "image_atomic_comp_swap_sample"
         if func_name == "textureGather":
             if has_sampler:
                 return (
@@ -7048,6 +7656,14 @@ class RustCodeGen:
         return temp_name
 
     def generate_member_access_expression(self, expr):
+        access = self.glsl_buffer_block_access(expr)
+        if access == "writeonly" and self.assignment_lhs_depth == 0:
+            return self.unsupported_glsl_buffer_block_expression(
+                "load",
+                "writeonly placeholder cannot be read",
+                self.expression_result_type(expr),
+            )
+
         obj_expr = getattr(expr, "object_expr", getattr(expr, "object", ""))
         member = getattr(expr, "member", "")
         self.member_object_depth += 1
@@ -7117,10 +7733,37 @@ class RustCodeGen:
 
     def generate_identifier_value_expression(self, name):
         name = self.lambda_capture_alias_name(name) or name
+        builtin_value = self.rust_builtin_value_expression(name)
+        if builtin_value is not None and name not in self.variable_types:
+            return builtin_value
         value = self.lazy_static_identifier_expression(name)
         if self.should_clone_identifier_value(name):
             return self.clone_value_expression(value)
         return value
+
+    def rust_builtin_value_expression(self, name):
+        return {
+            "gl_LaunchIDEXT": "ray_launch_id()",
+            "gl_LaunchSizeEXT": "ray_launch_size()",
+            "gl_HitTEXT": "ray_hit_t()",
+            "gl_HitKindEXT": "ray_hit_kind()",
+            "gl_WorldRayOriginEXT": "ray_world_origin()",
+            "gl_WorldRayDirectionEXT": "ray_world_direction()",
+            "gl_ObjectRayOriginEXT": "ray_object_origin()",
+            "gl_ObjectRayDirectionEXT": "ray_object_direction()",
+            "gl_RayTminEXT": "ray_t_min()",
+            "gl_IncomingRayFlagsEXT": "ray_incoming_flags()",
+            "gl_InstanceCustomIndexEXT": "ray_instance_custom_index()",
+            "gl_GeometryIndexEXT": "ray_geometry_index()",
+        }.get(name)
+
+    def is_default_constructible_ray_runtime_type(self, rust_type):
+        return str(rust_type) in {
+            "BuiltInTriangleIntersectionAttributes",
+            "RayDesc",
+            "RayQuery",
+            "RayTracingAccelerationStructure",
+        }
 
     def should_clone_identifier_value(self, name):
         if (
@@ -8002,7 +8645,7 @@ class RustCodeGen:
         if mapped_name.startswith("texture_gather_compare"):
             return "vec4"
 
-        if mapped_name == "image_load" and arg_types:
+        if mapped_name in {"image_load", "image_load_sample"} and arg_types:
             return self.storage_image_value_result_type(arg_types[0])
 
         if mapped_name == "image_size" and arg_types:
@@ -8017,7 +8660,16 @@ class RustCodeGen:
         if mapped_name == "buffer_load" and arg_types:
             return self.buffer_element_result_type(arg_types[0])
 
-        if mapped_name in {"image_store", "buffer_store", "buffer_dimensions"}:
+        if mapped_name == "buffer_consume" and arg_types:
+            return self.buffer_element_result_type(arg_types[0])
+
+        if mapped_name in {
+            "image_store",
+            "image_store_sample",
+            "buffer_store",
+            "buffer_dimensions",
+            "buffer_append",
+        }:
             return "void"
 
         if (
@@ -8231,6 +8883,9 @@ class RustCodeGen:
 
     def storage_image_value_result_type(self, image_type):
         image_type = str(image_type or "")
+        element_type = self.storage_image_runtime_element_type(image_type)
+        if element_type is not None:
+            return self.rust_storage_image_element_crossgl_type(element_type)
         if image_type.startswith("uimage") or "Vec4<u32>" in image_type:
             return "uvec4"
         if image_type.startswith("iimage") or "Vec4<i32>" in image_type:
@@ -8278,9 +8933,543 @@ class RustCodeGen:
 
     def storage_image_atomic_result_type(self, image_type):
         image_type = str(image_type or "")
+        element_type = self.storage_image_runtime_element_type(image_type)
+        if element_type is not None and "i32" in element_type:
+            return "int"
         if image_type.startswith("iimage") or "Vec4<i32>" in image_type:
             return "int"
         return "uint"
+
+    def storage_image_type_with_attributes(self, type_name, attributes):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return None
+
+        if self.is_array_type_name(type_name):
+            base_type, sizes = self.c_array_type_parts(type_name)
+            image_type = self.storage_image_type_with_attributes(base_type, attributes)
+            if image_type is None:
+                return None
+            return self.format_c_array_type(image_type, sizes)
+
+        mapped_type = self.type_mapping.get(type_name)
+        if mapped_type is None or not mapped_type.startswith("Image"):
+            return None
+
+        format_name = self.storage_image_format_attribute(attributes)
+        if format_name is None:
+            return None
+
+        element_type = self.storage_image_format_element_type(format_name)
+        if element_type is None:
+            return None
+
+        runtime_base = mapped_type.split("<", 1)[0]
+        return f"{runtime_base}<{element_type}>"
+
+    def resource_type_with_attributes(self, type_name, node):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name
+
+        glsl_buffer_type = self.glsl_buffer_array_resource_type(type_name, node)
+        if glsl_buffer_type is not None:
+            return glsl_buffer_type
+
+        buffer_type = self.buffer_type_with_access(type_name, node)
+        image_type = self.storage_image_type_with_attributes(
+            buffer_type,
+            getattr(node, "attributes", []),
+        )
+        return image_type or buffer_type
+
+    def is_glsl_buffer_array_declaration(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "buffer" not in qualifiers:
+            return False
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        if not attributes.intersection({"std140", "std430", "scalar"}):
+            return False
+        node_type = glsl_buffer_block_node_type(node)
+        if getattr(node_type, "__class__", None).__name__ == "ArrayType":
+            return True
+        type_name = self.type_name_string(node_type)
+        return isinstance(type_name, str) and type_name.endswith("[]")
+
+    def glsl_buffer_array_resource_type(self, type_name, node):
+        if not self.is_glsl_buffer_array_declaration(node):
+            return None
+        base_type, sizes = self.c_array_type_parts(type_name)
+        if not sizes or len(sizes) != 1 or sizes[0] is not None:
+            return None
+        access = self.explicit_resource_access(node) or "readwrite"
+        resource_type = (
+            "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+        )
+        return f"{resource_type}<{base_type}>"
+
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        arguments = getattr(attr, "arguments", []) if attr is not None else []
+        if arguments:
+            layout = self.attribute_argument_text(arguments[0])
+            if layout:
+                return layout
+        return "std430"
+
+    def is_glsl_buffer_block_variable(self, node):
+        return self.glsl_buffer_block_attribute(node) is not None
+
+    def register_glsl_buffer_block_metadata(self, node):
+        if not self.is_glsl_buffer_block_variable(node):
+            return
+        name = getattr(node, "name", None)
+        if not name:
+            return
+        self.glsl_buffer_block_accesses[name] = (
+            self.explicit_resource_access(node) or "readwrite"
+        )
+        self.glsl_buffer_block_layouts[name] = self.glsl_buffer_block_layout(node)
+
+    def glsl_buffer_block_metadata_comment(self, node):
+        if not self.is_glsl_buffer_block_variable(node):
+            return ""
+        name = getattr(node, "name", "")
+        access = self.explicit_resource_access(node) or "readwrite"
+        layout = self.glsl_buffer_block_layout(node)
+        return (
+            f"// CrossGL resource metadata: name={name} "
+            f"kind=glsl_buffer_block layout={layout} access={access}\n"
+        )
+
+    def glsl_buffer_block_root_name(self, expr):
+        if isinstance(expr, (IdentifierNode, VariableNode)):
+            return getattr(expr, "name", None)
+        if isinstance(expr, str):
+            return expr
+        if isinstance(expr, MemberAccessNode):
+            return self.glsl_buffer_block_root_name(
+                getattr(expr, "object_expr", getattr(expr, "object", None))
+            )
+        if isinstance(expr, ArrayAccessNode):
+            return self.glsl_buffer_block_root_name(
+                getattr(expr, "array_expr", getattr(expr, "array", None))
+            )
+        return None
+
+    def glsl_buffer_block_access(self, expr):
+        root_name = self.glsl_buffer_block_root_name(expr)
+        if not root_name:
+            return None
+        return self.glsl_buffer_block_accesses.get(root_name)
+
+    def unsupported_glsl_buffer_block_expression(self, operation, reason, result_type):
+        fallback = self.rust_default_value_for_type(result_type)
+        return (
+            f"/* unsupported Rust GLSL buffer block: {operation} {reason} */ {fallback}"
+        )
+
+    def unsupported_glsl_buffer_block_statement(self, operation, reason):
+        return f"/* unsupported Rust GLSL buffer block: {operation} {reason} */"
+
+    def rust_default_value_for_type(self, type_name):
+        rust_type = self.map_type(type_name)
+        scalar = self.rust_scalar_default_literal(rust_type)
+        if scalar is not None:
+            return scalar
+        return "Default::default()"
+
+    def explicit_resource_access(self, node):
+        access_names = {
+            "read": "readonly",
+            "readonly": "readonly",
+            "write": "writeonly",
+            "writeonly": "writeonly",
+            "read_write": "readwrite",
+            "readwrite": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = access_names.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "") or "").lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                access = access_names.get(
+                    str(self.attribute_argument_text(arguments[0])).lower()
+                )
+            else:
+                access = access_names.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def buffer_type_with_access(self, type_name, node):
+        access = self.explicit_resource_access(node)
+        if access is None:
+            return type_name
+
+        base_type, sizes = (
+            self.c_array_type_parts(type_name)
+            if self.is_array_type_name(type_name)
+            else (type_name, [])
+        )
+        generic_base, generic_args = self.generic_type_parts(base_type)
+        mapped_base = None
+
+        if generic_base in {"StructuredBuffer", "RWStructuredBuffer"}:
+            mapped_base = (
+                "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+            )
+        elif generic_base in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            mapped_base = (
+                "ByteAddressBuffer" if access == "readonly" else "RWByteAddressBuffer"
+            )
+
+        if mapped_base is None:
+            return type_name
+
+        if generic_args:
+            mapped = f"{mapped_base}<{', '.join(generic_args)}>"
+        else:
+            mapped = mapped_base
+        return self.format_c_array_type(mapped, sizes) if sizes else mapped
+
+    def storage_image_format_attribute(self, attributes):
+        for attr in attributes or []:
+            name = str(getattr(attr, "name", "") or "")
+            if name == "format":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_argument_text(arguments[0])
+                continue
+            if self.storage_image_format_element_type(name) is not None:
+                return name
+        return None
+
+    def attribute_argument_text(self, argument):
+        if hasattr(argument, "value"):
+            return str(argument.value)
+        if hasattr(argument, "name"):
+            return str(argument.name)
+        return str(argument)
+
+    def attribute_arguments(self, attr):
+        return getattr(attr, "arguments", getattr(attr, "args", [])) or []
+
+    def resource_binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_argument_text(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def resource_register_space_value(self, value):
+        raw_value = self.attribute_argument_text(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_rust_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_rust_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.resource_binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.resource_register_space_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.resource_register_space_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def rust_resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_argument_text(argument)
+                for argument in self.attribute_arguments(attr)
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def rust_resource_base_type_and_count(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if self.is_array_type_name(type_name):
+            base_type, sizes = self.c_array_type_parts(type_name)
+            count = 1
+            for size in sizes:
+                if size is not None:
+                    count *= int(size)
+            return base_type, count
+        return type_name, 1
+
+    def rust_resource_kind(self, type_name, node=None, forced_kind=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_variable(node):
+            return "glsl_buffer_block"
+
+        base_type, _count = self.rust_resource_base_type_and_count(type_name)
+        generic_base, _generic_args = self.generic_type_parts(base_type)
+        base_name = generic_base.rsplit("::", 1)[-1]
+        if base_name in {
+            "StructuredBuffer",
+            "RWStructuredBuffer",
+            "AppendStructuredBuffer",
+            "ConsumeStructuredBuffer",
+            "Buffer",
+            "RwBuffer",
+            "AppendBuffer",
+            "ConsumeBuffer",
+            "ByteAddressBuffer",
+            "RWByteAddressBuffer",
+            "RwByteAddressBuffer",
+        }:
+            return "buffer"
+
+        mapped_type = self.type_mapping.get(base_name, base_name)
+        mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
+        if mapped_base == "RayTracingAccelerationStructure":
+            return "acceleration_structure"
+        if mapped_base == "Sampler":
+            return "sampler"
+        if mapped_base.startswith(("Image", "IImage", "UImage")):
+            return "image"
+        if mapped_base.startswith(("Texture", "DepthTexture")):
+            return "texture"
+        return None
+
+    def rust_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def rust_resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _used_name in self.rust_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def next_available_rust_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.rust_resource_binding_cursors.get(key, 0)
+        while self.rust_resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.rust_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def reserve_rust_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        ranges = self.rust_used_resource_bindings.setdefault(key, [])
+        for used_start, used_end, used_name in ranges:
+            if binding <= used_end and used_start <= end:
+                if used_start == binding and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    "Conflicting Rust resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        ranges.append((binding, end, name))
+        self.rust_resource_binding_cursors[key] = max(
+            self.rust_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def rust_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.rust_resource_kind(type_name, node=node, forced_kind=kind)
+        if not name or resource_kind is None:
+            return ""
+
+        _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        namespace = self.rust_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_rust_resource_set_index(node)
+        binding = self.explicit_rust_resource_binding_index(node)
+        if binding is None:
+            binding = self.next_available_rust_resource_binding(
+                namespace, set_index, count
+            )
+            binding_source = "automatic"
+            self.reserve_rust_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+        else:
+            binding_source = "explicit"
+            self.reserve_rust_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+
+        parts = [
+            "// CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+        ]
+        if resource_kind == "glsl_buffer_block":
+            parts.append(f"layout={self.glsl_buffer_block_layout(node)}")
+            parts.append(f"access={self.explicit_resource_access(node) or 'readwrite'}")
+        parts.extend(
+            [
+                f"set={set_index}",
+                f"binding={binding}",
+                f"binding_source={binding_source}",
+            ]
+        )
+        if count != 1:
+            parts.append(f"count={count}")
+        register_metadata = self.rust_resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        return " ".join(parts) + "\n"
+
+    def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.rust_resource_kind(type_name, node=node, forced_kind=kind)
+        binding = self.explicit_rust_resource_binding_index(node)
+        if not name or resource_kind is None or binding is None:
+            return
+        _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        namespace = self.rust_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_rust_resource_set_index(node)
+        self.reserve_rust_resource_binding(namespace, set_index, binding, count, name)
+
+    def reserve_explicit_rust_resource_bindings(self, ast):
+        def reserve_variable(node):
+            if isinstance(node, ArrayNode):
+                element_type = self.convert_type_node_to_string(
+                    getattr(node, "element_type", "float")
+                )
+                size = self.format_array_size(getattr(node, "size", None))
+                type_name = (
+                    f"{element_type}[{size}]"
+                    if size is not None
+                    else f"{element_type}[]"
+                )
+            else:
+                type_name = self.get_variable_type(node) or "float"
+            type_name = self.resource_type_with_attributes(type_name, node)
+            self.reserve_explicit_rust_resource_binding(node, type_name)
+
+        for node in getattr(ast, "global_variables", []) or []:
+            reserve_variable(node)
+        for cbuffer in self.get_cbuffer_nodes(ast):
+            self.reserve_explicit_rust_resource_binding(
+                cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+            )
+        for stage in (
+            getattr(ast, "stages", {}).values() if hasattr(ast, "stages") else []
+        ):
+            for node in getattr(stage, "local_variables", []) or []:
+                reserve_variable(node)
+            for cbuffer in getattr(stage, "local_cbuffers", []) or []:
+                self.reserve_explicit_rust_resource_binding(
+                    cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+                )
+
+    def storage_image_format_element_type(self, format_name):
+        format_name = str(format_name or "").lower()
+        match = re.fullmatch(
+            r"(rgba|rgb|rg|r)(?:8|16|32|64)?(ui|i|f|unorm|snorm)?",
+            format_name,
+        )
+        if match is None:
+            return None
+
+        lanes = {"r": 1, "rg": 2, "rgb": 3, "rgba": 4}[match.group(1)]
+        suffix = match.group(2) or "f"
+        scalar_type = "u32" if suffix == "ui" else "i32" if suffix == "i" else "f32"
+        if lanes == 1:
+            return scalar_type
+        return f"Vec{lanes}<{scalar_type}>"
+
+    def storage_image_runtime_element_type(self, image_type):
+        image_base, image_args = self.generic_type_parts(image_type)
+        if not image_args or not image_base.rsplit("::", 1)[-1].startswith("Image"):
+            return None
+        return image_args[0]
+
+    def rust_storage_image_element_crossgl_type(self, element_type):
+        element_type = str(element_type or "")
+        element_base, element_args = self.generic_type_parts(element_type)
+        if element_args:
+            component = element_args[0]
+            vector_type_name = element_base.rsplit("::", 1)[-1]
+            lane_count = (
+                vector_type_name[3:]
+                if vector_type_name.startswith("Vec")
+                else vector_type_name
+            )
+            if component == "u32":
+                return f"uvec{lane_count}"
+            if component == "i32":
+                return f"ivec{lane_count}"
+            return f"vec{lane_count}"
+        if element_type == "u32":
+            return "uint"
+        if element_type == "i32":
+            return "int"
+        return "float"
 
     def buffer_element_result_type(self, buffer_type):
         base_type, generic_args = self.generic_type_parts(buffer_type)

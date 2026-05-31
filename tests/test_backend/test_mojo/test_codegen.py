@@ -1,8 +1,10 @@
+from typing import List
+
+import pytest
+
 from crosstl.backend.Mojo import MojoCrossGLCodeGen
 from crosstl.backend.Mojo.MojoLexer import MojoLexer
 from crosstl.backend.Mojo.MojoParser import MojoParser
-import pytest
-from typing import List
 
 
 def generate_code(ast_node):

@@ -11,8 +11,8 @@ from .CudaAst import (
     ConstantMemoryNode,
     ContinueNode,
     CudaBuiltinNode,
-    DesignatedInitializerNode,
     DeleteNode,
+    DesignatedInitializerNode,
     DoWhileNode,
     ForNode,
     FunctionCallNode,
@@ -37,7 +37,6 @@ from .CudaAst import (
     VariableNode,
     WhileNode,
 )
-from .CudaLexer import CudaLexer
 
 
 class CudaParser:

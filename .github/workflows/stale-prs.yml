@@ -4,9 +4,14 @@ on:
   schedule:
     - cron: '0 0 * * *'
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   close_stale_prs:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Close stale pull requests
         uses: actions/stale@v9

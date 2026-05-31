@@ -1,8 +1,8 @@
 """CUDA to CrossGL Code Generator"""
 
 from .CudaAst import (
-    AssignmentNode,
     ArrayAccessNode,
+    AssignmentNode,
     CastNode,
     FunctionCallNode,
     InitializerListNode,

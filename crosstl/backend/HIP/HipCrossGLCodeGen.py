@@ -1,38 +1,18 @@
 """HIP to CrossGL Code Generator"""
 
 from .HipAst import (
-    ASTNode,
-    ShaderNode,
-    FunctionNode,
-    KernelNode,
-    KernelLaunchNode,
-    StructNode,
-    VariableNode,
-    AssignmentNode,
-    BinaryOpNode,
-    UnaryOpNode,
-    FunctionCallNode,
-    AtomicOperationNode,
-    CaseNode,
-    CastNode,
-    DesignatedInitializerNode,
-    DoWhileNode,
-    InitializerListNode,
-    SyncNode,
-    MemberAccessNode,
     ArrayAccessNode,
-    IfNode,
-    ForNode,
-    WhileNode,
-    ReturnNode,
-    BreakNode,
-    ContinueNode,
-    PreprocessorNode,
-    SwitchNode,
-    TernaryOpNode,
-    TypeAliasNode,
-    HipBuiltinNode,
+    AssignmentNode,
+    CastNode,
+    FunctionCallNode,
+    FunctionNode,
     HipDevicePropertyNode,
+    InitializerListNode,
+    MemberAccessNode,
+    StructNode,
+    TypeAliasNode,
+    UnaryOpNode,
+    VariableNode,
 )
 
 
@@ -742,52 +722,52 @@ class HipToCrossGLConverter:
 
         if name in {"hipMalloc", "hipMallocManaged"}:
             if len(node.args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 size = self.visit(node.args[1])
                 return [f"// HIP memory allocate: {target}, bytes: {size}"]
         elif name == "hipExtMallocWithFlags":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP extended memory allocate: {target}, "
                     f"bytes: {args[1]}, flags: {args[2]}"
                 ]
         elif name == "hipMallocAsync":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP async memory allocate: {target}, bytes: {args[1]}, "
                     f"stream: {args[2]}"
                 ]
         elif name == "hipMallocFromPoolAsync":
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP async memory allocate from pool: {target}, "
                     f"bytes: {args[1]}, pool: {args[2]}, stream: {args[3]}"
                 ]
         elif name in {"hipHostMalloc", "hipHostAlloc"}:
             if len(args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 comment = f"// HIP host memory allocate: {target}, bytes: {args[1]}"
                 if len(args) >= 3:
                     comment += f", flags: {args[2]}"
                 return [comment]
         elif name == "hipMallocPitch":
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
-                pitch = self.format_runtime_pointer_target(node.args[1])
+                target = self.format_runtime_raw_output_target(node.args[0])
+                pitch = self.format_runtime_raw_output_target(node.args[1])
                 return [
                     f"// HIP pitched memory allocate: {target}, pitch: {pitch}, "
                     f"width: {args[2]}, height: {args[3]}"
                 ]
         elif name == "hipMalloc3D":
             if len(args) >= 2:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 return [f"// HIP 3D memory allocate: {target}, extent: {args[1]}"]
         elif name in {"hipMallocArray", "hipMalloc3DArray"}:
             if len(args) >= 4:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 if name == "hipMallocArray":
                     comment = (
@@ -804,7 +784,7 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMallocMipmappedArray":
             if len(args) >= 5:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 return [
                     f"// HIP mipmapped array allocate: output: {target}, "
@@ -813,7 +793,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMipmappedArrayCreate":
             if len(args) >= 3:
-                target = self.format_runtime_pointer_target(node.args[0])
+                target = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 return [
                     f"// HIP mipmapped array create: output: {target}, "
@@ -821,7 +801,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipGetMipmappedArrayLevel", "hipMipmappedArrayGetLevel"}:
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP mipmapped array get level: output: {output}, "
                     f"mipmapped array: {args[1]}, level: {args[2]}"
@@ -840,7 +820,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP array free: {args[0]}"]
         elif name in {"hipArrayCreate", "hipArray3DCreate"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 descriptor = self.format_runtime_pointer_target(node.args[1])
                 dimension = "3D " if name == "hipArray3DCreate" else ""
                 return [
@@ -849,7 +829,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipArrayGetDescriptor", "hipArray3DGetDescriptor"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 dimension = "3D " if name == "hipArray3DGetDescriptor" else ""
                 if output_name is not None:
@@ -872,9 +852,9 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipArrayGetInfo":
             if len(args) >= 4:
-                descriptor_output = self.format_runtime_pointer_target(node.args[0])
-                extent_output = self.format_runtime_pointer_target(node.args[1])
-                flags_output = self.format_runtime_pointer_target(node.args[2])
+                descriptor_output = self.format_runtime_raw_output_target(node.args[0])
+                extent_output = self.format_runtime_raw_output_target(node.args[1])
+                flags_output = self.format_runtime_raw_output_target(node.args[2])
                 descriptor_output_name = self.get_runtime_pointer_target_name(
                     node.args[0]
                 )
@@ -908,7 +888,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemPoolCreate":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory pool create: output: {output}, properties: {args[1]}"
                 ]
@@ -930,7 +910,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemPoolGetAttribute":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[2])
+                output = self.format_runtime_raw_output_target(node.args[2])
                 output_name = self.get_runtime_pointer_target_name(node.args[2])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -949,7 +929,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemPoolGetAccess":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 location = self.format_runtime_pointer_target(node.args[2])
                 if output_name is not None:
@@ -963,35 +943,35 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemPoolExportToShareableHandle":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory pool export to shareable handle: output: {output}, "
                     f"pool: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
                 ]
         elif name == "hipMemPoolImportFromShareableHandle":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory pool import from shareable handle: output: {output}, "
                     f"handle: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
                 ]
         elif name == "hipMemPoolExportPointer":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory pool export pointer: output: {output}, "
                     f"pointer: {args[1]}"
                 ]
         elif name == "hipMemPoolImportPointer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory pool import pointer: output: {output}, "
                     f"pool: {args[1]}, export data: {args[2]}"
                 ]
         elif name == "hipDeviceGetDefaultMemPool":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP get default memory pool: output: {output}, "
                     f"device: {args[1]}"
@@ -1003,7 +983,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetMemPool":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP get device memory pool: output: {output}, "
                     f"device: {args[1]}"
@@ -1035,7 +1015,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemRangeGetAttribute":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1063,7 +1043,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemGetAllocationGranularity":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 properties = self.format_runtime_pointer_target(node.args[1])
                 if output_name is not None:
@@ -1078,7 +1058,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemCreate":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory create allocation: output: {output}, "
                     f"bytes: {args[1]}, properties: {args[2]}, flags: {args[3]}"
@@ -1088,7 +1068,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP virtual memory release allocation: {args[0]}"]
         elif name == "hipMemAddressReserve":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory reserve address: output: {output}, "
                     f"bytes: {args[1]}, alignment: {args[2]}, address: {args[3]}, "
@@ -1121,7 +1101,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemGetAccess":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 location = self.format_runtime_pointer_target(node.args[1])
                 if output_name is not None:
@@ -1135,28 +1115,28 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemGetAllocationPropertiesFromHandle":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory allocation properties: output: {output}, "
                     f"handle: {args[1]}"
                 ]
         elif name == "hipMemRetainAllocationHandle":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory retain allocation handle: output: {output}, "
                     f"address: {args[1]}"
                 ]
         elif name == "hipMemExportToShareableHandle":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory export shareable handle: output: {output}, "
                     f"handle: {args[1]}, handle type: {args[2]}, flags: {args[3]}"
                 ]
         elif name == "hipMemImportFromShareableHandle":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP virtual memory import shareable handle: output: {output}, "
                     f"shareable handle: {args[1]}, handle type: {args[2]}"
@@ -1172,14 +1152,14 @@ class HipToCrossGLConverter:
                 return [f"// HIP host memory unregister: {args[0]}"]
         elif name == "hipHostGetDevicePointer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP host device pointer: output: {output}, host: {args[1]}, "
                     f"flags: {args[2]}"
                 ]
         elif name == "hipHostGetFlags":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1306,7 +1286,7 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMemcpyBatchAsync":
             if len(args) >= 9:
-                fail_output = self.format_runtime_pointer_target(node.args[7])
+                fail_output = self.format_runtime_raw_output_target(node.args[7])
                 return [
                     f"// HIP batched memory copy: destinations: {args[0]}, "
                     f"sources: {args[1]}, sizes: {args[2]}, count: {args[3]}, "
@@ -1316,7 +1296,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemcpy3DBatchAsync":
             if len(args) >= 5:
-                fail_output = self.format_runtime_pointer_target(node.args[2])
+                fail_output = self.format_runtime_raw_output_target(node.args[2])
                 return [
                     f"// HIP batched 3D memory copy: count: {args[0]}, "
                     f"operations: {args[1]}, fail index output: {fail_output}, "
@@ -1324,14 +1304,14 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetSymbolAddress":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP get symbol address: output: {output}, "
                     f"symbol: {args[1]}"
                 ]
         elif name == "hipGetSymbolSize":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -1394,15 +1374,15 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipMemAlloc":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP driver memory allocate: output: {output}, "
                     f"bytes: {args[1]}"
                 ]
         elif name == "hipMemAllocPitch":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
-                pitch = self.format_runtime_pointer_target(node.args[1])
+                output = self.format_runtime_raw_output_target(node.args[0])
+                pitch = self.format_runtime_raw_output_target(node.args[1])
                 return [
                     f"// HIP driver pitched memory allocate: output: {output}, "
                     f"pitch output: {pitch}, width: {args[2]}, height: {args[3]}, "
@@ -1413,7 +1393,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP driver memory free: {args[0]}"]
         elif name in {"hipMemAllocHost", "hipMemHostAlloc"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 comment = (
                     f"// HIP driver host memory allocate: output: {output}, "
                     f"bytes: {args[1]}"
@@ -1426,7 +1406,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP driver host memory free: {args[0]}"]
         elif name == "hipMemHostGetDevicePointer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP driver host device pointer: output: {output}, "
                     f"host: {args[1]}, flags: {args[2]}"
@@ -1568,14 +1548,14 @@ class HipToCrossGLConverter:
                 return [comment]
         elif name == "hipIpcGetMemHandle":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP IPC get memory handle: output: {output}, "
                     f"pointer: {args[1]}"
                 ]
         elif name == "hipIpcOpenMemHandle":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP IPC open memory handle: output: {output}, "
                     f"handle: {args[1]}, flags: {args[2]}"
@@ -1585,13 +1565,13 @@ class HipToCrossGLConverter:
                 return [f"// HIP IPC close memory handle: pointer: {args[0]}"]
         elif name == "hipIpcGetEventHandle":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP IPC get event handle: output: {output}, event: {args[1]}"
                 ]
         elif name == "hipIpcOpenEventHandle":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP IPC open event handle: output: {output}, "
                     f"handle: {args[1]}"
@@ -1643,10 +1623,10 @@ class HipToCrossGLConverter:
                 ]
         elif name == "__hipPopCallConfiguration":
             if len(args) >= 4:
-                grid_output = self.format_runtime_pointer_target(node.args[0])
-                block_output = self.format_runtime_pointer_target(node.args[1])
-                shared_output = self.format_runtime_pointer_target(node.args[2])
-                stream_output = self.format_runtime_pointer_target(node.args[3])
+                grid_output = self.format_runtime_raw_output_target(node.args[0])
+                block_output = self.format_runtime_raw_output_target(node.args[1])
+                shared_output = self.format_runtime_raw_output_target(node.args[2])
+                stream_output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP pop call configuration: grid output: {grid_output}, "
                     f"block output: {block_output}, shared memory output: "
@@ -1902,7 +1882,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetDeviceProperties":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_property_source(output_name, args[1])
@@ -1919,13 +1899,14 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetName":
             if len(args) >= 3:
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
-                    f"// HIP get device name: output: {args[0]}, "
+                    f"// HIP get device name: output: {output}, "
                     f"length: {args[1]}, device: {args[2]}"
                 ]
         elif name == "hipDeviceGetUuid":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [f"// HIP get device UUID: output: {output}, device: {args[1]}"]
         elif name == "hipDeviceTotalMem":
             if len(args) >= 2:
@@ -1990,8 +1971,9 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipDeviceGetPCIBusId":
             if len(args) >= 3:
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
-                    f"// HIP get device PCI bus id: output: {args[0]}, "
+                    f"// HIP get device PCI bus id: output: {output}, "
                     f"length: {args[1]}, device: {args[2]}"
                 ]
         elif name == "hipDeviceGetByPCIBusId":
@@ -2059,8 +2041,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemGetInfo":
             if len(args) >= 2:
-                free_output = self.format_runtime_pointer_target(node.args[0])
-                total_output = self.format_runtime_pointer_target(node.args[1])
+                free_output = self.format_runtime_raw_output_target(node.args[0])
+                total_output = self.format_runtime_raw_output_target(node.args[1])
                 free_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 total_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if free_output_name is not None:
@@ -2079,7 +2061,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipPointerGetAttributes":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP pointer attributes: output: {output}, pointer: {args[1]}"
                 ]
@@ -2091,7 +2073,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipPointerGetAttribute":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2111,7 +2093,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipMemPtrGetInfo":
             if len(args) >= 2:
-                size_output = self.format_runtime_pointer_target(node.args[1])
+                size_output = self.format_runtime_raw_output_target(node.args[1])
                 size_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if size_output_name is not None:
                     self.register_device_query_source(
@@ -2248,7 +2230,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipModuleLoad", "hipModuleLoadData"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 source_label = "file" if name == "hipModuleLoad" else "image"
                 return [
                     f"// HIP module load: output: {output}, "
@@ -2256,7 +2238,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipModuleLoadDataEx":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP module load data ex: output: {output}, image: {args[1]}, "
                     f"options: {args[2]}, option keys: {args[3]}, "
@@ -2264,7 +2246,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipModuleLoadFatBinary":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP module load fat binary: output: {output}, "
                     f"fat binary: {args[1]}"
@@ -2322,7 +2304,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipBindTexture":
             if len(args) >= 5:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference bind: "
                     f"offset output: {offset}, texture: {args[1]}, "
@@ -2330,7 +2312,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipBindTexture2D":
             if len(args) >= 7:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference bind 2D: "
                     f"offset output: {offset}, texture: {args[1]}, "
@@ -2360,7 +2342,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetTextureAlignmentOffset":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2384,7 +2366,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetAddressMode":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_device_query_source(
@@ -2407,7 +2389,7 @@ class HipToCrossGLConverter:
             "hipTexRefGetMipmappedArray",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 labels = {
                     "hipTexRefGetArray": "array",
@@ -2451,8 +2433,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetFormat":
             if len(args) >= 3:
-                format_output = self.format_runtime_pointer_target(node.args[0])
-                channels_output = self.format_runtime_pointer_target(node.args[1])
+                format_output = self.format_runtime_raw_output_target(node.args[0])
+                channels_output = self.format_runtime_raw_output_target(node.args[1])
                 format_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 channels_output_name = self.get_runtime_pointer_target_name(
                     node.args[1]
@@ -2474,8 +2456,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefGetMipmapLevelClamp":
             if len(args) >= 3:
-                min_output = self.format_runtime_pointer_target(node.args[0])
-                max_output = self.format_runtime_pointer_target(node.args[1])
+                min_output = self.format_runtime_raw_output_target(node.args[0])
+                max_output = self.format_runtime_raw_output_target(node.args[1])
                 min_output_name = self.get_runtime_pointer_target_name(node.args[0])
                 max_output_name = self.get_runtime_pointer_target_name(node.args[1])
                 if min_output_name is not None:
@@ -2495,7 +2477,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipTexRefSetAddress":
             if len(args) >= 4:
-                offset = self.format_runtime_pointer_target(node.args[0])
+                offset = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     "// HIP texture reference set address: "
                     f"offset output: {offset}, texture: {args[1]}, "
@@ -2581,8 +2563,8 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetDriverEntryPoint":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[1])
-                status_output = self.format_runtime_pointer_target(node.args[3])
+                output = self.format_runtime_raw_output_target(node.args[1])
+                status_output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP get driver entry point: symbol: {args[0]}, "
                     f"output: {output}, flags: {args[2]}, "
@@ -2590,7 +2572,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipLibraryLoadData", "hipLibraryLoadFromFile"}:
             if len(args) >= 8:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 source_label = "file" if name == "hipLibraryLoadFromFile" else "code"
                 return [
                     f"// HIP library load: output: {output}, "
@@ -2703,7 +2685,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipLinkCreate":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(node.args[3])
+                output = self.format_runtime_raw_output_target(node.args[3])
                 return [
                     f"// HIP link create: options: {args[0]}, "
                     f"option keys: {args[1]}, option values: {args[2]}, "
@@ -2745,7 +2727,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP link destroy: state: {args[0]}"]
         elif name == "hipMemGetHandleForAddressRange":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 return [
                     f"// HIP memory get handle for address range: output: {output}, "
                     f"device pointer: {args[1]}, bytes: {args[2]}, "
@@ -2834,7 +2816,7 @@ class HipToCrossGLConverter:
             "hipTexObjectGetResourceDesc",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2853,7 +2835,7 @@ class HipToCrossGLConverter:
                 ]
         elif name in {"hipGetTextureObjectTextureDesc", "hipTexObjectGetTextureDesc"}:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2875,7 +2857,7 @@ class HipToCrossGLConverter:
             "hipTexObjectGetResourceViewDesc",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2893,7 +2875,7 @@ class HipToCrossGLConverter:
                 ]
         elif name == "hipGetChannelDesc":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(node.args[0])
+                output = self.format_runtime_raw_output_target(node.args[0])
                 output_name = self.get_runtime_pointer_target_name(node.args[0])
                 if output_name is not None:
                     self.register_member_query_sources(
@@ -2928,7 +2910,7 @@ class HipToCrossGLConverter:
             return ["// HIP profiler stop"]
         if name == "hipImportExternalMemory":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP import external memory: output: {output}, "
                     f"descriptor: {args[1]}"
@@ -2938,14 +2920,14 @@ class HipToCrossGLConverter:
                 return [f"// HIP destroy external memory: {args[0]}"]
         if name == "hipExternalMemoryGetMappedBuffer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP external memory mapped buffer: output: {output}, "
                     f"memory: {args[1]}, descriptor: {args[2]}"
                 ]
         if name == "hipExternalMemoryGetMappedMipmappedArray":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP external memory mapped mipmapped array: output: {output}, "
                     f"memory: {args[1]}, descriptor: {args[2]}"
@@ -2955,7 +2937,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP free mipmapped array: {args[0]}"]
         if name == "hipImportExternalSemaphore":
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP import external semaphore: output: {output}, "
                     f"descriptor: {args[1]}"
@@ -2977,14 +2959,14 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphicsGLRegisterBuffer":
             if len(args) >= 3:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP OpenGL register buffer: output: {output}, "
                     f"buffer: {args[1]}, flags: {args[2]}"
                 ]
         if name == "hipGraphicsGLRegisterImage":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP OpenGL register image: output: {output}, "
                     f"image: {args[1]}, target: {args[2]}, flags: {args[3]}"
@@ -3001,15 +2983,15 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipGraphicsResourceGetMappedPointer":
             if len(args) >= 3:
-                pointer_output = self.format_runtime_pointer_target(raw_args[0])
-                size_output = self.format_runtime_pointer_target(raw_args[1])
+                pointer_output = self.format_runtime_raw_output_target(raw_args[0])
+                size_output = self.format_runtime_raw_output_target(raw_args[1])
                 return [
                     f"// HIP graphics mapped pointer: pointer output: {pointer_output}, "
                     f"size output: {size_output}, resource: {args[2]}"
                 ]
         if name == "hipGraphicsSubResourceGetMappedArray":
             if len(args) >= 4:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP graphics mapped subresource array: output: {output}, "
                     f"resource: {args[1]}, array index: {args[2]}, mip level: {args[3]}"
@@ -3019,30 +3001,25 @@ class HipToCrossGLConverter:
     def format_hip_rtc_runtime_call(self, name, raw_args, args):
         if name == "hiprtcVersion":
             if len(args) >= 2:
-                major_output = self.format_runtime_pointer_target(raw_args[0])
-                minor_output = self.format_runtime_pointer_target(raw_args[1])
+                major_output = self.format_runtime_raw_output_target(raw_args[0])
+                minor_output = self.format_runtime_raw_output_target(raw_args[1])
                 major_output_name = self.get_runtime_pointer_target_name(raw_args[0])
                 minor_output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 if major_output_name is not None:
                     self.register_device_query_source(
                         major_output_name, "rtc.version.major"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[0])
                 if minor_output_name is not None:
                     self.register_device_query_source(
                         minor_output_name, "rtc.version.minor"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC version: major output: {major_output}, "
                     f"minor output: {minor_output}"
                 ]
         if name == "hiprtcCreateProgram":
             if len(args) >= 6:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIPRTC create program: output: {output}, source: {args[1]}, "
                     f"name: {args[2]}, headers: {args[3]}, header sources: {args[4]}, "
@@ -3050,8 +3027,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcDestroyProgram":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIPRTC destroy program: output: {output}"]
         if name == "hiprtcCompileProgram":
             if len(args) >= 3:
@@ -3065,7 +3041,7 @@ class HipToCrossGLConverter:
             "hiprtcGetProgramLogSize",
         }:
             if len(args) >= 2:
-                output = self.format_runtime_pointer_target(raw_args[1])
+                output = self.format_runtime_raw_output_target(raw_args[1])
                 output_name = self.get_runtime_pointer_target_name(raw_args[1])
                 artifact = {
                     "hiprtcGetCodeSize": "code size",
@@ -3081,8 +3057,6 @@ class HipToCrossGLConverter:
                     self.register_device_query_source(
                         output_name, f"{query}({args[0]})"
                     )
-                else:
-                    self.clear_lvalue_metadata_source(raw_args[1])
                 return [
                     f"// HIPRTC get {artifact}: program: {args[0]}, output: {output}"
                 ]
@@ -3105,16 +3079,14 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcGetLoweredName":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[2])
-                output = self.format_runtime_pointer_target(raw_args[2])
+                output = self.format_runtime_raw_output_target(raw_args[2])
                 return [
                     f"// HIPRTC get lowered name: program: {args[0]}, "
                     f"expression: {args[1]}, output: {output}"
                 ]
         if name == "hiprtcLinkCreate":
             if len(args) >= 4:
-                self.clear_lvalue_metadata_source(raw_args[3])
-                output = self.format_runtime_pointer_target(raw_args[3])
+                output = self.format_runtime_raw_output_target(raw_args[3])
                 return [
                     f"// HIPRTC link create: options: {args[0]}, "
                     f"option keys: {args[1]}, option values: {args[2]}, "
@@ -3137,10 +3109,8 @@ class HipToCrossGLConverter:
                 ]
         if name == "hiprtcLinkComplete":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[1])
-                binary_output = self.format_runtime_pointer_target(raw_args[1])
-                self.clear_lvalue_metadata_source(raw_args[2])
-                size_output = self.format_runtime_pointer_target(raw_args[2])
+                binary_output = self.format_runtime_raw_output_target(raw_args[1])
+                size_output = self.format_runtime_raw_output_target(raw_args[2])
                 size_output_name = self.get_runtime_pointer_target_name(raw_args[2])
                 if size_output_name is not None:
                     self.register_device_query_source(
@@ -3216,8 +3186,7 @@ class HipToCrossGLConverter:
                 return [comment]
         if name == "hipCtxCreate":
             if len(args) >= 3:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP context create: output: {output}, flags: {args[1]}, "
                     f"device: {args[2]}"
@@ -3227,8 +3196,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context destroy: {args[0]}"]
         if name == "hipCtxPopCurrent":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP context pop current: output: {output}"]
         if name == "hipCtxPushCurrent":
             if args:
@@ -3238,8 +3206,7 @@ class HipToCrossGLConverter:
                 return [f"// HIP context set current: {args[0]}"]
         if name == "hipCtxGetCurrent":
             if args:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [f"// HIP context get current: output: {output}"]
         if name == "hipCtxGetDevice":
             if args:
@@ -3288,8 +3255,7 @@ class HipToCrossGLConverter:
             return ["// HIP context synchronize"]
         if name == "hipDevicePrimaryCtxRetain":
             if len(args) >= 2:
-                self.clear_lvalue_metadata_source(raw_args[0])
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP primary context retain: output: {output}, "
                     f"device: {args[1]}"
@@ -3814,7 +3780,7 @@ class HipToCrossGLConverter:
                 ]
         if name == "hipUserObjectCreate":
             if len(args) >= 5:
-                output = self.format_runtime_pointer_target(raw_args[0])
+                output = self.format_runtime_raw_output_target(raw_args[0])
                 return [
                     f"// HIP user object create: output: {output}, "
                     f"resource: {args[1]}, destructor: {args[2]}, "

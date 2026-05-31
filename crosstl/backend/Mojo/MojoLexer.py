@@ -1,7 +1,7 @@
 """Lexer for importing Mojo source into CrossGL Translator."""
 
 import re
-from typing import Iterator, Tuple, List
+from typing import Iterator, List, Tuple
 
 # using sets for faster lookup
 SKIP_TOKENS = {"WHITESPACE", "COMMENT_SINGLE", "COMMENT_MULTI"}
@@ -221,5 +221,5 @@ class MojoLexer:
     @classmethod
     def from_file(cls, filepath: str, chunk_size: int = 8192) -> "MojoLexer":
         """Create a lexer instance from a Mojo source file."""
-        with open(filepath, "r") as f:
+        with open(filepath) as f:
             return cls(f.read())

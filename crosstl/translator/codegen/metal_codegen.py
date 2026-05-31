@@ -4,33 +4,33 @@ import ast as py_ast
 from hashlib import sha1
 
 from ..ast import (
-    AssignmentNode,
+    ArrayAccessNode,
     ArrayLiteralNode,
     ArrayNode,
-    ArrayAccessNode,
+    AssignmentNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    ContinueNode,
     ConstructorNode,
+    ContinueNode,
     DoWhileNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
-    IfNode,
     IdentifierNode,
+    IfNode,
     LoopNode,
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
-    PreprocessorNode,
     PointerAccessNode,
+    PointerType,
+    PreprocessorNode,
+    RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
-    RangeNode,
-    ReturnNode,
-    PointerType,
     ReferenceType,
+    ReturnNode,
     StructNode,
     SwitchNode,
     TernaryOpNode,
@@ -39,24 +39,15 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
-from .array_utils import (
-    parse_array_type,
-    format_c_style_array_declaration,
-    split_array_type_suffix,
-    get_array_size_from_node,
-    evaluate_literal_int_expression,
-    collect_literal_int_constants,
-    collect_struct_member_types,
-)
 from ..validation import (
+    IMAGE_RESOURCE_INTRINSIC_NAMES,
+    INTEGER_COORDINATE_INTRINSIC_NAMES,
     collect_cbuffer_declaration_name_conflicts,
     collect_cbuffer_member_global_conflicts,
     collect_duplicate_cbuffer_member_names,
     collect_duplicate_cbuffer_names,
     collect_non_resource_global_resource_shadows,
     expression_debug_name,
-    IMAGE_RESOURCE_INTRINSIC_NAMES,
-    INTEGER_COORDINATE_INTRINSIC_NAMES,
     texture_bias_argument_index,
     texture_compare_argument_index,
     texture_gather_component_argument_index,
@@ -67,6 +58,240 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .array_utils import (
+    collect_literal_int_constants,
+    collect_struct_member_types,
+    evaluate_literal_int_expression,
+    format_c_style_array_declaration,
+    get_array_size_from_node,
+    parse_array_type,
+    split_array_type_suffix,
+)
+from .enum_utils import (
+    collect_enum_struct_variant_fields,
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_plain_enums,
+    collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constants,
+    generate_enum_constructor_call,
+    generate_enum_constructor_expression,
+    generate_enum_constructor_functions,
+    generate_enum_structs,
+    generate_generic_enum_constants,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_structs,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+)
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    format_struct_constructor_expression,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+)
+from .glsl_buffer_layout import (
+    byte_offset_add,
+    byte_offset_expression,
+    collect_lowered_glsl_buffer_blocks,
+    glsl_buffer_block_node_type,
+    glsl_buffer_compound_binary_operator,
+    matrix_column_offsets,
+    vector_component_offsets,
+)
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    default_storage_image_channel_count,
+    explicit_image_access,
+    explicit_image_format,
+    floating_coordinate_dimension_from_type_name,
+    image_access_requirement_label,
+    image_access_satisfies_requirement,
+    image_atomic_helper_descriptor_fields,
+    image_atomic_helper_resource_metadata,
+    image_atomic_result_kind_error,
+    image_atomic_result_kind_mismatch,
+)
+from .image_access_contracts import (
+    image_atomic_value_arguments as shared_image_atomic_value_arguments,
+)
+from .image_access_contracts import (
+    image_atomic_value_kind_error,
+    image_atomic_value_kind_mismatch,
+    image_format_channel_count,
+    image_format_component_kind,
+    image_format_component_type,
+    image_format_or_default_channel_count,
+    image_format_result_type,
+    image_load_result_kind_error,
+    image_load_result_kind_mismatch,
+    image_load_result_shape_error,
+    image_load_result_shape_mismatch,
+    image_multisample_sample_argument_index,
+    image_multisample_sample_type_error,
+    image_multisample_sample_type_mismatch,
+    image_resource_metadata,
+    image_store_value_kind_error,
+    image_store_value_kind_mismatch,
+    image_store_value_shape_error,
+    image_store_value_shape_mismatch,
+    integer_coordinate_dimension_from_type_name,
+    is_floating_scalar_type_name,
+    is_image_atomic_operation,
+    is_image_format_attribute,
+    is_image_resource_operation,
+    is_integer_coordinate_type_name,
+    is_integer_scalar_type_name,
+    is_metal_float_image_resource,
+    is_metal_integer_image_type,
+    is_metal_storage_image_resource,
+    is_numeric_scalar_type_name,
+    is_projected_texture_basic_offset_operation,
+    is_projected_texture_basic_operation,
+    is_projected_texture_compare_operation,
+    is_projected_texture_grad_offset_operation,
+    is_projected_texture_grad_operation,
+    is_projected_texture_lod_offset_operation,
+    is_projected_texture_lod_operation,
+    is_projected_texture_operation,
+    is_resource_access_attribute,
+    is_resource_samples_query_operation,
+    is_resource_size_query_operation,
+    is_scalar_image_format,
+    is_storage_image_texture_comparison_operation,
+    is_storage_image_texture_operation,
+    is_texel_fetch_basic_operation,
+    is_texel_fetch_offset_operation,
+    is_texture_compare_basic_operation,
+    is_texture_compare_grad_offset_operation,
+    is_texture_compare_grad_operation,
+    is_texture_compare_lod_offset_operation,
+    is_texture_compare_lod_operation,
+    is_texture_compare_offset_operation,
+    is_texture_compare_operation,
+    is_texture_gather_basic_operation,
+    is_texture_gather_compare_operation,
+    is_texture_gather_multi_offset_operation,
+    is_texture_gather_operation,
+    is_texture_gather_single_offset_operation,
+    is_texture_query_levels_operation,
+    is_texture_query_lod_operation,
+    is_texture_sample_basic_offset_operation,
+    is_texture_sample_basic_operation,
+    is_texture_sample_grad_offset_operation,
+    is_texture_sample_grad_operation,
+    is_texture_sample_lod_offset_operation,
+    is_texture_sample_lod_operation,
+    is_texture_sample_offset_operation,
+    is_texture_sample_operation,
+    is_texture_sampling_operation,
+    is_two_component_image_format,
+    metal_storage_image_access_agnostic_type,
+    metal_storage_image_component_type,
+    numeric_component_count_from_type,
+    numeric_component_kind_from_type,
+    numeric_expression_component_count,
+    numeric_expression_component_kind,
+    numeric_scalar_expression_kind,
+    numeric_scalar_type_kind,
+    operation_argument_type_error,
+    operation_dimension_argument_error,
+    projected_texture_extra_argument_count_error,
+    projected_texture_offset_capability_error,
+    record_explicit_image_metadata,
+    requires_integer_coordinate,
+    resolve_image_atomic_component_kind,
+    resource_query_method_size_descriptor,
+    should_validate_image_load_result_shape,
+    storage_image_atomic_zero_value,
+    storage_image_format_store_constructor,
+    storage_image_load_component_suffix,
+    storage_image_store_constructors,
+    storage_image_store_value_expression,
+    storage_image_two_component_store_expression,
+    storage_image_zero_values,
+    supported_image_formats,
+)
+from .image_access_contracts import (
+    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
+)
+from .image_access_contracts import (
+    texture_compare_argument_error,
+    texture_compare_extra_argument_count_error,
+    texture_compare_offset_capability_error,
+    texture_compare_projected_coordinate_error,
+    texture_gather_capability_error,
+    texture_gather_compare_extra_argument_count_error,
+    texture_gather_component_count_error,
+    texture_gather_component_literal_error,
+    texture_gather_offset_argument_count_error,
+    texture_gather_offset_capability_error,
+    texture_gather_offsets_argument_count_error,
+    texture_gather_operation_error,
+    texture_image_resource_operation_names,
+    texture_multisample_sample_type_error,
+    texture_query_levels_multisample_expression,
+    texture_query_lod_coordinate_dimension_error,
+    texture_query_lod_coordinate_swizzle,
+    texture_query_lod_coordinate_type_error,
+    texture_resource_dimension_descriptor,
+    texture_resource_offset_dimension_key,
+    texture_sample_offset_capability_error,
+    texture_sample_offset_extra_argument_count_error,
+    texture_samples_query_expression,
+    unsupported_cube_texel_fetch_expression,
+    unsupported_image_atomic_expression,
+    unsupported_multisample_image_atomic_expression,
+    unsupported_multisample_image_store_expression,
+    unsupported_multisample_texel_fetch_offset_expression,
+    unsupported_multisample_texture_call_vector_expression,
+    unsupported_multisample_texture_compare_scalar_expression,
+    unsupported_multisample_texture_gather_compare_vector_expression,
+    unsupported_multisample_texture_query_lod_expression,
+    unsupported_projected_texture_call_expression,
+    unsupported_projected_texture_operation_error,
+    unsupported_storage_image_texture_comparison_scalar_expression,
+    unsupported_storage_image_texture_operation_vector_expression,
+    unsupported_texture_compare_operation_error,
+    unsupported_texture_compare_scalar_expression,
+    unsupported_texture_gather_call_expression,
+    unsupported_texture_gather_compare_call_expression,
+    unsupported_texture_offset_call_expression,
+    unsupported_texture_offset_operation_error,
+    unsupported_texture_query_levels_expression,
+    unsupported_texture_query_lod_expression,
+    unsupported_texture_samples_query_call_expression,
+    validate_texture_operation_arity,
+)
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
+from .resource_arrays import collect_resource_array_size_hints
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -79,223 +304,6 @@ from .stage_utils import (
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
-)
-from .resource_arrays import collect_resource_array_size_hints
-from .enum_utils import (
-    collect_enum_type_names,
-    collect_enum_struct_variant_fields,
-    collect_enum_variant_constructor_fields,
-    collect_enum_variant_constructors,
-    collect_enum_variant_constants,
-    collect_generic_enum_specialization_member_types,
-    collect_generic_enum_specializations,
-    collect_generic_enum_struct_definitions,
-    collect_generic_enum_variant_constants,
-    collect_plain_enums,
-    collect_struct_payload_enums,
-    enum_value_expression,
-    generate_enum_constructor_expression,
-    generate_generic_enum_constructor_functions,
-    generate_generic_enum_constants,
-    generate_generic_enum_structs,
-    generate_enum_constructor_call,
-    generate_enum_constructor_functions,
-    generate_enum_constants,
-    generate_enum_structs,
-    generic_enum_specialized_type_name,
-    infer_enum_constructor_type,
-)
-from .generic_struct_utils import (
-    collect_generic_struct_definitions,
-    collect_generic_struct_specialization_member_types,
-    collect_generic_struct_specializations,
-    format_struct_constructor_expression,
-    generate_generic_structs,
-    generate_struct_constructor_expression,
-    generic_struct_specialized_type_name,
-    infer_struct_constructor_type,
-)
-from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
-    generic_function_call_name,
-    generic_function_emission_list,
-    generic_function_parameters,
-    numeric_trait_method_result_type,
-    prepare_generic_function_specializations,
-)
-from .glsl_buffer_layout import (
-    byte_offset_add,
-    byte_offset_expression,
-    collect_lowered_glsl_buffer_blocks,
-    glsl_buffer_compound_binary_operator,
-    glsl_buffer_block_node_type,
-    matrix_column_offsets,
-    vector_component_offsets,
-)
-from .image_access_contracts import (
-    collect_function_image_access_requirements,
-    collect_function_parameter_names,
-    default_storage_image_channel_count,
-    explicit_image_access,
-    explicit_image_format,
-    floating_coordinate_dimension_from_type_name,
-    image_atomic_result_kind_error,
-    image_atomic_result_kind_mismatch,
-    image_atomic_value_arguments as shared_image_atomic_value_arguments,
-    image_atomic_value_kind_error,
-    image_atomic_value_kind_mismatch,
-    image_load_result_kind_error,
-    image_load_result_kind_mismatch,
-    image_load_result_shape_error,
-    image_load_result_shape_mismatch,
-    image_format_or_default_channel_count,
-    image_format_channel_count,
-    image_format_component_kind,
-    image_format_result_type,
-    image_format_component_type,
-    image_access_requirement_label,
-    image_access_satisfies_requirement,
-    image_atomic_helper_descriptor_fields,
-    image_atomic_helper_resource_metadata,
-    image_multisample_sample_argument_index,
-    image_multisample_sample_type_error,
-    image_multisample_sample_type_mismatch,
-    image_store_value_kind_error,
-    image_store_value_kind_mismatch,
-    image_store_value_shape_error,
-    image_store_value_shape_mismatch,
-    is_image_format_attribute,
-    is_image_atomic_operation,
-    is_image_resource_operation,
-    integer_coordinate_dimension_from_type_name,
-    is_floating_scalar_type_name,
-    is_integer_coordinate_type_name,
-    is_integer_scalar_type_name,
-    is_numeric_scalar_type_name,
-    is_metal_float_image_resource,
-    is_metal_integer_image_type,
-    is_metal_storage_image_resource,
-    is_projected_texture_basic_offset_operation,
-    is_projected_texture_basic_operation,
-    is_projected_texture_compare_operation,
-    is_projected_texture_grad_offset_operation,
-    is_projected_texture_grad_operation,
-    is_projected_texture_lod_offset_operation,
-    is_projected_texture_lod_operation,
-    is_projected_texture_operation,
-    is_resource_samples_query_operation,
-    is_resource_size_query_operation,
-    is_resource_access_attribute,
-    is_scalar_image_format,
-    is_storage_image_texture_comparison_operation,
-    is_storage_image_texture_operation,
-    is_texel_fetch_basic_operation,
-    is_texel_fetch_offset_operation,
-    is_texture_compare_operation,
-    is_texture_compare_basic_operation,
-    is_texture_compare_grad_offset_operation,
-    is_texture_compare_grad_operation,
-    is_texture_compare_lod_offset_operation,
-    is_texture_compare_lod_operation,
-    is_texture_compare_offset_operation,
-    is_texture_gather_compare_operation,
-    is_texture_gather_basic_operation,
-    is_texture_gather_operation,
-    is_texture_gather_multi_offset_operation,
-    is_texture_gather_single_offset_operation,
-    is_texture_query_lod_operation,
-    is_texture_query_levels_operation,
-    is_texture_sample_basic_offset_operation,
-    is_texture_sample_basic_operation,
-    is_texture_sample_grad_offset_operation,
-    is_texture_sample_grad_operation,
-    is_texture_sample_lod_offset_operation,
-    is_texture_sample_lod_operation,
-    is_texture_sample_operation,
-    is_texture_sampling_operation,
-    is_texture_sample_offset_operation,
-    is_two_component_image_format,
-    metal_storage_image_access_agnostic_type,
-    metal_storage_image_component_type,
-    numeric_component_count_from_type,
-    numeric_component_kind_from_type,
-    numeric_expression_component_count,
-    numeric_expression_component_kind,
-    numeric_scalar_expression_kind,
-    numeric_scalar_type_kind,
-    operation_argument_type_error,
-    operation_dimension_argument_error,
-    image_resource_metadata,
-    record_explicit_image_metadata,
-    projected_texture_offset_capability_error,
-    projected_texture_extra_argument_count_error,
-    resource_query_method_size_descriptor,
-    resolve_image_atomic_component_kind,
-    should_validate_image_load_result_shape,
-    storage_image_atomic_zero_value,
-    storage_image_format_store_constructor,
-    storage_image_load_component_suffix,
-    storage_image_store_constructors,
-    storage_image_store_value_expression,
-    storage_image_two_component_store_expression,
-    storage_image_zero_values,
-    supported_image_formats,
-    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
-    texture_compare_argument_error,
-    texture_compare_extra_argument_count_error,
-    texture_compare_offset_capability_error,
-    texture_compare_projected_coordinate_error,
-    texture_gather_capability_error,
-    texture_gather_component_count_error,
-    texture_gather_component_literal_error,
-    texture_gather_compare_extra_argument_count_error,
-    texture_gather_offset_argument_count_error,
-    texture_gather_offset_capability_error,
-    texture_gather_offsets_argument_count_error,
-    texture_gather_operation_error,
-    texture_image_resource_operation_names,
-    texture_query_levels_multisample_expression,
-    texture_query_lod_coordinate_dimension_error,
-    texture_query_lod_coordinate_swizzle,
-    texture_query_lod_coordinate_type_error,
-    texture_resource_dimension_descriptor,
-    texture_resource_offset_dimension_key,
-    texture_samples_query_expression,
-    texture_sample_offset_extra_argument_count_error,
-    texture_sample_offset_capability_error,
-    texture_multisample_sample_type_error,
-    validate_texture_operation_arity,
-    requires_integer_coordinate,
-    unsupported_image_atomic_expression,
-    unsupported_cube_texel_fetch_expression,
-    unsupported_multisample_image_atomic_expression,
-    unsupported_multisample_image_store_expression,
-    unsupported_multisample_texture_call_vector_expression,
-    unsupported_multisample_texture_compare_scalar_expression,
-    unsupported_multisample_texture_gather_compare_vector_expression,
-    unsupported_multisample_texture_query_lod_expression,
-    unsupported_multisample_texel_fetch_offset_expression,
-    unsupported_projected_texture_call_expression,
-    unsupported_storage_image_texture_comparison_scalar_expression,
-    unsupported_storage_image_texture_operation_vector_expression,
-    unsupported_texture_gather_compare_call_expression,
-    unsupported_texture_gather_call_expression,
-    unsupported_texture_compare_scalar_expression,
-    unsupported_texture_compare_operation_error,
-    unsupported_texture_offset_call_expression,
-    unsupported_texture_offset_operation_error,
-    unsupported_projected_texture_operation_error,
-    unsupported_texture_query_levels_expression,
-    unsupported_texture_query_lod_expression,
-    unsupported_texture_samples_query_call_expression,
-)
-from .match_utils import (
-    generate_match_expression_assignment,
-    generate_ordered_conditional_match,
-    generate_switch_match,
-    infer_match_expression_result_type,
-    is_switch_lowerable_match,
 )
 
 
@@ -3538,6 +3546,44 @@ class MetalCodeGen:
             )
             if acceleration_structure_alias_type is not None:
                 var_type = acceleration_structure_alias_type
+            initial_value = getattr(stmt, "initial_value", None)
+            acceleration_structure_array_alias = (
+                self.unsupported_metal_acceleration_structure_array_alias_source(
+                    initial_value
+                )
+            )
+            if (
+                acceleration_structure_array_alias is not None
+                and self.is_acceleration_structure_type(var_type)
+            ):
+                self.local_variable_types[stmt.name] = var_type
+                self.unsupported_metal_acceleration_structure_array_variables[
+                    stmt.name
+                ] = self.unsupported_metal_acceleration_structure_array_variables[
+                    acceleration_structure_array_alias
+                ]
+                diagnostic = self.unsupported_metal_acceleration_structure_array_alias_diagnostic(
+                    stmt.name, acceleration_structure_array_alias
+                )
+                return f"{indent_str}{diagnostic}"
+            ray_function_table_array_alias = (
+                self.unsupported_metal_ray_function_table_array_alias_source(
+                    initial_value
+                )
+            )
+            if ray_function_table_array_alias is not None:
+                self.local_variable_types[stmt.name] = var_type
+                self.unsupported_metal_ray_function_table_array_variables[stmt.name] = (
+                    self.unsupported_metal_ray_function_table_array_variables[
+                        ray_function_table_array_alias
+                    ]
+                )
+                diagnostic = (
+                    self.unsupported_metal_ray_function_table_array_alias_diagnostic(
+                        stmt.name, ray_function_table_array_alias
+                    )
+                )
+                return f"{indent_str}{diagnostic}"
             self.local_variable_types[stmt.name] = var_type
             self.current_address_space_variables[stmt.name] = (
                 self.local_variable_address_space(stmt)
@@ -3558,7 +3604,6 @@ class MetalCodeGen:
                 self.map_type(var_type), stmt.name
             )
             declaration = f"{self.local_variable_qualifier(stmt)}{declaration}"
-            initial_value = getattr(stmt, "initial_value", None)
             if isinstance(initial_value, MatchNode):
                 code = f"{indent_str}{declaration};\n"
                 code += generate_match_expression_assignment(
@@ -5228,6 +5273,11 @@ class MetalCodeGen:
             )
             if unsupported_value is not None:
                 return unsupported_value
+            unsupported_value = (
+                self.unsupported_metal_ray_function_table_array_expression(expr)
+            )
+            if unsupported_value is not None:
+                return unsupported_value
             if hasattr(expr, "name"):
                 return enum_value_expression(self, expr.name)
             else:
@@ -6190,7 +6240,7 @@ class MetalCodeGen:
         return code
 
     def generate_ray_tracing_op_expression(self, expr):
-        raw_args = self.normalized_metal_ray_tracing_args(expr.arguments)
+        raw_args = self.normalized_metal_intrinsic_args(expr.arguments)
         rendered_args = [self.generate_expression(arg) for arg in raw_args]
         if expr.operation == "TraceRay":
             trace_ray = self.generate_metal_trace_ray(raw_args, rendered_args)
@@ -6227,7 +6277,7 @@ class MetalCodeGen:
 
         return f"{expr.operation}({', '.join(rendered_args)})"
 
-    def normalized_metal_ray_tracing_args(self, args):
+    def normalized_metal_intrinsic_args(self, args):
         normalized = []
         index = 0
         while index < len(args):
@@ -6962,6 +7012,21 @@ class MetalCodeGen:
             f"({name}) */\n"
         )
 
+    def unsupported_metal_acceleration_structure_array_alias_diagnostic(
+        self, name, source_name
+    ):
+        return (
+            "/* unsupported Metal ray tracing resource: local "
+            f"acceleration_structure alias '{name}' cannot be initialized from "
+            f"unsupported acceleration_structure array '{source_name}' */\n"
+        )
+
+    def unsupported_metal_acceleration_structure_array_alias_source(self, expr):
+        source_name = self.expression_name(expr)
+        if source_name in self.unsupported_metal_acceleration_structure_array_variables:
+            return source_name
+        return None
+
     def unsupported_metal_acceleration_structure_array_reason(self, expr):
         resource_name = self.expression_name(expr)
         if (
@@ -6995,6 +7060,18 @@ class MetalCodeGen:
             f"are not valid Metal buffer parameters ({name}) */\n"
         )
 
+    def unsupported_metal_ray_function_table_array_alias_diagnostic(
+        self, name, source_name
+    ):
+        table_kind = self.unsupported_metal_ray_function_table_array_variables.get(
+            source_name, "ray function table"
+        )
+        return (
+            "/* unsupported Metal ray tracing resource: local "
+            f"{table_kind} alias '{name}' cannot be initialized from "
+            f"unsupported {table_kind} array '{source_name}' */\n"
+        )
+
     def metal_ray_function_table_kind(self, vtype):
         if self.is_visible_function_table_type(vtype):
             return "visible_function_table"
@@ -7009,6 +7086,12 @@ class MetalCodeGen:
         if self.resource_array_parameter(vtype, node) is None:
             return None
         return table_kind
+
+    def unsupported_metal_ray_function_table_array_alias_source(self, expr):
+        source_name = self.expression_name(expr)
+        if source_name in self.unsupported_metal_ray_function_table_array_variables:
+            return source_name
+        return None
 
     def unsupported_metal_ray_function_table_array_reason(self, expr):
         table_name = self.expression_name(expr)
@@ -7507,19 +7590,20 @@ class MetalCodeGen:
         return f"({base_index}) + {offset}"
 
     def generate_mesh_op_expression(self, expr):
+        arguments = self.normalized_metal_intrinsic_args(expr.arguments)
         if (
             expr.operation == "SetMeshOutputCounts"
             and self.current_metal_mesh_output_parameter
-            and len(expr.arguments) >= 2
+            and len(arguments) >= 2
         ):
-            primitive_count = self.generate_expression(expr.arguments[1])
+            primitive_count = self.generate_expression(arguments[1])
             return (
                 f"{self.current_metal_mesh_output_parameter}"
                 f".set_primitive_count({primitive_count})"
             )
         if expr.operation == "DispatchMesh":
             if (
-                len(expr.arguments) == 4
+                len(arguments) == 4
                 and self.current_metal_mesh_payload_parameter is None
             ):
                 return (
@@ -7534,39 +7618,37 @@ class MetalCodeGen:
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 4
+            and len(arguments) == 4
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(
-                expr.arguments[:3]
-            )
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments[:3])
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments[:3])
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments[:3])
                 )
             payload_assignment = self.metal_dispatch_mesh_payload_assignment(
-                expr.arguments[3]
+                arguments[3]
             )
             return "\n".join([payload_assignment, grid_assignment])
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 3
+            and len(arguments) == 3
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments)
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments)
                 )
             return grid_assignment
         if (
             expr.operation == "DispatchMesh"
             and self.current_metal_mesh_grid_properties_parameter
-            and len(expr.arguments) == 1
+            and len(arguments) == 1
         ):
-            grid_assignment = self.metal_dispatch_mesh_grid_assignment(expr.arguments)
+            grid_assignment = self.metal_dispatch_mesh_grid_assignment(arguments)
             if grid_assignment is None:
                 return self.unsupported_metal_mesh_dispatch(
-                    self.metal_dispatch_mesh_grid_argument_reason(expr.arguments)
+                    self.metal_dispatch_mesh_grid_argument_reason(arguments)
                 )
             return grid_assignment
         return None
@@ -8511,6 +8593,8 @@ class MetalCodeGen:
             return f"{address_space} {referenced_type}& {name}"
 
         if self.is_array_type_node(raw_param_type):
+            if self.resource_array_parameter(raw_param_type, node) is not None:
+                return None
             binding = self.explicit_buffer_binding_index(node)
             qualifiers = self.parameter_qualifier_names(node)
             address_space = self.effective_parameter_address_space(
@@ -8628,6 +8712,11 @@ class MetalCodeGen:
     def parameter_variable_address_space(
         self, raw_param_type, node=None, shader_type=None
     ):
+        if (
+            self.is_array_type_node(raw_param_type)
+            and self.resource_array_parameter(raw_param_type, node) is not None
+        ):
+            return None
         if not (
             isinstance(raw_param_type, (PointerType, ReferenceType))
             or self.is_array_type_node(raw_param_type)
@@ -10696,10 +10785,11 @@ class MetalCodeGen:
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
             if not isinstance(node, MeshOpNode):
                 continue
-            if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+            arguments = self.normalized_metal_intrinsic_args(node.arguments)
+            if node.operation != "DispatchMesh" or len(arguments) != 4:
                 continue
             payload_type = self.metal_dispatch_mesh_payload_type(
-                node.arguments[3], declared_types
+                arguments[3], declared_types
             )
             if payload_type is not None:
                 payload_types.add(payload_type)
@@ -10792,10 +10882,8 @@ class MetalCodeGen:
         for node in self.iter_ast_nodes(getattr(func, "body", None)):
             if not isinstance(node, MeshOpNode) or node.operation != operation:
                 continue
-            if (
-                argument_counts is not None
-                and len(node.arguments) not in argument_counts
-            ):
+            arguments = self.normalized_metal_intrinsic_args(node.arguments)
+            if argument_counts is not None and len(arguments) not in argument_counts:
                 continue
             return True
         return False
@@ -11182,6 +11270,11 @@ class MetalCodeGen:
         )
         sampler_names = self.global_sampler_names()
         texture_alias_sources = self.local_texture_alias_sources(func, texture_names)
+        acceleration_structure_alias_types = (
+            self.local_acceleration_structure_dependency_types(
+                func, acceleration_structure_names
+            )
+        )
         dependencies = set()
 
         for node in self.iter_ast_nodes(getattr(func, "body", [])):
@@ -11219,10 +11312,97 @@ class MetalCodeGen:
                     local_names,
                     visible_function_table_names,
                     intersection_function_table_names,
+                    acceleration_structure_alias_types,
                     dependencies,
                 )
 
         return dependencies
+
+    def local_acceleration_structure_dependency_types(
+        self, func, acceleration_structure_names
+    ):
+        aliases = {}
+        for param in getattr(func, "parameters", getattr(func, "params", [])):
+            param_name = getattr(param, "name", None)
+            param_type = self.type_name_string(
+                getattr(
+                    param,
+                    "param_type",
+                    getattr(param, "var_type", getattr(param, "vtype", None)),
+                )
+            )
+            if (
+                param_name
+                and param_type
+                and self.is_acceleration_structure_type(param_type)
+                and not self.metal_type_is_pointer_like(param_type)
+            ):
+                aliases[param_name] = self.map_resource_type_with_format(param_type)
+
+        for node in self.iter_ast_nodes(getattr(func, "body", [])):
+            if not isinstance(node, VariableNode):
+                continue
+            name = getattr(node, "name", None)
+            if not name:
+                continue
+            initial_type = self.acceleration_structure_dependency_argument_type(
+                getattr(node, "initial_value", None),
+                aliases,
+                acceleration_structure_names,
+            )
+            if initial_type is None:
+                continue
+
+            declared_type = self.local_variable_type_node(node)
+            declared_type_name = self.type_name_string(declared_type)
+            if not declared_type_name:
+                aliases[name] = initial_type
+                continue
+            if not self.is_acceleration_structure_type(declared_type_name):
+                continue
+
+            declared_resource_type = self.map_resource_type_with_format(
+                declared_type_name, node
+            )
+            if declared_resource_type == initial_type:
+                aliases[name] = declared_resource_type
+        return aliases
+
+    def acceleration_structure_dependency_argument_type(
+        self, argument, alias_types=None, acceleration_structure_names=None
+    ):
+        if argument is None:
+            return None
+
+        argument_type = self.expression_result_type(argument)
+        if argument_type and self.is_acceleration_structure_type(argument_type):
+            if self.metal_type_is_pointer_like(argument_type):
+                return None
+            return self.map_resource_type_with_format(argument_type)
+
+        argument_name = self.expression_name(argument)
+        if not argument_name:
+            return None
+        if alias_types and argument_name in alias_types:
+            return alias_types[argument_name]
+
+        for (
+            acceleration_structure_variable,
+            _,
+            mapped_type,
+            array_size,
+        ) in self.acceleration_structure_variables:
+            if getattr(acceleration_structure_variable, "name", None) != argument_name:
+                continue
+            if (
+                acceleration_structure_names is not None
+                and argument_name not in acceleration_structure_names
+            ):
+                return None
+            if array_size is not None and not isinstance(argument, ArrayAccessNode):
+                return None
+            return mapped_type
+        return None
 
     def local_texture_alias_sources(self, func, texture_names):
         aliases = {}
@@ -11260,6 +11440,7 @@ class MetalCodeGen:
         local_names,
         visible_function_table_names,
         intersection_function_table_names,
+        acceleration_structure_alias_types,
         dependencies,
     ):
         operation = getattr(call, "operation", None)
@@ -11267,8 +11448,14 @@ class MetalCodeGen:
             args = getattr(call, "arguments", [])
             if not args:
                 return
+            acceleration_structure_type = (
+                self.acceleration_structure_dependency_argument_type(
+                    args[0], acceleration_structure_alias_types
+                )
+                or self.metal_acceleration_structure_argument_type(args[0])
+            )
             table = self.default_intersection_function_table(
-                self.metal_acceleration_structure_argument_type(args[0])
+                acceleration_structure_type
             )
             if (
                 table is not None
@@ -11582,6 +11769,14 @@ class MetalCodeGen:
             param_name, param_type = (
                 parameter_infos[index] if index < len(parameter_infos) else (None, None)
             )
+            if self.is_unsupported_metal_ray_function_table_array_parameter(
+                func_name, index
+            ):
+                continue
+            if self.is_unsupported_metal_acceleration_structure_array_parameter(
+                func_name, index
+            ):
+                continue
             args.append(self.generate_expression(arg))
             if self.structured_buffer_parameter_requires_length(func_name, param_name):
                 length = self.structured_buffer_length_data_argument(arg)
@@ -11594,6 +11789,42 @@ class MetalCodeGen:
                 if counter is not None:
                     args.append(counter)
         return args
+
+    def is_unsupported_metal_ray_function_table_array_parameter(self, func_name, index):
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        if index >= len(parameter_nodes):
+            return False
+        parameter = parameter_nodes[index]
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        previous_function_name = self.current_function_name
+        self.current_function_name = func_name
+        try:
+            return (
+                self.metal_ray_function_table_array_parameter_kind(raw_type, parameter)
+                is not None
+            )
+        finally:
+            self.current_function_name = previous_function_name
+
+    def is_unsupported_metal_acceleration_structure_array_parameter(
+        self, func_name, index
+    ):
+        parameter_nodes = self.function_parameter_nodes.get(func_name, [])
+        if index >= len(parameter_nodes):
+            return False
+        parameter = parameter_nodes[index]
+        raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        previous_function_name = self.current_function_name
+        self.current_function_name = func_name
+        try:
+            return (
+                self.metal_acceleration_structure_array_parameter_kind(
+                    raw_type, parameter
+                )
+                is not None
+            )
+        finally:
+            self.current_function_name = previous_function_name
 
     def required_function_resource_argument_names(self, func_name):
         names = [

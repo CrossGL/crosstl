@@ -1,5 +1,7 @@
-import pytest
 from typing import List
+
+import pytest
+
 from crosstl.backend.common_ast import MethodCallNode, TextureSampleNode
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser

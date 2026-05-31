@@ -1,11 +1,12 @@
-import pytest
-import crosstl.translator
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
-from crosstl.translator.parser import Parser
-from crosstl.translator.lexer import Lexer
+from typing import List
+
+import pytest
+
+import crosstl.translator
 from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -17,6 +18,8 @@ from crosstl.translator.ast import (
     BreakNode,
     ConstructorNode,
     ConstructorPatternNode,
+    EnumNode,
+    EnumVariantNode,
     ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
@@ -28,8 +31,8 @@ from crosstl.translator.ast import (
     IdentifierPatternNode,
     IfNode,
     LambdaNode,
-    LiteralPatternNode,
     LiteralNode,
+    LiteralPatternNode,
     LoopNode,
     MatchArmNode,
     MatchNode,
@@ -41,17 +44,17 @@ from crosstl.translator.ast import (
     ReferenceType,
     ReturnNode,
     ShaderNode,
+    ShaderStage,
     StructMemberNode,
-    StructPatternNode,
     StructNode,
-    EnumNode,
-    EnumVariantNode,
+    StructPatternNode,
     TernaryOpNode,
     VariableNode,
     WhileNode,
 )
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
-from typing import List
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -202,66 +205,243 @@ mod math {
         }
     }
 
-    macro_rules! matrix_type {
-        ($name:ident) => {
-            #[derive(Debug, Clone, Copy)]
-            pub struct $name<T>(PhantomData<T>);
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+    }
 
-            impl<T> Default for $name<T> {
-                fn default() -> Self {
-                    Self(PhantomData)
-                }
+    impl<T> Mat2<T> {
+        pub fn new(m00: T, m01: T, m10: T, m11: T) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
             }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+        pub c2: Vec3<T>,
+    }
+
+    impl<T> Mat3<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m20: T,
+            m21: T,
+            m22: T,
+        ) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+                c2: Vec3::new(m20, m21, m22),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+        pub c2: Vec4<T>,
+        pub c3: Vec4<T>,
+    }
+
+    impl<T> Mat4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m23: T,
+            m30: T,
+            m31: T,
+            m32: T,
+            m33: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+                c2: Vec4::new(m20, m21, m22, m23),
+                c3: Vec4::new(m30, m31, m32, m33),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2x3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+    }
+
+    impl<T> Mat2x3<T> {
+        pub fn new(m00: T, m01: T, m02: T, m10: T, m11: T, m12: T) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat2x4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+    }
+
+    impl<T> Mat2x4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3x2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+        pub c2: Vec2<T>,
+    }
+
+    impl<T> Mat3x2<T> {
+        pub fn new(m00: T, m01: T, m10: T, m11: T, m20: T, m21: T) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
+                c2: Vec2::new(m20, m21),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat3x4<T> {
+        pub c0: Vec4<T>,
+        pub c1: Vec4<T>,
+        pub c2: Vec4<T>,
+    }
+
+    impl<T> Mat3x4<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m03: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m13: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m23: T,
+        ) -> Self {
+            Self {
+                c0: Vec4::new(m00, m01, m02, m03),
+                c1: Vec4::new(m10, m11, m12, m13),
+                c2: Vec4::new(m20, m21, m22, m23),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4x2<T> {
+        pub c0: Vec2<T>,
+        pub c1: Vec2<T>,
+        pub c2: Vec2<T>,
+        pub c3: Vec2<T>,
+    }
+
+    impl<T> Mat4x2<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m10: T,
+            m11: T,
+            m20: T,
+            m21: T,
+            m30: T,
+            m31: T,
+        ) -> Self {
+            Self {
+                c0: Vec2::new(m00, m01),
+                c1: Vec2::new(m10, m11),
+                c2: Vec2::new(m20, m21),
+                c3: Vec2::new(m30, m31),
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct Mat4x3<T> {
+        pub c0: Vec3<T>,
+        pub c1: Vec3<T>,
+        pub c2: Vec3<T>,
+        pub c3: Vec3<T>,
+    }
+
+    impl<T> Mat4x3<T> {
+        pub fn new(
+            m00: T,
+            m01: T,
+            m02: T,
+            m10: T,
+            m11: T,
+            m12: T,
+            m20: T,
+            m21: T,
+            m22: T,
+            m30: T,
+            m31: T,
+            m32: T,
+        ) -> Self {
+            Self {
+                c0: Vec3::new(m00, m01, m02),
+                c1: Vec3::new(m10, m11, m12),
+                c2: Vec3::new(m20, m21, m22),
+                c3: Vec3::new(m30, m31, m32),
+            }
+        }
+    }
+
+    macro_rules! matrix_default {
+        ($($name:ident),+) => {
+            $(
+                impl<T> Default for $name<T> {
+                    fn default() -> Self {
+                        unsafe { std::mem::zeroed() }
+                    }
+                }
+            )+
         };
     }
 
-    matrix_type!(Mat2);
-    matrix_type!(Mat3);
-    matrix_type!(Mat4);
-    matrix_type!(Mat2x3);
-    matrix_type!(Mat2x4);
-    matrix_type!(Mat3x2);
-    matrix_type!(Mat3x4);
-    matrix_type!(Mat4x2);
-    matrix_type!(Mat4x3);
-
-    macro_rules! matrix_constructor {
-        ($name:ident, $($arg:ident),+) => {
-            impl<T> $name<T> {
-                pub fn new($($arg: T),+) -> Self {
-                    Self(PhantomData)
-                }
-            }
-        };
-    }
-
-    matrix_constructor!(Mat2, _m00, _m01, _m10, _m11);
-    matrix_constructor!(Mat3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22);
-    matrix_constructor!(
-        Mat4,
-        _m00,
-        _m01,
-        _m02,
-        _m03,
-        _m10,
-        _m11,
-        _m12,
-        _m13,
-        _m20,
-        _m21,
-        _m22,
-        _m23,
-        _m30,
-        _m31,
-        _m32,
-        _m33
-    );
-    matrix_constructor!(Mat2x3, _m00, _m01, _m02, _m10, _m11, _m12);
-    matrix_constructor!(Mat2x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13);
-    matrix_constructor!(Mat3x2, _m00, _m01, _m10, _m11, _m20, _m21);
-    matrix_constructor!(Mat3x4, _m00, _m01, _m02, _m03, _m10, _m11, _m12, _m13, _m20, _m21, _m22, _m23);
-    matrix_constructor!(Mat4x2, _m00, _m01, _m10, _m11, _m20, _m21, _m30, _m31);
-    matrix_constructor!(Mat4x3, _m00, _m01, _m02, _m10, _m11, _m12, _m20, _m21, _m22, _m30, _m31, _m32);
+    matrix_default!(Mat2, Mat3, Mat4, Mat2x3, Mat2x4, Mat3x2, Mat3x4, Mat4x2, Mat4x3);
 
     macro_rules! matrix_arithmetic {
         ($name:ident) => {
@@ -2002,6 +2182,25 @@ mod gpu {
     use super::math::{Vec2, Vec3, Vec4};
     use std::marker::PhantomData;
 
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayTracingAccelerationStructure;
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayDesc {
+        pub origin: Vec3<f32>,
+        pub t_min: f32,
+        pub direction: Vec3<f32>,
+        pub t_max: f32,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct BuiltInTriangleIntersectionAttributes {
+        pub barycentrics: Vec2<f32>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayQuery;
+
     #[derive(Debug, Clone, Copy)]
     pub struct Texture1D<T>(PhantomData<T>);
 
@@ -2273,12 +2472,22 @@ mod gpu {
     impl<T> ImageLike<T> for Image2DMSArray<T> {}
 
     pub trait BufferLike<T> {}
+    pub trait ReadableBufferLike<T> {}
+    pub trait WritableBufferLike<T> {}
     impl<T> BufferLike<T> for Buffer<T> {}
+    impl<T> ReadableBufferLike<T> for Buffer<T> {}
     impl<T> BufferLike<T> for RwBuffer<T> {}
+    impl<T> ReadableBufferLike<T> for RwBuffer<T> {}
+    impl<T> WritableBufferLike<T> for RwBuffer<T> {}
     impl<T> BufferLike<T> for AppendBuffer<T> {}
+    impl<T> WritableBufferLike<T> for AppendBuffer<T> {}
     impl<T> BufferLike<T> for ConsumeBuffer<T> {}
+    impl<T> ReadableBufferLike<T> for ConsumeBuffer<T> {}
     impl BufferLike<u32> for ByteAddressBuffer {}
+    impl ReadableBufferLike<u32> for ByteAddressBuffer {}
     impl BufferLike<u32> for RwByteAddressBuffer {}
+    impl ReadableBufferLike<u32> for RwByteAddressBuffer {}
+    impl WritableBufferLike<u32> for RwByteAddressBuffer {}
 
     pub trait SampleCoord {}
     impl SampleCoord for f32 {}
@@ -3337,6 +3546,18 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_load_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+    ) -> Value
+    where
+        Image: ImageLike<Value>,
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_store<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
@@ -3347,9 +3568,32 @@ mod gpu {
     {
     }
 
+    pub fn image_store_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    )
+    where
+        Image: ImageLike<Value>,
+    {
+    }
+
     pub fn image_atomic_add<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_add_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3369,9 +3613,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_min_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_max<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_max_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3391,9 +3659,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_and_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_or<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_or_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3413,9 +3705,33 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_xor_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn image_atomic_exchange<Image, Coord, Value>(
         _image: Image,
         _coord: Coord,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
+    pub fn image_atomic_exchange_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
         _value: Value,
     ) -> Value
     where
@@ -3436,12 +3752,25 @@ mod gpu {
         Value::default()
     }
 
+    pub fn image_atomic_comp_swap_sample<Image, Coord, Sample, Value>(
+        _image: Image,
+        _coord: Coord,
+        _sample: Sample,
+        _compare: Value,
+        _value: Value,
+    ) -> Value
+    where
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn buffer_load<Resource, Index, Value>(
         _resource: Resource,
         _index: Index,
     ) -> Value
     where
-        Resource: BufferLike<Value>,
+        Resource: ReadableBufferLike<Value>,
         Value: Default,
     {
         Value::default()
@@ -3453,11 +3782,103 @@ mod gpu {
         _value: Value,
     )
     where
-        Resource: BufferLike<Value>,
+        Resource: WritableBufferLike<Value>,
     {
     }
 
+    pub fn buffer_append<Resource, Value>(_resource: Resource, _value: Value)
+    where
+        Resource: WritableBufferLike<Value>,
+    {
+    }
+
+    pub fn buffer_consume<Resource, Value>(_resource: Resource) -> Value
+    where
+        Resource: ReadableBufferLike<Value>,
+        Value: Default,
+    {
+        Value::default()
+    }
+
     pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
+
+    pub fn ray_launch_id() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn ray_launch_size() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn ray_hit_t() -> f32 {
+        0.0
+    }
+
+    pub fn ray_hit_kind() -> u32 {
+        0
+    }
+
+    pub fn ray_world_origin() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_world_direction() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_object_origin() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_object_direction() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_t_min() -> f32 {
+        0.0
+    }
+
+    pub fn ray_incoming_flags() -> u32 {
+        0
+    }
+
+    pub fn ray_instance_custom_index() -> u32 {
+        0
+    }
+
+    pub fn ray_geometry_index() -> u32 {
+        0
+    }
+
+    pub fn trace_ray<AccelerationStructure, Flags, Mask, HitGroup, Multiplier, Miss, Ray, Payload>(
+        _acceleration_structure: AccelerationStructure,
+        _flags: Flags,
+        _mask: Mask,
+        _hit_group: HitGroup,
+        _multiplier: Multiplier,
+        _miss: Miss,
+        _ray: Ray,
+        _payload: Payload,
+    ) {
+    }
+
+    pub fn call_shader<ShaderIndex, CallableData>(
+        _shader_index: ShaderIndex,
+        _data: CallableData,
+    ) {
+    }
+
+    pub fn report_hit<Distance, Kind, Attributes>(
+        _distance: Distance,
+        _kind: Kind,
+        _attributes: Attributes,
+    ) -> bool {
+        false
+    }
+
+    pub fn ignore_hit() {}
+
+    pub fn accept_hit_and_end_search() {}
 }
 """
 
@@ -15538,7 +15959,7 @@ def test_default_composite_statics_use_lazy_lock():
     assert "static MODEL: Mat4<f32> = Default::default();" not in generated_code
 
 
-def test_lazy_lock_static_use_sites_are_dereferenced():
+def test_lazy_lock_static_use_sites_are_dereferenced(tmp_path):
     code = """
     vec3 direction;
     float values[] = {1.0, 2.0};
@@ -15558,9 +15979,10 @@ def test_lazy_lock_static_use_sites_are_dereferenced():
 
     assert "return ((*DIRECTION).x + (*VALUES)[0]);" in generated_code
     assert "direction.x + values[0]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_colliding_static_symbol_names_are_suffixed_and_referenced():
+def test_colliding_static_symbol_names_are_suffixed_and_referenced(tmp_path):
     code = """
     float fooBar = 1.0;
     float foo_bar = 2.0;
@@ -15588,9 +16010,10 @@ def test_colliding_static_symbol_names_are_suffixed_and_referenced():
     )
     assert "static FOO_BAR: f32 = 2.0;" not in generated_code
     assert "fooBar + foo_bar" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():
+def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced(tmp_path):
     code = """
     vec3 direction;
 
@@ -15611,6 +16034,7 @@ def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced():
     assert "let direction: Vec3<f32>" in generated_code
     assert "return direction;" in generated_code
     assert "return *direction;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_generated_rust_lazy_lock_statics_smoke_compile_with_rustc(tmp_path):
@@ -15797,7 +16221,7 @@ def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
+def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock(tmp_path):
     code = """
     vec3 globalDirs[3] = {
         vec3(1.0, 0.0, 0.0),
@@ -15845,9 +16269,10 @@ def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock():
         "static GLOBAL_DIRS: [Vec3<f32>; 3] = [Vec3::<f32>::new" not in generated_code
     )
     assert "static DYNAMIC_WEIGHTS: Vec<f32> = vec!" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_legacy_global_array_nodes_emit_static_declarations():
+def test_legacy_global_array_nodes_emit_static_declarations(tmp_path):
     ast = ShaderNode(
         "Legacy",
         ExecutionModel.GENERAL_PURPOSE,
@@ -15877,6 +16302,7 @@ def test_legacy_global_array_nodes_emit_static_declarations():
     assert "static INITIALIZED: [f32; 4] = [1.0, 2.0, 0.0, 0.0];" in generated_code
     assert "\nlet weights:" not in generated_code
     assert "\nlet initialized:" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_basic_shader():
@@ -15992,7 +16418,7 @@ def test_if_statement(tmp_path):
         pytest.fail("If statement codegen not implemented.")
 
 
-def test_sampler3d_maps_to_texture3d_in_rust():
+def test_sampler3d_maps_to_texture3d_in_rust(tmp_path):
     code = """
     shader Sampler3DProbe {
         sampler3D volumeMap;
@@ -16017,6 +16443,7 @@ def test_sampler3d_maps_to_texture3d_in_rust():
     )
     assert "static VOLUME_MAP: sampler3D" not in generated_code
     assert "return sample(*VOLUME_MAP, uv);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_path):
@@ -16103,6 +16530,89 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     assert "textureLod" not in generated_code
     assert "textureGrad" not in generated_code
     assert "textureOffset" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
+    code = """
+    shader TexelFetchSamplerFamilyProbe {
+        sampler1D rampMap;
+        sampler1DArray rampArrayMap;
+        sampler2DArray arrayMap;
+        sampler3D volumeMap;
+        samplerCube envMap;
+        samplerCubeArray probeMap;
+
+        fragment {
+            vec4 main(
+                int x,
+                ivec2 xLayer,
+                ivec3 pixelLayer,
+                ivec3 voxel,
+                ivec3 cubeCoord,
+                ivec4 cubeLayerCoord,
+                int lod,
+                int offset1,
+                ivec2 offset2,
+                ivec3 offset3
+            ) @ gl_FragColor {
+                let rampFetch = texelFetch(rampMap, x, lod);
+                let rampOffset = texelFetchOffset(rampMap, x, lod, offset1);
+                let rampLayerFetch = texelFetch(rampArrayMap, xLayer, lod);
+                let layerOffset = texelFetchOffset(arrayMap, pixelLayer, lod, offset2);
+                let volumeOffset = texelFetchOffset(volumeMap, voxel, lod, offset3);
+                let cubeFetch = texelFetch(envMap, cubeCoord, lod);
+                let cubeArrayFetch = texelFetch(probeMap, cubeLayerCoord, lod);
+                return rampFetch + rampOffset + rampLayerFetch + layerOffset
+                    + volumeOffset + cubeFetch + cubeArrayFetch;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static RAMP_MAP: std::sync::LazyLock<Texture1D<f32>>" in generated_code
+    assert (
+        "static RAMP_ARRAY_MAP: std::sync::LazyLock<Texture1DArray<f32>>"
+        in generated_code
+    )
+    assert (
+        "static ARRAY_MAP: std::sync::LazyLock<Texture2DArray<f32>>" in generated_code
+    )
+    assert "static VOLUME_MAP: std::sync::LazyLock<Texture3D<f32>>" in generated_code
+    assert "static ENV_MAP: std::sync::LazyLock<TextureCube<f32>>" in generated_code
+    assert (
+        "static PROBE_MAP: std::sync::LazyLock<TextureCubeArray<f32>>" in generated_code
+    )
+    assert "let rampFetch: Vec4<f32> = texel_fetch(*RAMP_MAP, x, lod);" in (
+        generated_code
+    )
+    assert (
+        "let rampOffset: Vec4<f32> = texel_fetch_offset(*RAMP_MAP, x, lod, offset1);"
+        in generated_code
+    )
+    assert (
+        "let rampLayerFetch: Vec4<f32> = texel_fetch(*RAMP_ARRAY_MAP, xLayer, lod);"
+        in generated_code
+    )
+    assert (
+        "let layerOffset: Vec4<f32> = texel_fetch_offset(*ARRAY_MAP, pixelLayer, lod, offset2);"
+        in generated_code
+    )
+    assert (
+        "let volumeOffset: Vec4<f32> = texel_fetch_offset(*VOLUME_MAP, voxel, lod, offset3);"
+        in generated_code
+    )
+    assert "let cubeFetch: Vec4<f32> = texel_fetch(*ENV_MAP, cubeCoord, lod);" in (
+        generated_code
+    )
+    assert (
+        "let cubeArrayFetch: Vec4<f32> = texel_fetch(*PROBE_MAP, cubeLayerCoord, lod);"
+        in generated_code
+    )
+    assert "texelFetch" not in generated_code
+    assert "texelFetchOffset" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
@@ -16680,6 +17190,134 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
+    code = """
+    shader RustResourceArrays {
+        sampler2D fixedTextures[2];
+        sampler fixedSamplers[2];
+        image2D fixedImages[2];
+        StructuredBuffer<float> fixedWeights[2];
+        RWStructuredBuffer<int> fixedValues[2];
+        ByteAddressBuffer fixedRaw[2];
+        RWByteAddressBuffer fixedRawOut[2];
+        sampler2D bindlessTextures[];
+        sampler bindlessSamplers[];
+        image2D bindlessImages[];
+        StructuredBuffer<float> bindlessWeights[];
+        RWStructuredBuffer<int> bindlessValues[];
+        ByteAddressBuffer bindlessRaw[];
+        RWByteAddressBuffer bindlessRawOut[];
+
+        fragment {
+            vec4 main(
+                int fixedIndex,
+                int index,
+                vec2 uv,
+                ivec2 pixel,
+                uint offset,
+                int value
+            ) @ gl_FragColor {
+                let fixedSampled = texture(
+                    fixedTextures[fixedIndex],
+                    fixedSamplers[fixedIndex],
+                    uv
+                );
+                let bindlessSampled = texture(
+                    bindlessTextures[index],
+                    bindlessSamplers[index],
+                    uv
+                );
+                let fixedColor = imageLoad(fixedImages[fixedIndex], pixel);
+                let bindlessColor = imageLoad(bindlessImages[index], pixel);
+                imageStore(fixedImages[fixedIndex], pixel, fixedColor);
+                imageStore(bindlessImages[index], pixel, bindlessColor);
+                let fixedLoaded = buffer_load(fixedValues[fixedIndex], offset);
+                let bindlessLoaded = buffer_load(bindlessValues[index], offset);
+                let fixedWeight = buffer_load(fixedWeights[fixedIndex], offset);
+                let bindlessWeight = buffer_load(bindlessWeights[index], offset);
+                let fixedRawValue = buffer_load(fixedRaw[fixedIndex], offset);
+                let bindlessRawValue = buffer_load(bindlessRaw[index], offset);
+                buffer_store(fixedValues[fixedIndex], offset, fixedLoaded + value);
+                buffer_store(bindlessValues[index], offset, bindlessLoaded + value);
+                buffer_store(fixedRawOut[fixedIndex], offset, fixedRawValue);
+                buffer_store(bindlessRawOut[index], offset, bindlessRawValue);
+                return fixedSampled + bindlessSampled + fixedColor + bindlessColor
+                    + vec4(float(fixedLoaded + bindlessLoaded) + fixedWeight
+                        + bindlessWeight
+                        + float(fixedRawValue + bindlessRawValue));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static FIXED_TEXTURES: std::sync::LazyLock<[Texture2D<f32>; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_SAMPLERS: std::sync::LazyLock<[Sampler; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_IMAGES: std::sync::LazyLock<[Image2D<Vec4<f32>>; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_WEIGHTS: std::sync::LazyLock<[StructuredBuffer<f32>; 2]>" in (
+        generated_code
+    )
+    assert (
+        "static FIXED_VALUES: std::sync::LazyLock<[RWStructuredBuffer<i32>; 2]>"
+        in generated_code
+    )
+    assert "static FIXED_RAW: std::sync::LazyLock<[ByteAddressBuffer; 2]>" in (
+        generated_code
+    )
+    assert "static FIXED_RAW_OUT: std::sync::LazyLock<[RwByteAddressBuffer; 2]>" in (
+        generated_code
+    )
+    assert "static BINDLESS_TEXTURES: Vec<Texture2D<f32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_SAMPLERS: Vec<Sampler> = Vec::new();" in generated_code
+    assert "static BINDLESS_IMAGES: Vec<Image2D<Vec4<f32>>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_WEIGHTS: Vec<StructuredBuffer<f32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_VALUES: Vec<RWStructuredBuffer<i32>> = Vec::new();" in (
+        generated_code
+    )
+    assert "static BINDLESS_RAW: Vec<ByteAddressBuffer> = Vec::new();" in generated_code
+    assert "static BINDLESS_RAW_OUT: Vec<RwByteAddressBuffer> = Vec::new();" in (
+        generated_code
+    )
+    assert (
+        "sample_sampler((*FIXED_TEXTURES)[fixedIndex as usize], "
+        "(*FIXED_SAMPLERS)[fixedIndex as usize], uv)"
+    ) in generated_code
+    assert (
+        "sample_sampler(BINDLESS_TEXTURES[index as usize], "
+        "BINDLESS_SAMPLERS[index as usize], uv)"
+    ) in generated_code
+    assert "image_load((*FIXED_IMAGES)[fixedIndex as usize], pixel)" in generated_code
+    assert "image_load(BINDLESS_IMAGES[index as usize], pixel)" in generated_code
+    assert "buffer_load((*FIXED_VALUES)[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(BINDLESS_VALUES[index as usize], offset)" in generated_code
+    assert "buffer_load((*FIXED_RAW)[fixedIndex as usize], offset)" in generated_code
+    assert "buffer_load(BINDLESS_RAW[index as usize], offset)" in generated_code
+    assert (
+        "buffer_store((*FIXED_RAW_OUT)[fixedIndex as usize], offset, fixedRawValue)"
+        in (generated_code)
+    )
+    assert (
+        "buffer_store(BINDLESS_RAW_OUT[index as usize], offset, bindlessRawValue)"
+        in (generated_code)
+    )
+    assert "texture(fixedTextures" not in generated_code
+    assert "imageLoad(fixedImages" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
     code = """
     shader ResourceBundleProbe {
@@ -16798,11 +17436,14 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
                 let weight = buffer_load(weights, index);
                 uint length = 0u;
                 buffer_dimensions(values, length);
+                buffer_append(appendValues, amount);
+                uint consumed = buffer_consume(consumeValues);
                 buffer_store(values, index, value + int(previous));
                 return color + ramp + vec4(
                     weight + float(signedValue.x + int(unsignedValue.x))
                         + float(size1D + size2D.x + size3D.z + sizeCube.y
                             + sizeArray.z + sizeMs.y + sizeMsArray.z + sampleCount)
+                        + float(consumed)
                 );
             }
         }
@@ -16917,6 +17558,8 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "let weight: f32 = buffer_load(*WEIGHTS, index);" in generated_code
     assert "let length: u32 = 0;" in generated_code
     assert "buffer_dimensions(*VALUES, length);" in generated_code
+    assert "buffer_append(*APPEND_VALUES, amount);" in generated_code
+    assert "let consumed: u32 = buffer_consume(*CONSUME_VALUES);" in generated_code
     assert (
         "buffer_store(*VALUES, index, (value + (previous as i32)));" in generated_code
     )
@@ -16934,6 +17577,421 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     assert "imageAtomicAnd" not in generated_code
     assert "imageAtomicOr" not in generated_code
     assert "imageAtomicXor" not in generated_code
+    assert "imageAtomicExchange" not in generated_code
+    assert "imageAtomicCompSwap" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_resource_memory_qualifiers_map_rust_buffer_access_and_compile(tmp_path):
+    code = """
+    shader RustResourceMemoryQualifiers {
+        readonly RWStructuredBuffer<int> readOnlyValues;
+        writeonly StructuredBuffer<int> writeOnlyValues;
+        readwrite StructuredBuffer<float> readWriteValues;
+        RWStructuredBuffer<int> attrReadValues @access(read);
+        StructuredBuffer<int> attrWriteValues @access(write);
+        readonly RWByteAddressBuffer rawInput;
+        writeonly ByteAddressBuffer rawOutput;
+        readonly image2D source @rgba32f;
+        writeonly image2D target @rgba32f;
+
+        compute {
+            void main(uint index, uint byteOffset) {
+                int value = buffer_load(readOnlyValues, index);
+                int attrValue = buffer_load(attrReadValues, index);
+                uint rawValue = buffer_load(rawInput, byteOffset);
+                buffer_store(writeOnlyValues, index, value + attrValue);
+                buffer_store(readWriteValues, index, float(value));
+                buffer_store(attrWriteValues, index, attrValue);
+                buffer_store(rawOutput, byteOffset, rawValue);
+                vec4 color = imageLoad(source, ivec2(0));
+                imageStore(target, ivec2(0), color);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "static READ_ONLY_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static WRITE_ONLY_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static READ_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>"
+        in generated_code
+    )
+    assert (
+        "static ATTR_READ_VALUES: std::sync::LazyLock<StructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert (
+        "static ATTR_WRITE_VALUES: std::sync::LazyLock<RWStructuredBuffer<i32>>"
+        in generated_code
+    )
+    assert "static RAW_INPUT: std::sync::LazyLock<ByteAddressBuffer>" in generated_code
+    assert (
+        "static RAW_OUTPUT: std::sync::LazyLock<RwByteAddressBuffer>" in generated_code
+    )
+    assert "static SOURCE: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
+    assert "static TARGET: std::sync::LazyLock<Image2D<Vec4<f32>>>" in generated_code
+    assert "let value: i32 = buffer_load(*READ_ONLY_VALUES, index);" in generated_code
+    assert (
+        "let attrValue: i32 = buffer_load(*ATTR_READ_VALUES, index);" in generated_code
+    )
+    assert "let rawValue: u32 = buffer_load(*RAW_INPUT, byteOffset);" in generated_code
+    assert "buffer_store(*WRITE_ONLY_VALUES, index, (value + attrValue));" in (
+        generated_code
+    )
+    assert "buffer_store(*READ_WRITE_VALUES, index, (value as f32));" in generated_code
+    assert "buffer_store(*ATTR_WRITE_VALUES, index, attrValue);" in generated_code
+    assert "buffer_store(*RAW_OUTPUT, byteOffset, rawValue);" in generated_code
+    assert "let color: Vec4<f32> = image_load(*SOURCE, Vec2::<i32>::new(0, 0));" in (
+        generated_code
+    )
+    assert "image_store(*TARGET, Vec2::<i32>::new(0, 0), color);" in generated_code
+    assert "readonly" not in generated_code
+    assert "writeonly" not in generated_code
+    assert "readwrite" not in generated_code
+    assert "access" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_glsl_buffer_array_declarations_map_to_rust_resources_and_compile(tmp_path):
+    code = """
+    shader RustGlslBufferArrays {
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            layout(std430, binding = 3) writeonly buffer float outValues[];
+
+            void main() {
+                float value = buffer_load(values, 0u);
+                buffer_store(outValues, 1u, value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static VALUES: std::sync::LazyLock<StructuredBuffer<f32>>" in (
+        generated_code
+    )
+    assert "static OUT_VALUES: std::sync::LazyLock<RWStructuredBuffer<f32>>" in (
+        generated_code
+    )
+    assert "let value: f32 = buffer_load(*VALUES, 0);" in generated_code
+    assert "buffer_store(*OUT_VALUES, 1, value);" in generated_code
+    assert "Vec<f32>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path):
+    code = """
+    shader RustGlslBufferBlocks {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        layout(std430, binding = 4) buffer ParticleBlock {
+            Particle particles[];
+        } particleBlock;
+
+        struct Data {
+            uint value;
+        };
+
+        Data readOnlyData @glsl_buffer_block(std430) @readonly;
+        Data writeOnlyData @glsl_buffer_block(std430) @writeonly;
+
+        compute {
+            void main() {
+                float mass = particleBlock.particles[0u].mass;
+                particleBlock.particles[1u].mass = mass;
+                uint blockedRead = writeOnlyData.value;
+                readOnlyData.value = blockedRead;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=particleBlock "
+        "kind=glsl_buffer_block layout=std430 access=readwrite" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=readOnlyData "
+        "kind=glsl_buffer_block layout=std430 access=readonly" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=writeOnlyData "
+        "kind=glsl_buffer_block layout=std430 access=writeonly" in generated_code
+    )
+    assert "static PARTICLE_BLOCK: std::sync::LazyLock<ParticleBlock>" in (
+        generated_code
+    )
+    assert "let mass: f32 = (*PARTICLE_BLOCK).particles[0].mass;" in generated_code
+    assert (
+        "/* unsupported Rust GLSL buffer block: store Rust placeholder storage "
+        "is immutable */;" in generated_code
+    )
+    assert (
+        "let blockedRead: u32 = /* unsupported Rust GLSL buffer block: load "
+        "writeonly placeholder cannot be read */ 0;" in generated_code
+    )
+    assert (
+        "/* unsupported Rust GLSL buffer block: store readonly placeholder "
+        "cannot be written */;" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
+    code = """
+    shader RustResourceBindings {
+        sampler2D colorMap @set(2) @binding(5);
+        sampler linearSampler @binding(1);
+        @binding(3) RWStructuredBuffer<int> counters[2];
+        sampler2D registeredTexture @register(t7, space3);
+
+        @binding(6)
+        cbuffer Camera {
+            float exposure;
+        };
+
+        image2D outImage;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=colorMap kind=texture set=2 "
+        "binding=5 binding_source=explicit" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+        "binding=1 binding_source=explicit" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=counters kind=buffer set=0 "
+        "binding=3 binding_source=explicit count=2" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=registeredTexture kind=texture set=3 "
+        "binding=7 binding_source=explicit register=t7,space3" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=outImage kind=image set=0 "
+        "binding=0 binding_source=automatic" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
+        "binding=6 binding_source=explicit" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
+    duplicate_texture_binding = """
+    shader DuplicateRustTextureBindings {
+        @binding(2) sampler2D firstTexture;
+        @binding(2) sampler2D secondTexture;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    overlapping_buffer_range = """
+    shader DuplicateRustBufferBindings {
+        @binding(3) RWStructuredBuffer<int> counters[2];
+        @binding(4)
+        cbuffer Camera {
+            float exposure;
+        };
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(overlapping_buffer_range)))
+
+
+def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_path):
+    code = """
+    shader ExplicitStorageImageFormats {
+        image2D scalarFloat @r32f;
+        uimage2D scalarCounter @r32ui;
+        image2D rgFloat @rg32f;
+        uimage2D rgUint @format(rg32ui);
+        image3D signedVolume @r32i;
+
+        fragment {
+            vec4 main(ivec2 pixel) @ gl_FragColor {
+                float scalar = imageLoad(scalarFloat, pixel);
+                imageStore(scalarFloat, pixel, scalar + 1.0);
+                uint count = imageLoad(scalarCounter, pixel);
+                imageStore(scalarCounter, pixel, count + 1u);
+                vec2 pair = imageLoad(rgFloat, pixel);
+                imageStore(rgFloat, pixel, pair);
+                uvec2 unsignedPair = imageLoad(rgUint, pixel);
+                imageStore(rgUint, pixel, unsignedPair);
+                int signedValue = imageLoad(signedVolume, ivec3(0));
+                imageStore(signedVolume, ivec3(0), signedValue - 1);
+                return vec4(
+                    scalar + float(count) + pair.x
+                        + float(unsignedPair.x + uint(signedValue))
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static SCALAR_FLOAT: std::sync::LazyLock<Image2D<f32>>" in generated_code
+    assert "static SCALAR_COUNTER: std::sync::LazyLock<Image2D<u32>>" in generated_code
+    assert "static RG_FLOAT: std::sync::LazyLock<Image2D<Vec2<f32>>>" in generated_code
+    assert "static RG_UINT: std::sync::LazyLock<Image2D<Vec2<u32>>>" in generated_code
+    assert "static SIGNED_VOLUME: std::sync::LazyLock<Image3D<i32>>" in generated_code
+    assert "let scalar: f32 = image_load(*SCALAR_FLOAT, pixel);" in generated_code
+    assert "image_store(*SCALAR_FLOAT, pixel, (scalar + 1.0));" in generated_code
+    assert "let count: u32 = image_load(*SCALAR_COUNTER, pixel);" in generated_code
+    assert "image_store(*SCALAR_COUNTER, pixel, (count + 1));" in generated_code
+    assert "let pair: Vec2<f32> = image_load(*RG_FLOAT, pixel);" in generated_code
+    assert "image_store(*RG_FLOAT, pixel, pair);" in generated_code
+    assert (
+        "let unsignedPair: Vec2<u32> = image_load(*RG_UINT, pixel);" in generated_code
+    )
+    assert "image_store(*RG_UINT, pixel, unsignedPair);" in generated_code
+    assert (
+        "let signedValue: i32 = image_load(*SIGNED_VOLUME, "
+        "Vec3::<i32>::new(0, 0, 0));" in generated_code
+    )
+    assert (
+        "image_store(*SIGNED_VOLUME, Vec3::<i32>::new(0, 0, 0), "
+        "(signedValue - 1));" in generated_code
+    )
+    assert "image2D" not in generated_code
+    assert "uimage2D" not in generated_code
+    assert "image3D" not in generated_code
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
+    code = """
+    shader MultisampleStorageImages {
+        image2DMS msImage;
+        image2DMSArray msLayerImage;
+        uimage2DMS msCounter;
+        iimage2DMSArray msSignedLayers;
+
+        compute {
+            void main(uint amount) {
+                ivec2 pixel = ivec2(4, 8);
+                ivec3 pixelLayer = ivec3(4, 8, 1);
+                int sampleIndex = 2;
+                vec4 color = imageLoad(msImage, pixel, sampleIndex);
+                imageStore(msImage, pixel, sampleIndex, color + vec4(1.0));
+                vec4 layer = imageLoad(msLayerImage, pixelLayer, sampleIndex);
+                imageStore(msLayerImage, pixelLayer, sampleIndex, layer);
+                uvec4 counts = imageLoad(msCounter, pixel, sampleIndex);
+                imageStore(msCounter, pixel, sampleIndex, counts);
+                uint previous = imageAtomicAdd(msCounter, pixel, sampleIndex, amount);
+                uint exchanged = imageAtomicExchange(
+                    msCounter,
+                    pixel,
+                    sampleIndex,
+                    previous
+                );
+                int swapped = imageAtomicCompSwap(
+                    msSignedLayers,
+                    pixelLayer,
+                    sampleIndex,
+                    0,
+                    int(exchanged)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "static MS_IMAGE: std::sync::LazyLock<Image2DMS<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_LAYER_IMAGE: std::sync::LazyLock<Image2DMSArray<Vec4<f32>>>" in (
+        generated_code
+    )
+    assert "static MS_COUNTER: std::sync::LazyLock<Image2DMS<Vec4<u32>>>" in (
+        generated_code
+    )
+    assert (
+        "static MS_SIGNED_LAYERS: std::sync::LazyLock<Image2DMSArray<Vec4<i32>>>"
+        in (generated_code)
+    )
+    assert (
+        "let color: Vec4<f32> = image_load_sample(*MS_IMAGE, pixel, sampleIndex);"
+        in (generated_code)
+    )
+    assert (
+        "image_store_sample(*MS_IMAGE, pixel, sampleIndex, "
+        "(color + Vec4::<f32>::new" in generated_code
+    )
+    assert (
+        "let layer: Vec4<f32> = "
+        "image_load_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex);" in generated_code
+    )
+    assert "image_store_sample(*MS_LAYER_IMAGE, pixelLayer, sampleIndex, layer);" in (
+        generated_code
+    )
+    assert (
+        "let counts: Vec4<u32> = image_load_sample(*MS_COUNTER, pixel, sampleIndex);"
+        in generated_code
+    )
+    assert "image_store_sample(*MS_COUNTER, pixel, sampleIndex, counts);" in (
+        generated_code
+    )
+    assert (
+        "let previous: u32 = "
+        "image_atomic_add_sample(*MS_COUNTER, pixel, sampleIndex, amount);"
+        in generated_code
+    )
+    assert (
+        "let exchanged: u32 = "
+        "image_atomic_exchange_sample(*MS_COUNTER, pixel, sampleIndex, previous);"
+        in generated_code
+    )
+    assert (
+        "let swapped: i32 = image_atomic_comp_swap_sample("
+        "*MS_SIGNED_LAYERS, pixelLayer, sampleIndex, 0, (exchanged as i32));"
+        in generated_code
+    )
+    assert "imageLoad" not in generated_code
+    assert "imageStore" not in generated_code
+    assert "imageAtomicAdd" not in generated_code
     assert "imageAtomicExchange" not in generated_code
     assert "imageAtomicCompSwap" not in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
@@ -19645,7 +20703,7 @@ def test_mixed_scalar_simple_assignments_cast_rhs_to_lhs_type():
     assert "count = index;" not in generated_code
 
 
-def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
+def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types(tmp_path):
     code = """
     void probe(ivec2 pixel, vec2 amount, mat2 transform, dmat2 preciseInput) {
         vec2 declaredCoords = pixel;
@@ -19710,6 +20768,7 @@ def test_vector_and_matrix_assignments_cast_rhs_to_lhs_component_types():
     assert "coords = pixel;" not in generated_code
     assert "precise = transform;" not in generated_code
     assert "declaredRegular = preciseInput;" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_returns_cast_value_to_declared_return_type():
@@ -19748,7 +20807,7 @@ def test_mixed_scalar_returns_cast_value_to_declared_return_type():
     assert "return enabled;" not in generated_code
 
 
-def test_numeric_conditions_compare_against_zero_in_rust_bool_sites():
+def test_numeric_conditions_compare_against_zero_in_rust_bool_sites(tmp_path):
     code = """
     float choose(int index, uint count, float inputWeight, bool ready) {
         int localIndex = index;
@@ -19793,6 +20852,7 @@ def test_numeric_conditions_compare_against_zero_in_rust_bool_sites():
     assert "else if count {" not in generated_code
     assert "while weight {" not in generated_code
     assert "while i {" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mixed_scalar_ternary_branches_cast_to_result_type():
@@ -19838,7 +20898,7 @@ def test_mixed_scalar_ternary_branches_cast_to_result_type():
     assert "return (if ready { weight } else { index });" not in generated_code
 
 
-def test_vector_and_matrix_ternary_branches_cast_to_result_type():
+def test_vector_and_matrix_ternary_branches_cast_to_result_type(tmp_path):
     code = """
     vec2 chooseVec(bool ready, ivec2 pixel, vec2 amount) {
         vec2 declared = ready ? pixel : amount;
@@ -19904,9 +20964,10 @@ def test_vector_and_matrix_ternary_branches_cast_to_result_type():
     assert "{ let __cgl_mat_arg_" not in generated_code
     assert "if ready { pixel } else { amount }" not in generated_code
     assert "if ready { transform } else { preciseInput }" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_bool_vector_ternary_conditions_emit_lane_selectors():
+def test_bool_vector_ternary_conditions_emit_lane_selectors(tmp_path):
     code = """
     bvec3 makeMask() {
         return bvec3(true, false, true);
@@ -19974,9 +21035,10 @@ def test_bool_vector_ternary_conditions_emit_lane_selectors():
     assert "(if mask { a } else { b })" not in generated_code
     assert "(if mask { 1.0 } else { 0.0 })" not in generated_code
     assert "(if makeMask() { makeA() } else { makeScalar() })" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types():
+def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types(tmp_path):
     code = """
     void infer(bool ready, ivec2 pixel, vec2 amount, mat2 transform, dmat2 preciseInput) {
         let inferredVec = ready ? pixel : amount;
@@ -20014,9 +21076,10 @@ def test_inferred_vector_and_matrix_ternaries_promote_branch_component_types():
     )
     assert "let inferredVec: Vec2<i32>" not in generated_code
     assert "let inferredMat: Mat2<f32>" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_generic_vector_constructors_emit_rust_names():
+def test_generic_vector_constructors_emit_rust_names(tmp_path):
     code = """
     shader main {
         compute {
@@ -20045,6 +21108,7 @@ def test_generic_vector_constructors_emit_rust_names():
     assert "vec2<" not in generated_code
     assert "vec3<" not in generated_code
     assert "vec4<" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_inferred_let_vector_declarations_preserve_vector_type():
@@ -20536,7 +21600,9 @@ def test_match_path_constructor_struct_and_guarded_patterns_emit_rust_match():
     assert "MatchArmNode" not in generated_code
 
 
-def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preserved():
+def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preserved(
+    tmp_path,
+):
     code = """
     shader PatternWarnings {
         generic<T, E> struct Result {
@@ -20582,6 +21648,7 @@ def test_unused_match_pattern_bindings_are_prefixed_but_used_bindings_are_preser
     )
     assert "Command::Draw { payload: _payload, amount } =>" in generated_code
     assert "amount: _amount" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_mutated_match_pattern_bindings_emit_mut_and_smoke_compile(tmp_path):
@@ -20638,9 +21705,26 @@ def test_mutated_match_pattern_bindings_emit_mut_and_smoke_compile(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_match_arm_block_tail_expression_emits_without_semicolon():
+def test_match_arm_block_tail_expression_emits_without_semicolon(tmp_path):
     code = """
     shader PatternCases {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            InvalidInput
+        }
+
+        enum VectorOp {
+            Cross,
+            Dot
+        }
+
         fn convert(op: VectorOp) -> Result<int, MathError> {
             match op {
                 VectorOp::Cross => {
@@ -20663,6 +21747,7 @@ def test_match_arm_block_tail_expression_emits_without_semicolon():
     )
     assert "Result::Ok(1);" not in generated_code
     assert "Result::Err(MathError::InvalidInput);" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_keyword_like_let_binding_inside_match_arm_preserves_function_body(
@@ -20856,9 +21941,27 @@ def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():
     assert "RenderOutput::Clear::new(color, depth)" not in generated_code
 
 
-def test_non_wildcard_match_fallback_uses_never_expression():
+def test_non_wildcard_match_fallback_uses_never_expression(tmp_path):
     code = """
     shader PatternCases {
+        generic<T, E> struct Result {
+            enum ResultType {
+                Ok(T),
+                Err(E)
+            }
+            ResultType variant;
+        }
+
+        enum MathError {
+            InvalidInput
+        }
+
+        enum VectorOp {
+            Cross,
+            Add,
+            Dot
+        }
+
         fn convert(op: VectorOp) -> Result<int, MathError> {
             match op {
                 VectorOp::Cross => Result::Ok(1),
@@ -20872,6 +21975,7 @@ def test_non_wildcard_match_fallback_uses_never_expression():
 
     assert "_ => unreachable!()," in generated_code
     assert "_ => {}," not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_exhaustive_bool_result_and_enum_matches_omit_unreachable_fallback(tmp_path):
@@ -21003,7 +22107,7 @@ def test_inferred_generic_struct_literals_and_destructured_members_keep_generic_
     assert "let a: f32 = row0.x;" not in generated_code
 
 
-def test_match_guarded_literal_arm_emits_rust_guard():
+def test_match_guarded_literal_arm_emits_rust_guard(tmp_path):
     code = """
     shader main {
         compute {
@@ -21029,9 +22133,10 @@ def test_match_guarded_literal_arm_emits_rust_guard():
 
     assert "0 if (mode > 0) =>" in generated_code
     assert "value = 1;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_generic_vector_composite_types_emit_rust_names():
+def test_generic_vector_composite_types_emit_rust_names(tmp_path):
     code = """
     shader GenericComposite {
         struct Packed {
@@ -21080,6 +22185,7 @@ def test_generic_vector_composite_types_emit_rust_names():
     )
     assert "LiteralNode(" not in generated_code
     assert "vec2<" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_array_access():
@@ -21431,3 +22537,1820 @@ def test_rust_type_conversions():
         print(generated_code)
     except SyntaxError:
         pytest.fail("Rust type conversions not implemented")
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
+    """Ensure an empty vertex stage still generates valid code with the shader attribute."""
+    code = """
+    shader EmptyVertex {
+        vertex {
+            void main() {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    assert "#[vertex_shader]" in generated_code
+    assert "pub fn main() -> ()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_no_stages(tmp_path):
+    """A shader with no stages should still produce valid header code without crashing."""
+    code = """
+    shader NoStages {
+        struct Data {
+            float value;
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    assert "use gpu::*;" in generated_code
+    assert "pub struct Data" in generated_code
+    assert "#[vertex_shader]" not in generated_code
+    assert "#[fragment_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_missing_return_type(tmp_path):
+    """Vertex stage with void return type should still produce valid Rust code."""
+    code = """
+    shader VoidVertex {
+        vertex {
+            void main() {
+                float x = 1.0;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+    assert "#[vertex_shader]" in generated_code
+    assert "-> ()" in generated_code
+    assert "let x: f32 = 1.0;" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_cbuffer_basic_uniform_buffer():
+    """Verify cbuffer with multiple typed fields generates correct Rust struct and statics."""
+    code = """
+    cbuffer SceneData {
+        mat4 viewProjection;
+        vec3 cameraPosition;
+        float time;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "// Constant Buffers" in generated_code
+    assert "#[repr(C)]" in generated_code
+    assert "pub struct SceneData" in generated_code
+    assert "pub viewProjection: Mat4<f32>," in generated_code
+    assert "pub cameraPosition: Vec3<f32>," in generated_code
+    assert "pub time: f32," in generated_code
+    assert "static TIME: f32 = 0.0;" in generated_code
+
+
+def test_rust_cbuffer_with_arrays():
+    """Verify cbuffer with fixed-size arrays generates proper Rust array fields."""
+    code = """
+    cbuffer LightBuffer {
+        vec4 lightPositions[8];
+        float intensities[8];
+        int lightCount;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct LightBuffer" in generated_code
+    assert "pub lightPositions: [Vec4<f32>; 8]," in generated_code
+    assert "pub intensities: [f32; 8]," in generated_code
+    assert "pub lightCount: i32," in generated_code
+    assert "static LIGHT_COUNT: i32 = 0;" in generated_code
+
+
+def test_rust_cbuffer_multiple_buffers():
+    """Multiple cbuffers should each produce their own struct."""
+    code = """
+    cbuffer PerFrame {
+        float time;
+        float deltaTime;
+    };
+    cbuffer PerObject {
+        mat4 model;
+        mat4 normalMatrix;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct PerFrame" in generated_code
+    assert "pub struct PerObject" in generated_code
+    assert "pub time: f32," in generated_code
+    assert "pub deltaTime: f32," in generated_code
+    assert "pub model: Mat4<f32>," in generated_code
+    assert "pub normalMatrix: Mat4<f32>," in generated_code
+
+
+def test_rust_cbuffer_used_in_vertex_stage():
+    """Verify cbuffer values are accessible in shader stage code."""
+    code = """
+    shader CbufferUsage {
+        cbuffer Transform {
+            mat4 mvp;
+            vec3 offset;
+        };
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+        struct VSOutput {
+            vec4 pos @ gl_Position;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.pos = mvp * vec4(input.position + offset, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct Transform" in generated_code
+    assert "#[vertex_shader]" in generated_code
+    assert "pub fn main(" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_struct_member_semantic_position():
+    """Struct members with POSITION semantic should produce a comment annotation."""
+    code = """
+    shader main {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            void main(VSInput input) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct VSInput" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub normal: Vec3<f32>," in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// texcoord(0)" in generated_code
+
+
+def test_rust_struct_member_semantic_color():
+    """Struct members with COLOR semantic should generate mapped annotation."""
+    code = """
+    shader main {
+        struct VSOutput {
+            vec4 color @ COLOR;
+            vec4 position @ gl_Position;
+        };
+        vertex {
+            VSOutput main() {
+                VSOutput out;
+                out.color = vec4(1.0, 0.0, 0.0, 1.0);
+                out.position = vec4(0.0, 0.0, 0.0, 1.0);
+                return out;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub color: Vec4<f32>," in generated_code
+    assert "pub position: Vec4<f32>," in generated_code
+    assert "// color" in generated_code
+    assert "// position" in generated_code
+
+
+def test_rust_struct_member_multiple_texcoords():
+    """Struct with multiple TEXCOORD slots generates distinct mapped semantics."""
+    code = """
+    shader main {
+        struct VertexInput {
+            vec2 uv0 @ TEXCOORD0;
+            vec2 uv1 @ TEXCOORD1;
+            vec2 uv2 @ TEXCOORD2;
+        };
+        vertex {
+            void main(VertexInput v) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub uv0: Vec2<f32>," in generated_code
+    assert "pub uv1: Vec2<f32>," in generated_code
+    assert "pub uv2: Vec2<f32>," in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "// texcoord(1)" in generated_code
+    assert "// texcoord(2)" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_stage_parameter_input_struct():
+    """Stage function receiving struct parameter should handle it correctly."""
+    code = """
+    shader main {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.texCoord;
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "input: VSInput" in generated_code
+    assert "-> VSOutput" in generated_code
+
+
+def test_rust_stage_parameter_output_semantic():
+    """Fragment stage with output semantic annotation should use fragment_shader attribute."""
+    code = """
+    shader main {
+        struct FSInput {
+            vec4 color @ COLOR;
+        };
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return input.color;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "input: FSInput" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+
+
+def test_rust_stage_parameter_multiple_params():
+    """Stage function with multiple parameters should pass them all through."""
+    code = """
+    shader main {
+        struct VSInput {
+            vec3 pos @ POSITION;
+        };
+        vertex {
+            vec4 main(VSInput input) @ gl_Position {
+                return vec4(input.pos, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "input: VSInput" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_fragment_stage_basic():
+    """Basic fragment stage generates fragment_shader attribute and correct signature."""
+    code = """
+    shader FragShader {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+    assert "Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0)" in generated_code
+
+
+def test_rust_fragment_stage_with_texture_sampling():
+    """Fragment stage using texture sampling maps to Rust sample function."""
+    code = """
+    shader TexturedFrag {
+        sampler2D diffuseTexture;
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                return texture(diffuseTexture, input.uv);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "sample" in generated_code
+    assert "DIFFUSE_TEXTURE" in generated_code or "diffuseTexture" in generated_code
+
+
+def test_rust_fragment_stage_with_discard():
+    """Fragment stage with conditional discard generates Rust discard equivalent."""
+    code = """
+    shader AlphaTest {
+        struct FSInput {
+            vec4 color @ COLOR;
+        };
+        fragment {
+            vec4 main(FSInput input) @ gl_FragColor {
+                if (input.color.a < 0.5) {
+                    discard;
+                }
+                return input.color;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "discard" in generated_code
+    assert "input.color.w" in generated_code
+
+
+def test_rust_fragment_stage_multiple_render_targets():
+    """Fragment stage can output multiple render targets via struct."""
+    code = """
+    shader MRT {
+        struct GBuffer {
+            vec4 albedo @ gl_FragColor0;
+            vec4 normal @ gl_FragColor1;
+            vec4 position @ gl_FragColor2;
+        };
+        fragment {
+            GBuffer main() {
+                GBuffer gbuf;
+                gbuf.albedo = vec4(1.0, 0.0, 0.0, 1.0);
+                gbuf.normal = vec4(0.0, 1.0, 0.0, 1.0);
+                gbuf.position = vec4(0.0, 0.0, 1.0, 1.0);
+                return gbuf;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "-> GBuffer" in generated_code
+    assert "pub struct GBuffer" in generated_code
+    assert "// target(0)" in generated_code
+    assert "// target(1)" in generated_code
+    assert "// target(2)" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_vertex_stage_basic():
+    """Basic vertex stage generates vertex_shader attribute."""
+    code = """
+    shader VertShader {
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+        vertex {
+            vec4 main(VSInput input) @ gl_Position {
+                return vec4(input.position, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub fn main(input: VSInput) -> Vec4<f32>" in generated_code
+
+
+def test_rust_vertex_stage_with_transform():
+    """Vertex stage with matrix transform produces correct codegen."""
+    code = """
+    shader TransformVert {
+        cbuffer Transforms {
+            mat4 modelViewProjection;
+        };
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec3 worldNormal @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = modelViewProjection * vec4(input.position, 1.0);
+                output.worldNormal = input.normal;
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct Transforms" in generated_code
+    assert "pub modelViewProjection: Mat4<f32>," in generated_code
+    assert "-> VSOutput" in generated_code
+
+
+def test_rust_vertex_stage_passthrough():
+    """Vertex stage that passes data directly to fragment outputs."""
+    code = """
+    shader Passthrough {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec4 color @ COLOR;
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec4 color @ COLOR;
+            vec2 texCoord @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.color = input.color;
+                output.texCoord = input.texCoord;
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct VSInput" in generated_code
+    assert "pub struct VSOutput" in generated_code
+    assert "// position" in generated_code
+    assert "// color" in generated_code
+    assert "// texcoord(0)" in generated_code
+
+
+def test_rust_vertex_and_fragment_pipeline():
+    """Full vertex+fragment pipeline generates both stage attributes and correct structs."""
+    code = """
+    shader FullPipeline {
+        cbuffer Material {
+            vec4 baseColor;
+            float roughness;
+        };
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec3 normal @ TEXCOORD0;
+            vec2 uv @ TEXCOORD1;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.normal = input.normal;
+                output.uv = input.uv;
+                return output;
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                float lighting = dot(input.normal, vec3(0.0, 1.0, 0.0));
+                return baseColor * lighting;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct Material" in generated_code
+    assert "pub struct VSInput" in generated_code
+    assert "pub struct VSOutput" in generated_code
+    assert "pub baseColor: Vec4<f32>," in generated_code
+    assert "pub roughness: f32," in generated_code
+    assert "// Constant Buffers" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_cbuffer_repr_c_and_derive():
+    """cbuffer declarations must produce #[repr(C)] and derive traits on the struct."""
+    code = """
+    cbuffer CameraData {
+        mat4 view;
+        mat4 projection;
+        vec3 eyePosition;
+        float nearPlane;
+        float farPlane;
+    };
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[repr(C)]" in generated_code
+    assert "#[derive(Debug, Clone, Copy)]" in generated_code
+    assert "pub struct CameraData" in generated_code
+    assert "pub view: Mat4<f32>," in generated_code
+    assert "pub projection: Mat4<f32>," in generated_code
+    assert "pub eyePosition: Vec3<f32>," in generated_code
+    assert "pub nearPlane: f32," in generated_code
+    assert "pub farPlane: f32," in generated_code
+    assert "static NEAR_PLANE: f32 = 0.0;" in generated_code
+    assert "static FAR_PLANE: f32 = 0.0;" in generated_code
+
+
+def test_rust_struct_member_semantics_tangent_binormal():
+    """Struct members with TANGENT and BINORMAL semantics produce mapped comments."""
+    code = """
+    shader main {
+        struct VertexData {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec3 tangent @ TANGENT;
+            vec3 binormal @ BINORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            void main(VertexData v) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct VertexData" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub tangent: Vec3<f32>," in generated_code
+    assert "pub binormal: Vec3<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// tangent" in generated_code
+    assert "// binormal" in generated_code
+    assert "// texcoord(0)" in generated_code
+
+
+def test_rust_multiple_cbuffers_in_shader():
+    """Multiple cbuffers inside a single shader produce separate structs."""
+    code = """
+    shader MultiBuffer {
+        cbuffer PerFrame {
+            mat4 viewProjection;
+            float time;
+            float deltaTime;
+        };
+        cbuffer PerMaterial {
+            vec4 albedo;
+            float metallic;
+            float roughness;
+        };
+        cbuffer PerObject {
+            mat4 world;
+            mat4 worldInverseTranspose;
+        };
+        struct VSInput {
+            vec3 position @ POSITION;
+        };
+        vertex {
+            void main(VSInput input) {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct PerFrame" in generated_code
+    assert "pub struct PerMaterial" in generated_code
+    assert "pub struct PerObject" in generated_code
+    assert "pub viewProjection: Mat4<f32>," in generated_code
+    assert "pub time: f32," in generated_code
+    assert "pub deltaTime: f32," in generated_code
+    assert "pub albedo: Vec4<f32>," in generated_code
+    assert "pub metallic: f32," in generated_code
+    assert "pub roughness: f32," in generated_code
+    assert "pub world: Mat4<f32>," in generated_code
+    assert "pub worldInverseTranspose: Mat4<f32>," in generated_code
+    assert generated_code.count("#[repr(C)]") >= 3
+
+
+def test_rust_structured_buffer_type_mapping():
+    """StructuredBuffer and RWStructuredBuffer types map to correct Rust aliases."""
+    code = """
+    shader ComputeShader {
+        struct Particle {
+            vec3 position @ POSITION;
+            vec3 velocity @ TEXCOORD0;
+            float life @ TEXCOORD1;
+        };
+        StructuredBuffer<Particle> inputParticles;
+        RWStructuredBuffer<Particle> outputParticles;
+        compute {
+            void main() {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct Particle" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub velocity: Vec3<f32>," in generated_code
+    assert "pub life: f32," in generated_code
+    assert "// position" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "// texcoord(1)" in generated_code
+
+
+def test_rust_struct_semantic_fragment_outputs():
+    """Fragment output struct with gl_FragColor semantics produces target annotations."""
+    code = """
+    shader main {
+        struct GBufferOutput {
+            vec4 albedo @ gl_FragColor0;
+            vec4 normals @ gl_FragColor1;
+            vec4 emission @ gl_FragColor2;
+        };
+        struct FSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+        fragment {
+            GBufferOutput main(FSInput input) {
+                GBufferOutput output;
+                output.albedo = vec4(1.0, 0.0, 0.0, 1.0);
+                output.normals = vec4(0.0, 1.0, 0.0, 1.0);
+                output.emission = vec4(0.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct GBufferOutput" in generated_code
+    assert "pub albedo: Vec4<f32>," in generated_code
+    assert "pub normals: Vec4<f32>," in generated_code
+    assert "pub emission: Vec4<f32>," in generated_code
+    assert "// target(0)" in generated_code
+    assert "// target(1)" in generated_code
+    assert "// target(2)" in generated_code
+
+
+def test_rust_struct_semantics_validate_builtin_types_and_stage_context():
+    """Rust validates builtin output semantics on returned structs."""
+    valid_code = """
+    shader StructSemantics {
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ gl_FragDepth;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "pub color: Vec4<f32>,  // target(1)" in generated_code
+    assert "pub depth: f32,  // depth(any)" in generated_code
+    assert "pub uv: Vec2<f32>,  // texcoord(0)" in generated_code
+
+    invalid_type = """
+    shader BadStructSemanticType {
+        struct FSOutput {
+            vec3 color @ gl_FragColor;
+        };
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader BadStructSemanticStage {
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        vertex {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadStructInputOnlySemantic {
+        struct VSOutput {
+            uint vertexId @ gl_VertexID;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_rust_return_semantics_validate_builtin_types_and_stage_context():
+    """Rust validates builtin direct return semantics before emitting code."""
+    invalid_depth_type = """
+    shader BadDepthType {
+        fragment {
+            vec4 main() @ gl_FragDepth {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+        generate_code(parse_code(tokenize_code(invalid_depth_type)))
+
+    invalid_stage = """
+    shader BadStage {
+        vertex {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadInputOnlyReturn {
+        vertex {
+            uint main() @ gl_VertexID {
+                return uint(0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
+    """Rust direct return semantics are preserved as deterministic comments."""
+    color_code = """
+    shader RustDirectReturnSemantics {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                return vec4(position, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0, 0.5, 0.25, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(color_code)))
+
+    assert "#[vertex_shader]" in generated_code
+    assert "// CrossGL return semantic: position" in generated_code
+    assert "pub fn vertex_main(position: Vec3<f32>) -> Vec4<f32>" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "// CrossGL return semantic: target(0)" in generated_code
+    assert "pub fn fragment_main() -> Vec4<f32>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+    depth_code = """
+    shader RustDepthReturnSemantics {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
+
+    assert "#[fragment_shader]" in depth_generated_code
+    assert "// CrossGL return semantic: depth(any)" in depth_generated_code
+    assert "pub fn main() -> f32" in depth_generated_code
+    assert_generated_rust_smoke_compiles(depth_generated_code, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+
+
+def test_rust_vertex_stage_position_output(tmp_path):
+    """Vertex shader produces correct Rust struct with position output."""
+    code = """
+    shader VertexPosition {
+        struct VSOutput {
+            vec4 position @ gl_Position;
+        };
+        vertex {
+            VSOutput main(vec3 pos) {
+                VSOutput output;
+                output.position = vec4(pos, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct VSOutput" in generated_code
+    assert "pub position: Vec4<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "-> VSOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_fragment_stage_color_output(tmp_path):
+    """Fragment shader produces correct Rust struct with color output."""
+    code = """
+    shader FragmentColor {
+        struct PSOutput {
+            vec4 color @ gl_FragColor;
+        };
+        fragment {
+            PSOutput main(vec4 fragCoord) {
+                PSOutput output;
+                output.color = vec4(1.0, 0.0, 0.0, 1.0);
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct PSOutput" in generated_code
+    assert "pub color: Vec4<f32>," in generated_code
+    assert "// target(0)" in generated_code
+    assert "-> PSOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_io_semantics_sv_position_sv_target(tmp_path):
+    """SV_Position and SV_Target map to Rust semantic comments (issues #323/#327)."""
+    code = """
+    shader SemanticMapping {
+        struct VSOut {
+            vec4 pos @ gl_Position;
+            vec3 norm @ NORMAL;
+        };
+        struct PSOut {
+            vec4 color @ gl_FragColor;
+        };
+        vertex {
+            VSOut main(vec3 position) {
+                VSOut o;
+                o.pos = vec4(position, 1.0);
+                o.norm = vec3(0.0, 1.0, 0.0);
+                return o;
+            }
+        }
+        fragment {
+            PSOut main(VSOut input) {
+                PSOut o;
+                o.color = vec4(input.norm, 1.0);
+                return o;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct VSOut" in generated_code
+    assert "pub struct PSOut" in generated_code
+    assert "pub pos: Vec4<f32>," in generated_code
+    assert "pub norm: Vec3<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// target(0)" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_vertex_multiple_attributes(tmp_path):
+    """Multiple vertex attributes (position, normal, texcoord) are handled."""
+    code = """
+    shader MultiAttrib {
+        struct VertexIn {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texcoord @ TEXCOORD0;
+        };
+        struct VertexOut {
+            vec4 clipPos @ gl_Position;
+            vec3 worldNormal @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VertexOut main(VertexIn v) {
+                VertexOut o;
+                o.clipPos = vec4(v.position, 1.0);
+                o.worldNormal = v.normal;
+                o.uv = v.texcoord;
+                return o;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub struct VertexIn" in generated_code
+    assert "pub struct VertexOut" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub normal: Vec3<f32>," in generated_code
+    assert "pub texcoord: Vec2<f32>," in generated_code
+    assert "pub clipPos: Vec4<f32>," in generated_code
+    assert "pub worldNormal: Vec3<f32>," in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "v: VertexIn" in generated_code
+    assert "-> VertexOut" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_fragment_stage_with_texture_sampling(tmp_path):
+    """Fragment shader with texture sampling produces correct Rust."""
+    code = """
+    shader TexturedFragment {
+        sampler2D diffuseTex;
+
+        struct PSInput {
+            vec2 uv @ TEXCOORD0;
+        };
+        fragment {
+            vec4 main(PSInput input) @ gl_FragColor {
+                return texture(diffuseTex, input.uv);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[fragment_shader]" in generated_code
+    assert "pub struct PSInput" in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "input: PSInput" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+
+
+# ---------------------------------------------------------------------------
+# Invalid shader shape validation and stage parameter semantics
+# ---------------------------------------------------------------------------
+
+
+def test_rust_invalid_shader_completely_empty(tmp_path):
+    """A shader with absolutely no content emits the standard header and compiles."""
+    code = """
+    shader Empty {
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "// Generated Rust GPU Shader Code" in generated_code
+    assert "use gpu::*;" in generated_code
+    assert "use math::*;" in generated_code
+    assert "#[vertex_shader]" not in generated_code
+    assert "#[fragment_shader]" not in generated_code
+    assert "#[compute_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_vertex_stage_no_body(tmp_path):
+    """Vertex stage with empty main body still produces shader attribute and compiles."""
+    code = """
+    shader NoBody {
+        vertex {
+            void main() {
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "pub fn" in generated_code
+    assert "-> ()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
+    """Shader with only structs and no stages produces struct code but no shader attributes."""
+    code = """
+    shader StructOnly {
+        struct Vertex {
+            vec3 pos @ POSITION;
+            vec3 norm @ NORMAL;
+        };
+        struct Fragment {
+            vec4 color @ COLOR;
+        };
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct Vertex" in generated_code
+    assert "pub struct Fragment" in generated_code
+    assert "pub pos: Vec3<f32>," in generated_code
+    assert "pub norm: Vec3<f32>," in generated_code
+    assert "pub color: Vec4<f32>," in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// color" in generated_code
+    assert "#[vertex_shader]" not in generated_code
+    assert "#[fragment_shader]" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("stage_name", "normalized_stage"),
+    [
+        ("amplification", "amplification"),
+        ("geometry", "geometry"),
+        ("mesh", "mesh"),
+        ("object", "object"),
+        ("task", "task"),
+        ("tessellation_control", "tessellation_control"),
+        ("tessellation_evaluation", "tessellation_evaluation"),
+    ],
+)
+def test_unsupported_shader_stages_are_rejected_for_rust_codegen(
+    stage_name, normalized_stage
+):
+    code = f"""
+    shader UnsupportedRustStage {{
+        {stage_name} {{
+            void main() {{
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Rust output does not support stage type\(s\): {normalized_stage}",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
+    ast = ShaderNode(
+        name="UnsupportedQualifiedRustStage",
+        execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+        functions=[
+            FunctionNode(
+                name="main",
+                return_type=PrimitiveType("void"),
+                parameters=[],
+                body=BlockNode([]),
+                qualifiers=["hull", ShaderStage.MESH],
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Rust output does not support stage type\(s\): "
+            r"mesh, tessellation_control"
+        ),
+    ):
+        generate_code(ast)
+
+
+def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
+    code = """
+    shader RustRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(3) @set(2);
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchWidth = gl_LaunchSizeEXT.x;
+                RayDesc ray;
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                float hitT @ gl_HitTEXT
+            ) {
+                payload.color = vec3(attributes.barycentrics, hitT);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                uint hitKind @ gl_HitKindEXT
+            ) {
+                payload.color = vec3(attributes.barycentrics, float(hitKind));
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = ReportHit(1.0, 0, attributes);
+                bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+        "set=2 binding=3 binding_source=explicit" in generated_code
+    )
+    assert "static SCENE: std::sync::LazyLock<RayTracingAccelerationStructure>" in (
+        generated_code
+    )
+    assert "// CrossGL ray stage: ray_generation" in generated_code
+    assert "// CrossGL ray stage: closest_hit" in generated_code
+    assert "// CrossGL ray stage: any_hit" in generated_code
+    assert "// CrossGL ray stage: miss" in generated_code
+    assert "// CrossGL ray stage: callable" in generated_code
+    assert "// CrossGL ray stage: intersection" in generated_code
+    assert "// CrossGL parameter semantic: payload: ray_payload" in generated_code
+    assert "// CrossGL parameter semantic: attributes: hit_attribute" in generated_code
+    assert "// CrossGL parameter semantic: data: callable_data" in generated_code
+    assert "let launch: Vec3<u32> = ray_launch_id();" in generated_code
+    assert "let launchWidth: u32 = ray_launch_size().x;" in generated_code
+    assert "trace_ray(*SCENE, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert "call_shader(0, data);" in generated_code
+    assert "ignore_hit();" in generated_code
+    assert "accept_hit_and_end_search();" in generated_code
+    assert "let accepted: bool = report_hit(1.0, 0, attributes);" in generated_code
+    assert "let acceptedWithoutAttributes: bool = report_hit(2.0, 1, ());" in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_type = """
+    shader InvalidRustRayBuiltinType {
+        ray_generation {
+            void main(float launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*Vec3<u32>"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader InvalidRustRayBuiltinStage {
+        fragment {
+            void main(uvec3 launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    duplicate = """
+    shader DuplicateRustRayBuiltin {
+        ray_generation {
+            void main(
+                uvec3 launch @ gl_LaunchIDEXT,
+                uvec3 launchAgain @ SV_DispatchRaysIndex
+            ) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Rust stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(duplicate)))
+
+
+def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
+    """All standard semantics (POSITION, NORMAL, TANGENT, TEXCOORD0-3, COLOR0-1) map correctly."""
+    code = """
+    shader SemanticsFull {
+        struct FullInput {
+            vec3 pos @ POSITION;
+            vec3 norm @ NORMAL;
+            vec3 tang @ TANGENT;
+            vec3 binorm @ BINORMAL;
+            vec2 uv0 @ TEXCOORD0;
+            vec2 uv1 @ TEXCOORD1;
+            vec2 uv2 @ TEXCOORD2;
+            vec2 uv3 @ TEXCOORD3;
+            vec4 col0 @ COLOR0;
+            vec4 col1 @ COLOR1;
+        };
+        struct FullOutput {
+            vec4 position @ gl_Position;
+            vec4 fragColor @ COLOR0;
+        };
+        vertex {
+            FullOutput main(FullInput input) {
+                FullOutput output;
+                output.position = vec4(input.pos, 1.0);
+                output.fragColor = input.col0;
+                return output;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "pub struct FullInput" in generated_code
+    assert "pub struct FullOutput" in generated_code
+    assert "// position" in generated_code
+    assert "// normal" in generated_code
+    assert "// tangent" in generated_code
+    assert "// binormal" in generated_code
+    assert "// texcoord(0)" in generated_code
+    assert "// texcoord(1)" in generated_code
+    assert "// texcoord(2)" in generated_code
+    assert "// texcoord(3)" in generated_code
+    assert "// color(0)" in generated_code
+    assert "// color(1)" in generated_code
+    assert "#[vertex_shader]" in generated_code
+    assert "input: FullInput" in generated_code
+    assert "-> FullOutput" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_path):
+    """Builtin stage parameter semantics are preserved as Rust comments."""
+    code = """
+    shader RustBuiltinStageParameters {
+        vertex {
+            vec4 main(uint vertexId @ gl_VertexID, uint instanceId @ SV_InstanceID)
+                @ gl_Position {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 fragCoord @ gl_FragCoord, bool front @ gl_FrontFacing)
+                @ gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        compute {
+            void main(
+                uvec3 globalId @ gl_GlobalInvocationID,
+                uvec3 localId @ SV_GroupThreadID,
+                uint lane @ gl_LocalInvocationIndex
+            ) {
+                uint copy = lane;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "// CrossGL parameter semantic: vertexId: vertex_id" in generated_code
+    assert "// CrossGL parameter semantic: instanceId: instance_id" in generated_code
+    assert "// CrossGL parameter semantic: fragCoord: position" in generated_code
+    assert "// CrossGL parameter semantic: front: front_facing" in generated_code
+    assert (
+        "// CrossGL parameter semantic: globalId: global_invocation_id"
+        in generated_code
+    )
+    assert (
+        "// CrossGL parameter semantic: localId: local_invocation_id" in generated_code
+    )
+    assert (
+        "// CrossGL parameter semantic: lane: local_invocation_index" in generated_code
+    )
+    assert "pub fn vertex_main(vertexId: u32, instanceId: u32)" in generated_code
+    assert "pub fn fragment_main(fragCoord: Vec4<f32>, front: bool)" in generated_code
+    assert (
+        "pub fn compute_main(globalId: Vec3<u32>, localId: Vec3<u32>, lane: u32)"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_stage = """
+    shader BadRustStageParameterStage {
+        fragment {
+            void main(uint vertexId @ gl_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_type = """
+    shader BadRustStageParameterType {
+        fragment {
+            void main(vec3 fragCoord @ gl_FragCoord) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragCoord.*expected Vec4<f32> type"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    output_only = """
+    shader BadRustStageParameterOutputOnly {
+        vertex {
+            void main(vec4 color @ SV_Target0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+        generate_code(parse_code(tokenize_code(output_only)))
+
+    duplicate_system_value = """
+    shader BadRustStageParameterDuplicate {
+        vertex {
+            void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Rust stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(duplicate_system_value)))
+
+
+def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
+    """Multiple parameters with bindings produce correct Rust function signature."""
+    code = """
+    shader MultiParam {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec3 normal @ NORMAL;
+            vec2 texCoord @ TEXCOORD0;
+        };
+        struct VSOutput {
+            vec4 clipPos @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput out;
+                out.clipPos = vec4(input.position, 1.0);
+                out.uv = input.texCoord;
+                return out;
+            }
+        }
+        fragment {
+            vec4 main(VSOutput input) @ gl_FragColor {
+                return vec4(input.uv, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "#[vertex_shader]" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "input: VSInput" in generated_code
+    assert "input: VSOutput" in generated_code
+    assert "-> VSOutput" in generated_code
+    assert "-> Vec4<f32>" in generated_code
+    assert "pub position: Vec3<f32>," in generated_code
+    assert "pub normal: Vec3<f32>," in generated_code
+    assert "pub texCoord: Vec2<f32>," in generated_code
+    assert "pub clipPos: Vec4<f32>," in generated_code
+    assert "pub uv: Vec2<f32>," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_generate_param_attributes_unit():
+    """Unit test for generate_param_attributes covering all semantic branches."""
+    codegen = RustCodeGen()
+
+    class MockParam:
+        def __init__(self, semantic):
+            self.semantic = semantic
+
+    assert "#[location(0)]" in codegen.generate_param_attributes(MockParam("POSITION"))
+    assert "#[location(1)]" in codegen.generate_param_attributes(MockParam("NORMAL"))
+    assert "#[location(2)]" in codegen.generate_param_attributes(MockParam("TEXCOORD0"))
+    assert "#[location(3)]" in codegen.generate_param_attributes(MockParam("TEXCOORD1"))
+    assert "#[location(2)]" in codegen.generate_param_attributes(MockParam("TEXCOORD"))
+    assert "#[location(4)]" in codegen.generate_param_attributes(MockParam("COLOR"))
+    result_gl_position = codegen.generate_param_attributes(MockParam("gl_Position"))
+    assert (
+        "#[location(0)]" in result_gl_position
+        or "#[builtin(position)]" in result_gl_position
+    )
+    result_gl_fragcolor = codegen.generate_param_attributes(MockParam("gl_FragColor"))
+    assert "#[location(" in result_gl_fragcolor
+    assert codegen.generate_param_attributes(MockParam(None)) == ""
+    assert codegen.generate_param_attributes(MockParam("UNKNOWN_SEMANTIC")) == ""
+
+
+def test_wave_active_sum_emits_rust_subgroup_intrinsic():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint total = WaveActiveSum(lane);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+
+
+def test_wave_ballot_emits_rust_subgroup_ballot():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                bool active = true;
+                uvec4 ballot = WaveActiveBallot(active);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_ballot(active)" in generated_code
+
+
+def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool first = WaveIsFirstLane();
+                bool equal = WaveActiveAllEqual(lane);
+                uint bitCount = WaveActiveCountBits(equal);
+                uint prefixCount = WavePrefixCountBits(equal);
+                uvec4 mask = WaveMatch(lane);
+                uint quadLane = QuadReadLaneAt(lane, 1u);
+                uint quadX = QuadReadAcrossX(lane);
+                uint quadY = QuadReadAcrossY(lane);
+                uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_size()" in generated_code
+    assert "subgroup_elect()" in generated_code
+    assert "subgroup_all_equal(lane)" in generated_code
+    assert "subgroup_ballot_bit_count(equal)" in generated_code
+    assert "subgroup_exclusive_ballot_bit_count(equal)" in generated_code
+    assert "subgroup_match(lane)" in generated_code
+    assert "subgroup_quad_broadcast(lane, 1)" in generated_code
+    assert "subgroup_quad_swap_horizontal(lane)" in generated_code
+    assert "subgroup_quad_swap_vertical(lane)" in generated_code
+    assert "subgroup_quad_swap_diagonal(lane)" in generated_code
+    assert "unsupported wave op" not in generated_code
+
+
+def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool active = lane > 0u;
+                uvec4 mask = WaveActiveBallot(active);
+                uint sum = WaveMultiPrefixSum(lane, mask);
+                uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                uint count = WaveMultiPrefixCountBits(active, mask);
+                uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "subgroup_partitioned_add(lane, mask)" in generated_code
+    assert "subgroup_partitioned_mul((lane + 1), mask)" in generated_code
+    assert "subgroup_partitioned_ballot_bit_count(active, mask)" in generated_code
+    assert "subgroup_partitioned_and(product, mask)" in generated_code
+    assert "subgroup_partitioned_or(bitAnd, mask)" in generated_code
+    assert "subgroup_partitioned_xor(bitOr, mask)" in generated_code
+    assert "unsupported wave op" not in generated_code
+
+
+def test_barrier_emits_rust_workgroup_barrier():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                barrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "workgroup_barrier()" in generated_code
+
+
+def test_memory_barrier_emits_rust_memory_barrier():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "memory_barrier()" in generated_code
+
+
+def test_workgroup_barrier_emits_rust_sync():
+    code = """
+    shader ComputeSync {
+        compute {
+            void main() {
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "workgroup_barrier()" in generated_code
+
+
+def test_rust_memory_barrier_variants_emit_sync_intrinsics():
+    code = """
+    shader ComputeSyncVariants {
+        compute {
+            void main() {
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+                groupMemoryBarrier();
+                allMemoryBarrier();
+                deviceMemoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    for expected in [
+        "memory_barrier_shared()",
+        "memory_barrier_buffer()",
+        "memory_barrier_image()",
+        "group_memory_barrier()",
+        "all_memory_barrier()",
+        "device_memory_barrier()",
+    ]:
+        assert expected in generated_code
+
+
+def test_rust_user_defined_synchronization_names_are_not_lowered():
+    code = """
+    shader ComputeSyncShadowing {
+        void barrier() {
+            return;
+        }
+
+        compute {
+            void main() {
+                barrier();
+                memoryBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "fn barrier()" in generated_code
+    assert "barrier();" in generated_code
+    assert "workgroup_barrier()" not in generated_code
+    assert "memory_barrier()" in generated_code
+
+
+def test_multiple_wave_ops_in_one_function():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uint sumVal = WaveActiveSum(lane);
+                bool anyTrue = WaveActiveAnyTrue(sumVal > 0u);
+                uvec4 ballot = WaveActiveBallot(anyTrue);
+                uint broadcast = WaveReadLaneAt(sumVal, 0u);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+    assert "subgroup_any(" in generated_code
+    assert "subgroup_ballot(" in generated_code
+    assert "subgroup_broadcast(" in generated_code
+
+
+def test_mixed_sync_and_wave_ops():
+    code = """
+    shader ComputeMixed {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                barrier();
+                uint total = WaveActiveSum(lane);
+                memoryBarrier();
+                workgroupBarrier();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "subgroup_invocation_id()" in generated_code
+    assert "workgroup_barrier()" in generated_code
+    assert "subgroup_add(lane)" in generated_code
+    assert "memory_barrier()" in generated_code

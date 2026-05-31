@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.lexer import Lexer

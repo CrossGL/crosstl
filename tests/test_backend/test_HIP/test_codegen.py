@@ -1,10 +1,9 @@
 """Test HIP Code Generation"""
 
-import pytest
 from crosstl import translate
+from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
-from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 
 
 class TestHipCodeGen:
@@ -119,7 +118,7 @@ class TestHipCodeGen:
         __global__ void kernel1() {
             int x = 1;
         }
-        
+
         __global__ void kernel2() {
             int x = 2;
         }
@@ -627,6 +626,7 @@ class TestHipCodeGen:
             hipTextureObject_t ambiguous;
             hipSurfaceObject_t surf;
             hipSurfaceObject_t lineSurf;
+            texture<float4, 1> lineTex;
             texture<float4, 2> legacyTex;
             texture<float4, hipTextureTypeCubemap> cubeTex;
             texture<float4, hipTextureTypeCubemapLayered> cubeLayerTex;
@@ -639,7 +639,9 @@ class TestHipCodeGen:
             float2 uv = make_float2(0.25f, 0.75f);
             float3 uvw = make_float3(0.25f, 0.75f, 0.5f);
             int2 pixel = make_int2(1, 2);
+            int lineIndex = 3;
             float4 sampled = tex2D<float4>(tex, uv.x, uv.y);
+            float4 fetchedLine = tex1Dfetch<float4>(lineTex, lineIndex);
             float4 arraySample = tex2D<float4>(textures[1], uv);
             float4 paramSample = tex2D<float4>(paramTex, uv);
             float4 globalSample = tex2D<float4>(globalTex, uv);
@@ -762,6 +764,7 @@ class TestHipCodeGen:
         assert "var ambiguous: sampler;" in result
         assert "var surf: image2D;" in result
         assert "var lineSurf: image1D;" in result
+        assert "var lineTex: sampler1D;" in result
         assert "var legacyTex: sampler2D;" in result
         assert "var lineSurface: image1D;" in result
         assert "var lineLayerSurface: image1DArray;" in result
@@ -772,6 +775,9 @@ class TestHipCodeGen:
         assert "var cubeSurface: imageCube;" in result
         assert "var cubeLayerSurface: imageCubeArray;" in result
         assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
+        assert (
+            "var fetchedLine: vec4<f32> = texelFetch(lineTex, lineIndex, 0);" in result
+        )
         assert "var arraySample: vec4<f32> = texture(textures[1], uv);" in result
         assert "var paramSample: vec4<f32> = texture(paramTex, uv);" in result
         assert "var globalSample: vec4<f32> = texture(globalTex, uv);" in result
@@ -1549,6 +1555,110 @@ class TestHipCodeGen:
             "hipExtModuleLaunchKernel",
         ]:
             assert f"{function_name}(" not in result
+
+    def test_hip_runtime_handle_launch_array_outputs_clear_stale_metadata(self):
+        """Test runtime handle/launch outputs clear stale array/member metadata."""
+        code = """
+        struct LaunchOutputs {
+            dim3 grid;
+            dim3 block;
+            size_t shared;
+            hipStream_t stream;
+            void* rangeHandle;
+        };
+
+        void queryRuntimeOutputTargets(
+            hipDeviceptr_t devicePtr,
+            size_t bytes,
+            void** handles,
+            dim3* grids,
+            dim3* blocks,
+            size_t* sharedMem,
+            hipStream_t* streams,
+            LaunchOutputs* holder,
+            void** ptrs,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&handles, &staleSize, devicePtr);
+            hipMemGetHandleForAddressRange(
+                &handles[0],
+                devicePtr,
+                bytes,
+                hipMemRangeHandleTypeDmaBuf,
+                0
+            );
+            ptrs[0] = handles[0];
+
+            hipMemGetAddressRange((void**)&grids, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&blocks, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sharedMem, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&streams, &staleSize, devicePtr);
+            __hipPopCallConfiguration(
+                &grids[0],
+                &blocks[0],
+                &sharedMem[0],
+                &streams[0]
+            );
+            values[0] = sharedMem[0];
+            ptrs[1] = streams[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemGetHandleForAddressRange(
+                &holder->rangeHandle,
+                devicePtr,
+                bytes,
+                hipMemRangeHandleTypeDmaBuf,
+                0
+            );
+            ptrs[2] = holder->rangeHandle;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            __hipPopCallConfiguration(
+                &holder->grid,
+                &holder->block,
+                &holder->shared,
+                &holder->stream
+            );
+            values[1] = holder->shared;
+            ptrs[3] = holder->stream;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory get handle for address range: output: handles[0], "
+            "device pointer: devicePtr, bytes: bytes, "
+            "handle type: hipMemRangeHandleTypeDmaBuf, flags: 0"
+        ) in result
+        assert (
+            "// HIP pop call configuration: grid output: grids[0], "
+            "block output: blocks[0], shared memory output: sharedMem[0], "
+            "stream output: streams[0]"
+        ) in result
+        assert (
+            "// HIP memory get handle for address range: output: "
+            "holder->rangeHandle, device pointer: devicePtr, bytes: bytes, "
+            "handle type: hipMemRangeHandleTypeDmaBuf, flags: 0"
+        ) in result
+        assert (
+            "// HIP pop call configuration: grid output: holder->grid, "
+            "block output: holder->block, shared memory output: holder->shared, "
+            "stream output: holder->stream"
+        ) in result
+        assert "ptrs[0] = handles[0];" in result
+        assert "values[0] = sharedMem[0];" in result
+        assert "ptrs[1] = streams[0];" in result
+        assert "ptrs[2] = holder->rangeHandle;" in result
+        assert "values[1] = holder->shared;" in result
+        assert "ptrs[3] = holder->stream;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_user_defined_hip_launch_kernel_call_is_not_kernel_launch(self):
         """Test user-defined hipLaunchKernel shadows launch lowering."""
@@ -3406,6 +3516,311 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_allocation_array_outputs_clear_stale_metadata(self):
+        """Test HIP allocation outputs clear stale array/member metadata."""
+        code = """
+        struct AllocOutputs {
+            void* ptr;
+            void* hostPtr;
+            hipDeviceptr_t driverPtr;
+            hipPitchedPtr pitched;
+            size_t pitch;
+            hipArray_t array;
+            hipArray_t levelArray;
+            hipMipmappedArray_t mipmap;
+        };
+
+        void queryAllocationOutputTargets(
+            size_t bytes,
+            size_t width,
+            hipStream_t stream,
+            hipMemPool_t pool,
+            hipExtent extent,
+            hipChannelFormatDesc* desc,
+            HIP_ARRAY_DESCRIPTOR* arrayDesc,
+            HIP_ARRAY3D_DESCRIPTOR* array3DDesc,
+            void* devicePtr,
+            void** ptrs,
+            hipDeviceptr_t* driverPtrs,
+            hipPitchedPtr* pitchedPtrs,
+            size_t* pitches,
+            hipArray_t* arrays,
+            hipMipmappedArray_t* mipmaps,
+            AllocOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMalloc(&ptrs[0], bytes);
+            ptrs[8] = ptrs[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocManaged(&ptrs[1], bytes);
+            ptrs[9] = ptrs[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipExtMallocWithFlags(&ptrs[2], bytes, hipDeviceMallocDefault);
+            ptrs[10] = ptrs[2];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocAsync(&ptrs[3], bytes, stream);
+            ptrs[11] = ptrs[3];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMallocFromPoolAsync(&ptrs[4], bytes, pool, stream);
+            ptrs[12] = ptrs[4];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostMalloc(&ptrs[5], bytes, hipHostMallocMapped);
+            ptrs[13] = ptrs[5];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostAlloc(&ptrs[6], bytes, hipHostMallocDefault);
+            ptrs[14] = ptrs[6];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&pitches, &staleSize, devicePtr);
+            hipMallocPitch(&ptrs[7], &pitches[0], width, 4);
+            ptrs[15] = ptrs[7];
+            values[0] = pitches[0];
+
+            hipMemGetAddressRange((void**)&pitchedPtrs, &staleSize, devicePtr);
+            hipMalloc3D(&pitchedPtrs[0], extent);
+            values[1] = pitchedPtrs[0].pitch;
+
+            hipMemGetAddressRange((void**)&driverPtrs, &staleSize, devicePtr);
+            hipMemAlloc(&driverPtrs[0], bytes);
+            driverPtrs[8] = driverPtrs[0];
+
+            hipMemGetAddressRange((void**)&driverPtrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&pitches, &staleSize, devicePtr);
+            hipMemAllocPitch(&driverPtrs[1], &pitches[1], width, 4, 4);
+            driverPtrs[9] = driverPtrs[1];
+            values[2] = pitches[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemAllocHost(&ptrs[16], bytes);
+            ptrs[17] = ptrs[16];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemHostAlloc(&ptrs[18], bytes, hipHostMallocDefault);
+            ptrs[19] = ptrs[18];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMallocArray(&arrays[0], desc, width, 4, hipArrayDefault);
+            arrays[8] = arrays[0];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMalloc3DArray(&arrays[1], desc, extent, hipArrayLayered);
+            arrays[9] = arrays[1];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipArrayCreate(&arrays[2], arrayDesc);
+            arrays[10] = arrays[2];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipArray3DCreate(&arrays[3], array3DDesc);
+            arrays[11] = arrays[3];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipMallocMipmappedArray(
+                &mipmaps[0],
+                desc,
+                extent,
+                4,
+                hipArrayDefault
+            );
+            mipmaps[4] = mipmaps[0];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipMipmappedArrayCreate(&mipmaps[1], array3DDesc, 3);
+            mipmaps[5] = mipmaps[1];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipGetMipmappedArrayLevel(&arrays[4], mipmaps[0], 1);
+            arrays[12] = arrays[4];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipMipmappedArrayGetLevel(&arrays[5], mipmaps[1], 2);
+            arrays[13] = arrays[5];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMalloc(&holder->ptr, bytes);
+            ptrs[20] = holder->ptr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocPitch(&holder->hostPtr, &holder->pitch, width, 4);
+            ptrs[21] = holder->hostPtr;
+            values[3] = holder->pitch;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemAlloc(&holder->driverPtr, bytes);
+            driverPtrs[10] = holder->driverPtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMalloc3D(&holder->pitched, extent);
+            values[4] = holder->pitched.pitch;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocArray(&holder->array, desc, width, 4, hipArrayDefault);
+            arrays[14] = holder->array;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMallocMipmappedArray(
+                &holder->mipmap,
+                desc,
+                extent,
+                2,
+                hipArrayDefault
+            );
+            mipmaps[6] = holder->mipmap;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetMipmappedArrayLevel(&holder->levelArray, holder->mipmap, 0);
+            arrays[15] = holder->levelArray;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP memory allocate: ptrs[0], bytes: bytes" in result
+        assert "// HIP memory allocate: ptrs[1], bytes: bytes" in result
+        assert (
+            "// HIP extended memory allocate: ptrs[2], bytes: bytes, "
+            "flags: hipDeviceMallocDefault"
+        ) in result
+        assert (
+            "// HIP async memory allocate: ptrs[3], bytes: bytes, stream: stream"
+            in result
+        )
+        assert (
+            "// HIP async memory allocate from pool: ptrs[4], bytes: bytes, "
+            "pool: pool, stream: stream"
+        ) in result
+        assert (
+            "// HIP host memory allocate: ptrs[5], bytes: bytes, "
+            "flags: hipHostMallocMapped"
+        ) in result
+        assert (
+            "// HIP host memory allocate: ptrs[6], bytes: bytes, "
+            "flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            "// HIP pitched memory allocate: ptrs[7], pitch: pitches[0], "
+            "width: width, height: 4"
+        ) in result
+        assert "// HIP 3D memory allocate: pitchedPtrs[0], extent: extent" in result
+        assert (
+            "// HIP driver memory allocate: output: driverPtrs[0], bytes: bytes"
+            in result
+        )
+        assert (
+            "// HIP driver pitched memory allocate: output: driverPtrs[1], "
+            "pitch output: pitches[1], width: width, height: 4, element bytes: 4"
+        ) in result
+        assert (
+            "// HIP driver host memory allocate: output: ptrs[16], bytes: bytes"
+            in result
+        )
+        assert (
+            "// HIP driver host memory allocate: output: ptrs[18], bytes: bytes, "
+            "flags: hipHostMallocDefault"
+        ) in result
+        assert (
+            "// HIP array allocate: arrays[0], desc: desc, width: width, "
+            "height: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP 3D array allocate: arrays[1], desc: desc, extent: extent, "
+            "flags: hipArrayLayered"
+        ) in result
+        assert "// HIP array create: output: arrays[2], descriptor: arrayDesc" in result
+        assert (
+            "// HIP 3D array create: output: arrays[3], descriptor: array3DDesc"
+            in result
+        )
+        assert (
+            "// HIP mipmapped array allocate: output: mipmaps[0], desc: desc, "
+            "extent: extent, levels: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array create: output: mipmaps[1], "
+            "descriptor: array3DDesc, levels: 3"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: arrays[4], "
+            "mipmapped array: mipmaps[0], level: 1"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: arrays[5], "
+            "mipmapped array: mipmaps[1], level: 2"
+        ) in result
+        assert "// HIP memory allocate: holder->ptr, bytes: bytes" in result
+        assert (
+            "// HIP pitched memory allocate: holder->hostPtr, "
+            "pitch: holder->pitch, width: width, height: 4"
+        ) in result
+        assert (
+            "// HIP driver memory allocate: output: holder->driverPtr, bytes: bytes"
+            in result
+        )
+        assert "// HIP 3D memory allocate: holder->pitched, extent: extent" in result
+        assert (
+            "// HIP array allocate: holder->array, desc: desc, width: width, "
+            "height: 4, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array allocate: output: holder->mipmap, desc: desc, "
+            "extent: extent, levels: 2, flags: hipArrayDefault"
+        ) in result
+        assert (
+            "// HIP mipmapped array get level: output: holder->levelArray, "
+            "mipmapped array: holder->mipmap, level: 0"
+        ) in result
+
+        for snippet in [
+            "ptrs[8] = ptrs[0];",
+            "ptrs[9] = ptrs[1];",
+            "ptrs[10] = ptrs[2];",
+            "ptrs[11] = ptrs[3];",
+            "ptrs[12] = ptrs[4];",
+            "ptrs[13] = ptrs[5];",
+            "ptrs[14] = ptrs[6];",
+            "ptrs[15] = ptrs[7];",
+            "values[0] = pitches[0];",
+            "values[1] = pitchedPtrs[0].pitch;",
+            "driverPtrs[8] = driverPtrs[0];",
+            "driverPtrs[9] = driverPtrs[1];",
+            "values[2] = pitches[1];",
+            "ptrs[17] = ptrs[16];",
+            "ptrs[19] = ptrs[18];",
+            "arrays[8] = arrays[0];",
+            "arrays[9] = arrays[1];",
+            "arrays[10] = arrays[2];",
+            "arrays[11] = arrays[3];",
+            "mipmaps[4] = mipmaps[0];",
+            "mipmaps[5] = mipmaps[1];",
+            "arrays[12] = arrays[4];",
+            "arrays[13] = arrays[5];",
+            "ptrs[20] = holder->ptr;",
+            "ptrs[21] = holder->hostPtr;",
+            "values[3] = holder->pitch;",
+            "driverPtrs[10] = holder->driverPtr;",
+            "values[4] = holder->pitched.pitch;",
+            "arrays[14] = holder->array;",
+            "mipmaps[6] = holder->mipmap;",
+            "arrays[15] = holder->levelArray;",
+        ]:
+            assert snippet in result
+
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_copy_memset_symbol_expression_contexts_emit_status(self):
         """Test HIP copy/memset/symbol expressions emit status metadata."""
         code = """
@@ -3697,6 +4112,135 @@ class TestHipCodeGen:
             "hipMemsetD2D32Async",
         ]:
             assert f"{function_name}(" not in result
+
+    def test_hip_batch_symbol_array_outputs_clear_stale_metadata(self):
+        """Test HIP batched copy and symbol outputs clear stale metadata."""
+        code = """
+        struct BatchOutputs {
+            size_t failIndex;
+            void* symbolPtr;
+            size_t symbolSize;
+        };
+
+        void queryBatchSymbolOutputTargets(
+            void** copyDsts,
+            void** copySrcs,
+            size_t* copySizes,
+            hipMemcpyAttributes* attrs,
+            size_t* attrIndices,
+            hipMemcpy3DBatchOp* batch3DOps,
+            hipStream_t stream,
+            void* symbol,
+            void* devicePtr,
+            size_t* failIndices,
+            void** symbolPtrs,
+            size_t* symbolSizes,
+            BatchOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&failIndices, &staleSize, devicePtr);
+            hipMemcpyBatchAsync(
+                copyDsts,
+                copySrcs,
+                copySizes,
+                1,
+                attrs,
+                attrIndices,
+                1,
+                &failIndices[0],
+                stream
+            );
+            values[0] = failIndices[0];
+
+            hipMemGetAddressRange((void**)&failIndices, &staleSize, devicePtr);
+            hipMemcpy3DBatchAsync(
+                1,
+                batch3DOps,
+                &failIndices[1],
+                0ull,
+                stream
+            );
+            values[1] = failIndices[1];
+
+            hipMemGetAddressRange((void**)&symbolPtrs, &staleSize, devicePtr);
+            hipGetSymbolAddress(&symbolPtrs[0], symbol);
+            symbolPtrs[1] = symbolPtrs[0];
+
+            hipMemGetAddressRange((void**)&symbolSizes, &staleSize, devicePtr);
+            hipGetSymbolSize(&symbolSizes[0], symbol);
+            values[2] = symbolSizes[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemcpyBatchAsync(
+                copyDsts,
+                copySrcs,
+                copySizes,
+                1,
+                attrs,
+                attrIndices,
+                1,
+                &holder->failIndex,
+                stream
+            );
+            values[3] = holder->failIndex;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetSymbolAddress(&holder->symbolPtr, symbol);
+            symbolPtrs[2] = holder->symbolPtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetSymbolSize(&holder->symbolSize, symbol);
+            values[4] = holder->symbolSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP batched memory copy: destinations: copyDsts, "
+            "sources: copySrcs, sizes: copySizes, count: 1, attributes: attrs, "
+            "attribute indices: attrIndices, attribute count: 1, "
+            "fail index output: failIndices[0], stream: stream"
+        ) in result
+        assert (
+            "// HIP batched 3D memory copy: count: 1, operations: batch3DOps, "
+            "fail index output: failIndices[1], flags: 0ull, stream: stream"
+        ) in result
+        assert (
+            "// HIP get symbol address: output: symbolPtrs[0], symbol: symbol" in result
+        )
+        assert (
+            "// HIP get symbol size: output: symbolSizes[0], symbol: symbol" in result
+        )
+        assert (
+            "// HIP batched memory copy: destinations: copyDsts, "
+            "sources: copySrcs, sizes: copySizes, count: 1, attributes: attrs, "
+            "attribute indices: attrIndices, attribute count: 1, "
+            "fail index output: holder->failIndex, stream: stream"
+        ) in result
+        assert (
+            "// HIP get symbol address: output: holder->symbolPtr, symbol: symbol"
+            in result
+        )
+        assert (
+            "// HIP get symbol size: output: holder->symbolSize, symbol: symbol"
+            in result
+        )
+        assert "values[0] = failIndices[0];" in result
+        assert "values[1] = failIndices[1];" in result
+        assert "symbolPtrs[1] = symbolPtrs[0];" in result
+        assert "values[2] = symbolSizes[0];" in result
+        assert "values[3] = holder->failIndex;" in result
+        assert "symbolPtrs[2] = holder->symbolPtr;" in result
+        assert "values[4] = holder->symbolSize;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_surface_object_descriptor_query_is_explicitly_unsupported(self):
         """Test CUDA-parity surface descriptor queries stay explicit for HIP."""
@@ -4436,6 +4980,104 @@ class TestHipCodeGen:
         assert "var manualWidth: u32 = (/* HIP device query:" not in result
         assert "var manualDepth: u32 = (/* HIP device query:" not in result
 
+    def test_hip_descriptor_array_outputs_clear_stale_metadata(self):
+        """Test descriptor array outputs clear prior query metadata."""
+        code = """
+        void queryDescriptorArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipArray_t array,
+            hipTextureObject_t texObj,
+            hipChannelFormatDesc* channelDescs,
+            HIP_ARRAY_DESCRIPTOR* arrayDescs,
+            HIP_ARRAY3D_DESCRIPTOR* array3DDescs,
+            hipExtent* extents,
+            unsigned int* flags,
+            hipResourceDesc* resourceDescs,
+            hipTextureDesc* textureDescs,
+            hipResourceViewDesc* viewDescs,
+            int* out,
+            size_t* dims
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&channelDescs, &staleSize, devicePtr);
+            hipGetChannelDesc(&channelDescs[0], array);
+            out[0] = channelDescs[0].x;
+
+            hipMemGetAddressRange((void**)&arrayDescs, &staleSize, devicePtr);
+            hipArrayGetDescriptor(&arrayDescs[0], array);
+            out[1] = arrayDescs[0].NumChannels;
+
+            hipMemGetAddressRange((void**)&array3DDescs, &staleSize, devicePtr);
+            hipArray3DGetDescriptor(&array3DDescs[0], array);
+            out[2] = array3DDescs[0].Flags;
+
+            hipMemGetAddressRange((void**)&channelDescs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&extents, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&flags, &staleSize, devicePtr);
+            hipArrayGetInfo(&channelDescs[1], &extents[0], &flags[0], array);
+            out[3] = channelDescs[1].y;
+            dims[0] = extents[0].width;
+            out[4] = flags[0];
+
+            hipMemGetAddressRange((void**)&resourceDescs, &staleSize, devicePtr);
+            hipGetTextureObjectResourceDesc(&resourceDescs[0], texObj);
+            out[5] = resourceDescs[0].resType;
+
+            hipMemGetAddressRange((void**)&textureDescs, &staleSize, devicePtr);
+            hipGetTextureObjectTextureDesc(&textureDescs[0], texObj);
+            out[6] = textureDescs[0].addressMode[0];
+
+            hipMemGetAddressRange((void**)&viewDescs, &staleSize, devicePtr);
+            hipGetTextureObjectResourceViewDesc(&viewDescs[0], texObj);
+            dims[1] = viewDescs[0].width;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP get channel desc: output: channelDescs[0], array: array" in result
+        )
+        assert "out[0] = channelDescs[0].x;" in result
+        assert (
+            "// HIP array get descriptor: output: arrayDescs[0], array: array" in result
+        )
+        assert "out[1] = arrayDescs[0].NumChannels;" in result
+        assert (
+            "// HIP array get 3D descriptor: output: array3DDescs[0], array: array"
+            in result
+        )
+        assert "out[2] = array3DDescs[0].Flags;" in result
+        assert (
+            "// HIP array get info: desc output: channelDescs[1], "
+            "extent output: extents[0], flags output: flags[0], array: array"
+        ) in result
+        assert "out[3] = channelDescs[1].y;" in result
+        assert "dims[0] = extents[0].width;" in result
+        assert "out[4] = flags[0];" in result
+        assert (
+            "// HIP texture object get resource desc: output: resourceDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "out[5] = resourceDescs[0].resType;" in result
+        assert (
+            "// HIP texture object get texture desc: output: textureDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "out[6] = textureDescs[0].addressMode[0];" in result
+        assert (
+            "// HIP texture object get resource view desc: output: viewDescs[0], "
+            "texture: texObj"
+        ) in result
+        assert "dims[1] = viewDescs[0].width;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_object_lifecycle_expression_contexts_emit_status(self):
         """Test object lifecycle calls in expressions stay explicit."""
         code = """
@@ -4809,6 +5451,63 @@ class TestHipCodeGen:
             "hipGraphReleaseUserObject",
         ]:
             assert f"{function_name}(" not in result
+
+    def test_hip_user_object_array_outputs_clear_stale_metadata(self):
+        """Test user-object array and member outputs clear stale metadata."""
+        code = """
+        struct UserObjectOutputs {
+            hipUserObject_t object;
+        };
+
+        void queryUserObjectOutputs(
+            hipDeviceptr_t devicePtr,
+            hipHostFn_t destructor,
+            void* resource,
+            hipUserObject_t* objects,
+            UserObjectOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&objects, &staleSize, devicePtr);
+            hipUserObjectCreate(&objects[0], resource, destructor, 1, 0);
+            ptrs[0] = objects[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipUserObjectCreate(&holder->object, resource, destructor, 2, 0);
+            ptrs[1] = holder->object;
+
+            hipMemGetAddressRange((void**)&objects, &staleSize, devicePtr);
+            if (hipUserObjectCreate(&objects[1], resource, destructor, 3, 0) == hipSuccess) {
+                ptrs[2] = objects[1];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP user object create: output: objects[0], resource: resource, "
+            "destructor: destructor, initial refcount: 1, flags: 0"
+        ) in result
+        assert (
+            "// HIP user object create: output: holder->object, resource: resource, "
+            "destructor: destructor, initial refcount: 2, flags: 0"
+        ) in result
+        assert (
+            "if (((/* HIP user object create: output: objects[1], "
+            "resource: resource, destructor: destructor, initial refcount: 3, "
+            "flags: 0 */ hipSuccess) == hipSuccess))"
+        ) in result
+        assert "ptrs[0] = objects[0];" in result
+        assert "ptrs[1] = holder->object;" in result
+        assert "ptrs[2] = objects[1];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_memory_memcpy_expression_contexts_emit_status(self):
         """Test HIP graph memory/memcpy calls in expressions emit status."""
@@ -5716,6 +6415,342 @@ class TestHipCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
+    def test_hip_interop_handle_array_outputs_clear_stale_metadata(self):
+        """Test HIP interop and handle array outputs clear stale metadata."""
+        code = """
+        void host(
+            void* devicePtr,
+            void* hostPtr,
+            hipMemPoolProps* poolProps,
+            hipMemPool_t* pools,
+            hipMemPoolPtrExportData* poolExports,
+            hipMemGenericAllocationHandle_t* allocationHandles,
+            hipMemAllocationProp* allocationProps,
+            hipMemAllocationHandleType handleType,
+            void** shareableHandles,
+            void** ptrs,
+            hipDeviceptr_t* devicePtrs,
+            hipIpcMemHandle_t* ipcMemHandles,
+            hipIpcEventHandle_t* ipcEventHandles,
+            hipEvent_t* events,
+            hipExternalMemory_t* externalMemories,
+            hipExternalMemoryHandleDesc* memoryDescs,
+            hipExternalMemoryBufferDesc* bufferDescs,
+            hipExternalMemoryMipmappedArrayDesc* mipmapDescs,
+            hipMipmappedArray_t* mipmaps,
+            hipExternalSemaphore_t* externalSemaphores,
+            hipExternalSemaphoreHandleDesc* semaphoreDescs,
+            hipGraphicsResource_t* graphicsResources,
+            hipArray_t* arrays,
+            size_t* sizes,
+            unsigned int glBuffer,
+            unsigned int glImage,
+            unsigned int glTarget
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipMemPoolCreate(&pools[0], &poolProps[0]);
+            pools[8] = pools[0];
+
+            hipMemGetAddressRange((void**)&shareableHandles, &staleSize, devicePtr);
+            hipMemPoolExportToShareableHandle(
+                &shareableHandles[0],
+                pools[0],
+                handleType,
+                0
+            );
+            shareableHandles[8] = shareableHandles[0];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipMemPoolImportFromShareableHandle(
+                &pools[1],
+                shareableHandles[0],
+                handleType,
+                0
+            );
+            pools[9] = pools[1];
+
+            hipMemGetAddressRange((void**)&poolExports, &staleSize, devicePtr);
+            hipMemPoolExportPointer(&poolExports[0], ptrs[0]);
+            poolExports[8] = poolExports[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemPoolImportPointer(&ptrs[1], pools[1], &poolExports[0]);
+            ptrs[8] = ptrs[1];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipDeviceGetDefaultMemPool(&pools[2], 0);
+            pools[10] = pools[2];
+
+            hipMemGetAddressRange((void**)&pools, &staleSize, devicePtr);
+            hipDeviceGetMemPool(&pools[3], 0);
+            pools[11] = pools[3];
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemCreate(&allocationHandles[0], 4096, &allocationProps[0], 0);
+            allocationHandles[8] = allocationHandles[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemAddressReserve(&ptrs[2], 4096, 0, hostPtr, 0);
+            ptrs[9] = ptrs[2];
+
+            hipMemGetAddressRange((void**)&allocationProps, &staleSize, devicePtr);
+            hipMemGetAllocationPropertiesFromHandle(
+                &allocationProps[1],
+                allocationHandles[0]
+            );
+            allocationProps[8].type = allocationProps[1].type;
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemRetainAllocationHandle(&allocationHandles[1], ptrs[2]);
+            allocationHandles[9] = allocationHandles[1];
+
+            hipMemGetAddressRange((void**)&shareableHandles, &staleSize, devicePtr);
+            hipMemExportToShareableHandle(
+                &shareableHandles[1],
+                allocationHandles[0],
+                handleType,
+                0
+            );
+            shareableHandles[9] = shareableHandles[1];
+
+            hipMemGetAddressRange((void**)&allocationHandles, &staleSize, devicePtr);
+            hipMemImportFromShareableHandle(
+                &allocationHandles[2],
+                shareableHandles[1],
+                handleType
+            );
+            allocationHandles[10] = allocationHandles[2];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipHostGetDevicePointer(&ptrs[3], hostPtr, 0);
+            ptrs[10] = ptrs[3];
+
+            hipMemGetAddressRange((void**)&devicePtrs, &staleSize, devicePtr);
+            hipMemHostGetDevicePointer(&devicePtrs[0], hostPtr, 0);
+            devicePtrs[8] = devicePtrs[0];
+
+            hipMemGetAddressRange((void**)&ipcMemHandles, &staleSize, devicePtr);
+            hipIpcGetMemHandle(&ipcMemHandles[0], ptrs[3]);
+            ipcMemHandles[8] = ipcMemHandles[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipIpcOpenMemHandle(
+                &ptrs[4],
+                ipcMemHandles[0],
+                hipIpcMemLazyEnablePeerAccess
+            );
+            ptrs[11] = ptrs[4];
+
+            hipMemGetAddressRange((void**)&ipcEventHandles, &staleSize, devicePtr);
+            hipIpcGetEventHandle(&ipcEventHandles[0], events[0]);
+            ipcEventHandles[8] = ipcEventHandles[0];
+
+            hipMemGetAddressRange((void**)&events, &staleSize, devicePtr);
+            hipIpcOpenEventHandle(&events[1], ipcEventHandles[0]);
+            events[8] = events[1];
+
+            hipMemGetAddressRange((void**)&externalMemories, &staleSize, devicePtr);
+            hipImportExternalMemory(&externalMemories[0], &memoryDescs[0]);
+            externalMemories[8] = externalMemories[0];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipExternalMemoryGetMappedBuffer(
+                &ptrs[5],
+                externalMemories[0],
+                &bufferDescs[0]
+            );
+            ptrs[12] = ptrs[5];
+
+            hipMemGetAddressRange((void**)&mipmaps, &staleSize, devicePtr);
+            hipExternalMemoryGetMappedMipmappedArray(
+                &mipmaps[0],
+                externalMemories[0],
+                &mipmapDescs[0]
+            );
+            mipmaps[8] = mipmaps[0];
+
+            hipMemGetAddressRange((void**)&externalSemaphores, &staleSize, devicePtr);
+            hipImportExternalSemaphore(&externalSemaphores[0], &semaphoreDescs[0]);
+            externalSemaphores[8] = externalSemaphores[0];
+
+            hipMemGetAddressRange((void**)&graphicsResources, &staleSize, devicePtr);
+            hipGraphicsGLRegisterBuffer(
+                &graphicsResources[0],
+                glBuffer,
+                hipGraphicsRegisterFlagsWriteDiscard
+            );
+            graphicsResources[8] = graphicsResources[0];
+
+            hipMemGetAddressRange((void**)&graphicsResources, &staleSize, devicePtr);
+            hipGraphicsGLRegisterImage(
+                &graphicsResources[1],
+                glImage,
+                glTarget,
+                hipGraphicsRegisterFlagsSurfaceLoadStore
+            );
+            graphicsResources[9] = graphicsResources[1];
+
+            hipMemGetAddressRange((void**)&ptrs, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipGraphicsResourceGetMappedPointer(
+                &ptrs[6],
+                &sizes[0],
+                graphicsResources[0]
+            );
+            ptrs[13] = ptrs[6];
+            sizes[8] = sizes[0];
+
+            hipMemGetAddressRange((void**)&arrays, &staleSize, devicePtr);
+            hipGraphicsSubResourceGetMappedArray(&arrays[0], graphicsResources[1], 0, 0);
+            arrays[8] = arrays[0];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory pool create: output: pools[0], properties: (&poolProps[0])"
+            in result
+        )
+        assert "pools[8] = pools[0];" in result
+        assert (
+            "// HIP memory pool export to shareable handle: "
+            "output: shareableHandles[0], pool: pools[0], "
+            "handle type: handleType, flags: 0"
+        ) in result
+        assert "shareableHandles[8] = shareableHandles[0];" in result
+        assert (
+            "// HIP memory pool import from shareable handle: output: pools[1], "
+            "handle: shareableHandles[0], handle type: handleType, flags: 0"
+        ) in result
+        assert "pools[9] = pools[1];" in result
+        assert (
+            "// HIP memory pool export pointer: output: poolExports[0], "
+            "pointer: ptrs[0]"
+        ) in result
+        assert "poolExports[8] = poolExports[0];" in result
+        assert (
+            "// HIP memory pool import pointer: output: ptrs[1], "
+            "pool: pools[1], export data: (&poolExports[0])"
+        ) in result
+        assert "ptrs[8] = ptrs[1];" in result
+        assert "// HIP get default memory pool: output: pools[2], device: 0" in result
+        assert "pools[10] = pools[2];" in result
+        assert "// HIP get device memory pool: output: pools[3], device: 0" in result
+        assert "pools[11] = pools[3];" in result
+        assert (
+            "// HIP virtual memory create allocation: output: allocationHandles[0], "
+            "bytes: 4096, properties: (&allocationProps[0]), flags: 0"
+        ) in result
+        assert "allocationHandles[8] = allocationHandles[0];" in result
+        assert (
+            "// HIP virtual memory reserve address: output: ptrs[2], bytes: 4096, "
+            "alignment: 0, address: hostPtr, flags: 0"
+        ) in result
+        assert "ptrs[9] = ptrs[2];" in result
+        assert (
+            "// HIP virtual memory allocation properties: output: allocationProps[1], "
+            "handle: allocationHandles[0]"
+        ) in result
+        assert "allocationProps[8].type = allocationProps[1].type;" in result
+        assert (
+            "// HIP virtual memory retain allocation handle: "
+            "output: allocationHandles[1], address: ptrs[2]"
+        ) in result
+        assert "allocationHandles[9] = allocationHandles[1];" in result
+        assert (
+            "// HIP virtual memory export shareable handle: "
+            "output: shareableHandles[1], handle: allocationHandles[0], "
+            "handle type: handleType, flags: 0"
+        ) in result
+        assert "shareableHandles[9] = shareableHandles[1];" in result
+        assert (
+            "// HIP virtual memory import shareable handle: "
+            "output: allocationHandles[2], shareable handle: shareableHandles[1], "
+            "handle type: handleType"
+        ) in result
+        assert "allocationHandles[10] = allocationHandles[2];" in result
+        assert (
+            "// HIP host device pointer: output: ptrs[3], host: hostPtr, flags: 0"
+            in result
+        )
+        assert "ptrs[10] = ptrs[3];" in result
+        assert (
+            "// HIP driver host device pointer: output: devicePtrs[0], "
+            "host: hostPtr, flags: 0"
+        ) in result
+        assert "devicePtrs[8] = devicePtrs[0];" in result
+        assert (
+            "// HIP IPC get memory handle: output: ipcMemHandles[0], "
+            "pointer: ptrs[3]"
+        ) in result
+        assert "ipcMemHandles[8] = ipcMemHandles[0];" in result
+        assert (
+            "// HIP IPC open memory handle: output: ptrs[4], "
+            "handle: ipcMemHandles[0], flags: hipIpcMemLazyEnablePeerAccess"
+        ) in result
+        assert "ptrs[11] = ptrs[4];" in result
+        assert (
+            "// HIP IPC get event handle: output: ipcEventHandles[0], "
+            "event: events[0]"
+        ) in result
+        assert "ipcEventHandles[8] = ipcEventHandles[0];" in result
+        assert (
+            "// HIP IPC open event handle: output: events[1], "
+            "handle: ipcEventHandles[0]"
+        ) in result
+        assert "events[8] = events[1];" in result
+        assert (
+            "// HIP import external memory: output: externalMemories[0], "
+            "descriptor: (&memoryDescs[0])"
+        ) in result
+        assert "externalMemories[8] = externalMemories[0];" in result
+        assert (
+            "// HIP external memory mapped buffer: output: ptrs[5], "
+            "memory: externalMemories[0], descriptor: (&bufferDescs[0])"
+        ) in result
+        assert "ptrs[12] = ptrs[5];" in result
+        assert (
+            "// HIP external memory mapped mipmapped array: output: mipmaps[0], "
+            "memory: externalMemories[0], descriptor: (&mipmapDescs[0])"
+        ) in result
+        assert "mipmaps[8] = mipmaps[0];" in result
+        assert (
+            "// HIP import external semaphore: output: externalSemaphores[0], "
+            "descriptor: (&semaphoreDescs[0])"
+        ) in result
+        assert "externalSemaphores[8] = externalSemaphores[0];" in result
+        assert (
+            "// HIP OpenGL register buffer: output: graphicsResources[0], "
+            "buffer: glBuffer, flags: hipGraphicsRegisterFlagsWriteDiscard"
+        ) in result
+        assert "graphicsResources[8] = graphicsResources[0];" in result
+        assert (
+            "// HIP OpenGL register image: output: graphicsResources[1], "
+            "image: glImage, target: glTarget, "
+            "flags: hipGraphicsRegisterFlagsSurfaceLoadStore"
+        ) in result
+        assert "graphicsResources[9] = graphicsResources[1];" in result
+        assert (
+            "// HIP graphics mapped pointer: pointer output: ptrs[6], "
+            "size output: sizes[0], resource: graphicsResources[0]"
+        ) in result
+        assert "ptrs[13] = ptrs[6];" in result
+        assert "sizes[8] = sizes[0];" in result
+        assert (
+            "// HIP graphics mapped subresource array: output: arrays[0], "
+            "resource: graphicsResources[1], array index: 0, mip level: 0"
+        ) in result
+        assert "arrays[8] = arrays[0];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_memset_async_conversion(self):
         """Test hipMemsetAsync emits metadata comments and status success"""
         code = """
@@ -5853,6 +6888,66 @@ class TestHipCodeGen:
         assert "var sms: i32 = props.multiProcessorCount;" not in result
         assert "var warp: i32 = props.warpSize;" not in result
         assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
+
+    def test_hip_device_property_string_array_outputs_clear_stale_metadata(self):
+        """Test device property/string array outputs clear prior query metadata."""
+        code = """
+        void queryDeviceInfoArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            hipDeviceProp_t* props,
+            hipUUID* uuids,
+            char* names,
+            char* pciIds,
+            int device,
+            int* out
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&props, &staleSize, devicePtr);
+            hipGetDeviceProperties(&props[0], device);
+            out[0] = props[0].multiProcessorCount;
+
+            hipMemGetAddressRange((void**)&uuids, &staleSize, devicePtr);
+            hipDeviceGetUuid(&uuids[0], device);
+            hipUUID uuidCopy = uuids[0];
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipDeviceGetName(names, 64, device);
+            int firstNameChar = names[0];
+
+            hipMemGetAddressRange((void**)&pciIds, &staleSize, devicePtr);
+            hipDeviceGetPCIBusId(pciIds, 32, device);
+            int firstPciChar = pciIds[0];
+
+            out[1] = firstNameChar;
+            out[2] = firstPciChar;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "// HIP get device properties: props[0], device: device" in result
+        assert "out[0] = props[0].multiProcessorCount;" in result
+        assert "// HIP get device UUID: output: uuids[0], device: device" in result
+        assert "var uuidCopy: hipUUID = uuids[0];" in result
+        assert (
+            "// HIP get device name: output: names, length: 64, device: device"
+            in result
+        )
+        assert "var firstNameChar: i32 = names[0];" in result
+        assert (
+            "// HIP get device PCI bus id: output: pciIds, "
+            "length: 32, device: device"
+        ) in result
+        assert "var firstPciChar: i32 = pciIds[0];" in result
+        assert "out[1] = firstNameChar;" in result
+        assert "out[2] = firstPciChar;" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_device_attribute_reads_emit_metadata_expressions(self):
         """Test hipDeviceGetAttribute output reads lower to explicit metadata."""
@@ -7594,6 +8689,260 @@ class TestHipCodeGen:
         assert "var manualPointerSize: u32 = (/* HIP device query:" not in result
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
+    def test_hip_memory_pointer_array_outputs_clear_stale_metadata(self):
+        """Test HIP memory and pointer array outputs clear stale metadata."""
+        code = """
+        void host(
+            void* devicePtr,
+            void* hostPtr,
+            hipMemPool_t pool,
+            hipMemLocation* locations,
+            hipMemAllocationProp* props,
+            hipPointerAttribute_t* pointerAttrs,
+            size_t* sizes,
+            int* attrs,
+            unsigned long long* accessFlags,
+            int* out
+        ) {
+            size_t staleSize = 0;
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemGetInfo(&sizes[0], &sizes[1]);
+            out[0] = sizes[0];
+            out[1] = sizes[1];
+
+            hipMemGetAddressRange((void**)&pointerAttrs, &staleSize, devicePtr);
+            hipPointerGetAttributes(&pointerAttrs[0], devicePtr);
+            out[2] = pointerAttrs[0].memoryType;
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipPointerGetAttribute(
+                &attrs[0],
+                hipPointerAttributeMemoryType,
+                devicePtr
+            );
+            out[3] = attrs[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemPtrGetInfo(devicePtr, &sizes[2]);
+            out[4] = sizes[2];
+
+            hipMemGetAddressRange((void**)&accessFlags, &staleSize, devicePtr);
+            hipMemGetAccess(&accessFlags[0], &locations[0], devicePtr);
+            out[5] = accessFlags[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemPoolGetAttribute(
+                pool,
+                hipMemPoolAttrReleaseThreshold,
+                &sizes[3]
+            );
+            out[6] = sizes[3];
+
+            hipMemGetAddressRange((void**)&accessFlags, &staleSize, devicePtr);
+            hipMemPoolGetAccess(&accessFlags[1], pool, &locations[1]);
+            out[7] = accessFlags[1];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipHostGetFlags(&attrs[1], hostPtr);
+            out[8] = attrs[1];
+
+            hipMemGetAddressRange((void**)&attrs, &staleSize, devicePtr);
+            hipMemRangeGetAttribute(
+                &attrs[2],
+                sizeof(int),
+                hipMemRangeAttributePreferredLocation,
+                devicePtr,
+                256
+            );
+            out[9] = attrs[2];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipMemGetAllocationGranularity(
+                &sizes[4],
+                &props[0],
+                hipMemAllocationGranularityMinimum
+            );
+            out[10] = sizes[4];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert (
+            "// HIP memory info: free output: sizes[0], total output: sizes[1]"
+            in result
+        )
+        assert "out[0] = sizes[0];" in result
+        assert "out[1] = sizes[1];" in result
+        assert (
+            "// HIP pointer attributes: output: pointerAttrs[0], " "pointer: devicePtr"
+        ) in result
+        assert "out[2] = pointerAttrs[0].memoryType;" in result
+        assert (
+            "// HIP pointer attribute: output: attrs[0], "
+            "attribute: hipPointerAttributeMemoryType, pointer: devicePtr"
+        ) in result
+        assert "out[3] = attrs[0];" in result
+        assert (
+            "// HIP memory pointer info: pointer: devicePtr, " "size output: sizes[2]"
+        ) in result
+        assert "out[4] = sizes[2];" in result
+        assert (
+            "// HIP virtual memory get access: output: accessFlags[0], "
+            "location: (&locations[0]), pointer: devicePtr"
+        ) in result
+        assert "out[5] = accessFlags[0];" in result
+        assert (
+            "// HIP memory pool get attribute: pool: pool, "
+            "attribute: hipMemPoolAttrReleaseThreshold, output: sizes[3]"
+        ) in result
+        assert "out[6] = sizes[3];" in result
+        assert (
+            "// HIP memory pool get access: output: accessFlags[1], "
+            "pool: pool, location: (&locations[1])"
+        ) in result
+        assert "out[7] = accessFlags[1];" in result
+        assert "// HIP host memory flags: output: attrs[1], host: hostPtr" in result
+        assert "out[8] = attrs[1];" in result
+        assert (
+            "// HIP memory range get attribute: output: attrs[2], "
+            "output bytes: sizeof(int), "
+            "attribute: hipMemRangeAttributePreferredLocation, "
+            "pointer: devicePtr, range bytes: 256"
+        ) in result
+        assert "out[9] = attrs[2];" in result
+        assert (
+            "// HIP virtual memory allocation granularity: output: sizes[4], "
+            "properties: (&props[0]), option: hipMemAllocationGranularityMinimum"
+        ) in result
+        assert "out[10] = sizes[4];" in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_memory_pool_member_outputs_clear_stale_metadata(self):
+        """Test HIP memory-pool member outputs clear stale metadata."""
+        code = """
+        struct PoolOutputs {
+            hipMemPool_t pool;
+            size_t attr;
+            unsigned long long access;
+            void* handle;
+            hipMemPoolPtrExportData exportData;
+            void* importedPtr;
+        };
+
+        void queryMemoryPoolMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            hipMemPool_t pool,
+            hipMemPoolProps* poolProps,
+            hipMemLocation* location,
+            int device,
+            void* pointer,
+            PoolOutputs* holder,
+            void** ptrs,
+            size_t* sizes,
+            unsigned long long* flags
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolCreate(&holder->pool, poolProps);
+            ptrs[0] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetDefaultMemPool(&holder->pool, device);
+            ptrs[1] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetMemPool(&holder->pool, device);
+            ptrs[2] = holder->pool;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolGetAttribute(
+                pool,
+                hipMemPoolAttrReleaseThreshold,
+                &holder->attr
+            );
+            sizes[0] = holder->attr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolGetAccess(&holder->access, pool, location);
+            flags[0] = holder->access;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolExportToShareableHandle(
+                &holder->handle,
+                pool,
+                hipMemHandleTypePosixFileDescriptor,
+                0
+            );
+            ptrs[3] = holder->handle;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolExportPointer(&holder->exportData, pointer);
+            ptrs[4] = holder->exportData.reserved[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipMemPoolImportPointer(&holder->importedPtr, pool, &holder->exportData);
+            ptrs[5] = holder->importedPtr;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            "// HIP memory pool create: output: holder->pool, properties: poolProps",
+            "// HIP get default memory pool: output: holder->pool, device: device",
+            "// HIP get device memory pool: output: holder->pool, device: device",
+            (
+                "// HIP memory pool get attribute: pool: pool, "
+                "attribute: hipMemPoolAttrReleaseThreshold, output: holder->attr"
+            ),
+            (
+                "// HIP memory pool get access: output: holder->access, "
+                "pool: pool, location: location"
+            ),
+            (
+                "// HIP memory pool export to shareable handle: "
+                "output: holder->handle, pool: pool, "
+                "handle type: hipMemHandleTypePosixFileDescriptor, flags: 0"
+            ),
+            (
+                "// HIP memory pool export pointer: output: holder->exportData, "
+                "pointer: pointer"
+            ),
+            (
+                "// HIP memory pool import pointer: output: holder->importedPtr, "
+                "pool: pool, export data: (&holder->exportData)"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for index, expression in [
+            (0, "holder->pool"),
+            (1, "holder->pool"),
+            (2, "holder->pool"),
+            (3, "holder->handle"),
+            (4, "holder->exportData.reserved[0]"),
+            (5, "holder->importedPtr"),
+        ]:
+            assert f"ptrs[{index}] = {expression};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "sizes[0] = holder->attr;" in result
+        assert "sizes[0] = (/* HIP device query:" not in result
+        assert "flags[0] = holder->access;" in result
+        assert "flags[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_symbol_range_function_output_reads_emit_metadata_expressions(self):
         """Test HIP symbol, range, function, and array scalar outputs."""
         code = """
@@ -9191,6 +10540,142 @@ class TestHipCodeGen:
         assert "ptrs[0] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
+    def test_hip_module_library_kernel_array_outputs_clear_stale_metadata(self):
+        """Test module/library/kernel array and member outputs clear stale metadata."""
+        code = """
+        struct ModuleHandleOutputs {
+            hipFunction_t function;
+            textureReference* texRef;
+            hipKernel_t kernel;
+            hipLibrary_t library;
+            const char* name;
+        };
+
+        void queryModuleHandleOutputs(
+            hipModule_t module,
+            const void* symbol,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            hipFunction_t* functions,
+            textureReference** refs,
+            hipKernel_t* kernels,
+            hipLibrary_t* libraries,
+            const char** names,
+            ModuleHandleOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipModuleGetFunction(&functions[0], module, "array_kernel");
+            ptrs[0] = functions[0];
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipGetFuncBySymbol(&functions[1], symbol);
+            ptrs[1] = functions[1];
+
+            hipMemGetAddressRange((void**)&refs, &staleSize, devicePtr);
+            hipModuleGetTexRef(&refs[0], module, "array_tex");
+            ptrs[2] = refs[0];
+
+            hipMemGetAddressRange((void**)&kernels, &staleSize, devicePtr);
+            hipLibraryGetKernel(&kernels[0], library, "library_kernel");
+            ptrs[3] = kernels[0];
+
+            hipMemGetAddressRange((void**)&kernels, &staleSize, devicePtr);
+            hipLibraryEnumerateKernels(kernels, 4, library);
+            ptrs[4] = kernels[1];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipKernelGetLibrary(&libraries[0], kernel);
+            ptrs[5] = libraries[0];
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipKernelGetName(&names[0], kernel);
+            ptrs[6] = names[0];
+
+            hipMemGetAddressRange((void**)&functions, &staleSize, devicePtr);
+            hipKernelGetFunction(&functions[2], kernel);
+            ptrs[7] = functions[2];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleGetFunction(&holder->function, module, "member_kernel");
+            ptrs[8] = holder->function;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleGetTexRef(&holder->texRef, module, "member_tex");
+            ptrs[9] = holder->texRef;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryGetKernel(&holder->kernel, library, "member_library_kernel");
+            ptrs[10] = holder->kernel;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetLibrary(&holder->library, kernel);
+            ptrs[11] = holder->library;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetName(&holder->name, kernel);
+            ptrs[12] = holder->name;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetFunction(&holder->function, kernel);
+            ptrs[13] = holder->function;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIP module get function: output: functions[0], "
+                'module: module, name: "array_kernel"'
+            ),
+            "// HIP get function by symbol: output: functions[1], symbol: symbol",
+            (
+                "// HIP module get texture reference: output: refs[0], "
+                'module: module, name: "array_tex"'
+            ),
+            (
+                "// HIP library get kernel: output: kernels[0], library: library, "
+                'name: "library_kernel"'
+            ),
+            (
+                "// HIP library enumerate kernels: output: kernels, "
+                "max kernels: 4, library: library"
+            ),
+            "// HIP kernel get library: output: libraries[0], kernel: kernel",
+            "// HIP kernel get name: output: names[0], kernel: kernel",
+            "// HIP kernel get function: output: functions[2], kernel: kernel",
+            (
+                "// HIP module get function: output: holder->function, "
+                'module: module, name: "member_kernel"'
+            ),
+            (
+                "// HIP module get texture reference: output: holder->texRef, "
+                'module: module, name: "member_tex"'
+            ),
+            (
+                "// HIP library get kernel: output: holder->kernel, "
+                'library: library, name: "member_library_kernel"'
+            ),
+            "// HIP kernel get library: output: holder->library, kernel: kernel",
+            "// HIP kernel get name: output: holder->name, kernel: kernel",
+            "// HIP kernel get function: output: holder->function, kernel: kernel",
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(14):
+            assert f"ptrs[{index}] = " in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_module_library_kernel_scalar_outputs_replace_stale_metadata(self):
         """Test scalar module/library/kernel outputs replace prior query metadata."""
         code = """
@@ -9300,6 +10785,275 @@ class TestHipCodeGen:
         assert "values[0] = (/* HIP device query: pointer.attribute" not in result
         assert "names[0] = (/* HIP device query:" not in result
         assert "symbol.size(kernelName)" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
+    def test_hip_module_kernel_array_member_scalar_outputs_clear_stale_metadata(
+        self,
+    ):
+        """Test module/kernel scalar array/member outputs clear stale metadata."""
+        code = """
+        struct KernelScalarOutputs {
+            unsigned int kernelCount;
+            int attributeValue;
+            size_t paramSize;
+        };
+
+        void queryModuleKernelArrayMemberScalars(
+            hipModule_t module,
+            hipLibrary_t library,
+            hipKernel_t kernel,
+            hipDeviceptr_t devicePtr,
+            unsigned int* counts,
+            size_t* sizes,
+            const char** names,
+            KernelScalarOutputs* holder,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&counts, &staleSize, devicePtr);
+            hipModuleGetFunctionCount(&counts[0], module);
+            values[0] = counts[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryGetKernelCount(&holder->kernelCount, library);
+            values[1] = holder->kernelCount;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetAttribute(
+                &holder->attributeValue,
+                HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK,
+                kernel,
+                0
+            );
+            values[2] = holder->attributeValue;
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hipKernelGetName(&names[0], kernel);
+            names[1] = names[0];
+
+            hipGetSymbolSize(&sizes[0], names[0]);
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipKernelGetParamInfo(kernel, 0, &sizes[0], &holder->paramSize);
+            sizes[1] = sizes[0];
+            sizes[2] = holder->paramSize;
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            if (hipKernelGetParamInfo(kernel, 1, &sizes[3], &sizes[4]) == hipSuccess) {
+                sizes[5] = sizes[3];
+                sizes[6] = sizes[4];
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            "// HIP module get function count: output: counts[0], module: module",
+            (
+                "// HIP library get kernel count: output: holder->kernelCount, "
+                "library: library"
+            ),
+            (
+                "// HIP kernel get attribute: output: holder->attributeValue, "
+                "attribute: HIP_FUNC_ATTRIBUTE_MAX_THREADS_PER_BLOCK, "
+                "kernel: kernel, device: 0"
+            ),
+            "// HIP kernel get name: output: names[0], kernel: kernel",
+            (
+                "// HIP kernel get parameter info: kernel: kernel, "
+                "param index: 0, offset output: sizes[0], "
+                "size output: holder->paramSize"
+            ),
+            (
+                "if (((/* HIP kernel get parameter info: kernel: kernel, "
+                "param index: 1, offset output: sizes[3], "
+                "size output: sizes[4] */ hipSuccess) == hipSuccess))"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+
+        for index, expression in [
+            (0, "counts[0]"),
+            (1, "holder->kernelCount"),
+            (2, "holder->attributeValue"),
+        ]:
+            assert f"values[{index}] = {expression};" in result
+            assert f"values[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (1, "sizes[0]"),
+            (2, "holder->paramSize"),
+            (5, "sizes[3]"),
+            (6, "sizes[4]"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        assert "names[1] = names[0];" in result
+        assert "names[1] = (/* HIP device query:" not in result
+        assert "symbol.size(names[0])" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+
+    def test_hip_module_library_load_array_outputs_clear_stale_metadata(self):
+        """Test module/library/link load outputs clear stale array/member metadata."""
+        code = """
+        struct RuntimeHandles {
+            hipModule_t module;
+            hipLibrary_t library;
+            hipLinkState_t link;
+            void* entry;
+            hipDriverEntryPointQueryResult status;
+        };
+
+        void queryModuleLoadOutputs(
+            hipDeviceptr_t devicePtr,
+            const void* image,
+            const void* fatBinary,
+            hiprtcJIT_option* options,
+            void** optionValues,
+            RuntimeHandles* holder,
+            hipModule_t* modules,
+            hipLibrary_t* libraries,
+            hipLinkState_t* links,
+            void** entries,
+            hipDriverEntryPointQueryResult* statuses,
+            void** ptrs,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoad(&modules[0], "kernel.hsaco");
+            ptrs[0] = modules[0];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadData(&modules[1], image);
+            ptrs[1] = modules[1];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadDataEx(
+                &modules[2],
+                image,
+                1,
+                options,
+                optionValues
+            );
+            ptrs[2] = modules[2];
+
+            hipMemGetAddressRange((void**)&modules, &staleSize, devicePtr);
+            hipModuleLoadFatBinary(&modules[3], fatBinary);
+            ptrs[3] = modules[3];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipLibraryLoadData(
+                &libraries[0],
+                image,
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[4] = libraries[0];
+
+            hipMemGetAddressRange((void**)&libraries, &staleSize, devicePtr);
+            hipLibraryLoadFromFile(
+                &libraries[1],
+                "kernel.hipfb",
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[5] = libraries[1];
+
+            hipMemGetAddressRange((void**)&links, &staleSize, devicePtr);
+            hipLinkCreate(1, options, optionValues, &links[0]);
+            ptrs[6] = links[0];
+
+            hipMemGetAddressRange((void**)&entries, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&statuses, &staleSize, devicePtr);
+            hipGetDriverEntryPoint("hipMalloc", &entries[0], 0, &statuses[0]);
+            ptrs[7] = entries[0];
+            values[0] = statuses[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipModuleLoad(&holder->module, "member.hsaco");
+            ptrs[8] = holder->module;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLibraryLoadData(
+                &holder->library,
+                image,
+                options,
+                optionValues,
+                1,
+                options,
+                optionValues,
+                1
+            );
+            ptrs[9] = holder->library;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipLinkCreate(1, options, optionValues, &holder->link);
+            ptrs[10] = holder->link;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetDriverEntryPoint("hipLaunchKernel", &holder->entry, 0, &holder->status);
+            ptrs[11] = holder->entry;
+            values[1] = holder->status;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert '// HIP module load: output: modules[0], file: "kernel.hsaco"' in result
+        assert "// HIP module load: output: modules[1], image: image" in result
+        assert "// HIP module load data ex: output: modules[2], image: image" in result
+        assert (
+            "// HIP module load fat binary: output: modules[3], "
+            "fat binary: fatBinary"
+        ) in result
+        assert "// HIP library load: output: libraries[0], code: image" in result
+        assert (
+            '// HIP library load: output: libraries[1], file: "kernel.hipfb"' in result
+        )
+        assert (
+            "// HIP link create: options: 1, option keys: options, "
+            "option values: optionValues, state output: links[0]"
+        ) in result
+        assert (
+            '// HIP get driver entry point: symbol: "hipMalloc", '
+            "output: entries[0], flags: 0, status output: statuses[0]"
+        ) in result
+        assert (
+            '// HIP module load: output: holder->module, file: "member.hsaco"' in result
+        )
+        assert "// HIP library load: output: holder->library, code: image" in result
+        assert "state output: holder->link" in result
+        assert (
+            '// HIP get driver entry point: symbol: "hipLaunchKernel", '
+            "output: holder->entry, flags: 0, status output: holder->status"
+        ) in result
+        for index in range(8):
+            assert f"ptrs[{index}] = " in result
+        assert "ptrs[8] = holder->module;" in result
+        assert "ptrs[9] = holder->library;" in result
+        assert "ptrs[10] = holder->link;" in result
+        assert "ptrs[11] = holder->entry;" in result
+        assert "values[0] = statuses[0];" in result
+        assert "values[1] = holder->status;" in result
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_hip_link_complete_outputs_replace_stale_metadata(self):
@@ -9639,6 +11393,132 @@ class TestHipCodeGen:
         ]:
             assert f"ptrs[{index}] = {name};" in result
             assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hiprtc_array_member_outputs_clear_stale_metadata(self):
+        """Test HIPRTC array/member outputs clear prior query metadata."""
+        code = """
+        struct RtcOutputs {
+            hiprtcProgram program;
+            const char* loweredName;
+            hiprtcLinkState linkState;
+            void* linkedBinary;
+            size_t linkedSize;
+            size_t codeSize;
+        };
+
+        void queryRtcArrayMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            const char* source,
+            const char** headers,
+            const char** includeNames,
+            hiprtcJIT_option jitOptions,
+            void* optionValues,
+            hiprtcProgram* programs,
+            const char** names,
+            hiprtcLinkState* links,
+            void** binaries,
+            size_t* sizes,
+            RtcOutputs* holder,
+            void** ptrs,
+            size_t* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&programs, &staleSize, devicePtr);
+            hiprtcCreateProgram(
+                &programs[0],
+                source,
+                "kernel.hip",
+                0,
+                headers,
+                includeNames
+            );
+            ptrs[0] = programs[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcDestroyProgram(&holder->program);
+            ptrs[1] = holder->program;
+
+            hipMemGetAddressRange((void**)&names, &staleSize, devicePtr);
+            hiprtcGetLoweredName(programs[0], "kernel", &names[0]);
+            ptrs[2] = names[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcGetLoweredName(programs[0], "member", &holder->loweredName);
+            ptrs[3] = holder->loweredName;
+
+            hipMemGetAddressRange((void**)&links, &staleSize, devicePtr);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &links[0]);
+            ptrs[4] = links[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcLinkCreate(1, &jitOptions, &optionValues, &holder->linkState);
+            ptrs[5] = holder->linkState;
+
+            hipMemGetAddressRange((void**)&binaries, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hiprtcLinkComplete(links[0], &binaries[0], &sizes[0]);
+            ptrs[6] = binaries[0];
+            values[0] = sizes[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hiprtcGetCodeSize(programs[0], &sizes[1]);
+            values[1] = sizes[1];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hiprtcGetCodeSize(programs[0], &holder->codeSize);
+            values[2] = holder->codeSize;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIPRTC create program: output: programs[0], source: source, "
+                'name: "kernel.hip"'
+            ),
+            "// HIPRTC destroy program: output: holder->program",
+            (
+                "// HIPRTC get lowered name: program: programs[0], expression: "
+                '"kernel", output: names[0]'
+            ),
+            (
+                "// HIPRTC get lowered name: program: programs[0], expression: "
+                '"member", output: holder->loweredName'
+            ),
+            (
+                "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+                "option values: (&optionValues), state output: links[0]"
+            ),
+            (
+                "// HIPRTC link create: options: 1, option keys: (&jitOptions), "
+                "option values: (&optionValues), state output: holder->linkState"
+            ),
+            (
+                "// HIPRTC link complete: state: links[0], "
+                "binary output: binaries[0], size output: sizes[0]"
+            ),
+            "// HIPRTC get code size: program: programs[0], output: sizes[1]",
+            (
+                "// HIPRTC get code size: program: programs[0], "
+                "output: holder->codeSize"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(7):
+            assert f"ptrs[{index}] = " in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        for index in range(3):
+            assert f"values[{index}] = " in result
+            assert f"values[{index}] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
@@ -10271,6 +12151,279 @@ class TestHipCodeGen:
         assert "textureReference.array(texRef)" not in result
         assert "textureReference.mipmappedArray(texRef)" not in result
 
+    def test_hip_texture_reference_array_outputs_clear_stale_metadata(self):
+        """Test texture-reference array-element outputs clear stale metadata."""
+        code = """
+        void queryTextureReferenceArrayOutputs(
+            hipDeviceptr_t devicePtr,
+            textureReference* texRef,
+            hipChannelFormatDesc* desc,
+            size_t* sizes,
+            hipTextureAddressMode* addressModes,
+            hipTextureFilterMode* filterModes,
+            unsigned int* flagsOut,
+            int* ints,
+            float* floats,
+            hipArray_Format* formats
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipGetTextureAlignmentOffset(&sizes[0], texRef);
+            sizes[2] = sizes[0];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipBindTexture(&sizes[1], texRef, devicePtr, desc, 256);
+            sizes[3] = sizes[1];
+
+            hipMemGetAddressRange((void**)&sizes, &staleSize, devicePtr);
+            hipTexRefSetAddress(&sizes[4], texRef, devicePtr, 512);
+            sizes[5] = sizes[4];
+
+            hipMemGetAddressRange((void**)&addressModes, &staleSize, devicePtr);
+            hipTexRefGetAddressMode(&addressModes[0], texRef, 1);
+            addressModes[1] = addressModes[0];
+
+            hipMemGetAddressRange((void**)&filterModes, &staleSize, devicePtr);
+            hipTexRefGetFilterMode(&filterModes[0], texRef);
+            filterModes[1] = filterModes[0];
+
+            hipMemGetAddressRange((void**)&flagsOut, &staleSize, devicePtr);
+            hipTexRefGetFlags(&flagsOut[0], texRef);
+            flagsOut[1] = flagsOut[0];
+
+            hipMemGetAddressRange((void**)&ints, &staleSize, devicePtr);
+            hipTexRefGetMaxAnisotropy(&ints[0], texRef);
+            ints[1] = ints[0];
+
+            hipMemGetAddressRange((void**)&floats, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelBias(&floats[0], texRef);
+            floats[1] = floats[0];
+
+            hipMemGetAddressRange((void**)&formats, &staleSize, devicePtr);
+            hipMemGetAddressRange((void**)&ints, &staleSize, devicePtr);
+            hipTexRefGetFormat(&formats[0], &ints[2], texRef);
+            formats[1] = formats[0];
+            ints[3] = ints[2];
+
+            hipMemGetAddressRange((void**)&floats, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelClamp(&floats[2], &floats[3], texRef);
+            floats[4] = floats[2];
+            floats[5] = floats[3];
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            "HIP texture alignment offset query: output: sizes[0], texture: texRef",
+            (
+                "HIP texture reference bind: offset output: sizes[1], "
+                "texture: texRef, pointer: devicePtr, desc: desc, bytes: 256"
+            ),
+            (
+                "HIP texture reference set address: offset output: sizes[4], "
+                "texture: texRef, pointer: devicePtr, bytes: 512"
+            ),
+            (
+                "HIP texture reference get address mode: output: addressModes[0], "
+                "texture: texRef, dim: 1"
+            ),
+            (
+                "HIP texture reference get filter mode: output: filterModes[0], "
+                "texture: texRef"
+            ),
+            "HIP texture reference get flags: output: flagsOut[0], texture: texRef",
+            (
+                "HIP texture reference get max anisotropy: output: ints[0], "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level bias: output: floats[0], "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get format: format output: formats[0], "
+                "channels output: ints[2], texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level clamp: min output: "
+                "floats[2], max output: floats[3], texture: texRef"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for assignment in [
+            "sizes[2] = sizes[0];",
+            "sizes[3] = sizes[1];",
+            "sizes[5] = sizes[4];",
+            "addressModes[1] = addressModes[0];",
+            "filterModes[1] = filterModes[0];",
+            "flagsOut[1] = flagsOut[0];",
+            "ints[1] = ints[0];",
+            "floats[1] = floats[0];",
+            "formats[1] = formats[0];",
+            "ints[3] = ints[2];",
+            "floats[4] = floats[2];",
+            "floats[5] = floats[3];",
+        ]:
+            assert assignment in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_texture_reference_member_outputs_clear_stale_metadata(self):
+        """Test texture-reference member outputs clear stale metadata."""
+        code = """
+        struct TextureRefOutputs {
+            size_t alignment;
+            size_t offset;
+            hipTextureAddressMode addressMode;
+            hipTextureFilterMode filterMode;
+            unsigned int flags;
+            int maxAniso;
+            float mipBias;
+            hipArray_Format format;
+            int channels;
+            float minClamp;
+            float maxClamp;
+        };
+
+        void queryTextureReferenceMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            textureReference* texRef,
+            hipChannelFormatDesc* desc,
+            TextureRefOutputs* holder,
+            size_t* sizes,
+            int* ints,
+            float* floats,
+            unsigned int* flagsOut
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGetTextureAlignmentOffset(&holder->alignment, texRef);
+            sizes[0] = holder->alignment;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipBindTexture(&holder->offset, texRef, devicePtr, desc, 256);
+            sizes[1] = holder->offset;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefSetAddress(&holder->offset, texRef, devicePtr, 512);
+            sizes[2] = holder->offset;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetAddressMode(&holder->addressMode, texRef, 1);
+            ints[0] = holder->addressMode;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFilterMode(&holder->filterMode, texRef);
+            ints[1] = holder->filterMode;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFlags(&holder->flags, texRef);
+            flagsOut[0] = holder->flags;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMaxAnisotropy(&holder->maxAniso, texRef);
+            ints[2] = holder->maxAniso;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelBias(&holder->mipBias, texRef);
+            floats[0] = holder->mipBias;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetFormat(&holder->format, &holder->channels, texRef);
+            ints[3] = holder->format;
+            ints[4] = holder->channels;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipTexRefGetMipmapLevelClamp(&holder->minClamp, &holder->maxClamp, texRef);
+            floats[1] = holder->minClamp;
+            floats[2] = holder->maxClamp;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP texture alignment offset query: output: holder->alignment, "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference bind: offset output: holder->offset, "
+                "texture: texRef, pointer: devicePtr, desc: desc, bytes: 256"
+            ),
+            (
+                "HIP texture reference set address: offset output: holder->offset, "
+                "texture: texRef, pointer: devicePtr, bytes: 512"
+            ),
+            (
+                "HIP texture reference get address mode: output: holder->addressMode, "
+                "texture: texRef, dim: 1"
+            ),
+            (
+                "HIP texture reference get filter mode: output: holder->filterMode, "
+                "texture: texRef"
+            ),
+            "HIP texture reference get flags: output: holder->flags, texture: texRef",
+            (
+                "HIP texture reference get max anisotropy: output: holder->maxAniso, "
+                "texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level bias: "
+                "output: holder->mipBias, texture: texRef"
+            ),
+            (
+                "HIP texture reference get format: format output: holder->format, "
+                "channels output: holder->channels, texture: texRef"
+            ),
+            (
+                "HIP texture reference get mipmap level clamp: "
+                "min output: holder->minClamp, max output: holder->maxClamp, "
+                "texture: texRef"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+        for index, expression in [
+            (0, "holder->alignment"),
+            (1, "holder->offset"),
+            (2, "holder->offset"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "holder->addressMode"),
+            (1, "holder->filterMode"),
+            (2, "holder->maxAniso"),
+            (3, "holder->format"),
+            (4, "holder->channels"),
+        ]:
+            assert f"ints[{index}] = {expression};" in result
+            assert f"ints[{index}] = (/* HIP device query:" not in result
+        assert "flagsOut[0] = holder->flags;" in result
+        assert "flagsOut[0] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "holder->mipBias"),
+            (1, "holder->minClamp"),
+            (2, "holder->maxClamp"),
+        ]:
+            assert f"floats[{index}] = {expression};" in result
+            assert f"floats[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_runtime_callback_activity_expression_conversion(self):
         """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """
@@ -10878,6 +13031,101 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result
 
+    def test_hip_context_array_member_outputs_clear_stale_metadata(self):
+        """Test context array/member outputs clear prior query metadata."""
+        code = """
+        struct ContextOutputs {
+            hipCtx_t ctx;
+            hipCtx_t current;
+        };
+
+        void queryContextArrayMemberOutputs(
+            hipDeviceptr_t devicePtr,
+            hipDevice_t device,
+            unsigned int flags,
+            hipCtx_t* contexts,
+            ContextOutputs* holder,
+            void** ptrs
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            hipCtxCreate(&contexts[0], flags, device);
+            ptrs[0] = contexts[0];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipCtxGetCurrent(&holder->current);
+            ptrs[1] = holder->current;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            hipCtxPopCurrent(&contexts[1]);
+            ptrs[2] = contexts[1];
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDevicePrimaryCtxRetain(&holder->ctx, device);
+            ptrs[3] = holder->ctx;
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            if (hipCtxCreate(&contexts[2], flags, device) == hipSuccess) {
+                ptrs[4] = contexts[2];
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipCtxGetCurrent(&holder->current) == hipSuccess) {
+                ptrs[5] = holder->current;
+            }
+
+            hipMemGetAddressRange((void**)&contexts, &staleSize, devicePtr);
+            if (hipCtxPopCurrent(&contexts[3]) == hipSuccess) {
+                ptrs[6] = contexts[3];
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipDevicePrimaryCtxRetain(&holder->ctx, device) == hipSuccess) {
+                ptrs[7] = holder->ctx;
+            }
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_snippets = [
+            (
+                "// HIP context create: output: contexts[0], "
+                "flags: flags, device: device"
+            ),
+            "// HIP context get current: output: holder->current",
+            "// HIP context pop current: output: contexts[1]",
+            "// HIP primary context retain: output: holder->ctx, device: device",
+            (
+                "if (((/* HIP context create: output: contexts[2], "
+                "flags: flags, device: device */ hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP context get current: output: holder->current */ "
+                "hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP context pop current: output: contexts[3] */ "
+                "hipSuccess) == hipSuccess))"
+            ),
+            (
+                "if (((/* HIP primary context retain: output: holder->ctx, "
+                "device: device */ hipSuccess) == hipSuccess))"
+            ),
+        ]
+        for snippet in expected_snippets:
+            assert snippet in result
+        for index in range(8):
+            assert f"ptrs[{index}] = " in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
     def test_hip_graph_raw_outputs_clear_stale_metadata(self):
         """Test graph handle outputs clear prior query metadata."""
         code = """
@@ -11427,6 +13675,175 @@ class TestHipCodeGen:
             assert f"sizes[{index}] = {expression};" in result
             assert f"sizes[{index}] = (/* HIP device query:" not in result
         assert "values[0] = attrValue.cooperative;" in result
+        assert "values[0] = (/* HIP device query:" not in result
+        assert "memory.addressRange.base(devicePtr)" not in result
+        assert "memory.addressRange.size(devicePtr)" not in result
+
+    def test_hip_graph_array_member_param_outputs_clear_stale_metadata(self):
+        """Test graph get-param array/member outputs clear prior metadata."""
+        code = """
+        struct GraphParamOutputs {
+            hipHostNodeParams host;
+            hipMemAllocNodeParams alloc;
+            hipExternalSemaphoreSignalNodeParams signal;
+            hipKernelNodeAttrValue attr;
+            void* freePtr;
+            size_t graphBytes;
+        };
+
+        void queryGraphParamOutputs(
+            hipDeviceptr_t devicePtr,
+            hipGraphNode_t kernelNode,
+            hipGraphNode_t memcpyNode,
+            hipGraphNode_t memsetNode,
+            hipGraphNode_t hostNode,
+            hipGraphNode_t allocNode,
+            hipGraphNode_t freeNode,
+            hipGraphNode_t signalNode,
+            hipGraphNode_t waitNode,
+            hipGraphNode_t driverMemcpyNode,
+            int device,
+            hipKernelNodeParams* kernelParams,
+            hipMemcpy3DParms* copyParams,
+            hipMemsetParams* memsetParams,
+            hipExternalSemaphoreWaitParams* waitParams,
+            HIP_MEMCPY3D* driverCopies,
+            GraphParamOutputs* holder,
+            void** ptrs,
+            size_t* sizes,
+            int* values
+        ) {
+            size_t staleSize = 0;
+
+            hipMemGetAddressRange((void**)&kernelParams, &staleSize, devicePtr);
+            hipGraphKernelNodeGetParams(kernelNode, &kernelParams[0]);
+            ptrs[0] = kernelParams[0].func;
+
+            hipMemGetAddressRange((void**)&copyParams, &staleSize, devicePtr);
+            if (hipGraphMemcpyNodeGetParams(memcpyNode, &copyParams[1]) == hipSuccess) {
+                ptrs[1] = copyParams[1].srcPtr.ptr;
+            }
+
+            hipMemGetAddressRange((void**)&memsetParams, &staleSize, devicePtr);
+            hipGraphMemsetNodeGetParams(memsetNode, &memsetParams[2]);
+            sizes[0] = memsetParams[2].width;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            if (hipGraphHostNodeGetParams(hostNode, &holder->host) != hipSuccess) {
+                ptrs[2] = holder->host.fn;
+            }
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphMemAllocNodeGetParams(allocNode, &holder->alloc);
+            sizes[1] = holder->alloc.bytesize;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphMemFreeNodeGetParams(freeNode, &holder->freePtr);
+            ptrs[3] = holder->freePtr;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphKernelNodeGetAttribute(
+                kernelNode, hipKernelNodeAttributeCooperative, &holder->attr
+            );
+            values[0] = holder->attr.cooperative;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipGraphExternalSemaphoresSignalNodeGetParams(
+                signalNode, &holder->signal
+            );
+            ptrs[4] = holder->signal.extSemArray;
+
+            hipMemGetAddressRange((void**)&waitParams, &staleSize, devicePtr);
+            if (hipGraphExternalSemaphoresWaitNodeGetParams(waitNode, &waitParams[0]) == hipSuccess) {
+                ptrs[5] = waitParams[0].extSemArray;
+            }
+
+            hipMemGetAddressRange((void**)&driverCopies, &staleSize, devicePtr);
+            hipDrvGraphMemcpyNodeGetParams(driverMemcpyNode, &driverCopies[0]);
+            ptrs[6] = driverCopies[0].srcDevice;
+
+            hipMemGetAddressRange((void**)&holder, &staleSize, devicePtr);
+            hipDeviceGetGraphMemAttribute(
+                device, hipGraphMemAttrUsedMemCurrent, &holder->graphBytes
+            );
+            sizes[2] = holder->graphBytes;
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        expected_comment_snippets = [
+            (
+                "HIP graph kernel node get params: node: kernelNode, "
+                "params: (&kernelParams[0])"
+            ),
+            (
+                "HIP graph memcpy node get params: node: memcpyNode, "
+                "params: (&copyParams[1])"
+            ),
+            (
+                "HIP graph memset node get params: node: memsetNode, "
+                "params: (&memsetParams[2])"
+            ),
+            (
+                "HIP graph host node get params: node: hostNode, "
+                "params: (&holder->host)"
+            ),
+            (
+                "HIP graph memory alloc node get params: node: allocNode, "
+                "params output: holder->alloc"
+            ),
+            (
+                "HIP graph memory free node get params: node: freeNode, "
+                "pointer output: holder->freePtr"
+            ),
+            (
+                "HIP graph kernel node get attribute: node: kernelNode, "
+                "attribute: hipKernelNodeAttributeCooperative, output: holder->attr"
+            ),
+            (
+                "HIP graph external semaphore signal node get params: "
+                "node: signalNode, params: (&holder->signal)"
+            ),
+            (
+                "HIP graph external semaphore wait node get params: "
+                "node: waitNode, params: (&waitParams[0])"
+            ),
+            (
+                "HIP driver graph memcpy node get params: "
+                "node: driverMemcpyNode, params output: driverCopies[0]"
+            ),
+            (
+                "HIP device graph memory get attribute: device: device, "
+                "attribute: hipGraphMemAttrUsedMemCurrent, output: holder->graphBytes"
+            ),
+        ]
+        for snippet in expected_comment_snippets:
+            assert snippet in result
+
+        for index, expression in [
+            (0, "kernelParams[0].func"),
+            (1, "copyParams[1].srcPtr.ptr"),
+            (2, "holder->host.fn"),
+            (3, "holder->freePtr"),
+            (4, "holder->signal.extSemArray"),
+            (5, "waitParams[0].extSemArray"),
+            (6, "driverCopies[0].srcDevice"),
+        ]:
+            assert f"ptrs[{index}] = {expression};" in result
+            assert f"ptrs[{index}] = (/* HIP device query:" not in result
+        for index, expression in [
+            (0, "memsetParams[2].width"),
+            (1, "holder->alloc.bytesize"),
+            (2, "holder->graphBytes"),
+        ]:
+            assert f"sizes[{index}] = {expression};" in result
+            assert f"sizes[{index}] = (/* HIP device query:" not in result
+        assert "values[0] = holder->attr.cooperative;" in result
         assert "values[0] = (/* HIP device query:" not in result
         assert "memory.addressRange.base(devicePtr)" not in result
         assert "memory.addressRange.size(devicePtr)" not in result

@@ -1,7 +1,8 @@
 from typing import NamedTuple, Tuple
 
 import pytest
-from hypothesis import assume, given, settings, strategies as st
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from crosstl.translator.ast import LiteralNode, NamedType, ShaderStage
 from crosstl.translator.lexer import Lexer

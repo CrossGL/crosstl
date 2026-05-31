@@ -3,13 +3,13 @@ from textwrap import dedent
 
 import pytest
 
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
-from crosstl.translator.lexer import Lexer as CrossGLLexer
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
 RESOURCE_GLSL = """

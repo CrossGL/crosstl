@@ -11,22 +11,20 @@ from __future__ import annotations
 
 import argparse
 import ast
-from collections import Counter
 import difflib
-from functools import lru_cache
 import hashlib
-from html.parser import HTMLParser
-from io import BytesIO
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
+from collections import Counter
+from functools import lru_cache
+from html.parser import HTMLParser
+from io import BytesIO
+from pathlib import Path
 from typing import Any
-from urllib import error
-from urllib import parse
-from urllib import request
+from urllib import error, parse, request
 
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORT_DIR = ROOT / "support"
@@ -34,6 +32,9 @@ BACKENDS_PATH = SUPPORT_DIR / "backends.json"
 FEATURES_PATH = SUPPORT_DIR / "features.json"
 DEFAULT_OUTPUT_PATH = SUPPORT_DIR / "generated" / "support-signals.json"
 DEFAULT_DOCS_REPORT_PATH = SUPPORT_DIR / "generated" / "backend-docs-report.json"
+PYTEST_FAILURE_SUMMARY_GENERATOR = "tools/pytest_failure_summary.py"
+FRONTEND_ID = "frontend"
+FRONTEND_NAME = "Frontend / IR / Parser"
 
 BACKLOG_STATUSES = {
     "partial",
@@ -158,6 +159,7 @@ CATALOG_REVIEW_NOISE_TERMS = GENERIC_FEATURE_TOKENS | {
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 TEST_DEF_RE = re.compile(r"^\s*def\s+(test_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
+TEST_CLASS_RE = re.compile(r"^\s*class\s+(Test[A-Za-z0-9_]*)\s*[:(]", re.MULTILINE)
 UNSUPPORTED_RE = re.compile(
     r"unsupported|not support|does not support|notimplemented", re.IGNORECASE
 )
@@ -212,10 +214,23 @@ LINK_KEYWORDS = {
     "wave",
 }
 DOC_CANDIDATE_NOISE = {
+    "atomically",
+    "descriptorhandle",
     "fontdescriptor",
     "getimagetag",
     "gltf",
+    "hipdeviceptrt",
     "largeimage",
+    "opline",
+    "opname",
+    "opnoline",
+    "opstring",
+    "optypedeviceevent",
+    "optypepipe",
+    "optypequeue",
+    "optypereserveid",
+    "optypexxx",
+    "pipelines",
     "summarylargeimage",
 }
 GENERIC_DOC_CANDIDATES = {
@@ -231,6 +246,76 @@ GENERIC_DOC_CANDIDATES = {
     "texture",
     "wave",
 }
+DOC_CANDIDATE_FEATURE_ALIASES = {
+    "descriptorset": "resources.bindings",
+    "raytracing": "stage.ray_tracing",
+    "svinstanceid": "io.stage_parameters",
+    "svvertexid": "io.stage_parameters",
+}
+DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS = (
+    (re.compile(r"^descriptorheap"), "resources.bindings"),
+    (re.compile(r"^gl[a-z0-9]+"), "io.stage_parameters"),
+    (re.compile(r"^op(?:arraylength|typearray|typeruntimearray)$"), "language.arrays"),
+    (
+        re.compile(
+            r"^op(?:branch|branchconditional|label|loopmerge|phi|"
+            r"selectionmerge|switch)$"
+        ),
+        "language.control_flow",
+    ),
+    (
+        re.compile(r"^op(?:functioncall|functionparameter|typevoid)$"),
+        "language.functions",
+    ),
+    (
+        re.compile(
+            r"^op(?:constant|constantcomposite|constantnull|copyobject|"
+            r"specconstantop|typebool|typefloat|typeint|typematrix|typevector|"
+            r"undef)$"
+        ),
+        "language.vector_matrix",
+    ),
+    (
+        re.compile(
+            r"^op(?:decorate|decorationgroup|executionmode|executionmodeid|"
+            r"memberdecorate|variable)$"
+        ),
+        "resources.bindings",
+    ),
+    (
+        re.compile(
+            r"^op(?:load|ptr(?:not)?equal|store|typeforwardpointer|typepointer)$"
+        ),
+        "resources.memory_qualifiers",
+    ),
+    (re.compile(r"^op(?:extinst|extinstimport)$"), "target.codegen"),
+    (re.compile(r"^op(?:membername|typestruct)$"), "language.structs"),
+    (re.compile(r"^structured$"), "resources.structured_buffers"),
+    (re.compile(r"^sv[a-z0-9]+"), "io.stage_parameters"),
+    (
+        re.compile(r"^rw(?:byteaddress|structured)?buffer"),
+        "resources.structured_buffers",
+    ),
+    (re.compile(r"^sampler[a-z0-9]*"), "resources.texture_sampler_split"),
+    (re.compile(r"^texture[a-z0-9]*"), "texture.sampling"),
+    (re.compile(r"^image[a-z0-9]*"), "image.storage"),
+    (
+        re.compile(
+            r"^hip(?:addressmode|bindtexture|channelformatdesc|filtermode|"
+            r"getchanneldesc|resource(?:view)?desc|tex(?:object|ref))"
+        ),
+        "resources.texture_sampler_split",
+    ),
+    (
+        re.compile(
+            r"^hip(?:array|extent|free)?mipmappedarray|"
+            r"^hip(?:array|arrayconst|arrayformat|extent|getmipmappedarraylevel|"
+            r"mallocmipmappedarray)"
+        ),
+        "resources.resource_arrays",
+    ),
+)
+DOC_CANDIDATE_NOISE_PATTERNS = (re.compile(r"^(?:cuda|hip)(?:error|success)"),)
 
 
 class DocumentHTMLParser(HTMLParser):
@@ -319,7 +404,7 @@ def extract_pdf_text(content: bytes) -> tuple[str, dict[str, Any]]:
                 {
                     "kind": "pdf",
                     "parser": None,
-                    "error": "No PDF text extractor is available: {}".format(exc),
+                    "error": f"No PDF text extractor is available: {exc}",
                     "links": [],
                     "text_length": 0,
                 },
@@ -441,16 +526,20 @@ def cached_file_identifiers(path_text: str) -> frozenset[str]:
 def cached_test_symbols(path_text: str) -> tuple[str, ...]:
     path = ROOT / path_text
     text = read_text(path)
+    names: set[str] = set()
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return tuple(TEST_DEF_RE.findall(text))
+        names.update(TEST_DEF_RE.findall(text))
+        names.update(TEST_CLASS_RE.findall(text))
+        return tuple(sorted(names))
 
-    names = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name.startswith("test_"):
-                names.append(node.name)
+                names.add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            names.add(node.name)
     return tuple(sorted(names))
 
 
@@ -694,7 +783,7 @@ def link_score(url: str, base_url: str, backend: dict[str, Any]) -> int:
     extension = Path(parsed.path).suffix.lower()
     if extension in SKIPPED_LINK_EXTENSIONS:
         return 0
-    haystack = "{} {}".format(parsed.path, parsed.query).lower()
+    haystack = f"{parsed.path} {parsed.query}".lower()
     backend_terms = set(backend.get("aliases", [])) | set(
         split_identifier(backend["id"])
     )
@@ -734,11 +823,17 @@ def candidate_parts(term: str) -> set[str]:
     return parts
 
 
-def actionable_doc_candidate(term: str) -> bool:
+def actionable_doc_candidate(term: str, backend_id: str | None = None) -> bool:
     normalized = normalize_identifier(term)
     if len(normalized) < 4:
         return False
     if normalized in DOC_CANDIDATE_NOISE:
+        return False
+    if any(pattern.search(normalized) for pattern in DOC_CANDIDATE_NOISE_PATTERNS):
+        return False
+    if backend_id == "cuda" and normalized.startswith("cuda"):
+        return False
+    if backend_id != "vulkan" and term.startswith(("Op", "vk")):
         return False
     parts = candidate_parts(term)
     if not parts:
@@ -768,6 +863,29 @@ def actionable_doc_candidate(term: str) -> bool:
 def candidate_feature_matches(
     term: str, features: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
+    normalized = normalize_identifier(term)
+    alias_feature_id = DOC_CANDIDATE_FEATURE_ALIASES.get(normalized)
+    if not alias_feature_id:
+        alias_feature_id = next(
+            (
+                feature_id
+                for pattern, feature_id in DOC_CANDIDATE_FEATURE_ALIAS_PATTERNS
+                if pattern.search(normalized)
+            ),
+            None,
+        )
+    if alias_feature_id:
+        for feature in features:
+            if feature["id"] == alias_feature_id:
+                return [
+                    {
+                        "feature_id": feature["id"],
+                        "name": feature["name"],
+                        "matched_terms": [term],
+                        "score": 1,
+                    }
+                ]
+
     parts = candidate_parts(term)
     if not parts:
         return []
@@ -831,7 +949,7 @@ def fetch_url(url: str, timeout: float) -> dict[str, Any]:
         return {
             "ok": False,
             "url": url,
-            "error": "{}: {}".format(exc.__class__.__name__, exc),
+            "error": f"{exc.__class__.__name__}: {exc}",
             "elapsed_ms": int((time.time() - started) * 1000),
         }
 
@@ -1000,11 +1118,14 @@ def catalog_review_issue(
     state: str,
     implementation_hits: list[dict[str, Any]],
     test_hits: list[dict[str, Any]],
+    unsupported_hits: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     status = support.get("status")
     if status not in CATALOG_REVIEW_STATUSES:
         return None
     if state != "tested":
+        return None
+    if support.get("evidence") and unsupported_hits:
         return None
 
     matched_terms = sorted(
@@ -1041,7 +1162,7 @@ def docs_candidates_by_backend(
             continue
         for candidate in document.get("candidate_terms", []):
             term = candidate.get("term", "")
-            if not actionable_doc_candidate(term):
+            if not actionable_doc_candidate(term, backend_id):
                 continue
             key = normalize_identifier(term)
             row = candidates.setdefault(
@@ -1103,7 +1224,7 @@ def documented_candidate_issues(
             feature_id = "docs.{}".format(candidate_key(candidate["term"]))
             issues.append(
                 {
-                    "key": "extracted:{}:{}:{}".format(backend_id, feature_id, kind),
+                    "key": f"extracted:{backend_id}:{feature_id}:{kind}",
                     "kind": kind,
                     "title": title,
                     "backend_id": backend_id,
@@ -1133,13 +1254,152 @@ def documented_candidate_issues(
     return issues
 
 
+def load_pytest_failure_report(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "path": relpath(path),
+            "load_error": {
+                "type": "FileNotFoundError",
+                "message": "pytest failure summary does not exist",
+            },
+        }
+    try:
+        report = load_json(path)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {
+            "path": relpath(path),
+            "load_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
+    if report.get("generator") != PYTEST_FAILURE_SUMMARY_GENERATOR:
+        return {
+            "path": relpath(path),
+            "load_error": {
+                "type": "UnexpectedGenerator",
+                "message": "expected {}, got {}".format(
+                    PYTEST_FAILURE_SUMMARY_GENERATOR,
+                    report.get("generator"),
+                ),
+            },
+        }
+    report.setdefault("path", relpath(path))
+    return report
+
+
+def summarize_pytest_failure_reports(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    failures = [
+        failure
+        for report in reports
+        if not report.get("load_error")
+        for failure in report.get("failures", [])
+    ]
+    category_counts = Counter(
+        failure.get("category", "unknown") for failure in failures
+    )
+    backend_counts = Counter(failure.get("backend", "unknown") for failure in failures)
+    return {
+        "provided": bool(reports),
+        "report_count": len(reports),
+        "load_error_count": sum(1 for report in reports if report.get("load_error")),
+        "failed_testcase_count": len(failures),
+        "categories": dict(sorted(category_counts.items())),
+        "backends": dict(sorted(backend_counts.items())),
+    }
+
+
+def pytest_failure_backend_id(
+    failure: dict[str, Any],
+    backend_by_id: dict[str, dict[str, Any]],
+) -> str:
+    backend = failure.get("backend", "unknown")
+    if backend in backend_by_id:
+        return backend
+    return FRONTEND_ID
+
+
+def pytest_failure_sample(failure: dict[str, Any]) -> dict[str, Any]:
+    message = str(failure.get("message", "")).splitlines()[0][:240]
+    category = failure.get("category", "unknown")
+    return {
+        "nodeid": failure.get("nodeid", ""),
+        "path": failure.get("file", ""),
+        "kind": failure.get("kind", "failure"),
+        "category": category,
+        "backend": failure.get("backend", "unknown"),
+        "message": message,
+        "matched_terms": [category],
+    }
+
+
+def pytest_failure_issues(
+    backends: list[dict[str, Any]],
+    pytest_failure_reports: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    backend_by_id = {backend["id"]: backend for backend in backends}
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for report in pytest_failure_reports:
+        if report.get("load_error"):
+            continue
+        for failure in report.get("failures", []):
+            backend_id = pytest_failure_backend_id(failure, backend_by_id)
+            category = failure.get("category", "unknown")
+            grouped.setdefault((backend_id, category), []).append(failure)
+
+    issues = []
+    for (backend_id, category), failures in sorted(grouped.items()):
+        backend = backend_by_id.get(
+            backend_id,
+            {"id": FRONTEND_ID, "name": FRONTEND_NAME},
+        )
+        category_key = candidate_key(category)
+        feature_id = f"ci.pytest.{category_key}"
+        samples = [pytest_failure_sample(failure) for failure in failures[:12]]
+        issues.append(
+            {
+                "key": "extracted:{}:{}:pytest_failure_summary".format(
+                    backend_id,
+                    feature_id,
+                ),
+                "kind": "pytest_failure_summary",
+                "title": "Investigate CI pytest failures for {}".format(
+                    category.replace("_", " ")
+                ),
+                "backend_id": backend_id,
+                "backend": backend["name"],
+                "feature_id": feature_id,
+                "feature": "CI pytest {} failures".format(category.replace("_", " ")),
+                "category": "ci",
+                "status": "failing",
+                "state": "ci_failure",
+                "signal": {
+                    "state": "ci_failure",
+                    "catalog_evidence_count": 0,
+                    "docs": [],
+                    "implementation": [],
+                    "tests": [],
+                    "unsupported": [],
+                    "failures": samples,
+                    "failure_count": len(failures),
+                    "category": category,
+                },
+            }
+        )
+    return issues
+
+
 def build_report(
     backends_data: dict[str, Any],
     features_data: dict[str, Any],
     docs_report: dict[str, Any] | None = None,
+    pytest_failure_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     backends = backends_data["backends"]
     backend_by_id = {backend["id"]: backend for backend in backends}
+    pytest_failure_reports = pytest_failure_reports or []
     features = []
     issues = []
     state_counts: dict[str, int] = {}
@@ -1173,6 +1433,7 @@ def build_report(
                 state,
                 implementation_hits,
                 test_hits,
+                unsupported_hits,
             )
             if issue:
                 issues.append(issue)
@@ -1202,10 +1463,12 @@ def build_report(
             docs_report,
         )
     )
+    issues.extend(pytest_failure_issues(backends, pytest_failure_reports))
     issues.sort(
         key=lambda item: (item["backend_id"], item["category"], item["feature_id"])
     )
     docs_summary = (docs_report or {}).get("summary", {})
+    pytest_failure_summary = summarize_pytest_failure_reports(pytest_failure_reports)
     return {
         "schema_version": 1,
         "generator": "tools/support_signals.py",
@@ -1215,12 +1478,18 @@ def build_report(
             "docs_report": (
                 relpath(DEFAULT_DOCS_REPORT_PATH) if docs_report is not None else None
             ),
+            "pytest_failure_summaries": [
+                report.get("path")
+                for report in pytest_failure_reports
+                if report.get("path")
+            ],
         },
         "summary": {
             "backend_count": len(backends),
             "feature_count": len(features),
             "state_counts": dict(sorted(state_counts.items())),
             "issue_count": len(issues),
+            "pytest_failures": pytest_failure_summary,
             "docs_probe": {
                 "provided": docs_report is not None,
                 "total": int(docs_summary.get("total", 0)),
@@ -1284,6 +1553,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             default=None,
             help="Optional backend docs probe report with feature hits",
         )
+        subparser.add_argument(
+            "--pytest-failure-summary",
+            type=Path,
+            action="append",
+            default=[],
+            help="Optional pytest failure summary JSON from tools/pytest_failure_summary.py",
+        )
     docs_parser = subparsers.add_parser(
         "docs", help="Fetch backend docs and extract feature/candidate terms"
     )
@@ -1323,7 +1599,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(stable_json(report), encoding="utf-8")
-        print("Wrote {}".format(relpath(output)))
+        print(f"Wrote {relpath(output)}")
         print(
             "Docs: total={total}, ok={ok}, failed={failed}, linked={linked_documents}, feature_hits={feature_hits}, candidate_terms={candidate_terms}".format(
                 **report["summary"]
@@ -1334,18 +1610,24 @@ def main(argv: list[str] | None = None) -> int:
     docs_report_path = args.docs_report
     if docs_report_path is not None and not docs_report_path.is_absolute():
         docs_report_path = ROOT / docs_report_path
+    pytest_failure_paths = []
+    for path in args.pytest_failure_summary:
+        pytest_failure_paths.append(path if path.is_absolute() else ROOT / path)
 
     report = build_report(
         backends_data,
         features_data,
         docs_report=load_docs_report(docs_report_path),
+        pytest_failure_reports=[
+            load_pytest_failure_report(path) for path in pytest_failure_paths
+        ],
     )
     expected = stable_json(report)
 
     if args.command in {"extract", "update"}:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(expected, encoding="utf-8")
-        print("Wrote {}".format(relpath(output)))
+        print(f"Wrote {relpath(output)}")
         return 0
 
     diff = compare_file(output, expected)

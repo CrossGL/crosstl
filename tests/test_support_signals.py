@@ -1,6 +1,7 @@
 import importlib.util
-from pathlib import Path
+import json
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "support_signals.py"
@@ -186,6 +187,42 @@ def test_build_report_scans_repo_implementation_and_tests():
     assert report["issues"] == []
 
 
+def test_build_report_counts_test_class_names_as_evidence():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "hip",
+                "name": "HIP",
+                "translator_codegen": "crosstl/backend/HIP/HipLexer.py",
+                "tests": ["tests/test_backend/test_HIP/test_lexer.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "source.lexing",
+                "category": "source",
+                "name": "Native lexer coverage",
+                "description": (
+                    "Tokenize backend source language constructs used by the "
+                    "native parser."
+                ),
+                "support": {"hip": {"status": "supported", "evidence": ["test"]}},
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["hip"]
+    test_symbols = {hit["symbol"] for hit in support["tests"]}
+
+    assert support["state"] == "tested"
+    assert "TestHipLexer" in test_symbols
+    assert report["issues"] == []
+
+
 def test_build_report_flags_unsupported_catalog_rows_with_detected_tests():
     module = load_signals_module()
     backends = {
@@ -246,6 +283,47 @@ def test_build_report_flags_unsupported_catalog_rows_with_detected_tests():
             ],
         }
     ]
+
+
+def test_build_report_skips_reviewed_unsupported_rows_with_unsupported_markers():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "catalog.unsupported",
+                "category": "validation",
+                "name": "Unsupported catalog issue",
+                "description": (
+                    "Review unsupported catalog rows with detected "
+                    "implementation tests."
+                ),
+                "support": {
+                    "directx": {
+                        "status": "unsupported",
+                        "evidence": ["tools/support_signals.py::unsupported marker"],
+                    }
+                },
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features)
+    support = report["features"][0]["support"]["directx"]
+
+    assert support["state"] == "tested"
+    assert support["unsupported"]
+    assert report["issues"] == []
 
 
 def test_build_report_does_not_flag_weak_unsupported_catalog_matches():
@@ -317,7 +395,7 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
                 "source": "HLSL reference",
                 "url": "https://example.com/hlsl",
                 "ok": True,
-                "candidate_terms": [{"term": "SV_Position", "count": 3}],
+                "candidate_terms": [{"term": "PipelineMagicState", "count": 3}],
             }
         ],
     }
@@ -333,7 +411,7 @@ def test_build_report_creates_issues_for_unmapped_documented_candidates():
     }
     assert any(
         issue["kind"] == "documented_candidate_not_detected"
-        and issue["feature"] == "SV_Position"
+        and issue["feature"] == "PipelineMagicState"
         and issue["category"] == "docs"
         for issue in report["issues"]
     )
@@ -383,6 +461,545 @@ def test_build_report_skips_documented_candidates_mapped_to_existing_features():
     )
 
 
+def test_build_report_maps_documented_semantic_candidates_to_stage_io_feature():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "slang",
+                "name": "Slang",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": (
+                    "Input parameter semantics and target builtin attributes."
+                ),
+                "support": {"slang": {"status": "partial"}},
+            }
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "slang",
+                "backend": "Slang",
+                "source": "Slang user guide",
+                "url": "https://example.com/slang",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "SV_VertexID", "count": 1},
+                    {"term": "SV_InstanceID", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert not any(issue["feature"] == "SV_VertexID" for issue in report["issues"])
+    assert not any(issue["feature"] == "SV_InstanceID" for issue in report["issues"])
+
+
+def test_build_report_maps_directx_surface_candidates_and_skips_spirv_noise():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": "Input parameter semantics.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "resources.structured_buffers",
+                "category": "resources",
+                "name": "Structured/storage buffers",
+                "description": "Structured and RW buffer resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "resources.texture_sampler_split",
+                "category": "resources",
+                "name": "Texture and sampler object model",
+                "description": "Texture and sampler resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "texture.sampling",
+                "category": "textures",
+                "name": "Texture sampling",
+                "description": "Sample texture resources.",
+                "support": {"directx": {"status": "partial"}},
+            },
+            {
+                "id": "stage.ray_tracing",
+                "category": "stages",
+                "name": "Ray tracing stages",
+                "description": "Ray tracing shader stages.",
+                "support": {"directx": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "directx",
+                "backend": "DirectX / HLSL",
+                "source": "HLSL docs",
+                "url": "https://example.com/hlsl",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "SV_Target0", "count": 1},
+                    {"term": "RWBuffer", "count": 1},
+                    {"term": "sampler2D", "count": 1},
+                    {"term": "Texture2D", "count": 1},
+                    {"term": "Raytracing", "count": 1},
+                    {"term": "Atomically", "count": 1},
+                    {"term": "OpDecorate", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_maps_opengl_builtin_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "opengl",
+                "name": "OpenGL / GLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "io.stage_parameters",
+                "category": "stage I/O",
+                "name": "Stage parameter semantics",
+                "description": "Input parameter semantics.",
+                "support": {"opengl": {"status": "partial"}},
+            },
+            {
+                "id": "resources.bindings",
+                "category": "resources",
+                "name": "Explicit and automatic resource bindings",
+                "description": "Descriptor set and binding metadata.",
+                "support": {"opengl": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "opengl",
+                "backend": "OpenGL / GLSL",
+                "source": "GLSL docs",
+                "url": "https://example.com/glsl",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "gl_Position", "count": 1},
+                    {"term": "gl_WorkGroupSize", "count": 1},
+                    {"term": "gl_FragCoord", "count": 1},
+                    {"term": "DescriptorSet", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_keeps_spirv_op_candidates_for_vulkan():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "vulkan",
+                "name": "Vulkan SPIR-V",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "vulkan",
+                "backend": "Vulkan SPIR-V",
+                "source": "SPIR-V spec",
+                "url": "https://example.com/spirv",
+                "ok": True,
+                "candidate_terms": [{"term": "OpDecorate", "count": 1}],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert any(issue["feature"] == "OpDecorate" for issue in report["issues"])
+
+
+def test_build_report_maps_vulkan_spirv_opcode_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "vulkan",
+                "name": "Vulkan SPIR-V",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "language.control_flow",
+                "category": "language",
+                "name": "Control flow",
+                "description": "Branch, loop, and selection control flow.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.arrays",
+                "category": "language",
+                "name": "Array declarations and access",
+                "description": "Array declarations and access.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.functions",
+                "category": "language",
+                "name": "Function declarations and calls",
+                "description": "Function calls and parameters.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.vector_matrix",
+                "category": "language",
+                "name": "Vector and matrix expressions",
+                "description": "Scalar, vector, and matrix expressions.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "language.structs",
+                "category": "language",
+                "name": "Struct declarations and construction",
+                "description": "Struct types and members.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.bindings",
+                "category": "resources",
+                "name": "Explicit and automatic resource bindings",
+                "description": "SPIR-V decorations and bindings.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.memory_qualifiers",
+                "category": "resources",
+                "name": "Resource memory qualifiers",
+                "description": "Pointer, load, and store memory semantics.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "resources.structured_buffers",
+                "category": "resources",
+                "name": "Structured/storage buffers",
+                "description": "Structured buffer resources.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+            {
+                "id": "target.codegen",
+                "category": "target",
+                "name": "CrossGL to target code generation",
+                "description": "Target code generation helpers.",
+                "support": {"vulkan": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "vulkan",
+                "backend": "Vulkan SPIR-V",
+                "source": "SPIR-V spec",
+                "url": "https://example.com/spirv",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "OpBranchConditional", "count": 1},
+                    {"term": "OpTypeArray", "count": 1},
+                    {"term": "OpFunctionCall", "count": 1},
+                    {"term": "OpTypeFloat", "count": 1},
+                    {"term": "OpTypeStruct", "count": 1},
+                    {"term": "OpDecorate", "count": 1},
+                    {"term": "OpTypePointer", "count": 1},
+                    {"term": "OpExtInstImport", "count": 1},
+                    {"term": "DescriptorHeapEXT", "count": 1},
+                    {"term": "Structured", "count": 1},
+                    {"term": "OpLine", "count": 1},
+                    {"term": "OpName", "count": 1},
+                    {"term": "OpTypePipe", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_ignores_cuda_runtime_doc_candidates():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "cuda",
+                "name": "CUDA",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "cuda",
+                "backend": "CUDA",
+                "source": "CUDA docs",
+                "url": "https://example.com/cuda",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "cudaMalloc", "count": 1},
+                    {"term": "cudaMemcpyAsync", "count": 1},
+                    {"term": "cuda_runtime_api", "count": 1},
+                    {"term": "Pipelines", "count": 1},
+                    {"term": "vkExt", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_maps_hip_texture_resource_candidates_to_catalog_features():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "hip",
+                "name": "HIP",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {
+        "features": [
+            {
+                "id": "resources.texture_sampler_split",
+                "category": "resources",
+                "name": "Texture and sampler object model",
+                "description": (
+                    "Represent combined and separate texture/sampler models."
+                ),
+                "support": {"hip": {"status": "partial"}},
+            },
+            {
+                "id": "resources.resource_arrays",
+                "category": "resources",
+                "name": "Resource arrays",
+                "description": "Fixed and unsized texture and sampler arrays.",
+                "support": {"hip": {"status": "partial"}},
+            },
+        ]
+    }
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "hip",
+                "backend": "HIP",
+                "source": "HIP docs",
+                "url": "https://example.com/hip",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "hipTexRefSetMipmappedArray", "count": 1},
+                    {"term": "hipTexObjectGetResourceDesc", "count": 1},
+                    {"term": "hipBindTexture2D", "count": 1},
+                    {"term": "hipGetChannelDesc", "count": 1},
+                    {"term": "hipMipmappedArrayGetLevel", "count": 1},
+                    {"term": "hipArray_t", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_ignores_non_surface_documented_noise_candidates():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "slang",
+                "name": "Slang",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    docs_report = {
+        "documents": [
+            {
+                "backend_id": "slang",
+                "backend": "Slang",
+                "source": "Slang user guide",
+                "url": "https://example.com/slang",
+                "ok": True,
+                "candidate_terms": [
+                    {"term": "DescriptorHandle", "count": 1},
+                    {"term": "hipDeviceptr_t", "count": 1},
+                    {"term": "hipSuccess", "count": 1},
+                    {"term": "cudaErrorNoDevice", "count": 1},
+                ],
+            }
+        ]
+    }
+
+    report = module.build_report(backends, features, docs_report=docs_report)
+
+    assert report["issues"] == []
+
+
+def test_build_report_creates_ci_failure_issues_from_pytest_summaries():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "opengl",
+                "name": "OpenGL / GLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    failure_report = {
+        "schema_version": 1,
+        "generator": "tools/pytest_failure_summary.py",
+        "path": "support/generated/full-tests-failure-summary.json",
+        "failures": [
+            {
+                "nodeid": (
+                    "tests.test_translator.test_codegen."
+                    "test_external_shader_validators::test_generated_glsl_validates"
+                ),
+                "file": (
+                    "tests/test_translator/test_codegen/"
+                    "test_external_shader_validators.py"
+                ),
+                "kind": "failure",
+                "category": "backend_compiler_validation",
+                "backend": "opengl",
+                "message": "glslangValidator rejected generated GLSL",
+            },
+            {
+                "nodeid": "tests.test_support_matrix::test_matrix_check",
+                "file": "tests/test_support_matrix.py",
+                "kind": "failure",
+                "category": "support_automation",
+                "backend": "unknown",
+                "message": "support matrix check failed",
+            },
+        ],
+    }
+
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[failure_report],
+    )
+
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 2,
+        "categories": {
+            "backend_compiler_validation": 1,
+            "support_automation": 1,
+        },
+        "backends": {"opengl": 1, "unknown": 1},
+    }
+    assert {
+        issue["key"]
+        for issue in report["issues"]
+        if issue["kind"] == "pytest_failure_summary"
+    } == {
+        (
+            "extracted:opengl:ci.pytest.backend-compiler-validation:"
+            "pytest_failure_summary"
+        ),
+        "extracted:frontend:ci.pytest.support-automation:pytest_failure_summary",
+    }
+    opengl_issue = next(
+        issue for issue in report["issues"] if issue["backend_id"] == "opengl"
+    )
+    assert opengl_issue["signal"]["failure_count"] == 1
+    assert (
+        "glslangValidator rejected generated GLSL"
+        in opengl_issue["signal"]["failures"][0]["message"]
+    )
+
+
 def test_build_report_records_missing_docs_probe_health():
     module = load_signals_module()
     backends = {
@@ -406,4 +1023,92 @@ def test_build_report_records_missing_docs_probe_health():
         "ok": 0,
         "failed": 0,
         "linked_documents": 0,
+    }
+
+
+def test_build_report_creates_issues_from_pytest_failure_summary():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    failure_report = {
+        "path": "support/generated/full-tests-failure-summary.json",
+        "generator": "tools/pytest_failure_summary.py",
+        "failures": [
+            {
+                "nodeid": (
+                    "tests.test_translator.test_codegen.test_directx_codegen::test_wave"
+                ),
+                "file": "tests/test_translator/test_codegen/test_directx_codegen.py",
+                "kind": "failure",
+                "category": "backend_codegen",
+                "backend": "directx",
+                "message": "assert generated HLSL contains WaveActiveSum",
+            },
+            {
+                "nodeid": "tests.test_translator.test_parser::test_parse",
+                "file": "tests/test_translator/test_parser.py",
+                "kind": "failure",
+                "category": "frontend_ir",
+                "backend": "unknown",
+                "message": "parser failed",
+            },
+        ],
+    }
+
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[failure_report],
+    )
+
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 2,
+        "categories": {"backend_codegen": 1, "frontend_ir": 1},
+        "backends": {"directx": 1, "unknown": 1},
+    }
+    assert report["source"]["pytest_failure_summaries"] == [
+        "support/generated/full-tests-failure-summary.json"
+    ]
+    failure_issues = [
+        issue for issue in report["issues"] if issue["kind"] == "pytest_failure_summary"
+    ]
+    assert [issue["backend_id"] for issue in failure_issues] == [
+        "directx",
+        "frontend",
+    ]
+    assert failure_issues[0]["feature_id"] == "ci.pytest.backend-codegen"
+    assert failure_issues[0]["signal"]["failure_count"] == 1
+    assert failure_issues[1]["backend"] == "Frontend / IR / Parser"
+    assert failure_issues[1]["signal"]["failures"][0]["message"] == "parser failed"
+
+
+def test_load_pytest_failure_report_validates_generator_and_missing_files(tmp_path):
+    module = load_signals_module()
+    missing = tmp_path / "missing.json"
+    wrong_generator = tmp_path / "wrong-generator.json"
+    wrong_generator.write_text(
+        json.dumps({"generator": "tools/other.py", "failures": []}),
+        encoding="utf-8",
+    )
+
+    missing_report = module.load_pytest_failure_report(missing)
+    wrong_report = module.load_pytest_failure_report(wrong_generator)
+
+    assert missing_report["load_error"]["type"] == "FileNotFoundError"
+    assert wrong_report["load_error"] == {
+        "type": "UnexpectedGenerator",
+        "message": "expected tools/pytest_failure_summary.py, got tools/other.py",
     }

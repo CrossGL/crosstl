@@ -1,18 +1,18 @@
 """High-level translation API and command-line entry point for CrossGL Translator."""
 
+import argparse
+import os
+import sys
 from typing import Optional
 
 from .translator.codegen import (
-    get_codegen,
-    get_backend_extension,
-    normalize_backend_name,
     backend_names,
+    get_backend_extension,
+    get_codegen,
+    normalize_backend_name,
 )
-from .translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from .translator.plugin_loader import discover_backend_plugins
-import argparse
-import sys
-import os
+from .translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 try:
     from .formatter import format_shader_code
@@ -43,7 +43,7 @@ def translate(
     discover_backend_plugins()
     backend = (backend or "cgl").strip().lower()
 
-    with open(file_path, "r", encoding="utf-8") as file:
+    with open(file_path, encoding="utf-8") as file:
         shader_code = file.read()
 
     source_spec = SOURCE_REGISTRY.get_by_extension(file_path)

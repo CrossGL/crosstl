@@ -13,13 +13,23 @@ from .enum_utils import enum_variant_fields_for_type
 
 def is_switch_lowerable_match(node):
     """Return true when a match can be emitted as a plain switch statement."""
-    return all(
-        getattr(arm, "guard", None) is None
-        and isinstance(
-            getattr(arm, "pattern", None), (LiteralPatternNode, WildcardPatternNode)
-        )
-        for arm in getattr(node, "arms", []) or []
-    )
+    arms = list(getattr(node, "arms", []) or [])
+    wildcard_index = None
+    for index, arm in enumerate(arms):
+        if getattr(arm, "guard", None) is not None:
+            return False
+
+        pattern = getattr(arm, "pattern", None)
+        if isinstance(pattern, WildcardPatternNode):
+            if wildcard_index is not None or index != len(arms) - 1:
+                return False
+            wildcard_index = index
+            continue
+
+        if not isinstance(pattern, LiteralPatternNode):
+            return False
+
+    return True
 
 
 def generate_switch_match(generator, node, indent):
@@ -173,6 +183,7 @@ def generate_match_expression_assignment_arms(
         expression = temp_name
 
     emitted_arm = False
+    handled_unconditional = False
     for index, arm in enumerate(arms):
         pattern_condition, bindings, binding_types = match_arm_pattern_lowering(
             generator,
@@ -204,6 +215,7 @@ def generate_match_expression_assignment_arms(
                 emitted_arm,
                 target_name,
             )
+            handled_unconditional = True
             break
 
         condition = combine_match_conditions(pattern_condition, guard_condition)
@@ -223,6 +235,7 @@ def generate_match_expression_assignment_arms(
                 target_name,
             )
             code += f"{indent_str}}}\n"
+            handled_unconditional = True
             break
 
         prefix = "if" if not emitted_arm else "else if"
@@ -239,6 +252,22 @@ def generate_match_expression_assignment_arms(
         )
         code += f"{indent_str}}}\n"
         emitted_arm = True
+
+    if not handled_unconditional:
+        fallback = match_expression_unmatched_assignment(
+            generator,
+            target_variable,
+            target_type,
+            indent + (1 if emitted_arm else 0),
+            target_name,
+        )
+        if fallback:
+            if emitted_arm:
+                code += f"{indent_str}else {{\n"
+                code += fallback
+                code += f"{indent_str}}}\n"
+            else:
+                code += fallback
 
     return code
 
@@ -839,12 +868,7 @@ def generate_match_expression_assignment_body(
     target_name,
 ):
     indent_str = "    " * indent
-    value = match_arm_value_expression(getattr(arm, "body", None))
-    if value is None:
-        raise ValueError(
-            f"Unsupported match expression for {target_name} codegen; arms must "
-            "end in a value expression"
-        )
+    prefix, value = match_arm_value_parts(getattr(arm, "body", None))
 
     code = "".join(f"{indent_str}{binding}\n" for binding in bindings)
     saved_types = getattr(generator, "local_variable_types", None)
@@ -852,7 +876,18 @@ def generate_match_expression_assignment_body(
         saved_types = dict(saved_types)
         generator.local_variable_types.update(binding_types)
     try:
-        if getattr(value, "__class__", None).__name__ == "MatchNode":
+        if prefix:
+            code += generator.generate_scoped_statement_body(prefix, indent)
+
+        if value is None:
+            code += match_expression_missing_value_assignment(
+                generator,
+                target_variable,
+                target_type,
+                indent,
+                target_name,
+            )
+        elif getattr(value, "__class__", None).__name__ == "MatchNode":
             code += generate_match_expression_assignment(
                 generator,
                 value,
@@ -982,16 +1017,62 @@ def compatible_match_result_type(generator, left_type, right_type):
 
 
 def match_arm_value_expression(body):
+    _prefix, value = match_arm_value_parts(body)
+    return value
+
+
+def match_arm_value_parts(body):
     statements = statement_list(body)
     if not statements:
-        return None
+        return [], None
 
     tail = statements[-1]
-    if hasattr(tail, "expression"):
-        return tail.expression
+    if hasattr(tail, "expression") and getattr(tail, "is_tail_expression", False):
+        return statements[:-1], tail.expression
     if getattr(tail, "__class__", None).__name__ == "MatchNode":
-        return tail
-    return None
+        return statements[:-1], tail
+    return statements, None
+
+
+def match_expression_missing_value_assignment(
+    generator,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    hook = getattr(generator, "generate_match_expression_diagnostic_assignment", None)
+    if hook is not None:
+        return hook(
+            target_variable,
+            target_type,
+            "arm does not produce a value",
+            indent,
+            target_name,
+        )
+    raise ValueError(
+        f"Unsupported match expression for {target_name} codegen; arms must "
+        "end in a value expression"
+    )
+
+
+def match_expression_unmatched_assignment(
+    generator,
+    target_variable,
+    target_type,
+    indent,
+    target_name,
+):
+    hook = getattr(generator, "generate_match_expression_diagnostic_assignment", None)
+    if hook is None:
+        return ""
+    return hook(
+        target_variable,
+        target_type,
+        "no wildcard arm handles remaining cases",
+        indent,
+        target_name,
+    )
 
 
 def statement_list(body):

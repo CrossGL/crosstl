@@ -7,6 +7,13 @@ on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Complete Test Suite
+    types:
+      - completed
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -15,8 +22,10 @@ on:
       - ".github/workflows/docs.yml"
       - ".github/workflows/examples-test.yml"
       - ".github/workflows/full-tests.yml"
+      - ".github/workflows/issue_assign.yml"
       - ".github/workflows/support-matrix.yml"
       - ".github/workflows/support-issue-sync.yml"
+      - ".github/workflows/stale-prs.yml"
       - ".github/workflows/translator-tests.yml"
       - ".github/workflows/pr-issue-links.yml"
       - "crosstl/backend/**"
@@ -29,6 +38,8 @@ on:
       - "examples/test.py"
       - "support/**"
       - "tools/ci_coverage.py"
+      - "tools/pytest_failure_summary.py"
+      - "tools/support_ci_summary.py"
       - "tools/support_matrix.py"
       - "tools/support_signals.py"
       - "tools/sync_support_issues.py"
@@ -47,11 +58,14 @@ on:
       - "tests/test_ci_workflows.py"
       - "tests/test_support_matrix.py"
       - "tests/test_support_signals.py"
+      - "tests/test_support_ci_summary.py"
       - "tests/test_support_issue_sync.py"
       - "tests/test_tool_cli.py"
       - "tests/test_pr_issue_links.py"
+      - "tests/test_pytest_failure_summary.py"
 
 permissions:
+  actions: read
   contents: read
   issues: write
 
@@ -63,6 +77,7 @@ jobs:
   sync:
     name: Sync support matrix issues
     runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -77,7 +92,27 @@ jobs:
         run: python -m pip install pytest pypdf
 
       - name: Validate support matrix artifacts
-        run: python tools/support_matrix.py check
+        run: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
+
+      - name: Audit support matrix evidence
+        if: always()
+        run: >
+          python tools/support_matrix.py evidence
+          --status supported
+          --evidence missing
+          --fail-on-missing
+          --output support/generated/support-evidence-check.json
+
+      - name: Upload support matrix check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: support-matrix-check-report
+          path: |
+            support/generated/support-matrix-check.json
+            support/generated/support-evidence-check.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Write CI coverage report
         run: |
@@ -114,9 +149,21 @@ jobs:
             support/generated/ci-coverage-report.md
             support/generated/ci-coverage-base-report.json
             support/generated/ci-coverage-comparison.json
+          retention-days: 30
 
       - name: Validate CI coverage policy
         run: python tools/ci_coverage.py check
+
+      - name: Download test failure summaries
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          pattern: "*failure-summary*"
+          path: support/generated/pytest-failures
+          merge-multiple: false
 
       - name: Probe backend documentation signals
         if: github.event_name != 'pull_request'
@@ -124,22 +171,42 @@ jobs:
 
       - name: Extract generated support signals
         run: |
+          docs_args=()
           if [ -f support/generated/backend-docs-report.json ]; then
-            python tools/support_signals.py extract \
-              --docs-report support/generated/backend-docs-report.json \
-              --output support/generated/support-signals.json
-          else
-            python tools/support_signals.py extract \
-              --output support/generated/support-signals.json
+            docs_args=(--docs-report support/generated/backend-docs-report.json)
           fi
+          failure_args=()
+          if [ -d support/generated/pytest-failures ]; then
+            while IFS= read -r report; do
+              failure_args+=(--pytest-failure-summary "$report")
+            done < <(find support/generated/pytest-failures -type f -name "*-failure-summary.json" | sort)
+          fi
+          python tools/support_signals.py extract \
+            "${docs_args[@]}" \
+            "${failure_args[@]}" \
+            --output support/generated/support-signals.json
+
+      - name: Upload support signal reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: support-signal-reports
+          path: |
+            support/generated/backend-docs-report.json
+            support/generated/pytest-failures/**
+            support/generated/support-signals.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Test support automation planners
         run: >
           python -m pytest -q
           tests/test_support_matrix.py
           tests/test_support_signals.py
+          tests/test_support_ci_summary.py
           tests/test_support_issue_sync.py
           tests/test_pr_issue_links.py
+          tests/test_pytest_failure_summary.py
           tests/test_ci_workflows.py
           tests/test_tool_cli.py
           tests/test_examples_test_script.py
@@ -150,11 +217,41 @@ jobs:
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
           --signals support/generated/support-signals.json
+          --matrix-check-report support/generated/support-matrix-check.json
           --throttle-seconds 2
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
           --min-desired-issues 10
+          --plan-output support/generated/support-issue-plan.json
+          --dry-run
+
+      - name: Plan GitHub issue sync
+        if: github.event_name != 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          python tools/sync_support_issues.py
+          --repo "$GITHUB_REPOSITORY"
+          --signals support/generated/support-signals.json
+          --matrix-check-report support/generated/support-matrix-check.json
+          --throttle-seconds 2
+          --max-retries 6
+          --retry-base-seconds 60
+          --retry-max-seconds 600
+          --min-desired-issues 10
+          --inspect-existing
+          --planned-action-budget-mode fail
+          --max-planned-created 300
+          --max-planned-updated 300
+          --max-planned-closed 50
+          --max-planned-attached 300
+          --max-planned-total 600
+          --max-planned-stale-parent-closures 0
+          --max-planned-stale-backlog-closures 100
+          --max-planned-stale-extracted-closures 100
+          --max-planned-duplicate-marker-closures 25
+          --plan-output support/generated/support-issue-plan.json
           --dry-run
 
       - name: Sync GitHub issues
@@ -165,8 +262,49 @@ jobs:
           python tools/sync_support_issues.py
           --repo "$GITHUB_REPOSITORY"
           --signals support/generated/support-signals.json
+          --matrix-check-report support/generated/support-matrix-check.json
           --throttle-seconds 2
           --max-retries 6
           --retry-base-seconds 60
           --retry-max-seconds 600
           --min-desired-issues 10
+          --inspect-existing
+          --planned-action-budget-mode fail
+          --max-planned-created 300
+          --max-planned-updated 300
+          --max-planned-closed 50
+          --max-planned-attached 300
+          --max-planned-total 600
+          --max-planned-stale-parent-closures 0
+          --max-planned-stale-backlog-closures 100
+          --max-planned-stale-extracted-closures 100
+          --max-planned-duplicate-marker-closures 25
+          --plan-output support/generated/support-issue-plan.json
+          --sync-summary-output support/generated/support-issue-sync-summary.json
+
+      - name: Write support automation summary
+        if: always()
+        run: |
+          python tools/support_ci_summary.py \
+            --matrix-check support/generated/support-matrix-check.json \
+            --support-evidence support/generated/support-evidence-check.json \
+            --issue-plan support/generated/support-issue-plan.json \
+            --sync-summary support/generated/support-issue-sync-summary.json \
+            --output support/generated/support-issue-ci-summary.md \
+            --step-summary "$GITHUB_STEP_SUMMARY" \
+            --github-annotations \
+            --fail-on-attention
+
+      - name: Upload support issue sync reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: support-issue-sync-reports
+          path: |
+            support/generated/support-matrix-check.json
+            support/generated/support-evidence-check.json
+            support/generated/support-issue-plan.json
+            support/generated/support-issue-sync-summary.json
+            support/generated/support-issue-ci-summary.md
+          if-no-files-found: ignore
+          retention-days: 30

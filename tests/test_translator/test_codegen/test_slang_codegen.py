@@ -1,9 +1,9 @@
-from crosstl.translator.lexer import Lexer
-import pytest
 import shutil
 import subprocess
 from typing import List
-from crosstl.translator.parser import Parser
+
+import pytest
+
 from crosstl.translator.ast import (
     ArrayAccessNode,
     AtomicOpNode,
@@ -15,6 +15,8 @@ from crosstl.translator.ast import (
     PrimitiveType,
 )
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
@@ -46,7 +48,13 @@ def generate_code(ast_node):
     return codegen.generate(ast_node)
 
 
-def compile_generated_slang(generated_code, tmp_path, stage, profile="sm_6_0"):
+def compile_generated_slang(
+    generated_code,
+    tmp_path,
+    stage,
+    profile="sm_6_0",
+    entry="main",
+):
     slangc = shutil.which("slangc")
     if slangc is None:
         pytest.skip("slangc is not installed")
@@ -61,7 +69,7 @@ def compile_generated_slang(generated_code, tmp_path, stage, profile="sm_6_0"):
             "-target",
             "hlsl",
             "-entry",
-            "main",
+            entry,
             "-stage",
             stage,
             "-profile",
@@ -3273,7 +3281,14 @@ def test_mesh_intrinsics_validate_value_contexts():
             }
 
             void main() {
+                bool choose = true;
+                vec3 dispatchAssign = vec3(0.0);
+                DispatchMesh(2, 3, 4);
                 vec3 dispatchVector = DispatchMesh(1, 2, 3);
+                dispatchAssign = DispatchMesh(1, 2, 3);
+                vec3 binaryDispatch = DispatchMesh(1, 2, 3) + vec3(1.0);
+                vec3 ternaryDispatch =
+                    choose ? DispatchMesh(1, 2, 3) : vec3(0.0);
                 acceptVector(DispatchMesh(1, 2, 3));
             }
         }
@@ -3291,12 +3306,30 @@ def test_mesh_intrinsics_validate_value_contexts():
         "float3 dispatchVector = /* unsupported Slang mesh intrinsic: DispatchMesh "
         "returns void but target expects float3 */ float3(0.0);" in dispatch_generated
     )
+    assert "DispatchMesh(2, 3, 4);" in dispatch_generated
+    assert (
+        "dispatchAssign = /* unsupported Slang mesh intrinsic: DispatchMesh returns "
+        "void but target expects float3 */ float3(0.0);" in dispatch_generated
+    )
+    assert (
+        "float3 binaryDispatch = /* unsupported Slang mesh intrinsic: DispatchMesh "
+        "returns void but target expects float3 */ float3(0.0) + float3(1.0);"
+        in dispatch_generated
+    )
+    assert (
+        "float3 ternaryDispatch = (choose ? /* unsupported Slang mesh intrinsic: "
+        "DispatchMesh returns void but target expects float3 */ float3(0.0) : "
+        "float3(0.0));" in dispatch_generated
+    )
     assert (
         "acceptVector(/* unsupported Slang mesh intrinsic: DispatchMesh returns void "
         "but target expects float3 */ float3(0.0));" in dispatch_generated
     )
     assert "return DispatchMesh(1, 2, 3);" not in dispatch_generated
     assert "float3 dispatchVector = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "dispatchAssign = DispatchMesh(1, 2, 3);" not in dispatch_generated
+    assert "float3 binaryDispatch = DispatchMesh(1, 2, 3)" not in dispatch_generated
+    assert "choose ? DispatchMesh(1, 2, 3)" not in dispatch_generated
     assert "acceptVector(DispatchMesh(1, 2, 3));" not in dispatch_generated
 
     counts_code = """
@@ -3422,6 +3455,105 @@ def test_mesh_output_signature_and_helper_roles_lower_to_native_slang():
     assert ": vertices" not in generated_code
     assert ": indices" not in generated_code
     assert ": primitives" not in generated_code
+
+
+def test_mesh_output_signature_accepts_nested_helper_set_counts():
+    code = """
+    shader SlangMeshOutputHelperCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        void writeVertex(@vertices inout MeshVertex verts[3]) {
+            verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                writeVertex(verts);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "void emitCounts()" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "void configureCounts()" in generated_code
+    assert "emitCounts();" in generated_code
+    assert "configureCounts();" in generated_code
+    assert "writeVertex(verts);" in generated_code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+
+def test_mesh_output_signature_validates_helper_set_counts_order_and_duplicates():
+    write_before_counts_code = """
+    shader InvalidSlangMeshOutputHelperCountOrder {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void configureCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                configureCounts();
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="writes must occur after"):
+        generate_code(parse_code(tokenize_code(write_before_counts_code)))
+
+    duplicate_helper_counts_code = """
+    shader InvalidSlangMeshOutputDuplicateHelperCounts {
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+        };
+
+        void configureCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        mesh {
+            void main(
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                configureCounts();
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="SetMeshOutputCounts exactly once"):
+        generate_code(parse_code(tokenize_code(duplicate_helper_counts_code)))
 
 
 @pytest.mark.parametrize(
@@ -3902,6 +4034,46 @@ def test_dispatch_mesh_payload_argument_accepts_array_element_lvalue():
     assert "void MSMain(in payload MeshPayload payload)" in generated_code
 
 
+def test_dispatch_mesh_payload_argument_accepts_reference_and_pointer_lvalues():
+    code = """
+    shader SlangDispatchMeshPayloadReferenceLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                payload.meshlet = 7u;
+                MeshPayload& payloadRef = payload;
+                MeshPayload* payloadPtr = &payload;
+                DispatchMesh(1, 1, 1, payloadRef);
+                DispatchMesh(1, 1, 1, *payloadPtr);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "groupshared MeshPayload payload;" in generated_code
+    assert "MeshPayload& payloadRef = payload;" in generated_code
+    assert "MeshPayload* payloadPtr = &payload;" in generated_code
+    assert "DispatchMesh(1, 1, 1, payloadRef);" in generated_code
+    assert "DispatchMesh(1, 1, 1, *payloadPtr);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
 def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
     code = """
     shader SlangDispatchMeshPayloadHelperLvalue {
@@ -3940,6 +4112,109 @@ def test_dispatch_mesh_payload_helper_accepts_lvalue_payload_argument():
     assert "DispatchMesh(1, 1, 1, payload);" in generated_code
     assert "launchMesh(payloads[slot]);" in generated_code
     assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+
+def test_dispatch_mesh_payload_nested_helper_tracks_member_lvalues():
+    code = """
+    shader SlangDispatchMeshNestedPayloadHelperLvalues {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct PayloadHolder {
+            MeshPayload current;
+            MeshPayload options[2];
+        };
+
+        groupshared PayloadHolder holder;
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void relayHolder(inout PayloadHolder holderRef, uint slot) {
+                launchMesh(holderRef.current);
+                launchMesh(holderRef.options[slot]);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                holder.current.meshlet = 7u;
+                holder.options[1].meshlet = 9u;
+                DispatchMesh(1, 1, 1, holder.current);
+                relayHolder(holder, 1u);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                uint meshlet = payload.meshlet;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct PayloadHolder" in generated_code
+    assert "groupshared PayloadHolder holder;" in generated_code
+    assert (
+        "void relayHolder(inout PayloadHolder holderRef, uint slot)" in generated_code
+    )
+    assert "launchMesh(holderRef.current);" in generated_code
+    assert "launchMesh(holderRef.options[slot]);" in generated_code
+    assert "DispatchMesh(1, 1, 1, holder.current);" in generated_code
+    assert "relayHolder(holder, 1u);" in generated_code
+    assert "void MSMain(in payload MeshPayload payload)" in generated_code
+
+    invalid_code = """
+    shader InvalidSlangDispatchMeshNestedPayloadHelperLvalue {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct PayloadHolder {
+            MeshPayload current;
+        };
+
+        PayloadHolder makeHolder() {
+            PayloadHolder holder;
+            holder.current.meshlet = 7u;
+            return holder;
+        }
+
+        task {
+            void launchMesh(inout MeshPayload payload) {
+                DispatchMesh(1, 1, 1, payload);
+            }
+
+            void relayHolder(inout PayloadHolder holderRef) {
+                launchMesh(holderRef.current);
+            }
+
+            void main() @numthreads(1, 1, 1) {
+                relayHolder(makeHolder());
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(
+        ValueError,
+        match="relayHolder payload argument must be an lvalue, got PayloadHolder",
+    ):
+        generate_code(parse_code(tokenize_code(invalid_code)))
 
 
 @pytest.mark.parametrize(
@@ -4045,6 +4320,57 @@ def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions(
         ValueError,
         match="DispatchMesh payload argument must be an lvalue, got MeshPayload",
     ):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "payload_expression", "message"),
+    [
+        (
+            "groupshared MeshPayload payloads[2];",
+            "payloads",
+            (
+                "DispatchMesh payload argument type MeshPayload\\[2\\] "
+                "must match mesh payload type MeshPayload"
+            ),
+        ),
+        (
+            "groupshared MeshPayload payload; MeshPayload* payloadPtr = &payload;",
+            "payloadPtr",
+            (
+                "DispatchMesh payload argument type MeshPayload\\* "
+                "must match mesh payload type MeshPayload"
+            ),
+        ),
+    ],
+)
+def test_dispatch_mesh_payload_argument_rejects_pointer_and_array_shapes(
+    setup_source, payload_expression, message
+):
+    code = f"""
+    shader InvalidSlangDispatchMeshPayloadShape {{
+        struct MeshPayload {{
+            uint meshlet;
+        }};
+
+        task {{
+            void main() @numthreads(1, 1, 1) {{
+                {setup_source}
+                DispatchMesh(1, 1, 1, {payload_expression});
+            }}
+        }}
+
+        mesh {{
+            void main(
+                @mesh_payload in MeshPayload payload
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {{
+                SetMeshOutputCounts(3, 1);
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -4205,6 +4531,98 @@ def test_task_stage_helper_can_dispatch_mesh():
     assert "void launchMesh()" in generated_code
     assert "DispatchMesh(1, 1, 1);" in generated_code
     assert "launchMesh();" in generated_code
+
+
+def test_mesh_intrinsics_validate_shared_nested_helper_stage_contexts():
+    valid_code = """
+    shader SlangSharedMeshTaskHelpers {
+        void launchMesh() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        void relayDispatch() {
+            launchMesh();
+        }
+
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                relayDispatch();
+            }
+        }
+
+        mesh {
+            void main(
+                @vertices out vec4 verts[3],
+                @indices out uvec3 tris[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                configureCounts();
+                verts[0] = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "void launchMesh()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "void relayDispatch()" in generated_code
+    assert "relayDispatch();" in generated_code
+    assert "void configureCounts()" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "configureCounts();" in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+    invalid_dispatch_code = """
+    shader InvalidSlangSharedDispatchHelper {
+        void launchMesh() {
+            DispatchMesh(1, 1, 1);
+        }
+
+        void relayDispatch() {
+            launchMesh();
+        }
+
+        compute {
+            void main() @numthreads(1, 1, 1) {
+                relayDispatch();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="compute stage cannot call DispatchMesh"):
+        generate_code(parse_code(tokenize_code(invalid_dispatch_code)))
+
+    invalid_counts_code = """
+    shader InvalidSlangSharedCountsHelper {
+        void emitCounts() {
+            SetMeshOutputCounts(3, 1);
+        }
+
+        void configureCounts() {
+            emitCounts();
+        }
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                configureCounts();
+            }
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="task stage cannot call SetMeshOutputCounts"):
+        generate_code(parse_code(tokenize_code(invalid_counts_code)))
 
 
 @pytest.mark.parametrize(
@@ -4385,6 +4803,666 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_Position" not in generated_code
     assert ": gl_FragColor" not in generated_code
     assert ": gl_GlobalInvocationID" not in generated_code
+
+
+def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang():
+    valid_code = """
+    shader StructSemantics {
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ gl_FragDepth;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "float4 color : SV_Target1;" in generated_code
+    assert "float depth : SV_Depth;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+
+    invalid_type = """
+    shader BadStructSemanticType {
+        struct FSOutput {
+            vec3 color @ gl_FragColor;
+        };
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader BadStructSemanticStage {
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        vertex {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadStructInputOnlySemantic {
+        struct VSOutput {
+            uint vertexId @ gl_VertexID;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_return_semantics_validate_builtin_types_and_stage_context_for_slang():
+    invalid_depth_type = """
+    shader BadDepthType {
+        fragment {
+            vec4 main() @ gl_FragDepth {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+        generate_code(parse_code(tokenize_code(invalid_depth_type)))
+
+    invalid_stage = """
+    shader BadStage {
+        vertex {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadInputOnlyReturn {
+        vertex {
+            uint main() @ gl_VertexID {
+                return uint(0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_slangc_smoke_compiles_generated_stage_interfaces_if_available(tmp_path):
+    code = """
+    shader SlangStageInterfaceCompileSmoke {
+        struct VSInput {
+            vec3 position @ POSITION;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct VSOutput {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(
+                VSInput input,
+                uint vertexId @ gl_VertexID,
+                uint instanceId @ gl_InstanceID
+            ) {
+                VSOutput output;
+                output.position = vec4(input.position, 1.0);
+                output.uv = input.uv + vec2(
+                    float(vertexId & 1u),
+                    float(instanceId & 1u)
+                );
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                VSOutput input,
+                bool frontFacing @ gl_FrontFacing,
+                vec4 fragCoord @ gl_FragCoord
+            ) @ gl_FragColor {
+                float facing = frontFacing ? 1.0 : 0.5;
+                return vec4(input.uv, facing, fragCoord.w);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float3 position : POSITION;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 position : SV_Position;" in generated_code
+    assert (
+        "VSOutput VSMain(VSInput input, uint vertexId : SV_VertexID, "
+        "uint instanceId : SV_InstanceID)" in generated_code
+    )
+    assert (
+        "float4 PSMain(VSOutput input, bool frontFacing : SV_IsFrontFace, "
+        "float4 fragCoord : SV_Position) : SV_Target" in generated_code
+    )
+    assert "float4(input.uv, facing, fragCoord.w)" in generated_code
+    assert ": gl_Position" not in generated_code
+    assert ": gl_VertexID" not in generated_code
+    assert ": gl_InstanceID" not in generated_code
+    assert ": gl_FrontFacing" not in generated_code
+    assert ": gl_FragCoord" not in generated_code
+    assert ": gl_FragColor" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "vertex",
+        profile="vs_6_0",
+        entry="VSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
+
+
+def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available(
+    tmp_path,
+):
+    color_code = """
+    shader SlangDirectReturnSemanticsCompileSmoke {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                return vec4(position, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 fragCoord @ gl_FragCoord) @ gl_FragColor {
+                return vec4(fragCoord.xy, 0.25, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(color_code)))
+
+    assert "float4 VSMain(float3 position : POSITION) : SV_Position" in generated_code
+    assert "return float4(position, 1.0);" in generated_code
+    assert "float4 PSMain(float4 fragCoord : SV_Position) : SV_Target" in generated_code
+    assert "return float4(fragCoord.xy, 0.25, 1.0);" in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "vertex",
+        profile="vs_6_0",
+        entry="VSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
+
+    depth_code = """
+    shader SlangDepthReturnSemanticsCompileSmoke {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
+
+    assert "float PSMain() : SV_Depth" in depth_generated_code
+    assert "return 0.5;" in depth_generated_code
+
+    compile_generated_slang(
+        depth_generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
+
+
+def test_slangc_smoke_compiles_generated_mesh_task_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangMeshTaskCompileSmoke {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ SV_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct MeshPrimitive {
+            bool culled @ SV_CullPrimitive;
+        };
+
+        groupshared MeshPayload payload;
+
+        task {
+            void main(uvec3 groupId @ gl_WorkGroupID) @numthreads(1, 1, 1) {
+                payload.meshlet = groupId.x;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                uvec3 threadId @ gl_LocalInvocationID,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1],
+                @primitives out MeshPrimitive prims[1]
+            ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                verts[1].position = vec4(float(threadId.x), 1.0, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 0.0, 1.0, 1.0);
+                verts[0].uv = vec2(0.0, 0.0);
+                verts[1].uv = vec2(1.0, 0.0);
+                verts[2].uv = vec2(0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+                prims[0].culled = false;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[numthreads(1, 1, 1)]\n[shader("amplification")]' in generated_code
+    assert "void ASMain(uint3 groupId : SV_GroupID)" in generated_code
+    assert "DispatchMesh(1, 1, 1, payload);" in generated_code
+    assert '[numthreads(32, 1, 1)]\n[outputtopology("triangle")]' in generated_code
+    assert '[shader("mesh")]' in generated_code
+    assert (
+        "void MSMain(in payload MeshPayload payload, "
+        "uint3 threadId : SV_GroupThreadID, "
+        "out vertices MeshVertex verts[3], out indices uint3 tris[1], "
+        "out primitives MeshPrimitive prims[1])" in generated_code
+    )
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "bool culled : SV_CullPrimitive;" in generated_code
+    assert (
+        "verts[0].position = float4(float(payload.meshlet), 0.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert (
+        "verts[1].position = float4(float(threadId.x), 1.0, 0.0, 1.0);"
+        in generated_code
+    )
+    assert "tris[0] = uint3(0u, 1u, 2u);" in generated_code
+    assert "prims[0].culled = false;" in generated_code
+    assert ": gl_WorkGroupID" not in generated_code
+    assert ": gl_LocalInvocationID" not in generated_code
+    assert ": mesh_payload" not in generated_code
+    assert ": vertices" not in generated_code
+    assert ": indices" not in generated_code
+    assert ": primitives" not in generated_code
+    assert "MeshOpNode" not in generated_code
+    assert "unsupported Slang mesh intrinsic" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "amplification",
+        profile="as_6_5",
+        entry="ASMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "mesh",
+        profile="ms_6_5",
+        entry="MSMain",
+    )
+
+
+def test_slangc_smoke_compiles_generated_tessellation_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangTessellationCompileSmoke {
+        struct VSOut {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct HSOut {
+            vec4 position @ gl_Position;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        struct PatchConstants {
+            float outer[3] @ gl_TessLevelOuter;
+            float inner[1] @ gl_TessLevelInner;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(
+                InputPatch<VSOut, 3> inputPatch,
+                uint patchID @ gl_PrimitiveID
+            ) {
+                PatchConstants patch;
+                VSOut first = gl_in[0];
+                patch.outer[0] = first.position.x + float(patchID);
+                patch.outer[1] = first.position.y;
+                patch.outer[2] = first.position.z;
+                patch.inner[0] = 1.0;
+                return patch;
+            }
+
+            HSOut main(InputPatch<VSOut, 3> inputPatch)
+                @domain(tri)
+                @partitioning(integer)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOut output;
+                VSOut current = gl_in[gl_InvocationID];
+                output.position = current.position;
+                output.uv = current.uv;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(
+                OutputPatch<HSOut, 3> patch,
+                vec3 domainCoord @ gl_TessCoord
+            ) @domain(tri) @ gl_Position {
+                vec4 p0 = patch[0].position * domainCoord.x;
+                vec4 p1 = patch[1].position * domainCoord.y;
+                vec4 p2 = patch[2].position * domainCoord.z;
+                return p0 + p1 + p2;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float outer[3] : SV_TessFactor;" in generated_code
+    assert "float inner[1] : SV_InsideTessFactor;" in generated_code
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint patchID : SV_PrimitiveID)" in generated_code
+    )
+    assert '[domain("tri")]' in generated_code
+    assert '[partitioning("integer")]' in generated_code
+    assert '[outputtopology("triangle_cw")]' in generated_code
+    assert "[outputcontrolpoints(3)]" in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert '[shader("hull")]' in generated_code
+    assert (
+        "HSOut HSMain(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)" in generated_code
+    )
+    assert "VSOut first = inputPatch[0];" in generated_code
+    assert "VSOut current = inputPatch[gl_InvocationID];" in generated_code
+    assert '[shader("domain")]' in generated_code
+    assert (
+        "float4 DSMain(OutputPatch<HSOut, 3> patch, "
+        "float3 domainCoord : SV_DomainLocation) : SV_Position" in generated_code
+    )
+    assert "return p0 + p1 + p2;" in generated_code
+    assert "gl_in" not in generated_code
+    assert ": gl_TessCoord" not in generated_code
+    assert ": gl_TessLevelOuter" not in generated_code
+    assert ": gl_TessLevelInner" not in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "hull",
+        profile="hs_6_0",
+        entry="HSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "domain",
+        profile="ds_6_0",
+        entry="DSMain",
+    )
+
+
+def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangRayCompileSmoke {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchSizeX = gl_LaunchSizeEXT.x;
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 0.5);
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                attributes.barycentrics = vec2(0.25, 0.75);
+                bool accepted = ReportHit(1.0, 0, attributes);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("raygeneration")]' in generated_code
+    assert "void RayGenMain()" in generated_code
+    assert "uint3 launch = DispatchRaysIndex();" in generated_code
+    assert "uint launchSizeX = DispatchRaysDimensions().x;" in generated_code
+    assert '[shader("closesthit")]' in generated_code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert '[shader("anyhit")]' in generated_code
+    assert (
+        "void AnyHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert "AcceptHitAndEndSearch();" in generated_code
+    assert '[shader("miss")]' in generated_code
+    assert "void MissMain(inout RayPayload payload)" in generated_code
+    assert '[shader("callable")]' in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert '[shader("intersection")]' in generated_code
+    assert "void IntersectionMain()" in generated_code
+    assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
+    assert "payload.color = float3(attributes.barycentrics, 1.0);" in generated_code
+    assert "payload.color = float3(attributes.barycentrics, 0.5);" in generated_code
+    assert "payload.color = float3(0.0, 0.0, 0.0);" in generated_code
+    assert "data.value = data.value + 1u;" in generated_code
+    assert ": payload" not in generated_code
+    assert ": hit_attribute" not in generated_code
+    assert "rayPayloadInEXT" not in generated_code
+    assert "callableDataInEXT" not in generated_code
+    assert "gl_LaunchIDEXT" not in generated_code
+    assert "gl_LaunchSizeEXT" not in generated_code
+
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("anyhit", "AnyHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
+        ("intersection", "IntersectionMain"),
+    ]:
+        compile_generated_slang(
+            generated_code,
+            tmp_path,
+            stage,
+            profile="sm_6_3",
+            entry=entry,
+        )
+
+
+def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangRayPipelineCompileSmoke {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(0) @set(0);
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene "
+        ": register(t0, space0);" in generated_code
+    )
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert "CallShader(0, data);" in generated_code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert "void MissMain(inout RayPayload payload)" in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert "accelerationStructureEXT" not in generated_code
+
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
+    ]:
+        compile_generated_slang(
+            generated_code,
+            tmp_path,
+            stage,
+            profile="sm_6_3",
+            entry=entry,
+        )
 
 
 @pytest.mark.parametrize(
@@ -5243,6 +6321,70 @@ def test_slang_ray_tracing_interface_pointer_and_reference_aliases_emit_native_c
     )
 
 
+def test_slang_ray_tracing_interface_pointer_dereferences_emit_native_calls():
+    code = """
+    shader SlangRayInterfacePointerDereferences {
+        RaytracingAccelerationStructure scene;
+
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                RayPayload* payloadPtr = &payload;
+                CallableData callableData;
+                CallableData* callablePtr = &callableData;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, *payloadPtr);
+                CallShader(0, *callablePtr);
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                HitAttributes* attributesPtr = &attributes;
+                bool accepted = ReportHit(1.0, 0, *attributesPtr);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) { }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) { }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) { }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RayPayload* payloadPtr = &payload;" in generated_code
+    assert "CallableData* callablePtr = &callableData;" in generated_code
+    assert "HitAttributes* attributesPtr = &attributes;" in generated_code
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, *payloadPtr);" in generated_code
+    assert "CallShader(0, *callablePtr);" in generated_code
+    assert "bool accepted = ReportHit(1.0, 0, *attributesPtr);" in generated_code
+
+
 def test_slang_ray_tracing_helper_pointer_holder_aliases_emit_native_calls():
     code = """
     shader SlangRayPointerHolderHelpers {
@@ -5861,6 +7003,11 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
                 holderPtr->query.CommitNonOpaqueTriangleHit();
                 RayQuery<RAY_FLAG_NONE>& indexedRef = holder.queries[0];
                 let indexedRefBarycentrics = indexedRef.CandidateTriangleBarycentrics();
+                RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;
+                rqPtr->TraceRayInline(scene, 0, 0xFF, ray);
+                let pointerAdvanced = rqPtr->Proceed();
+                let pointerCandidateType = rqPtr->CandidateType();
+                rqPtr->CommitNonOpaqueTriangleHit();
             }
         }
     }
@@ -5886,12 +7033,21 @@ def test_slang_ray_query_reference_and_member_receivers_emit_native_calls():
         "float2 indexedRefBarycentrics = "
         "indexedRef.CandidateTriangleBarycentrics();" in generated_code
     )
+    assert "RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;" in generated_code
+    assert "rqPtr->TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool pointerAdvanced = rqPtr->Proceed();" in generated_code
+    assert "uint pointerCandidateType = rqPtr->CandidateType();" in generated_code
+    assert "rqPtr->CommitNonOpaqueTriangleHit();" in generated_code
     assert "RayQueryOpNode" not in generated_code
 
 
 def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
     code = """
     shader SlangRayQueryInoutHelper {
+        struct QueryHolder {
+            RayQuery<RAY_FLAG_NONE> query;
+        }
+
         RaytracingAccelerationStructure scene;
 
         void advanceQuery(
@@ -5903,11 +7059,33 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
             let advanced = query.Proceed();
         }
 
+        void advanceQueryPointer(
+            RayQuery<RAY_FLAG_NONE>* query,
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray
+        ) {
+            query->TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            let pointerAdvanced = query->Proceed();
+        }
+
+        void advanceHolderPointer(
+            QueryHolder* holder,
+            RaytracingAccelerationStructure accelerationStructure,
+            RayDesc ray
+        ) {
+            holder->query.TraceRayInline(accelerationStructure, 0, 0xFF, ray);
+            let candidateType = holder->query.CandidateType();
+        }
+
         compute {
             void main() {
                 RayDesc ray;
                 RayQuery<RAY_FLAG_NONE> rq;
+                QueryHolder holder;
+                holder.query = rq;
                 advanceQuery(rq, scene, ray);
+                advanceQueryPointer(&rq, scene, ray);
+                advanceHolderPointer(&holder, scene, ray);
             }
         }
     }
@@ -5921,7 +7099,30 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
     )
     assert "query.TraceRayInline(accelerationStructure, 0, 255, ray);" in generated_code
     assert "bool advanced = query.Proceed();" in generated_code
+    assert (
+        "void advanceQueryPointer(RayQuery<RAY_FLAG_NONE>* query, "
+        "RaytracingAccelerationStructure accelerationStructure, RayDesc ray)"
+        in generated_code
+    )
+    assert (
+        "query->TraceRayInline(accelerationStructure, 0, 255, ray);" in generated_code
+    )
+    assert "bool pointerAdvanced = query->Proceed();" in generated_code
+    assert (
+        "void advanceHolderPointer(QueryHolder* holder, "
+        "RaytracingAccelerationStructure accelerationStructure, RayDesc ray)"
+        in generated_code
+    )
+    assert (
+        "holder->query.TraceRayInline(accelerationStructure, 0, 255, ray);"
+        in generated_code
+    )
+    assert "uint candidateType = holder->query.CandidateType();" in generated_code
+    assert "QueryHolder holder;" in generated_code
+    assert "holder.query = rq;" in generated_code
     assert "advanceQuery(rq, scene, ray);" in generated_code
+    assert "advanceQueryPointer(&rq, scene, ray);" in generated_code
+    assert "advanceHolderPointer(&holder, scene, ray);" in generated_code
     assert "RayQueryOpNode" not in generated_code
 
 
@@ -7455,6 +8656,25 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
                 void main() {
                     RaytracingAccelerationStructure scene;
                     RayDesc ray;
+                    OtherRayPayload wrong;
+                    OtherRayPayload* wrongPtr = &wrong;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, *wrongPtr);
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) { }
+            }
+            """,
+            "TraceRay payload argument type OtherRayPayload "
+            "must match ray payload parameter type RayPayload",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
+                    RaytracingAccelerationStructure scene;
+                    RayDesc ray;
                     OtherRayPayloadHolder wrongs;
                     OtherRayPayloadHolder* wrongPtr = &wrongs;
                     TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, wrongPtr->primary);
@@ -7489,6 +8709,23 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
             """
             ray_generation {
                 void main() {
+                    OtherCallableData wrong;
+                    OtherCallableData* wrongPtr = &wrong;
+                    CallShader(0, *wrongPtr);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) { }
+            }
+            """,
+            "CallShader callable data argument type OtherCallableData "
+            "must match callable data parameter type CallableData",
+        ),
+        (
+            """
+            ray_generation {
+                void main() {
                     OtherCallableDataHolder wrongs;
                     OtherCallableDataHolder* wrongPtr = &wrongs;
                     CallShader(0, wrongPtr->primary);
@@ -7509,6 +8746,26 @@ def test_invalid_slang_ray_tracing_member_lvalue_interface_types_raise(
                     OtherHitAttributes wrong;
                     OtherHitAttributes& wrongRef = wrong;
                     ReportHit(1.0, 0, wrongRef);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute
+                ) { }
+            }
+            """,
+            "ReportHit hit attribute argument type OtherHitAttributes "
+            "must match hit attribute parameter type HitAttributes",
+        ),
+        (
+            """
+            ray_intersection {
+                void main() {
+                    OtherHitAttributes wrong;
+                    OtherHitAttributes* wrongPtr = &wrong;
+                    ReportHit(1.0, 0, *wrongPtr);
                 }
             }
 
@@ -7632,8 +8889,8 @@ def test_invalid_slang_ray_tracing_pointer_reference_interface_types_raise(
             """
             compute {
                 void main() {
-                    RayQuery<RAY_FLAG_NONE> rq;
-                    RayQuery<RAY_FLAG_NONE>* rqPtr = &rq;
+                    uint rq;
+                    uint* rqPtr = &rq;
                     rqPtr->Proceed();
                 }
             }
@@ -7850,6 +9107,34 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
         (
             "compute { void main() @numthreads(0, 1, 1) { } }",
             "numthreads values must be positive",
+        ),
+        (
+            (
+                "compute { void main() "
+                "@numthreads(8, 1, 1) @slang_numthreads(4, 1, 1) { } }"
+            ),
+            "numthreads attribute must appear at most once",
+        ),
+        (
+            (
+                "geometry { void main() "
+                "@maxvertexcount(3) @hlsl_maxvertexcount(4) { } }"
+            ),
+            "maxvertexcount attribute must appear at most once",
+        ),
+        (
+            (
+                "tessellation_control { void main() "
+                "@domain(tri) @slang_domain(quad) { } }"
+            ),
+            "domain attribute must appear at most once",
+        ),
+        (
+            (
+                "mesh { void main() "
+                "@outputtopology(triangle) @hlsl_outputtopology(line) { } }"
+            ),
+            "outputtopology attribute must appear at most once",
         ),
     ],
 )
@@ -8109,7 +9394,7 @@ def test_match_literal_and_wildcard_arms_lower_to_slang_switch():
     assert "MatchNode" not in generated_code
 
 
-def test_match_guarded_arm_rejected_for_slang_switch_lowering():
+def test_match_guarded_arm_lowers_to_slang_if_chain():
     code = """
     shader main {
         compute {
@@ -8131,9 +9416,116 @@ def test_match_guarded_arm_rejected_for_slang_switch_lowering():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
+    generated_code = generate_code(ast)
 
-    with pytest.raises(ValueError, match="Unsupported match arm for Slang"):
-        generate_code(ast)
+    assert "switch (mode)" not in generated_code
+    assert "if (((mode == 0) && (mode > 0)))" in generated_code
+    assert "else {" in generated_code
+    assert "value = 1;" in generated_code
+    assert "value = 2;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_identifier_binding_arm_lowers_to_slang_scoped_else_body():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    other => {
+                        value = other;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int other = mode;" in generated_code
+    assert "value = other;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_guarded_identifier_binding_falls_through_to_later_slang_arm():
+    code = """
+    shader main {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 1;
+                    }
+                    candidate if candidate > 2 => {
+                        value = candidate;
+                    }
+                    _ => {
+                        value = 7;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "switch (mode)" not in generated_code
+    assert "if ((mode == 0))" in generated_code
+    assert "else {" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "candidate > 2" in generated_code
+    assert "value = candidate;" in generated_code
+    assert "value = 7;" in generated_code
+    assert "MatchNode" not in generated_code
+
+
+def test_match_plain_struct_pattern_binds_fields_for_slang():
+    code = """
+    shader main {
+        struct Pair {
+            int left;
+            int right;
+        };
+
+        compute {
+            int main(Pair pair) {
+                int value = 0;
+                match pair {
+                    Pair { left, right } => {
+                        value = left + right;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "int main(Pair pair)" in generated_code
+    assert "int left = pair.left;" in generated_code
+    assert "int right = pair.right;" in generated_code
+    assert "value = left + right;" in generated_code
+    assert "MatchNode" not in generated_code
 
 
 def test_array_access_and_ternary_expressions_emit_slang_syntax():
@@ -9720,6 +11112,68 @@ def test_conflicting_slang_resource_binding_ranges_raise(resource_source, messag
         generate_code(ast)
 
 
+def test_unsized_slang_resource_arrays_preserve_bindless_declarations_and_operations():
+    code = """
+    shader UnsizedSlangResourceArrays {
+        sampler querySampler;
+        sampler2d textures[];
+        sampler states[];
+        image2D images[] @rgba16f;
+        StructuredBuffer<float4> values[];
+        RWStructuredBuffer<uint> counters[];
+        ByteAddressBuffer rawBytes[];
+
+        float4 sampleArray(int index, float2 uv, int2 pixel, uint offset) {
+            float4 color = texture(textures[index], states[index], uv);
+            float4 imageColor = imageLoad(images[index], pixel);
+            float4 bufferValue = values[index].Load(0u);
+            uint counterValue = counters[index].Load(1u);
+            uint rawValue = rawBytes[index].Load(offset);
+            return color + imageColor + bufferValue
+                + float4(counterValue + rawValue);
+        }
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[[vk::binding(0, 0)]] SamplerState querySampler : register(s0);" in (
+        generated_code
+    )
+    assert "[[vk::binding(0, 0)]] Sampler2D<float4> textures[] : register(t0);" in (
+        generated_code
+    )
+    assert "[[vk::binding(1, 0)]] SamplerState states[] : register(s1);" in (
+        generated_code
+    )
+    assert "[[vk::binding(0, 0)]] RWTexture2D<float4> images[] : register(u0);" in (
+        generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] StructuredBuffer<float4> values[] : register(t1);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<uint> counters[] : register(u1);"
+        in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] ByteAddressBuffer rawBytes[] : register(t2);"
+        in generated_code
+    )
+    assert "float4 color = textures[index].Sample(uv);" in generated_code
+    assert "float4 imageColor = images[index][pixel];" in generated_code
+    assert "float4 bufferValue = values[index].Load(0u);" in generated_code
+    assert "uint counterValue = counters[index].Load(1u);" in generated_code
+    assert "uint rawValue = rawBytes[index].Load(offset);" in generated_code
+    assert "texture(textures" not in generated_code
+    assert "imageLoad(images" not in generated_code
+
+
 def test_one_dimensional_resources_emit_slang_methods_and_helpers():
     code = """
     shader OneDResources {
@@ -11239,6 +12693,227 @@ def test_explicit_sampler_texel_fetch_emits_combined_slang_methods():
     assert "ms[sampleState" not in generated_code
     assert "msLayers[sampleState" not in generated_code
     assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_offset_emits_slang_load_offsets():
+    code = """
+    shader Resources {
+        sampler1d lineMap;
+        sampler1darray lineLayers;
+        sampler2d colorMap;
+        sampler2darray layerMap;
+        sampler3d volumeMap;
+        sampler linearSampler;
+
+        compute {
+            vec4 fetchOffsets(
+                sampler1D line,
+                sampler1DArray lineArray,
+                sampler2D tex,
+                sampler2DArray layers,
+                sampler3D volume,
+                sampler sampleState,
+                int x,
+                ivec2 xLayer,
+                ivec2 pixel,
+                ivec3 pixelLayer,
+                ivec3 voxel,
+                int lod,
+                int offset1,
+                ivec2 offset2,
+                ivec3 offset3
+            ) {
+                vec4 lineFetch = texelFetchOffset(line, x, lod, offset1);
+                vec4 lineLayerFetch = texelFetchOffset(
+                    lineArray,
+                    sampleState,
+                    xLayer,
+                    lod,
+                    offset1
+                );
+                vec4 fetched = texelFetchOffset(tex, pixel, lod, offset2);
+                vec4 fetchedLayer = texelFetchOffset(
+                    layers,
+                    sampleState,
+                    pixelLayer,
+                    lod,
+                    offset2
+                );
+                vec4 fetchedVolume = texelFetchOffset(
+                    volume,
+                    voxel,
+                    lod,
+                    offset3
+                );
+                return lineFetch + lineLayerFetch + fetched
+                    + fetchedLayer + fetchedVolume;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "Sampler1D<float4> lineMap : register(t0);" in generated_code
+    assert "Sampler1DArray<float4> lineLayers : register(t1);" in generated_code
+    assert "Sampler2D<float4> colorMap : register(t2);" in generated_code
+    assert "Sampler2DArray<float4> layerMap : register(t3);" in generated_code
+    assert "Sampler3D<float4> volumeMap : register(t4);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "float4 lineFetch = line.Load(int2(x, lod), offset1);" in generated_code
+    assert (
+        "float4 lineLayerFetch = lineArray.Load(int3(xLayer, lod), offset1);"
+        in generated_code
+    )
+    assert "float4 fetched = tex.Load(int3(pixel, lod), offset2);" in generated_code
+    assert (
+        "float4 fetchedLayer = layers.Load(int4(pixelLayer, lod), offset2);"
+        in generated_code
+    )
+    assert (
+        "float4 fetchedVolume = volume.Load(int4(voxel, lod), offset3);"
+        in generated_code
+    )
+    assert "lineArray.Load(int3(sampleState" not in generated_code
+    assert "layers.Load(int4(sampleState" not in generated_code
+    assert "texelFetchOffset(" not in generated_code
+
+
+def test_texel_fetch_offset_invalid_slang_calls_emit_diagnostic_stubs():
+    code = """
+    shader Resources {
+        sampler querySampler;
+        sampler2d colorMap;
+        sampler2dshadow shadowMap;
+        sampler2dms msTex;
+        samplercube cubeTex;
+        samplercubearray cubeArrayTex;
+        image2D colorImage;
+
+        compute {
+            void main() {
+                ivec2 pixel = ivec2(2, 3);
+                ivec3 badPixel = ivec3(2, 3, 4);
+                ivec3 cubePixel = ivec3(1, 0, 0);
+                ivec4 cubeLayerPixel = ivec4(1, 0, 0, 2);
+                ivec2 offset = ivec2(1, 0);
+                ivec3 badOffset = ivec3(1, 0, 0);
+                uvec2 uintOffset = uvec2(1u, 0u);
+                float floatFetchLod = 1.0;
+                int lod = 0;
+
+                vec4 missingOffset = texelFetchOffset(colorMap, pixel, lod);
+                vec4 extraOffset = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    offset,
+                    offset
+                );
+                vec4 samplerOffset = texelFetchOffset(
+                    querySampler,
+                    pixel,
+                    lod,
+                    offset
+                );
+                vec4 imageOffset = texelFetchOffset(colorImage, pixel, lod, offset);
+                vec4 shadowOffset = texelFetchOffset(shadowMap, pixel, lod, offset);
+                vec4 multisampleOffset = texelFetchOffset(msTex, pixel, lod, offset);
+                vec4 cubeOffset = texelFetchOffset(
+                    cubeTex,
+                    cubePixel,
+                    lod,
+                    offset
+                );
+                vec4 cubeArrayOffset = texelFetchOffset(
+                    cubeArrayTex,
+                    cubeLayerPixel,
+                    lod,
+                    offset
+                );
+                vec4 badCoordRank = texelFetchOffset(
+                    colorMap,
+                    badPixel,
+                    lod,
+                    offset
+                );
+                vec4 badOffsetRank = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    badOffset
+                );
+                vec4 badOffsetType = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    lod,
+                    uintOffset
+                );
+                vec4 badFetchIndex = texelFetchOffset(
+                    colorMap,
+                    pixel,
+                    floatFetchLod,
+                    offset
+                );
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert (
+        "float4 missingOffset = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires lod/sample and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 extraOffset = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires lod/sample and offset arguments */ "
+        "float4(0.0);" in generated_code
+    )
+    for variable in [
+        "samplerOffset",
+        "imageOffset",
+        "shadowOffset",
+        "multisampleOffset",
+        "cubeOffset",
+        "cubeArrayOffset",
+    ]:
+        assert (
+            f"float4 {variable} = /* unsupported Slang sampled texture: "
+            "texelFetchOffset requires an offset-capable non-shadow "
+            "non-multisampled sampled texture resource */ float4(0.0);"
+            in generated_code
+        )
+    assert (
+        "float4 badCoordRank = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires a 2-component coordinate for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetRank = /* unsupported Slang sampled texture: "
+        "texelFetchOffset requires a 2-component offset for sampler2D */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badOffsetType = /* unsupported Slang sampled texture: "
+        "texelFetchOffset offset must be scalar or vector int, got uint2 */ "
+        "float4(0.0);" in generated_code
+    )
+    assert (
+        "float4 badFetchIndex = /* unsupported Slang sampled texture: "
+        "texelFetchOffset fetch index argument must be scalar int or uint, "
+        "got float */ float4(0.0);" in generated_code
+    )
+    assert "texelFetchOffset(" not in generated_code
+    assert ".Load(" not in generated_code
 
 
 def test_texture_gather_builtins_emit_slang_gather_methods():
@@ -15258,6 +16933,8 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
                 int missingTextureSamples = textureSamples();
                 int missingImageSamples = imageSamples();
                 int missingLevels = textureQueryLevels();
+                int levelsFromSampler = textureQueryLevels(querySampler);
+                int levelsFromImage = textureQueryLevels(colorImage);
                 int extraTextureSamples = textureSamples(msTex, 0);
                 int extraImageSamples = imageSamples(msImage, 0);
                 int extraLevels = textureQueryLevels(colorMap, 0);
@@ -15408,6 +17085,16 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "textureQueryLevels requires a resource argument */ 0;" in generated_code
     )
     assert (
+        "int levelsFromSampler = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
+        "int levelsFromImage = /* unsupported Slang resource query: "
+        "textureQueryLevels requires a mipmapped sampled texture resource */ 0;"
+        in generated_code
+    )
+    assert (
         "int extraTextureSamples = /* unsupported Slang resource query: "
         "textureSamples accepts only a resource argument */ 0;" in generated_code
     )
@@ -15523,7 +17210,7 @@ def test_unsupported_resource_query_combinations_emit_slang_diagnostics():
         "/* unsupported Slang resource query: imageSize returns int but target "
         "expects int2 */ int2(0))));" in generated_code
     )
-    assert generated_code.count("unsupported Slang resource query") == 55
+    assert generated_code.count("unsupported Slang resource query") == 57
     assert "textureSize(" not in generated_code
     assert "imageSize(" not in generated_code
     assert "textureQueryLevels(" not in generated_code
@@ -16150,13 +17837,13 @@ def test_resource_query_expected_types_flow_through_tail_expression_returns():
         "    }" in generated_code
     )
     assert (
-        "case 0:\n"
+        "case 0: {\n"
         "            return {/* unsupported Slang resource query: textureSize "
         "returns int2 but target expects int */ 0, /* unsupported Slang resource "
         "query: imageSize returns int2 but target expects int */ 0};" in generated_code
     )
     assert (
-        "default:\n"
+        "default: {\n"
         "            return {/* unsupported Slang resource query: textureSize "
         "returns int2 but target expects int */ 0, /* unsupported Slang resource "
         "query: imageSize returns int2 but target expects int */ 0};" in generated_code
@@ -16331,7 +18018,6 @@ def test_match_expression_defaults_assign_typed_values_for_missing_value_paths()
     assert "MatchNode(" not in generated_code
     assert "int chooseScalar(int mode)" in generated_code
     assert "int2[2] chooseVectorRow(int mode)" in generated_code
-    assert generated_code.count("default:") == 2
     assert (
         "cgl_match_value = /* unsupported Slang match expression: no wildcard "
         "arm handles remaining cases */ 0;" in generated_code
@@ -16376,19 +18062,17 @@ def test_match_expression_rejects_guarded_and_range_patterns_with_typed_values()
     generated_code = generate_code(ast)
 
     assert "MatchNode(" not in generated_code
-    assert "if mode > 0" not in generated_code
+    assert "if (((mode == 0) && (mode > 0)))" in generated_code
+    assert "cgl_match_value = 7;" in generated_code
+    assert "cgl_match_value = 1;" in generated_code
     assert "case .." not in generated_code
     assert (
-        "return /* unsupported Slang match expression: guarded arms cannot be "
-        "lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: range-style patterns "
-        "cannot be lowered to switch */ {int2(0), int2(0)};" in generated_code
+        "return /* unsupported Slang match expression: rest patterns are not "
+        "supported */ {int2(0), int2(0)};" in generated_code
     )
 
 
-def test_match_expression_reports_wildcard_and_destructuring_pattern_diagnostics():
+def test_match_expression_lowers_wildcard_and_binding_patterns_and_reports_type_diagnostics():
     code = """
     shader SlangMatchExpressionPatternDetailDiagnostics {
         compute {
@@ -16439,25 +18123,17 @@ def test_match_expression_reports_wildcard_and_destructuring_pattern_diagnostics
     assert "case Option::Some" not in generated_code
     assert "case Pair" not in generated_code
     assert "only unguarded literal patterns" not in generated_code
+    assert "int chooseDuplicateWildcard(int mode)" in generated_code
+    assert "int chooseNonFinalWildcard(int mode)" in generated_code
+    assert "int candidate = mode;" in generated_code
+    assert "cgl_match_value = candidate;" in generated_code
     assert (
-        "return /* unsupported Slang match expression: multiple wildcard arms "
-        "cannot be lowered to switch */ 0;" in generated_code
+        "return /* unsupported Slang match expression: enum constructor pattern "
+        "Option::Some cannot match expression type int */ 0;" in generated_code
     )
     assert (
-        "return /* unsupported Slang match expression: wildcard arm must be "
-        "final */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: identifier binding "
-        "patterns cannot be lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: constructor patterns "
-        "cannot be lowered to switch */ 0;" in generated_code
-    )
-    assert (
-        "return /* unsupported Slang match expression: struct destructuring "
-        "patterns cannot be lowered to switch */ 0;" in generated_code
+        "return /* unsupported Slang match expression: struct pattern Pair "
+        "cannot match expression type int */ 0;" in generated_code
     )
 
 
@@ -16608,6 +18284,55 @@ def test_storage_image_load_store_emit_slang_subscript_access():
     assert "signedLayers[pixelLayer, sampleIndex] = signedValue;" in generated_code
     assert "imageLoad(" not in generated_code
     assert "imageStore(" not in generated_code
+
+
+def test_slangc_smoke_compiles_generated_storage_image_load_store_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangStorageImageCompileSmoke {
+        image2D colorImage @rgba32f;
+        image2DArray layerImage @rgba32f;
+        uimage2D counters @r32ui;
+        image3D signedVolume @r32i;
+
+        compute {
+            @numthreads(1, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec2 pixel = ivec2(int(tid.x), int(tid.y));
+                ivec3 layerPixel = ivec3(pixel, 0);
+                ivec3 voxel = ivec3(pixel, 0);
+                vec4 color = imageLoad(colorImage, pixel);
+                imageStore(colorImage, pixel, color + vec4(1.0, 0.0, 0.0, 0.0));
+                vec4 layer = imageLoad(layerImage, layerPixel);
+                imageStore(layerImage, layerPixel, layer);
+                uint count = imageLoad(counters, pixel);
+                imageStore(counters, pixel, count + 1u);
+                int signedValue = imageLoad(signedVolume, voxel);
+                imageStore(signedVolume, voxel, signedValue - 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float4> colorImage : register(u0);" in generated_code
+    assert "RWTexture2DArray<float4> layerImage : register(u1);" in generated_code
+    assert "RWTexture2D<uint> counters : register(u2);" in generated_code
+    assert "RWTexture3D<int> signedVolume : register(u3);" in generated_code
+    assert "float4 color = colorImage[pixel];" in generated_code
+    assert "colorImage[pixel] = color + float4(1.0, 0.0, 0.0, 0.0);" in generated_code
+    assert "float4 layer = layerImage[layerPixel];" in generated_code
+    assert "layerImage[layerPixel] = layer;" in generated_code
+    assert "uint count = counters[pixel];" in generated_code
+    assert "counters[pixel] = count + 1u;" in generated_code
+    assert "int signedValue = signedVolume[voxel];" in generated_code
+    assert "signedVolume[voxel] = signedValue - 1;" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+    compile_generated_slang(generated_code, tmp_path, "compute")
 
 
 def test_storage_image_access_qualifiers_emit_slang_diagnostics():
@@ -17275,6 +19000,42 @@ def test_unsupported_image_atomics_emit_slang_diagnostic_stubs():
     assert "cgl_imageAtomicCompSwap_iimage2DMSArray" not in generated_code
 
 
+def test_float_image_atomics_emit_slang_diagnostic_stubs():
+    code = """
+    shader FloatAtomicImages {
+        image2D floats @r32f;
+
+        float addFloat(image2D image @r32f, ivec2 pixel, float value) {
+            return imageAtomicAdd(image, pixel, value);
+        }
+
+        compute {
+            void main() {
+                float oldValue = imageAtomicExchange(floats, ivec2(0, 0), 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float> floats : register(u0);" in generated_code
+    assert (
+        "return /* unsupported Slang image atomic: imageAtomicAdd "
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0;" in generated_code
+    )
+    assert (
+        "float oldValue = /* unsupported Slang image atomic: imageAtomicExchange "
+        "requires scalar int or uint image1D/image1DArray/image2D/image3D/image2DArray "
+        "resource */ 0;" in generated_code
+    )
+    assert "imageAtomicAdd(image" not in generated_code
+    assert "imageAtomicExchange(floats" not in generated_code
+    assert "cgl_imageAtomicAdd_image2D" not in generated_code
+    assert "cgl_imageAtomicExchange_image2D" not in generated_code
+
+
 def test_formatted_image_arrays_preserve_expression_sizes():
     code = """
     shader ExprFormattedImageArrays {
@@ -17532,6 +19293,38 @@ def test_binary_expression_precedence_preserves_grouping_in_slang():
     assert "float divisor = a / b * c;" not in generated_code
 
 
+def test_bitwise_operators_emit_slang_syntax():
+    code = """
+    shader BitwiseOps {
+        compute {
+            void main() {
+                uint flags = 6u;
+                uint masked = flags & 3u;
+                uint merged = masked | 8u;
+                uint toggled = merged ^ 1u;
+                uint shiftedLeft = toggled << 2u;
+                uint shiftedRight = shiftedLeft >> 1u;
+                flags &= shiftedRight;
+                flags |= 4u;
+                flags ^= 2u;
+            }
+        }
+    }
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "uint masked = flags & 3u;" in generated_code
+    assert "uint merged = masked | 8u;" in generated_code
+    assert "uint toggled = merged ^ 1u;" in generated_code
+    assert "uint shiftedLeft = toggled << 2u;" in generated_code
+    assert "uint shiftedRight = shiftedLeft >> 1u;" in generated_code
+    assert "flags &= shiftedRight;" in generated_code
+    assert "flags |= 4u;" in generated_code
+    assert "flags ^= 2u;" in generated_code
+
+
 def test_prefix_and_postfix_unary_operators_preserve_position():
     code = """
     shader main {
@@ -17568,6 +19361,2182 @@ def test_prefix_and_postfix_unary_operators_preserve_position():
     assert "\n    --i;\n" in generated_code
     assert "for (int j = 0; j < 2; j++)" in generated_code
     assert "++j" not in generated_code
+
+
+def test_wave_intrinsics_with_float_types_lower_to_native_slang():
+    code = """
+    shader SlangWaveFloat {
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                float value = float(tid.x) * 0.1;
+                float waveSum = WaveActiveSum(value);
+                float waveProduct = WaveActiveProduct(value + 1.0);
+                float waveMin = WaveActiveMin(waveSum);
+                float waveMax = WaveActiveMax(waveProduct);
+                float prefixSum = WavePrefixSum(value);
+                float prefixProduct = WavePrefixProduct(value + 1.0);
+                float broadcast = WaveReadLaneAt(waveSum, 0u);
+                float firstLane = WaveReadLaneFirst(waveMax);
+                float quadX = QuadReadAcrossX(value);
+                float quadY = QuadReadAcrossY(value);
+                float quadDiag = QuadReadAcrossDiagonal(value);
+                float quadLane = QuadReadLaneAt(value, 2u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float waveSum = WaveActiveSum(value);" in generated_code
+    assert "float waveProduct = WaveActiveProduct(value + 1.0);" in generated_code
+    assert "float waveMin = WaveActiveMin(waveSum);" in generated_code
+    assert "float waveMax = WaveActiveMax(waveProduct);" in generated_code
+    assert "float prefixSum = WavePrefixSum(value);" in generated_code
+    assert "float prefixProduct = WavePrefixProduct(value + 1.0);" in generated_code
+    assert "float broadcast = WaveReadLaneAt(waveSum, 0u);" in generated_code
+    assert "float firstLane = WaveReadLaneFirst(waveMax);" in generated_code
+    assert "float quadX = QuadReadAcrossX(value);" in generated_code
+    assert "float quadY = QuadReadAcrossY(value);" in generated_code
+    assert "float quadDiag = QuadReadAcrossDiagonal(value);" in generated_code
+    assert "float quadLane = QuadReadLaneAt(value, 2u);" in generated_code
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_wave_intrinsics_in_fragment_stage_lower_to_native_slang():
+    code = """
+    shader SlangWaveFragment {
+        fragment {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                bool first = WaveIsFirstLane();
+                uint sum = WaveActiveSum(lane);
+                bool allActive = WaveActiveAllTrue(lane > 0u);
+                bool anyActive = WaveActiveAnyTrue(first);
+                uvec4 ballot = WaveActiveBallot(first);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "bool first = WaveIsFirstLane();" in generated_code
+    assert "uint sum = WaveActiveSum(lane);" in generated_code
+    assert "bool allActive = WaveActiveAllTrue(lane > 0u);" in generated_code
+    assert "bool anyActive = WaveActiveAnyTrue(first);" in generated_code
+    assert "uint4 ballot = WaveActiveBallot(first);" in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_image_atomics_on_1d_textures_emit_slang_interlocked():
+    code = """
+    shader ImageAtomics1D {
+        uimage1D counters @r32ui;
+        image1D signedCounters @r32i;
+
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                int pixel = int(tid.x);
+                uint added = imageAtomicAdd(counters, pixel, 1u);
+                uint exchanged = imageAtomicExchange(counters, pixel, added);
+                int minVal = imageAtomicMin(signedCounters, pixel, -1);
+                int maxVal = imageAtomicMax(signedCounters, pixel, 100);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture1D<uint> counters : register(u0);" in generated_code
+    assert "RWTexture1D<int> signedCounters : register(u1);" in generated_code
+    assert "InterlockedAdd(counters[pixel], 1u, cgl_imageAtomicAdd_original);" in (
+        generated_code
+    )
+    assert "InterlockedExchange(counters[pixel]," in generated_code
+    assert "InterlockedMin(signedCounters[pixel], -1," in generated_code
+    assert "InterlockedMax(signedCounters[pixel], 100," in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "None(" not in generated_code
+
+
+def test_image_atomics_compare_swap_on_3d_texture():
+    code = """
+    shader ImageAtomicCompSwap3D {
+        uimage3D volume @r32ui;
+
+        compute {
+            @numthreads(4, 4, 4)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec3 voxel = ivec3(tid);
+                uint swapped = imageAtomicCompSwap(volume, voxel, 0u, 1u);
+                uint orResult = imageAtomicOr(volume, voxel, swapped);
+                uint xorResult = imageAtomicXor(volume, voxel, orResult);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture3D<uint> volume : register(u0);" in generated_code
+    assert (
+        "InterlockedCompareExchange(volume[voxel], 0u, 1u, "
+        "cgl_imageAtomicCompSwap_original);" in generated_code
+    )
+    assert "InterlockedOr(volume[voxel]," in generated_code
+    assert "InterlockedXor(volume[voxel]," in generated_code
+    assert "None(" not in generated_code
+
+
+def test_storage_image_load_store_3d_and_formats():
+    code = """
+    shader StorageImage3D {
+        image3D volumeData @rgba32f;
+        uimage3D volumeFlags @r32ui;
+
+        compute {
+            @numthreads(4, 4, 4)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec3 voxel = ivec3(tid);
+                vec4 data = imageLoad(volumeData, voxel);
+                imageStore(volumeData, voxel, data * 2.0);
+                uint flags = imageLoad(volumeFlags, voxel);
+                imageStore(volumeFlags, voxel, flags | 1u);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture3D<float4> volumeData : register(u0);" in generated_code
+    assert "RWTexture3D<uint> volumeFlags : register(u1);" in generated_code
+    assert "float4 data = volumeData[voxel];" in generated_code
+    assert "volumeData[voxel] = data * 2.0;" in generated_code
+    assert "uint flags = volumeFlags[voxel];" in generated_code
+    assert "volumeFlags[voxel] = flags | 1u;" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_storage_image_load_store_1d_array():
+    code = """
+    shader StorageImage1DArray {
+        image1DArray layers @rgba32f;
+
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(int(tid.x), 0);
+                vec4 value = imageLoad(layers, coord);
+                imageStore(layers, coord, value + vec4(1.0));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture1DArray<float4> layers : register(u0);" in generated_code
+    assert "float4 value = layers[coord];" in generated_code
+    assert "layers[coord] = value + float4(1.0);" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_texel_fetch_with_cube_and_3d_textures():
+    code = """
+    shader TexelFetch3D {
+        sampler3d volumeTex;
+
+        compute {
+            vec4 fetchVolume(sampler3d vol, ivec3 coord, int lod) {
+                return texelFetch(vol, coord, lod);
+            }
+
+            void main() {
+                vec4 voxel = fetchVolume(volumeTex, ivec3(1, 2, 3), 0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler3D<float4> volumeTex : register(t0);" in generated_code
+    assert "float4 fetchVolume(Sampler3D<float4> vol, int3 coord, int lod)" in (
+        generated_code
+    )
+    assert "return vol.Load(int4(coord, lod));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texture_query_operations_on_various_types():
+    code = """
+    shader TextureQueries {
+        sampler2d tex2d;
+        sampler3d tex3d;
+        samplercube texCube;
+        sampler2darray tex2dArray;
+
+        compute {
+            void main() {
+                ivec2 size2d = textureSize(tex2d, 0);
+                ivec3 size3d = textureSize(tex3d, 0);
+                ivec2 sizeCube = textureSize(texCube, 0);
+                ivec3 sizeArray = textureSize(tex2dArray, 0);
+                int levels2d = textureQueryLevels(tex2d);
+                int levels3d = textureQueryLevels(tex3d);
+                int levelsCube = textureQueryLevels(texCube);
+                int levelsArray = textureQueryLevels(tex2dArray);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> tex2d : register(t0);" in generated_code
+    assert "Sampler3D<float4> tex3d : register(t1);" in generated_code
+    assert "SamplerCube<float4> texCube : register(t2);" in generated_code
+    assert "Sampler2DArray<float4> tex2dArray : register(t3);" in generated_code
+    assert "cgl_textureSize_sampler2D(tex2d, 0)" in generated_code
+    assert "cgl_textureSize_sampler3D(tex3d, 0)" in generated_code
+    assert "cgl_textureSize_samplerCube(texCube, 0)" in generated_code
+    assert "cgl_textureSize_sampler2DArray(tex2dArray, 0)" in generated_code
+    assert "cgl_textureQueryLevels_sampler2D(tex2d)" in generated_code
+    assert "cgl_textureQueryLevels_sampler3D(tex3d)" in generated_code
+    assert "cgl_textureQueryLevels_samplerCube(texCube)" in generated_code
+    assert "cgl_textureQueryLevels_sampler2DArray(tex2dArray)" in generated_code
+    assert "textureSize(" not in generated_code
+    assert "textureQueryLevels(" not in generated_code
+    assert "GetDimensions" in generated_code
+
+
+def test_texture_query_image_size_on_storage_images():
+    code = """
+    shader ImageSizeQueries {
+        image2D img2d @rgba32f;
+        uimage3D img3d @r32ui;
+        image2DArray imgArray @rgba32f;
+
+        compute {
+            void main() {
+                ivec2 size2d = imageSize(img2d);
+                ivec3 size3d = imageSize(img3d);
+                ivec3 sizeArray = imageSize(imgArray);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "RWTexture2D<float4> img2d : register(u0);" in generated_code
+    assert "RWTexture3D<uint> img3d : register(u1);" in generated_code
+    assert "RWTexture2DArray<float4> imgArray : register(u2);" in generated_code
+    assert "cgl_imageSize" in generated_code
+    assert "imageSize(" not in generated_code
+    assert "GetDimensions" in generated_code
+
+
+def test_basic_texture_sampling_with_bias_lod_grad():
+    code = """
+    shader TextureSampling {
+        sampler2d diffuse;
+        sampler3d volume;
+        samplercube envMap;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 uvw = vec3(0.25, 0.5, 0.75);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                vec4 basic = texture(diffuse, uv);
+                vec4 biased = texture(diffuse, uv, 0.5);
+                vec4 lodSample = textureLod(diffuse, uv, 2.0);
+                vec4 gradSample = textureGrad(
+                    diffuse, uv, vec2(0.1, 0.0), vec2(0.0, 0.1)
+                );
+                vec4 vol = texture(volume, uvw);
+                vec4 volLod = textureLod(volume, uvw, 1.0);
+                vec4 cube = texture(envMap, dir);
+                vec4 cubeLod = textureLod(envMap, dir, 3.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuse : register(t0);" in generated_code
+    assert "Sampler3D<float4> volume : register(t1);" in generated_code
+    assert "SamplerCube<float4> envMap : register(t2);" in generated_code
+    assert "float4 basic = diffuse.Sample(uv);" in generated_code
+    assert "float4 biased = diffuse.SampleBias(uv, 0.5);" in generated_code
+    assert "float4 lodSample = diffuse.SampleLevel(uv, 2.0);" in generated_code
+    assert "float4 gradSample = diffuse.SampleGrad(uv," in generated_code
+    assert "float4 vol = volume.Sample(uvw);" in generated_code
+    assert "float4 volLod = volume.SampleLevel(uvw, 1.0);" in generated_code
+    assert "float4 cube = envMap.Sample(dir);" in generated_code
+    assert "float4 cubeLod = envMap.SampleLevel(dir, 3.0);" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_shadow_sampler_basic_compare_operations():
+    code = """
+    shader ShadowSampling {
+        sampler2dshadow shadowMap;
+        samplercubeshadow cubeShadow;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                float depth = 0.75;
+                float shadow2d = textureCompare(shadowMap, uv, depth);
+                float shadowLod = textureCompareLod(shadowMap, uv, depth, 0.0);
+                float shadowCube = textureCompare(cubeShadow, dir, depth);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DShadow shadowMap : register(t0);" in generated_code
+    assert "SamplerCubeShadow cubeShadow : register(t1);" in generated_code
+    assert "float shadow2d = shadowMap.SampleCmp(uv, depth);" in generated_code
+    assert "float shadowLod = shadowMap.SampleCmpLevel(uv, depth, 0.0);" in (
+        generated_code
+    )
+    assert "float shadowCube = cubeShadow.SampleCmp(dir, depth);" in generated_code
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+
+
+def test_wave_intrinsics_with_vector_types_lower_to_native_slang():
+    code = """
+    shader SlangWaveVectors {
+        compute {
+            @numthreads(64, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                vec4 color = vec4(float(tid.x), 0.0, 0.0, 1.0);
+                ivec2 coord = ivec2(int(tid.x), int(tid.y));
+                vec4 colorSum = WaveActiveSum(color);
+                vec4 colorMin = WaveActiveMin(color);
+                vec4 colorMax = WaveActiveMax(color);
+                ivec2 coordSum = WaveActiveSum(coord);
+                vec4 colorBroadcast = WaveReadLaneAt(color, 0u);
+                vec4 colorFirst = WaveReadLaneFirst(colorSum);
+                ivec2 coordPrefix = WavePrefixSum(coord);
+                vec4 colorQuad = QuadReadAcrossX(color);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 colorSum = WaveActiveSum(color);" in generated_code
+    assert "float4 colorMin = WaveActiveMin(color);" in generated_code
+    assert "float4 colorMax = WaveActiveMax(color);" in generated_code
+    assert "int2 coordSum = WaveActiveSum(coord);" in generated_code
+    assert "float4 colorBroadcast = WaveReadLaneAt(color, 0u);" in generated_code
+    assert "float4 colorFirst = WaveReadLaneFirst(colorSum);" in generated_code
+    assert "int2 coordPrefix = WavePrefixSum(coord);" in generated_code
+    assert "float4 colorQuad = QuadReadAcrossX(color);" in generated_code
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_wave_ballot_and_read_lane_combined_patterns():
+    code = """
+    shader SlangWaveBallotPatterns {
+        compute {
+            @numthreads(32, 1, 1)
+            void main(uvec3 tid @gl_GlobalInvocationID) {
+                uint lane = WaveGetLaneIndex();
+                uint count = WaveGetLaneCount();
+                bool isEven = (lane % 2u) == 0u;
+                uvec4 evenBallot = WaveActiveBallot(isEven);
+                uint firstEven = WaveReadLaneFirst(lane);
+                uint laneValue = lane * 2u;
+                uint readFromFour = WaveReadLaneAt(laneValue, 4u);
+                uvec4 matchResult = WaveMatch(laneValue);
+                uint multiPrefixResult = WaveMultiPrefixSum(laneValue, matchResult);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint lane = WaveGetLaneIndex();" in generated_code
+    assert "uint count = WaveGetLaneCount();" in generated_code
+    assert "uint4 evenBallot = WaveActiveBallot(isEven);" in generated_code
+    assert "uint firstEven = WaveReadLaneFirst(lane);" in generated_code
+    assert "uint readFromFour = WaveReadLaneAt(laneValue, 4u);" in generated_code
+    assert "uint4 matchResult = WaveMatch(laneValue);" in generated_code
+    assert (
+        "uint multiPrefixResult = WaveMultiPrefixSum(laneValue, matchResult);"
+        in generated_code
+    )
+    assert "WaveOpNode" not in generated_code
+    assert "unsupported Slang wave intrinsic" not in generated_code
+
+
+def test_texture_sampling_with_explicit_sampler_sample_level_and_grad():
+    code = """
+    shader TextureSamplerMethods {
+        sampler linearSampler;
+        sampler2d baseColor;
+        sampler3d volumeData;
+        samplercube skybox;
+
+        fragment {
+            vec4 sampleTextures(
+                sampler2d base,
+                sampler3d vol,
+                samplercube sky,
+                sampler samp,
+                vec2 uv,
+                vec3 uvw,
+                vec3 dir
+            ) {
+                vec4 baseLevel = textureLod(base, samp, uv, 3.0);
+                vec4 baseGrad = textureGrad(
+                    base, samp, uv,
+                    vec2(0.01, 0.0), vec2(0.0, 0.01)
+                );
+                vec4 volLevel = textureLod(vol, samp, uvw, 2.0);
+                vec4 volGrad = textureGrad(
+                    vol, samp, uvw,
+                    vec3(0.1, 0.0, 0.0), vec3(0.0, 0.1, 0.0)
+                );
+                vec4 skyLevel = textureLod(sky, samp, dir, 0.0);
+                vec4 skyGrad = textureGrad(
+                    sky, samp, dir,
+                    vec3(0.01, 0.0, 0.0), vec3(0.0, 0.01, 0.0)
+                );
+                return baseLevel + baseGrad + volLevel + volGrad + skyLevel + skyGrad;
+            }
+
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 baseLevel = base.SampleLevel(uv, 3.0);" in generated_code
+    assert "float4 baseGrad = base.SampleGrad(uv," in generated_code
+    assert "float4 volLevel = vol.SampleLevel(uvw, 2.0);" in generated_code
+    assert "float4 volGrad = vol.SampleGrad(uvw," in generated_code
+    assert "float4 skyLevel = sky.SampleLevel(dir, 0.0);" in generated_code
+    assert "float4 skyGrad = sky.SampleGrad(dir," in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_shadow_sampler_compare_grad_operations():
+    code = """
+    shader ShadowGradSampling {
+        sampler2dshadow depthMap;
+        samplercubeshadow cubeDepth;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec3 dir = vec3(1.0, 0.0, 0.0);
+                float compareVal = 0.8;
+                float shadow2dGrad = textureCompareGrad(
+                    depthMap, uv, compareVal, vec2(0.01, 0.0), vec2(0.0, 0.01)
+                );
+                float shadowCubeGrad = textureCompareGrad(
+                    cubeDepth, dir, compareVal,
+                    vec3(0.01, 0.0, 0.0), vec3(0.0, 0.01, 0.0)
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DShadow depthMap : register(t0);" in generated_code
+    assert "SamplerCubeShadow cubeDepth : register(t1);" in generated_code
+    assert (
+        "float shadow2dGrad = depthMap.SampleCmpGrad(uv, compareVal," in generated_code
+    )
+    assert (
+        "float shadowCubeGrad = cubeDepth.SampleCmpGrad(dir, compareVal,"
+        in generated_code
+    )
+    assert "textureCompareGrad(" not in generated_code
+
+
+def test_shadow_sampler_array_compare_operations():
+    code = """
+    shader ShadowArraySampling {
+        sampler2darrayshadow cascadeShadow;
+
+        fragment {
+            void main() {
+                vec3 uvLayer = vec3(0.5, 0.5, 2.0);
+                float compareVal = 0.9;
+                float cascadeResult = textureCompare(
+                    cascadeShadow, uvLayer, compareVal
+                );
+                float cascadeLod = textureCompareLod(
+                    cascadeShadow, uvLayer, compareVal, 0.0
+                );
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DArrayShadow cascadeShadow : register(t0);" in generated_code
+    assert (
+        "float cascadeResult = cascadeShadow.SampleCmp(uvLayer, compareVal);"
+        in generated_code
+    )
+    assert (
+        "float cascadeLod = cascadeShadow.SampleCmpLevel(uvLayer, compareVal, 0.0);"
+        in generated_code
+    )
+    assert "textureCompare(" not in generated_code
+    assert "textureCompareLod(" not in generated_code
+
+
+def test_texture_sample_with_combined_sampler_basic_operations():
+    code = """
+    shader CombinedSamplerOps {
+        sampler2d albedo;
+        sampler2darray layeredTex;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.25, 0.75);
+                vec3 uvLayer = vec3(0.25, 0.75, 1.0);
+                vec4 basic = texture(albedo, uv);
+                vec4 biased = texture(albedo, uv, 1.0);
+                vec4 lod = textureLod(albedo, uv, 4.0);
+                vec4 grad = textureGrad(
+                    albedo, uv, vec2(0.02, 0.0), vec2(0.0, 0.02)
+                );
+                vec4 layered = texture(layeredTex, uvLayer);
+                vec4 layeredLod = textureLod(layeredTex, uvLayer, 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> albedo : register(t0);" in generated_code
+    assert "Sampler2DArray<float4> layeredTex : register(t1);" in generated_code
+    assert "float4 basic = albedo.Sample(uv);" in generated_code
+    assert "float4 biased = albedo.SampleBias(uv, 1.0);" in generated_code
+    assert "float4 lod = albedo.SampleLevel(uv, 4.0);" in generated_code
+    assert "float4 grad = albedo.SampleGrad(uv," in generated_code
+    assert "float4 layered = layeredTex.Sample(uvLayer);" in generated_code
+    assert "float4 layeredLod = layeredTex.SampleLevel(uvLayer, 2.0);" in (
+        generated_code
+    )
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+    assert "textureGrad(" not in generated_code
+
+
+def test_image_load_emits_slang_rwtexture_subscript():
+    code = """
+    shader ImageLoadTest {
+        uimage2D inputImage @r32ui;
+        image2D colorImage;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint val = imageLoad(inputImage, ivec2(tid.x, tid.y));
+                vec4 color = imageLoad(colorImage, ivec2(tid.x, tid.y));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> inputImage" in generated_code
+    assert "RWTexture2D<float4> colorImage" in generated_code
+    assert "inputImage[int2(tid.x, tid.y)]" in generated_code
+    assert "colorImage[int2(tid.x, tid.y)]" in generated_code
+    assert "imageLoad(" not in generated_code
+
+
+def test_image_store_emits_slang_rwtexture_assignment():
+    code = """
+    shader ImageStoreTest {
+        uimage2D outputImage @r32ui;
+        image2D colorOutput;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                imageStore(outputImage, ivec2(tid.x, tid.y), 42u);
+                imageStore(colorOutput, ivec2(tid.x, tid.y), vec4(1.0, 0.0, 0.0, 1.0));
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> outputImage" in generated_code
+    assert "RWTexture2D<float4> colorOutput" in generated_code
+    assert "outputImage[int2(tid.x, tid.y)] = " in generated_code
+    assert "colorOutput[int2(tid.x, tid.y)] = " in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_image_load_store_combined_workflow():
+    code = """
+    shader ImageLoadStoreWorkflow {
+        uimage2D counters @r32ui;
+        image2D source;
+        image2D destination;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                vec4 pixel = imageLoad(source, ivec2(tid.x, tid.y));
+                vec4 modified = pixel * 2.0;
+                imageStore(destination, ivec2(tid.x, tid.y), modified);
+                uint count = imageLoad(counters, ivec2(0, 0));
+                imageStore(counters, ivec2(0, 0), count + 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "source[int2(tid.x, tid.y)]" in generated_code
+    assert "destination[int2(tid.x, tid.y)] = " in generated_code
+    assert "counters[int2(0, 0)]" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_image_atomic_add_emits_slang_interlocked_helper():
+    code = """
+    shader ImageAtomicAddTest {
+        uimage2D counters @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                uint oldValue = imageAtomicAdd(counters, ivec2(tid.x, tid.y), 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "RWTexture2D<uint> counters" in generated_code
+    assert "InterlockedAdd" in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "uint oldValue = " in generated_code
+
+
+def test_image_atomic_all_operations_emit_slang_interlocked():
+    code = """
+    shader ImageAtomicAllOps {
+        uimage2D uImg @r32ui;
+        iimage2D iImg @r32i;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(tid.x, tid.y);
+                uint a = imageAtomicAdd(uImg, coord, 1u);
+                uint b = imageAtomicMin(uImg, coord, 5u);
+                uint c = imageAtomicMax(uImg, coord, 10u);
+                uint d = imageAtomicAnd(uImg, coord, 0xFFu);
+                uint e = imageAtomicOr(uImg, coord, 0x0Fu);
+                uint f = imageAtomicXor(uImg, coord, 0xA0u);
+                uint g = imageAtomicExchange(uImg, coord, 99u);
+                uint h = imageAtomicCompSwap(uImg, coord, 0u, 1u);
+                int i = imageAtomicAdd(iImg, coord, 1);
+                int j = imageAtomicMin(iImg, coord, -5);
+                int k = imageAtomicMax(iImg, coord, 10);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "InterlockedAdd" in generated_code
+    assert "InterlockedMin" in generated_code
+    assert "InterlockedMax" in generated_code
+    assert "InterlockedAnd" in generated_code
+    assert "InterlockedOr" in generated_code
+    assert "InterlockedXor" in generated_code
+    assert "InterlockedExchange" in generated_code
+    assert "InterlockedCompareExchange" in generated_code
+    assert "imageAtomicAdd(" not in generated_code
+    assert "imageAtomicMin(" not in generated_code
+    assert "imageAtomicMax(" not in generated_code
+    assert "imageAtomicAnd(" not in generated_code
+    assert "imageAtomicOr(" not in generated_code
+    assert "imageAtomicXor(" not in generated_code
+    assert "imageAtomicExchange(" not in generated_code
+    assert "imageAtomicCompSwap(" not in generated_code
+
+
+def test_storage_image_access_qualifiers_affect_load_store():
+    code = """
+    shader ImageAccessQualifiers {
+        uimage2D readOnlyImg @r32ui @readonly;
+        uimage2D writeOnlyImg @r32ui @writeonly;
+        uimage2D readWriteImg @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                ivec2 coord = ivec2(tid.x, tid.y);
+                uint val = imageLoad(readOnlyImg, coord);
+                imageStore(writeOnlyImg, coord, val);
+                uint rwVal = imageLoad(readWriteImg, coord);
+                imageStore(readWriteImg, coord, rwVal + 1u);
+            }
+        }
+    }
+    """
+
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    generated_code = generate_code(ast)
+
+    assert "readOnlyImg[" in generated_code
+    assert "writeOnlyImg[" in generated_code
+    assert "readWriteImg[" in generated_code
+    assert "imageLoad(" not in generated_code
+    assert "imageStore(" not in generated_code
+
+
+def test_mesh_stage_emits_shader_mesh_attribute_with_output_topology():
+    code = """
+    shader SlangMeshShaderAttribute {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                out MeshVertex verts[3] @ vertices,
+                out uint3 tris[1] @ indices
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(-0.5, -0.5, 0.0, 1.0);
+                verts[1].position = vec4(0.5, -0.5, 0.0, 1.0);
+                verts[2].position = vec4(0.0, 0.5, 0.0, 1.0);
+                tris[0] = uint3(0, 1, 2);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("mesh")]' in generated_code
+    assert "[numthreads(1, 1, 1)]" in generated_code
+    assert '[outputtopology("triangle")]' in generated_code
+    assert "void MSMain(" in generated_code
+    assert "SetMeshOutputCounts(3, 1);" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_amplification_stage_emits_shader_amplification_attribute():
+    code = """
+    shader SlangAmplificationShader {
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            void main() @numthreads(32, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                out MeshVertex verts[3] @ vertices,
+                out uint3 tris[1] @ indices
+            ) @numthreads(1, 1, 1) @outputtopology(triangle) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(0.0, 0.0, 0.0, 1.0);
+                tris[0] = uint3(0, 0, 0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("amplification")]' in generated_code
+    assert "[numthreads(32, 1, 1)]" in generated_code
+    assert "void ASMain()" in generated_code
+    assert "DispatchMesh(1, 1, 1);" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_ray_tracing_stages_emit_correct_shader_attributes():
+    code = """
+    shader SlangRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+            float hitT;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        ray_generation {
+            void main() {
+                uvec3 launchID = gl_LaunchIDEXT;
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec3(1.0, 0.0, 0.0);
+                payload.hitT = gl_HitTEXT;
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+                payload.hitT = -1.0;
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attribs @ hit_attribute
+            ) {
+                payload.color = vec3(0.5, 0.5, 0.5);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("raygeneration")]' in generated_code
+    assert '[shader("closesthit")]' in generated_code
+    assert '[shader("miss")]' in generated_code
+    assert '[shader("anyhit")]' in generated_code
+    assert "void RayGenMain()" in generated_code
+    assert "void ClosestHitMain(" in generated_code
+    assert "void MissMain(" in generated_code
+    assert "void AnyHitMain(" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_ray_query_operations_emit_native_member_calls():
+    code = """
+    shader SlangRayQueryOps {
+        RaytracingAccelerationStructure scene;
+
+        compute {
+            void main() {
+                RayDesc ray;
+                RayQuery<RAY_FLAG_NONE> rq;
+                rq.TraceRayInline(scene, 0, 0xFF, ray);
+                bool advanced = rq.Proceed();
+                uint status = rq.CommittedStatus();
+                uint candidateType = rq.CandidateType();
+                float2 barycentrics = rq.CandidateTriangleBarycentrics();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "rq.TraceRayInline(scene, 0, 255, ray);" in generated_code
+    assert "bool advanced = rq.Proceed();" in generated_code
+    assert "uint status = rq.CommittedStatus();" in generated_code
+    assert "uint candidateType = rq.CandidateType();" in generated_code
+    assert "float2 barycentrics = rq.CandidateTriangleBarycentrics();" in generated_code
+    assert "None(" not in generated_code
+    assert "RayQueryOpNode" not in generated_code
+
+
+def test_tessellation_stages_emit_hull_and_domain_shader_attributes():
+    code = """
+    shader SlangTessellationAttributes {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float edges[3] @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> patch) {
+                PatchConstants pc;
+                pc.edges[0] = 1.0;
+                pc.edges[1] = 1.0;
+                pc.edges[2] = 1.0;
+                pc.inside = 1.0;
+                return pc;
+            }
+
+            VSOut main(InputPatch<VSOut, 3> patch, uint id @ gl_InvocationID)
+                @domain(tri)
+                @outputcontrolpoints(3)
+                @outputtopology(triangle_cw)
+                @partitioning(integer)
+                @patchconstantfunc(HSConst)
+            {
+                return patch[id];
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<VSOut, 3> patch, float3 coord @ gl_TessCoord)
+                @domain(tri)
+                @gl_Position
+            {
+                return patch[0].position * coord.x
+                     + patch[1].position * coord.y
+                     + patch[2].position * coord.z;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert '[shader("hull")]' in generated_code
+    assert '[shader("domain")]' in generated_code
+    assert '[domain("tri")]' in generated_code
+    assert "[outputcontrolpoints(3)]" in generated_code
+    assert '[outputtopology("triangle_cw")]' in generated_code
+    assert '[partitioning("integer")]' in generated_code
+    assert '[patchconstantfunc("HSConst")]' in generated_code
+    assert "VSOut HSMain(" in generated_code
+    assert "DSMain(" in generated_code
+    assert "float3 coord : SV_DomainLocation" in generated_code
+    assert "None(" not in generated_code
+
+
+def test_tessellation_domain_mismatch_raises_diagnostic():
+    code = """
+    shader SlangTessDomainMismatch {
+        struct VSOut {
+            vec4 position @ gl_Position;
+        };
+
+        struct PatchConstants {
+            float edges[3] @ SV_TessFactor;
+            float inside @ SV_InsideTessFactor;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<VSOut, 3> patch) {
+                PatchConstants pc;
+                pc.edges[0] = 1.0;
+                pc.edges[1] = 1.0;
+                pc.edges[2] = 1.0;
+                pc.inside = 1.0;
+                return pc;
+            }
+
+            VSOut main(InputPatch<VSOut, 3> patch, uint id @ gl_InvocationID)
+                @domain(tri)
+                @outputcontrolpoints(3)
+                @outputtopology(triangle_cw)
+                @partitioning(integer)
+                @patchconstantfunc(HSConst)
+            {
+                return patch[id];
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<VSOut, 3> patch, float3 coord @ gl_TessCoord)
+                @domain(quad)
+                @gl_Position
+            {
+                return patch[0].position;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="domain.*must match"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_texel_fetch_2d_emits_load_int3():
+    code = """
+    shader TexelFetch2D {
+        sampler2d colorTex;
+
+        fragment {
+            void main() {
+                ivec2 coord = ivec2(10, 20);
+                int mip = 0;
+                vec4 texel = texelFetch(colorTex, coord, mip);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> colorTex : register(t0);" in generated_code
+    assert "float4 texel = colorTex.Load(int3(coord, mip));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_3d_emits_load_int4():
+    code = """
+    shader TexelFetch3DVolume {
+        sampler3d volumeTex;
+
+        compute {
+            void main() {
+                ivec3 voxel = ivec3(1, 2, 3);
+                int mipLevel = 2;
+                vec4 data = texelFetch(volumeTex, voxel, mipLevel);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler3D<float4> volumeTex : register(t0);" in generated_code
+    assert "float4 data = volumeTex.Load(int4(voxel, mipLevel));" in generated_code
+    assert "texelFetch(" not in generated_code
+
+
+def test_texel_fetch_buffer_emits_load_index():
+    code = """
+    shader BufferFetch {
+        ByteAddressBuffer rawData @binding(0);
+
+        compute {
+            void main() {
+                uint offset = 64u;
+                uint fetched = buffer_load(rawData, offset);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "ByteAddressBuffer rawData" in generated_code
+    assert "uint fetched = rawData.Load(offset);" in generated_code
+    assert "buffer_load(" not in generated_code
+
+
+def test_texture_size_emits_get_dimensions_helper():
+    code = """
+    shader TextureSizeQuery {
+        sampler2d scene;
+        sampler3d volume;
+
+        compute {
+            void main() {
+                ivec2 sceneSize = textureSize(scene, 0);
+                ivec3 volSize = textureSize(volume, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "int2 sceneSize = cgl_textureSize_sampler2D(scene, 0);" in generated_code
+    assert "int3 volSize = cgl_textureSize_sampler3D(volume, 1);" in generated_code
+    assert "GetDimensions" in generated_code
+    assert "textureSize(" not in generated_code
+
+
+def test_texture_query_levels_emits_get_dimensions_levels():
+    code = """
+    shader QueryLevels {
+        sampler2d diffuse;
+        samplercube envMap;
+
+        compute {
+            void main() {
+                int diffuseLevels = textureQueryLevels(diffuse);
+                int envLevels = textureQueryLevels(envMap);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int cgl_textureQueryLevels_sampler2D(Sampler2D<float4> tex)" in generated_code
+    )
+    assert (
+        "int cgl_textureQueryLevels_samplerCube(SamplerCube<float4> tex)"
+        in generated_code
+    )
+    assert "int diffuseLevels = cgl_textureQueryLevels_sampler2D(diffuse);" in (
+        generated_code
+    )
+    assert "int envLevels = cgl_textureQueryLevels_samplerCube(envMap);" in (
+        generated_code
+    )
+    assert "GetDimensions" in generated_code
+    assert "return levels;" in generated_code
+    assert "textureQueryLevels(" not in generated_code
+
+
+def test_texture_samples_emits_get_dimensions_sample_count():
+    code = """
+    shader SampleCountQuery {
+        sampler2dms msTex;
+        sampler2dmsarray msArrayTex;
+
+        compute {
+            void main() {
+                int sampleCount = textureSamples(msTex);
+                int arrayCount = textureSamples(msArrayTex);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "int cgl_textureSamples_sampler2DMS(Sampler2DMS<float4> tex)" in generated_code
+    )
+    assert (
+        "int cgl_textureSamples_sampler2DMSArray(Sampler2DMSArray<float4> tex)"
+        in generated_code
+    )
+    assert "int sampleCount = cgl_textureSamples_sampler2DMS(msTex);" in generated_code
+    assert "int arrayCount = cgl_textureSamples_sampler2DMSArray(msArrayTex);" in (
+        generated_code
+    )
+    assert "GetDimensions" in generated_code
+    assert "return samples;" in generated_code
+    assert "textureSamples(" not in generated_code
+
+
+def test_texel_fetch_2d_array_emits_load_int4():
+    code = """
+    shader TexelFetch2DArray {
+        sampler2darray layeredTex;
+
+        compute {
+            void main() {
+                ivec3 layerCoord = ivec3(5, 10, 2);
+                int lod = 0;
+                vec4 layerData = texelFetch(layeredTex, layerCoord, lod);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2DArray<float4> layeredTex : register(t0);" in generated_code
+    assert "float4 layerData = layeredTex.Load(int4(layerCoord, lod));" in (
+        generated_code
+    )
+    assert "texelFetch(" not in generated_code
+
+
+def test_cbuffer_emits_slang_cbuffer_block():
+    code = """
+    shader CBufferBlock {
+        cbuffer SceneData {
+            mat4 viewMatrix;
+            mat4 projMatrix;
+            vec4 lightDir;
+            float time;
+        };
+
+        vertex {
+            void main() {
+                vec4 pos = projMatrix * viewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer SceneData" in generated_code
+    assert "float4x4 viewMatrix;" in generated_code
+    assert "float4x4 projMatrix;" in generated_code
+    assert "float4 lightDir;" in generated_code
+    assert "float time;" in generated_code
+    assert "{" in generated_code
+    assert "};" in generated_code
+
+
+def test_structured_buffer_and_rw_structured_buffer_declarations():
+    code = """
+    shader BufferDeclarations {
+        struct Vertex {
+            vec3 position;
+            vec3 normal;
+            vec2 texCoord;
+        };
+
+        StructuredBuffer<Vertex> vertexData @binding(0);
+        RWStructuredBuffer<Vertex> outputData @binding(1);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Vertex v = buffer_load(vertexData, tid.x);
+                v.position = v.position + v.normal * 0.1;
+                buffer_store(outputData, tid.x, v);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Vertex> vertexData "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<Vertex> outputData "
+        ": register(u1);" in generated_code
+    )
+    assert "Vertex v = vertexData.Load(tid.x);" in generated_code
+    assert "outputData.Store(tid.x, v);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_texture_resource_and_sampler_object_globals():
+    code = """
+    shader TextureAndSampler {
+        sampler2d diffuseMap;
+        sampler2d normalMap;
+        sampler linearSampler;
+
+        fragment {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec4 diffuse = texture(diffuseMap, uv);
+                vec4 normal = texture(normalMap, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuseMap" in generated_code
+    assert "Sampler2D<float4> normalMap" in generated_code
+    assert "SamplerState linearSampler" in generated_code
+    assert "register(t" in generated_code
+    assert "register(s" in generated_code
+    assert "sampler2d" not in generated_code
+
+
+def test_combined_texture_sampler_with_register_bindings():
+    code = """
+    shader RegisterBindings {
+        cbuffer FrameData : register(b0) {
+            float deltaTime;
+            float totalTime;
+        };
+
+        sampler2d albedo @register(t0);
+        sampler2d roughness @register(t1);
+        sampler linearSampler @register(s0);
+        sampler pointSampler @register(s1);
+        uimage2D outputImage @r32ui @register(u0);
+
+        compute {
+            void main() {
+                vec2 uv = vec2(0.5, 0.5);
+                vec4 albedoVal = texture(albedo, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer FrameData : register(b0)" in generated_code
+    assert "float deltaTime;" in generated_code
+    assert "float totalTime;" in generated_code
+    assert "Sampler2D<float4> albedo : register(t0);" in generated_code
+    assert "Sampler2D<float4> roughness : register(t1);" in generated_code
+    assert "SamplerState linearSampler : register(s0);" in generated_code
+    assert "SamplerState pointSampler : register(s1);" in generated_code
+    assert "RWTexture2D<uint> outputImage : register(u0);" in generated_code
+    assert "sampler2d" not in generated_code
+
+
+def test_buffer_with_mixed_member_types():
+    code = """
+    shader MixedBuffer {
+        cbuffer MaterialData {
+            vec4 baseColor;
+            float metallic;
+            float roughness;
+            vec2 uvScale;
+            mat4 transform;
+            int flags;
+            uint mask;
+        };
+
+        fragment {
+            void main() {
+                vec4 color = baseColor * metallic;
+                vec2 scaledUV = vec2(0.5, 0.5) * uvScale;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer MaterialData" in generated_code
+    assert "float4 baseColor;" in generated_code
+    assert "float metallic;" in generated_code
+    assert "float roughness;" in generated_code
+    assert "float2 uvScale;" in generated_code
+    assert "float4x4 transform;" in generated_code
+    assert "int flags;" in generated_code
+    assert "uint mask;" in generated_code
+
+
+def test_buffer_resource_multiple_types_with_auto_bindings():
+    code = """
+    shader MultiResourceBuffers {
+        struct Light {
+            vec4 position;
+            vec4 color;
+            float intensity;
+        };
+
+        StructuredBuffer<Light> lights @binding(0);
+        RWStructuredBuffer<float> lightOutput @binding(1);
+        StructuredBuffer<vec4> positions;
+        RWStructuredBuffer<uint> counters;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Light l = buffer_load(lights, tid.x);
+                vec4 pos = buffer_load(positions, 0u);
+                buffer_store(lightOutput, tid.x, l.intensity);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Light> lights "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<float> lightOutput "
+        ": register(u1);" in generated_code
+    )
+    assert "StructuredBuffer<float4> positions" in generated_code
+    assert "RWStructuredBuffer<uint> counters" in generated_code
+    assert "register(t" in generated_code
+    assert "register(u" in generated_code
+    assert "Light l = lights.Load(tid.x);" in generated_code
+    assert "float4 pos = positions.Load(0u);" in generated_code
+    assert "lightOutput.Store(tid.x, l.intensity);" in generated_code
+
+
+def test_struct_member_semantics_produce_slang_annotations():
+    code = """
+    shader StructSemantics {
+        struct VertexOutput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+            vec2 texcoord @ TEXCOORD0;
+        };
+
+        vertex {
+            VertexOutput main() {
+                VertexOutput out;
+                out.position = vec4(0.0, 0.0, 0.0, 1.0);
+                out.normal = vec3(0.0, 1.0, 0.0);
+                out.texcoord = vec2(0.0, 0.0);
+                return out;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 position : SV_Position;" in generated_code
+    assert "float3 normal : NORMAL;" in generated_code
+    assert "float2 texcoord : TEXCOORD0;" in generated_code
+
+
+def test_stage_output_sv_position_semantic():
+    code = """
+    shader PositionOutput {
+        vertex {
+            vec4 main() @ gl_Position {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4" in generated_code
+    assert ": SV_Position" in generated_code
+    assert "return float4(0.0, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_function_return_sv_target_semantic():
+    code = """
+    shader FragOutput {
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4" in generated_code
+    assert ": SV_Target" in generated_code
+    assert "return float4(1.0, 0.0, 0.0, 1.0);" in generated_code
+
+
+def test_stage_input_parameter_semantic_annotations():
+    code = """
+    shader InputSemantics {
+        compute {
+            void main(
+                uvec3 globalId @ gl_GlobalInvocationID,
+                uvec3 localId @ gl_LocalInvocationID,
+                uvec3 groupId @ gl_WorkGroupID
+            ) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint3 globalId : SV_DispatchThreadID" in generated_code
+    assert "uint3 localId : SV_GroupThreadID" in generated_code
+    assert "uint3 groupId : SV_GroupID" in generated_code
+
+
+def test_stage_parameter_semantics_cover_tessellation_system_values():
+    code = """
+    shader TessellationInputSemantics {
+        tessellation_control {
+            void main(
+                uint invocation @ gl_InvocationID,
+                uint primitive @ gl_PrimitiveID
+            ) @domain(tri) @outputcontrolpoints(3) {
+            }
+        }
+
+        tessellation_evaluation {
+            void main(
+                vec3 tessCoord @ gl_TessCoord,
+                uint primitive @ gl_PrimitiveID
+            ) @domain(tri) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint invocation : SV_OutputControlPointID" in generated_code
+    assert "uint primitive : SV_PrimitiveID" in generated_code
+    assert "float3 tessCoord : SV_DomainLocation" in generated_code
+    assert ": gl_InvocationID" not in generated_code
+    assert ": gl_TessCoord" not in generated_code
+
+
+def test_stage_parameter_semantics_validate_builtin_stage_and_type():
+    invalid_stage = """
+    shader BadSlangStageParameterStage {
+        fragment {
+            void main(uint vertexId @ gl_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_type = """
+    shader BadSlangStageParameterType {
+        fragment {
+            void main(vec3 fragCoord @ gl_FragCoord) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    output_only = """
+    shader BadSlangStageParameterOutputOnly {
+        vertex {
+            void main(vec4 color @ SV_Target0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+        generate_code(parse_code(tokenize_code(output_only)))
+
+    gl_position_input = """
+    shader SlangStageParameterGlPosition {
+        fragment {
+            void main(vec4 position @ gl_Position) {
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(gl_position_input)))
+    assert "float4 position : SV_Position" in generated
+
+
+def test_stage_parameter_semantics_reject_duplicate_system_values():
+    code = """
+    shader DuplicateSlangStageParameterSemantic {
+        vertex {
+            void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Slang stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(code)))
+
+
+def test_match_with_literal_patterns_lowers_to_switch():
+    code = """
+    shader MatchLiterals {
+        compute {
+            int main(int mode) {
+                int value = 0;
+                match mode {
+                    0 => {
+                        value = 10;
+                    }
+                    1 => {
+                        value = 20;
+                    }
+                    2 => {
+                        value = 30;
+                    }
+                }
+                return value;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (mode)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "value = 10;" in generated_code
+    assert "value = 20;" in generated_code
+    assert "value = 30;" in generated_code
+    assert "match " not in generated_code
+    assert "=>" not in generated_code
+
+
+def test_match_with_wildcard_default_case_lowers_to_switch_default():
+    code = """
+    shader MatchWildcard {
+        compute {
+            int main(int mode) {
+                int result = 0;
+                match mode {
+                    1 => {
+                        result = 100;
+                    }
+                    2 => {
+                        result = 200;
+                    }
+                    _ => {
+                        result = 999;
+                    }
+                }
+                return result;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (mode)" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "default:" in generated_code
+    assert "result = 100;" in generated_code
+    assert "result = 200;" in generated_code
+    assert "result = 999;" in generated_code
+    assert "match " not in generated_code
+    assert "_ =>" not in generated_code
+
+
+def test_match_multiple_literal_cases_without_wildcard():
+    code = """
+    shader MatchNoWildcard {
+        compute {
+            int main(int channel) {
+                int weight = 0;
+                match channel {
+                    0 => {
+                        weight = 1;
+                    }
+                    1 => {
+                        weight = 2;
+                    }
+                    2 => {
+                        weight = 4;
+                    }
+                    3 => {
+                        weight = 8;
+                    }
+                }
+                return weight;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (channel)" in generated_code
+    assert "case 0:" in generated_code
+    assert "case 1:" in generated_code
+    assert "case 2:" in generated_code
+    assert "case 3:" in generated_code
+    assert "weight = 1;" in generated_code
+    assert "weight = 2;" in generated_code
+    assert "weight = 4;" in generated_code
+    assert "weight = 8;" in generated_code
+    assert "default:" not in generated_code
+    assert generated_code.count("break;") >= 4
+
+
+def test_match_single_case_with_wildcard_fallthrough():
+    code = """
+    shader MatchSingleCase {
+        compute {
+            int main(int flag) {
+                int out_val = 0;
+                match flag {
+                    1 => {
+                        out_val = 42;
+                    }
+                    _ => {
+                        out_val = -1;
+                    }
+                }
+                return out_val;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (flag)" in generated_code
+    assert "case 1:" in generated_code
+    assert "out_val = 42;" in generated_code
+    assert "default:" in generated_code
+    assert "out_val = -1;" in generated_code
+
+
+def test_struct_multiple_semantics_position_normal_texcoord():
+    code = """
+    shader MultiSemantic {
+        struct VSInput {
+            vec4 pos @ POSITION;
+            vec3 norm @ NORMAL;
+            vec2 uv @ TEXCOORD0;
+            vec4 color @ COLOR;
+        };
+
+        struct VSOutput {
+            vec4 sv_pos @ gl_Position;
+            vec3 world_normal @ NORMAL;
+            vec2 out_uv @ TEXCOORD0;
+        };
+
+        vertex {
+            VSOutput main(VSInput input) {
+                VSOutput output;
+                output.sv_pos = input.pos;
+                output.world_normal = input.norm;
+                output.out_uv = input.uv;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 pos : POSITION;" in generated_code
+    assert "float3 norm : NORMAL;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+    assert "float4 color : COLOR;" in generated_code
+    assert "float4 sv_pos : SV_Position;" in generated_code
+    assert "float3 world_normal : NORMAL;" in generated_code
+    assert "float2 out_uv : TEXCOORD0;" in generated_code
+
+
+def test_stage_param_vertex_input_semantics():
+    code = """
+    shader VertexInput {
+        vertex {
+            vec4 main(
+                vec4 pos @ POSITION,
+                vec3 normal @ NORMAL,
+                vec2 texcoord @ TEXCOORD0
+            ) @ gl_Position {
+                return pos;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 pos : POSITION" in generated_code
+    assert "float3 normal : NORMAL" in generated_code
+    assert "float2 texcoord : TEXCOORD0" in generated_code
+    assert ": SV_Position" in generated_code
+
+
+def test_stage_param_fragment_sv_target_output():
+    code = """
+    shader FragmentSemantic {
+        fragment {
+            vec4 main(vec4 fragPos @ gl_FragCoord) @ gl_FragColor {
+                return vec4(fragPos.x, fragPos.y, 0.0, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float4 fragPos : SV_Position" in generated_code
+    assert ": SV_Target" in generated_code
+    assert "return float4(" in generated_code
+
+
+def test_match_break_auto_inserted_per_case():
+    code = """
+    shader MatchBreak {
+        compute {
+            int main(int selector) {
+                int x = 0;
+                match selector {
+                    10 => {
+                        x = 100;
+                    }
+                    20 => {
+                        x = 200;
+                    }
+                    _ => {
+                        x = 0;
+                    }
+                }
+                return x;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "switch (selector)" in generated_code
+    assert "case 10:" in generated_code
+    assert "case 20:" in generated_code
+    assert "default:" in generated_code
+    assert generated_code.count("break;") == 3
+
+
+def test_cbuffer_lowers_to_slang_cbuffer_with_typed_members():
+    code = """
+    shader CBufferLowering {
+        cbuffer SceneConstants {
+            mat4 viewMatrix;
+            mat4 projMatrix;
+            vec4 lightDir;
+            float time;
+        };
+
+        cbuffer MaterialParams : register(b1) {
+            vec4 albedo;
+            float roughness;
+            float metallic;
+        };
+
+        vertex {
+            vec4 main(vec3 pos @ POSITION) @ gl_Position {
+                return projMatrix * viewMatrix * vec4(pos, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer SceneConstants" in generated_code
+    assert "float4x4 viewMatrix;" in generated_code
+    assert "float4x4 projMatrix;" in generated_code
+    assert "float4 lightDir;" in generated_code
+    assert "float time;" in generated_code
+    assert "cbuffer MaterialParams" in generated_code
+    assert "float4 albedo;" in generated_code
+    assert "float roughness;" in generated_code
+    assert "float metallic;" in generated_code
+    assert "register(b1)" in generated_code
+    assert "mat4" not in generated_code
+    assert "vec4 lightDir" not in generated_code
+    assert "vec3" not in generated_code
+
+
+def test_structured_buffer_declarations_emit_slang_resource_types():
+    code = """
+    shader StructuredBufferDeclarations {
+        struct Light {
+            vec4 position;
+            vec4 color;
+            float intensity;
+        };
+
+        StructuredBuffer<Light> lights @binding(0);
+        RWStructuredBuffer<Light> outputLights @binding(1);
+        StructuredBuffer<float> weights @binding(2);
+        RWStructuredBuffer<uint> indices @binding(3);
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                Light light = buffer_load(lights, tid.x);
+                light.intensity = light.intensity * 2.0;
+                buffer_store(outputLights, tid.x, light);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] StructuredBuffer<Light> lights "
+        ": register(t0);" in generated_code
+    )
+    assert (
+        "[[vk::binding(1, 0)]] RWStructuredBuffer<Light> outputLights "
+        ": register(u1);" in generated_code
+    )
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> weights "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWStructuredBuffer<uint> indices "
+        ": register(u3);" in generated_code
+    )
+    assert "Light light = lights.Load(tid.x);" in generated_code
+    assert "outputLights.Store(tid.x, light);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_glsl_buffer_array_declarations_lower_to_slang_resources():
+    code = """
+    shader SlangGlslBufferArrays {
+        compute {
+            layout(std430, binding = 2) readonly buffer float values[];
+            layout(std430, binding = 3) writeonly buffer float outValues[];
+
+            void main() {
+                float value = buffer_load(values, 0u);
+                buffer_store(outValues, 1u, value);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(2, 0)]] StructuredBuffer<float> values "
+        ": register(t2);" in generated_code
+    )
+    assert (
+        "[[vk::binding(3, 0)]] RWStructuredBuffer<float> outValues "
+        ": register(u3);" in generated_code
+    )
+    assert "float value = values.Load(0u);" in generated_code
+    assert "outValues.Store(1u, value);" in generated_code
+    assert "buffer_load(" not in generated_code
+    assert "buffer_store(" not in generated_code
+
+
+def test_glsl_buffer_blocks_lower_to_slang_byteaddress_offsets():
+    code = """
+    shader SlangGlslBufferBlocks {
+        struct Particle {
+            vec4 position;
+            float mass;
+        };
+
+        layout(std430, set = 1, binding = 4) buffer ParticleBlock {
+            Particle particles[];
+        } particleBlock;
+
+        compute {
+            void main() {
+                float mass = particleBlock.particles[0u].mass;
+                particleBlock.particles[1u].mass = mass;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct Particle" in generated_code
+    assert "struct ParticleBlock" not in generated_code
+    assert (
+        "[[vk::binding(4, 1)]] RWByteAddressBuffer particleBlock "
+        ": register(u4, space1);" in generated_code
+    )
+    assert "float mass = asfloat(particleBlock.Load((0u * 32 + 16)));" in (
+        generated_code
+    )
+    assert "particleBlock.Store((1u * 32 + 16), asuint(mass));" in generated_code
+    assert "particleBlock.particles" not in generated_code
+    assert "unsupported Slang GLSL buffer block" not in generated_code
+
+
+def test_glsl_buffer_block_access_qualifiers_and_atomics_emit_slang():
+    code = """
+    shader SlangGlslBufferBlockAccess {
+        struct Data {
+            uint value;
+        };
+
+        Data readOnlyData @glsl_buffer_block(std430) @readonly;
+        Data writeOnlyData @glsl_buffer_block(std430) @writeonly;
+        Data readWriteData @glsl_buffer_block(std430) @access(readwrite);
+
+        compute {
+            void main() {
+                uint blockedRead = writeOnlyData.value;
+                readOnlyData.value = blockedRead;
+                uint original = atomicAdd(readWriteData.value, 1u);
+                readWriteData.value += original;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "ByteAddressBuffer readOnlyData : register(t0);" in generated_code
+    assert "RWByteAddressBuffer writeOnlyData : register(u0);" in generated_code
+    assert "RWByteAddressBuffer readWriteData : register(u1);" in generated_code
+    assert (
+        "uint blockedRead = /* unsupported Slang GLSL buffer block: load "
+        "requires readable buffer block resource */ 0u;" in generated_code
+    )
+    assert (
+        "/* unsupported Slang GLSL buffer block store: readonly "
+        "ByteAddressBuffer cannot be written */;" in generated_code
+    )
+    assert (
+        "uint __crossgl_slang_byteaddress_atomic_add_uint"
+        "(RWByteAddressBuffer buffer, uint offset, uint value)" in generated_code
+    )
+    assert (
+        "uint original = __crossgl_slang_byteaddress_atomic_add_uint"
+        "(readWriteData, 0, 1u);" in generated_code
+    )
+    assert "readWriteData.Store(0, (readWriteData.Load(0) + original));" in (
+        generated_code
+    )
+    assert "atomicAdd(" not in generated_code
+
+
+def test_texture_resource_declarations_emit_slang_typed_textures():
+    code = """
+    shader TextureResources {
+        sampler2d diffuseMap;
+        sampler3d volumeMap;
+        samplercube envMap;
+        sampler2darray layeredMap;
+        image2D outputImage;
+        iimage3D signedVolume;
+        uimage2D counterImage;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> diffuseMap" in generated_code
+    assert "Sampler3D<float4> volumeMap" in generated_code
+    assert "SamplerCube<float4> envMap" in generated_code
+    assert "Sampler2DArray<float4> layeredMap" in generated_code
+    assert "RWTexture2D<float4> outputImage" in generated_code
+    assert "RWTexture3D<int> signedVolume" in generated_code
+    assert "RWTexture2D<uint> counterImage" in generated_code
+    assert "sampler2d" not in generated_code
+    assert "sampler3d" not in generated_code
+    assert "samplercube" not in generated_code
+    assert "image2D" not in generated_code
+    assert "iimage3D" not in generated_code
+    assert "uimage2D" not in generated_code
+
+
+def test_sampler_state_declarations_emit_slang_sampler_types():
+    code = """
+    shader SamplerStateDeclarations {
+        sampler linearSampler;
+        sampler pointSampler @binding(1);
+        sampler2dshadow shadowMap;
+        samplercubeshadow shadowCube;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "SamplerState linearSampler" in generated_code
+    assert "SamplerState pointSampler" in generated_code
+    assert "register(s" in generated_code
+    assert "Sampler2DShadow shadowMap" in generated_code
+    assert "SamplerCubeShadow shadowCube" in generated_code
+    assert "sampler " not in generated_code.split("SamplerState")[0]
+
+
+def test_combined_texture_sampler_sampling_patterns():
+    code = """
+    shader TextureSamplingPatterns {
+        sampler2d albedoMap;
+        sampler3d volumeData;
+
+        fragment {
+            vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
+                vec4 albedo = texture(albedoMap, uv);
+                vec4 lod_sample = textureLod(albedoMap, uv, 2.0);
+                return albedo + lod_sample;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "Sampler2D<float4> albedoMap" in generated_code
+    assert "Sampler3D<float4> volumeData" in generated_code
+    assert "albedoMap.Sample(uv)" in generated_code
+    assert "albedoMap.SampleLevel(uv, 2.0)" in generated_code
+    assert "texture(" not in generated_code
+    assert "textureLod(" not in generated_code
+
+
+def test_buffer_and_texture_resources_coexist_with_correct_register_classes():
+    code = """
+    shader MixedResources {
+        cbuffer Transform {
+            mat4 worldViewProj;
+        };
+
+        sampler2d diffuse;
+        sampler linearSampler;
+        StructuredBuffer<float> weights @binding(0);
+        RWStructuredBuffer<float> results @binding(1);
+        uimage2D counterTex @r32ui;
+
+        compute {
+            void main(uint3 tid @ gl_GlobalInvocationID) {
+                float w = buffer_load(weights, tid.x);
+                buffer_store(results, tid.x, w * 2.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cbuffer Transform" in generated_code
+    assert "register(b" in generated_code
+    assert "Sampler2D<float4> diffuse" in generated_code
+    assert "register(t" in generated_code
+    assert "SamplerState linearSampler" in generated_code
+    assert "register(s" in generated_code
+    assert "StructuredBuffer<float> weights" in generated_code
+    assert "RWStructuredBuffer<float> results" in generated_code
+    assert "register(u" in generated_code
+    assert "RWTexture2D<uint> counterTex" in generated_code
+    assert "weights.Load(tid.x)" in generated_code
+    assert "results.Store(tid.x, w * 2.0)" in generated_code
+    assert "mat4" not in generated_code
+    assert "sampler2d" not in generated_code
+    assert "uimage2D" not in generated_code
 
 
 if __name__ == "__main__":

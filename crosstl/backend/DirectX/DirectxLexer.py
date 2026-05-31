@@ -2,8 +2,8 @@
 
 import os
 import re
-from typing import Iterator, Tuple, List, Optional
 from enum import Enum, auto
+from typing import Iterator, List, Optional, Tuple
 
 from .preprocessor import HLSLPreprocessor
 
@@ -587,7 +587,7 @@ class HLSLLexer:
     @classmethod
     def from_file(cls, filepath: str) -> "HLSLLexer":
         """Create a lexer instance from a source file."""
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             base_dir = os.path.dirname(filepath)
             return cls(f.read(), file_path=filepath, include_paths=[base_dir])
 

@@ -10,16 +10,14 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from urllib import error
-from urllib import parse
-from urllib import request
+from urllib import error, parse, request
 
 API_VERSION = "2026-03-10"
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,7 +26,7 @@ SUPPORT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
 SECTION_BEGIN = "<!-- crossgl-pr-issue-links:start -->"
 SECTION_END = "<!-- crossgl-pr-issue-links:end -->"
 SECTION_RE = re.compile(
-    r"\n*{}\n.*?\n{}\n*".format(re.escape(SECTION_BEGIN), re.escape(SECTION_END)),
+    rf"\n*{re.escape(SECTION_BEGIN)}\n.*?\n{re.escape(SECTION_END)}\n*",
     re.DOTALL,
 )
 FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
@@ -111,7 +109,7 @@ class GitHubApiError(RuntimeError):
     """Raised when GitHub returns an unexpected API error."""
 
     def __init__(self, method: str, path: str, status: int, body: str):
-        super().__init__("{} {} failed with {}: {}".format(method, path, status, body))
+        super().__init__(f"{method} {path} failed with {status}: {body}")
         self.method = method
         self.path = path
         self.status = status
@@ -127,6 +125,28 @@ class PullRequestContext:
     changed_files: tuple[str, ...] = ()
     head_repo: str | None = None
     head_sha: str | None = None
+
+
+@dataclass(frozen=True)
+class SupportIssueLink:
+    key: str
+    issue_numbers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SupportMatrixIssueLinks:
+    closure_links: tuple[SupportIssueLink, ...]
+    reference_links: tuple[SupportIssueLink, ...]
+    missing_closure_keys: tuple[str, ...]
+    missing_reference_keys: tuple[str, ...]
+
+    @property
+    def closure_numbers(self) -> list[int]:
+        return flatten_support_issue_numbers(self.closure_links)
+
+    @property
+    def reference_numbers(self) -> list[int]:
+        return flatten_support_issue_numbers(self.reference_links)
 
 
 class GitHubClient:
@@ -152,7 +172,7 @@ class GitHubClient:
             body = json.dumps(payload).encode("utf-8")
         req = request.Request(url, data=body, method=method)
         req.add_header("Accept", "application/vnd.github+json")
-        req.add_header("Authorization", "Bearer {}".format(self.token))
+        req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("X-GitHub-Api-Version", API_VERSION)
         if body is not None:
             req.add_header("Content-Type", "application/json")
@@ -169,20 +189,20 @@ class GitHubClient:
             raise GitHubApiError(method, path, exc.code, error_body) from exc
 
     def get_issue(self, number: int) -> dict[str, Any]:
-        issue, _ = self.request("GET", "/repos/{}/issues/{}".format(self.repo, number))
+        issue, _ = self.request("GET", f"/repos/{self.repo}/issues/{number}")
         return issue
 
     def add_issue_assignee(self, number: int, login: str) -> None:
         self.request(
             "POST",
-            "/repos/{}/issues/{}/assignees".format(self.repo, number),
+            f"/repos/{self.repo}/issues/{number}/assignees",
             {"assignees": [login]},
         )
 
     def update_pull_body(self, number: int, body: str) -> None:
         self.request(
             "PATCH",
-            "/repos/{}/pulls/{}".format(self.repo, number),
+            f"/repos/{self.repo}/pulls/{number}",
             {"body": body},
         )
 
@@ -192,7 +212,7 @@ class GitHubClient:
         while True:
             payload, _ = self.request(
                 "GET",
-                "/repos/{}/pulls/{}/files".format(self.repo, number),
+                f"/repos/{self.repo}/pulls/{number}/files",
                 query={"per_page": 100, "page": page},
             )
             batch = payload or []
@@ -204,7 +224,7 @@ class GitHubClient:
     def read_json_file(self, repo: str, path: str, ref: str) -> dict[str, Any]:
         payload, _ = self.request(
             "GET",
-            "/repos/{}/contents/{}".format(repo, parse.quote(path)),
+            f"/repos/{repo}/contents/{parse.quote(path)}",
             query={"ref": ref},
         )
         if not isinstance(payload, dict):
@@ -222,7 +242,7 @@ class GitHubClient:
         while True:
             payload, _ = self.request(
                 "GET",
-                "/repos/{}/issues".format(self.repo),
+                f"/repos/{self.repo}/issues",
                 query={
                     "labels": "support:matrix",
                     "state": "open",
@@ -348,8 +368,8 @@ def managed_section(
 ) -> str:
     reference_issue_numbers = reference_issue_numbers or []
     lines = [SECTION_BEGIN]
-    lines.extend("Closes #{}".format(number) for number in issue_numbers)
-    lines.extend("Refs #{}".format(number) for number in reference_issue_numbers)
+    lines.extend(f"Closes #{number}" for number in issue_numbers)
+    lines.extend(f"Refs #{number}" for number in reference_issue_numbers)
     lines.append(SECTION_END)
     return "\n".join(lines)
 
@@ -381,9 +401,7 @@ def support_backlog_row_details(matrix: dict[str, Any]) -> dict[str, dict[str, A
     for feature in matrix.get("features", []):
         feature_id = feature.get("id")
         for backend_id, support in feature.get("support", {}).items():
-            support_lookup["backlog:{}:{}".format(backend_id, feature_id)] = (
-                support or {}
-            )
+            support_lookup[f"backlog:{backend_id}:{feature_id}"] = support or {}
 
     rows = {}
     for item in matrix.get("backlog", []):
@@ -406,23 +424,65 @@ def support_issue_numbers_for_keys(
     support_issues: list[dict[str, Any]],
     keys: set[str],
 ) -> list[int]:
-    numbers = []
+    return flatten_support_issue_numbers(
+        support_issue_links_for_keys(support_issue_number_lookup(support_issues), keys)
+    )
+
+
+def support_issue_number_lookup(
+    support_issues: list[dict[str, Any]],
+) -> dict[str, tuple[int, ...]]:
+    numbers_by_key: dict[str, set[int]] = {}
     for issue in support_issues:
         marker_key = support_issue_marker_key(issue)
-        if marker_key in keys:
-            numbers.append(int(issue["number"]))
+        if marker_key:
+            numbers_by_key.setdefault(marker_key, set()).add(int(issue["number"]))
+    return {
+        key: tuple(sorted(issue_numbers))
+        for key, issue_numbers in numbers_by_key.items()
+    }
+
+
+def support_issue_links_for_keys(
+    numbers_by_key: dict[str, tuple[int, ...]],
+    keys: set[str],
+) -> tuple[SupportIssueLink, ...]:
+    return tuple(
+        SupportIssueLink(key=key, issue_numbers=numbers_by_key[key])
+        for key in sorted(keys)
+        if numbers_by_key.get(key)
+    )
+
+
+def support_issue_missing_keys(
+    numbers_by_key: dict[str, tuple[int, ...]],
+    keys: set[str],
+) -> tuple[str, ...]:
+    return tuple(key for key in sorted(keys) if not numbers_by_key.get(key))
+
+
+def flatten_support_issue_numbers(
+    links: tuple[SupportIssueLink, ...],
+) -> list[int]:
+    numbers = [issue_number for link in links for issue_number in link.issue_numbers]
     return sorted(set(numbers))
+
+
+def support_issue_link_audit(
+    links: tuple[SupportIssueLink, ...],
+) -> list[dict[str, Any]]:
+    return [{"key": link.key, "issues": list(link.issue_numbers)} for link in links]
 
 
 def support_matrix_issue_numbers(
     client: GitHubClient,
     pr: PullRequestContext,
     repo: str,
-) -> tuple[list[int], list[int]]:
+) -> SupportMatrixIssueLinks | None:
     if not pr.head_repo or not pr.head_sha:
-        return [], []
+        return None
     if not SUPPORT_MATRIX_PATH.exists():
-        return [], []
+        return None
 
     base_matrix = json.loads(SUPPORT_MATRIX_PATH.read_text(encoding="utf-8"))
     try:
@@ -432,8 +492,8 @@ def support_matrix_issue_numbers(
             pr.head_sha,
         )
     except (GitHubApiError, ValueError, json.JSONDecodeError, OSError) as exc:
-        print("::warning::Could not inspect PR support matrix links: {}".format(exc))
-        return [], []
+        print(f"::warning::Could not inspect PR support matrix links: {exc}")
+        return None
 
     base_backlog_keys = support_backlog_keys(base_matrix)
     head_backlog_keys = support_backlog_keys(head_matrix)
@@ -448,15 +508,31 @@ def support_matrix_issue_numbers(
     }
 
     if not closure_keys and not progress_keys:
-        return [], []
+        return SupportMatrixIssueLinks(
+            closure_links=(),
+            reference_links=(),
+            missing_closure_keys=(),
+            missing_reference_keys=(),
+        )
 
     support_issues = client.list_open_support_issues()
-    closure_numbers = support_issue_numbers_for_keys(support_issues, closure_keys)
-    reference_numbers = support_issue_numbers_for_keys(support_issues, progress_keys)
-    reference_numbers = [
-        number for number in reference_numbers if number not in set(closure_numbers)
-    ]
-    return closure_numbers, reference_numbers
+    numbers_by_key = support_issue_number_lookup(support_issues)
+    closure_links = support_issue_links_for_keys(numbers_by_key, closure_keys)
+    reference_links = support_issue_links_for_keys(numbers_by_key, progress_keys)
+    closure_numbers = set(flatten_support_issue_numbers(closure_links))
+    reference_links = tuple(
+        link
+        for link in reference_links
+        if not closure_numbers.intersection(link.issue_numbers)
+    )
+    return SupportMatrixIssueLinks(
+        closure_links=closure_links,
+        reference_links=reference_links,
+        missing_closure_keys=support_issue_missing_keys(numbers_by_key, closure_keys),
+        missing_reference_keys=support_issue_missing_keys(
+            numbers_by_key, progress_keys
+        ),
+    )
 
 
 def support_closure_issue_numbers(
@@ -464,8 +540,32 @@ def support_closure_issue_numbers(
     pr: PullRequestContext,
     repo: str,
 ) -> list[int]:
-    closure_numbers, _reference_numbers = support_matrix_issue_numbers(client, pr, repo)
-    return closure_numbers
+    issue_numbers = support_matrix_issue_numbers(client, pr, repo)
+    if issue_numbers is None:
+        return []
+    return issue_numbers.closure_numbers
+
+
+def empty_support_link_audit(*, inspection_failed: bool) -> dict[str, Any]:
+    return {
+        "inspection_failed": inspection_failed,
+        "closure_links": [],
+        "reference_links": [],
+        "missing_closure_keys": [],
+        "missing_reference_keys": [],
+    }
+
+
+def support_link_audit_from_issue_links(
+    issue_links: SupportMatrixIssueLinks,
+) -> dict[str, Any]:
+    return {
+        "inspection_failed": False,
+        "closure_links": support_issue_link_audit(issue_links.closure_links),
+        "reference_links": support_issue_link_audit(issue_links.reference_links),
+        "missing_closure_keys": list(issue_links.missing_closure_keys),
+        "missing_reference_keys": list(issue_links.missing_reference_keys),
+    }
 
 
 def dedupe_issue_numbers(issue_numbers: list[int]) -> list[int]:
@@ -493,18 +593,27 @@ def sync_pr_issue_links(
     enforce_support_traceability: bool = False,
     sync_support_closures: bool = False,
     sync_support_references: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     issue_numbers = extract_closing_issue_numbers(pr.title, pr.body, repo)
     support_closures: list[int] = []
     support_references: list[int] = []
+    support_links_inspected = True
+    support_link_audit: dict[str, Any] | None = None
     if sync_support_closures or sync_support_references:
-        support_closures, support_references = support_matrix_issue_numbers(
-            client, pr, repo
-        )
-        if not sync_support_closures:
-            support_closures = []
-        if not sync_support_references:
-            support_references = []
+        support_issue_numbers = support_matrix_issue_numbers(client, pr, repo)
+        support_links_inspected = support_issue_numbers is not None
+        if support_issue_numbers is not None:
+            support_link_audit = support_link_audit_from_issue_links(
+                support_issue_numbers
+            )
+            support_closures = support_issue_numbers.closure_numbers
+            support_references = support_issue_numbers.reference_numbers
+            if not sync_support_closures:
+                support_closures = []
+            if not sync_support_references:
+                support_references = []
+        else:
+            support_link_audit = empty_support_link_audit(inspection_failed=True)
     issue_numbers = dedupe_issue_numbers(issue_numbers + support_closures)
     reference_issue_numbers = dedupe_issue_numbers(
         [number for number in support_references if number not in set(issue_numbers)]
@@ -518,6 +627,8 @@ def sync_pr_issue_links(
         "missing_or_pull": 0,
         "body_updated": 0,
     }
+    if support_link_audit is not None:
+        summary["support_link_audit"] = support_link_audit
     valid_issue_numbers: list[int] = []
 
     for number in issue_numbers:
@@ -543,15 +654,16 @@ def sync_pr_issue_links(
                 continue
             raise
 
-    new_body = update_body_with_managed_section(
-        pr.body,
-        valid_issue_numbers,
-        reference_issue_numbers,
-    )
-    if new_body != (pr.body or ""):
-        summary["body_updated"] = 1
-        if not dry_run:
-            client.update_pull_body(pr.number, new_body)
+    if support_links_inspected:
+        new_body = update_body_with_managed_section(
+            pr.body,
+            valid_issue_numbers,
+            reference_issue_numbers,
+        )
+        if new_body != (pr.body or ""):
+            summary["body_updated"] = 1
+            if not dry_run:
+                client.update_pull_body(pr.number, new_body)
 
     if check_support_traceability or enforce_support_traceability:
         changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
@@ -570,6 +682,130 @@ def sync_pr_issue_links(
         summary["support_relevant_files"] = len(relevant_paths)
 
     return summary
+
+
+def support_link_audit_counts(audit: dict[str, Any]) -> dict[str, int]:
+    closure_links = audit.get("closure_links", [])
+    reference_links = audit.get("reference_links", [])
+    missing_closure_keys = audit.get("missing_closure_keys", [])
+    missing_reference_keys = audit.get("missing_reference_keys", [])
+    return {
+        "closure_candidates": len(closure_links) + len(missing_closure_keys),
+        "closure_links": sum(len(entry["issues"]) for entry in closure_links),
+        "reference_candidates": len(reference_links) + len(missing_reference_keys),
+        "reference_links": sum(len(entry["issues"]) for entry in reference_links),
+        "missing_closure_links": len(missing_closure_keys),
+        "missing_reference_links": len(missing_reference_keys),
+        "inspection_failed": int(bool(audit.get("inspection_failed"))),
+    }
+
+
+def format_support_link_entries(entries: list[dict[str, Any]], limit: int = 8) -> str:
+    if not entries:
+        return "none"
+    rendered = []
+    for entry in entries[:limit]:
+        issues = ", ".join(f"#{number}" for number in entry["issues"])
+        rendered.append(f"{issues} ({entry['key']})")
+    remaining = len(entries) - limit
+    if remaining > 0:
+        rendered.append(f"... +{remaining} more")
+    return "; ".join(rendered)
+
+
+def format_support_link_keys(keys: list[str], limit: int = 8) -> str:
+    if not keys:
+        return "none"
+    rendered = list(keys[:limit])
+    remaining = len(keys) - limit
+    if remaining > 0:
+        rendered.append(f"... +{remaining} more")
+    return "; ".join(rendered)
+
+
+def emit_support_link_audit(summary: dict[str, Any]) -> None:
+    audit = summary.get("support_link_audit")
+    if not audit:
+        return
+    counts = support_link_audit_counts(audit)
+    print(
+        "Support link audit: closure_candidates={closure_candidates}, "
+        "closure_links={closure_links}, reference_candidates={reference_candidates}, "
+        "reference_links={reference_links}, missing_closure_links={missing_closure_links}, "
+        "missing_reference_links={missing_reference_links}, inspection_failed={inspection_failed}".format(
+            **counts
+        )
+    )
+    if audit.get("closure_links"):
+        print(
+            "Support closure links: "
+            + format_support_link_entries(audit["closure_links"])
+        )
+    if audit.get("reference_links"):
+        print(
+            "Support reference links: "
+            + format_support_link_entries(audit["reference_links"])
+        )
+    missing_closure_keys = audit.get("missing_closure_keys") or []
+    missing_reference_keys = audit.get("missing_reference_keys") or []
+    if missing_closure_keys:
+        print(
+            "::warning::Support backlog rows were removed without open managed "
+            "support issues: " + format_support_link_keys(missing_closure_keys)
+        )
+    if missing_reference_keys:
+        print(
+            "::warning::Support backlog rows changed without open managed "
+            "support issues: " + format_support_link_keys(missing_reference_keys)
+        )
+
+
+def write_support_link_step_summary(summary: dict[str, Any]) -> None:
+    audit = summary.get("support_link_audit")
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not audit or not step_summary:
+        return
+    counts = support_link_audit_counts(audit)
+    with open(step_summary, "a", encoding="utf-8") as handle:
+        handle.write("## Support Issue Links\n\n")
+        handle.write(
+            "- Inspection: {}\n".format(
+                "failed" if counts["inspection_failed"] else "succeeded"
+            )
+        )
+        handle.write(
+            "- Closure links: {closure_links}/{closure_candidates}\n".format(**counts)
+        )
+        handle.write(
+            "- Reference links: {reference_links}/{reference_candidates}\n".format(
+                **counts
+            )
+        )
+        if audit.get("closure_links"):
+            handle.write(
+                "- Closes: {}\n".format(
+                    format_support_link_entries(audit["closure_links"])
+                )
+            )
+        if audit.get("reference_links"):
+            handle.write(
+                "- Refs: {}\n".format(
+                    format_support_link_entries(audit["reference_links"])
+                )
+            )
+        if audit.get("missing_closure_keys"):
+            handle.write(
+                "- Missing closure issue links: {}\n".format(
+                    format_support_link_keys(audit["missing_closure_keys"])
+                )
+            )
+        if audit.get("missing_reference_keys"):
+            handle.write(
+                "- Missing reference issue links: {}\n".format(
+                    format_support_link_keys(audit["missing_reference_keys"])
+                )
+            )
+        handle.write("\n")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -647,7 +883,7 @@ def main(argv: list[str] | None = None) -> int:
         print("--event-path or GITHUB_EVENT_PATH is required", file=sys.stderr)
         return 2
     if not token:
-        print("{} or GH_TOKEN is required".format(args.token_env), file=sys.stderr)
+        print(f"{args.token_env} or GH_TOKEN is required", file=sys.stderr)
         return 2
 
     pr = load_pr_context(args.event_path)
@@ -669,6 +905,8 @@ def main(argv: list[str] | None = None) -> int:
             **summary
         )
     )
+    emit_support_link_audit(summary)
+    write_support_link_step_summary(summary)
     if args.check_support_traceability or args.enforce_support_traceability:
         print(
             "Support traceability: required={traceability_required}, satisfied={traceability_satisfied}, failed={traceability_failed}, support_relevant_files={support_relevant_files}".format(
@@ -681,7 +919,7 @@ def main(argv: list[str] | None = None) -> int:
                 "reference, no managed support issue reference, and no explicit "
                 "'Support issue traceability: no issue closed' marker."
             )
-            print("::warning::{}".format(warning))
+            print(f"::warning::{warning}")
             step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
             if step_summary:
                 with open(step_summary, "a", encoding="utf-8") as handle:
@@ -692,7 +930,7 @@ def main(argv: list[str] | None = None) -> int:
                             **summary
                         )
                     )
-                    handle.write("- Action: {}\n".format(warning))
+                    handle.write(f"- Action: {warning}\n")
     if summary.get("traceability_failed"):
         if not args.enforce_support_traceability:
             return 0

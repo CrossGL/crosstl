@@ -4,15 +4,15 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 from ..ast import (
-    AssignmentNode,
-    ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
+    AssignmentNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    ContinueNode,
     ConstructorNode,
+    ContinueNode,
     DoWhileNode,
     ForInNode,
     ForNode,
@@ -25,9 +25,9 @@ from ..ast import (
     MeshOpNode,
     PreprocessorNode,
     PrimitiveType,
+    RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
-    RangeNode,
     ReturnNode,
     StructNode,
     SwitchNode,
@@ -37,24 +37,15 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
-from .array_utils import (
-    parse_array_type,
-    format_c_style_array_declaration,
-    split_array_type_suffix,
-    get_array_size_from_node,
-    evaluate_literal_int_expression,
-    collect_literal_int_constants,
-    collect_struct_member_types,
-)
 from ..validation import (
+    IMAGE_RESOURCE_INTRINSIC_NAMES,
+    INTEGER_COORDINATE_INTRINSIC_NAMES,
     collect_cbuffer_declaration_name_conflicts,
     collect_cbuffer_member_global_conflicts,
     collect_duplicate_cbuffer_member_names,
     collect_duplicate_cbuffer_names,
     collect_non_resource_global_resource_shadows,
     expression_debug_name,
-    IMAGE_RESOURCE_INTRINSIC_NAMES,
-    INTEGER_COORDINATE_INTRINSIC_NAMES,
     texture_bias_argument_index,
     texture_compare_argument_index,
     texture_gather_component_argument_index,
@@ -65,6 +56,218 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
+from .array_utils import (
+    collect_literal_int_constants,
+    collect_struct_member_types,
+    evaluate_literal_int_expression,
+    format_c_style_array_declaration,
+    get_array_size_from_node,
+    parse_array_type,
+    split_array_type_suffix,
+)
+from .enum_utils import (
+    collect_enum_struct_variant_fields,
+    collect_enum_type_names,
+    collect_enum_variant_constants,
+    collect_enum_variant_constructor_fields,
+    collect_enum_variant_constructors,
+    collect_generic_enum_specialization_member_types,
+    collect_generic_enum_specializations,
+    collect_generic_enum_struct_definitions,
+    collect_generic_enum_variant_constants,
+    collect_plain_enums,
+    collect_struct_payload_enums,
+    enum_value_expression,
+    generate_enum_constants,
+    generate_enum_constructor_call,
+    generate_enum_constructor_expression,
+    generate_enum_constructor_functions,
+    generate_enum_structs,
+    generate_generic_enum_constants,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_structs,
+    generic_enum_specialized_type_name,
+    infer_enum_constructor_type,
+    sanitize_type_name,
+)
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
+)
+from .generic_struct_utils import (
+    collect_generic_struct_definitions,
+    collect_generic_struct_specialization_member_types,
+    collect_generic_struct_specializations,
+    generate_generic_structs,
+    generate_struct_constructor_expression,
+    generic_struct_specialized_type_name,
+    infer_struct_constructor_type,
+)
+from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .image_access_contracts import (
+    collect_function_image_access_requirements,
+    collect_function_parameter_names,
+    default_storage_image_channel_count,
+    floating_coordinate_dimension_from_type_name,
+    image_access_diagnostic_name,
+    image_access_requirement_label,
+    image_access_satisfies_requirement,
+    image_atomic_explicit_format_component_kind,
+    image_atomic_format_error,
+    image_atomic_result_kind_error,
+    image_atomic_result_kind_mismatch,
+)
+from .image_access_contracts import (
+    image_atomic_value_arguments as shared_image_atomic_value_arguments,
+)
+from .image_access_contracts import (
+    image_atomic_value_kind_error,
+    image_atomic_value_kind_mismatch,
+    image_format_component_kind,
+    image_format_or_default_channel_count,
+    image_format_result_type,
+    image_load_result_kind_error,
+    image_load_result_kind_mismatch,
+    image_load_result_shape_error,
+    image_load_result_shape_mismatch,
+    image_multisample_sample_argument_index,
+    image_multisample_sample_type_error,
+    image_multisample_sample_type_mismatch,
+    image_resource_metadata,
+    image_store_value_kind_error,
+    image_store_value_kind_mismatch,
+    image_store_value_shape_error,
+    image_store_value_shape_mismatch,
+    integer_coordinate_dimension_from_type_name,
+    is_floating_scalar_type_name,
+    is_glsl_float_image_resource,
+    is_glsl_integer_image_type,
+    is_glsl_storage_image_type,
+    is_image_atomic_operation,
+    is_image_format_attribute,
+    is_image_resource_operation,
+    is_integer_coordinate_type_name,
+    is_integer_scalar_type_name,
+    is_numeric_scalar_type_name,
+    is_projected_texture_basic_offset_operation,
+    is_projected_texture_basic_operation,
+    is_projected_texture_compare_operation,
+    is_projected_texture_grad_offset_operation,
+    is_projected_texture_grad_operation,
+    is_projected_texture_lod_offset_operation,
+    is_projected_texture_lod_operation,
+    is_projected_texture_operation,
+    is_resource_access_attribute,
+    is_resource_samples_query_operation,
+    is_resource_size_query_operation,
+    is_scalar_image_format,
+    is_storage_image_texture_comparison_operation,
+    is_storage_image_texture_operation,
+    is_texel_fetch_basic_operation,
+    is_texel_fetch_offset_operation,
+    is_texture_compare_basic_operation,
+    is_texture_compare_grad_offset_operation,
+    is_texture_compare_grad_operation,
+    is_texture_compare_lod_offset_operation,
+    is_texture_compare_lod_operation,
+    is_texture_compare_offset_operation,
+    is_texture_compare_operation,
+    is_texture_gather_basic_operation,
+    is_texture_gather_compare_operation,
+    is_texture_gather_multi_offset_operation,
+    is_texture_gather_offset_operation,
+    is_texture_gather_operation,
+    is_texture_gather_single_offset_operation,
+    is_texture_query_levels_operation,
+    is_texture_query_lod_operation,
+    is_texture_sample_offset_operation,
+    is_texture_samples_query_operation,
+    is_texture_sampling_operation,
+    is_two_component_image_format,
+    normalized_image_access,
+    numeric_component_count_from_type,
+    numeric_component_kind_from_type,
+    numeric_expression_component_count,
+    numeric_expression_component_kind,
+    numeric_scalar_expression_kind,
+    numeric_scalar_type_kind,
+    operation_argument_type_error,
+    operation_dimension_argument_error,
+    projected_texture_extra_argument_count_error,
+    record_explicit_image_metadata,
+    requires_integer_coordinate,
+    should_validate_image_load_result_shape,
+    storage_image_atomic_zero_value,
+    storage_image_format_store_constructor,
+    storage_image_load_component_suffix,
+    storage_image_store_constructors,
+    storage_image_store_value_expression,
+    storage_image_two_component_store_expression,
+    storage_image_zero_values,
+    supported_image_formats,
+)
+from .image_access_contracts import (
+    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
+)
+from .image_access_contracts import (
+    texture_compare_argument_error,
+    texture_compare_coordinate_error,
+    texture_compare_extra_argument_count_error,
+    texture_compare_offset_capability_error,
+    texture_compare_projected_coordinate_error,
+    texture_compare_projected_lod_array_error,
+    texture_coordinate_arguments_error,
+    texture_gather_capability_error,
+    texture_gather_compare_extra_argument_count_error,
+    texture_gather_component_count_error,
+    texture_gather_component_literal_error,
+    texture_gather_offset_argument_count_error,
+    texture_gather_offset_capability_error,
+    texture_gather_offsets_argument_count_error,
+    texture_gather_operation_error,
+    texture_image_resource_operation_names,
+    texture_multisample_sample_type_error,
+    texture_query_levels_multisample_expression,
+    texture_query_lod_coordinate_dimension_error,
+    texture_query_lod_coordinate_swizzle,
+    texture_query_lod_coordinate_type_error,
+    texture_resource_dimension_descriptor,
+    texture_resource_offset_dimension_key,
+    texture_sample_offset_capability_error,
+    texture_samples_query_expression,
+)
+from .image_access_contracts import (
+    unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
+)
+from .image_access_contracts import (
+    unsupported_multisample_texture_compare_scalar_expression,
+    unsupported_multisample_texture_gather_compare_vector_expression,
+    unsupported_multisample_texture_query_lod_expression,
+    unsupported_projected_texture_operation_error,
+    unsupported_storage_image_texture_comparison_scalar_expression,
+    unsupported_storage_image_texture_operation_vector_expression,
+    unsupported_texture_compare_operation_error,
+    unsupported_texture_compare_scalar_expression,
+    unsupported_texture_gather_call_expression,
+    unsupported_texture_gather_compare_call_expression,
+    unsupported_texture_query_levels_expression,
+    unsupported_texture_query_lod_expression,
+    unsupported_texture_samples_query_call_expression,
+    validate_texture_operation_arity,
+)
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
+from .resource_arrays import collect_resource_array_size_hints
 from .stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -77,198 +280,6 @@ from .stage_utils import (
     order_functions_by_dependencies,
     should_emit_qualified_function,
     stage_matches,
-)
-from .resource_arrays import collect_resource_array_size_hints
-from .enum_utils import (
-    collect_enum_type_names,
-    collect_enum_struct_variant_fields,
-    collect_enum_variant_constructor_fields,
-    collect_enum_variant_constructors,
-    collect_enum_variant_constants,
-    collect_generic_enum_specialization_member_types,
-    collect_generic_enum_specializations,
-    collect_generic_enum_struct_definitions,
-    collect_generic_enum_variant_constants,
-    collect_plain_enums,
-    collect_struct_payload_enums,
-    enum_value_expression,
-    generate_enum_constructor_expression,
-    generate_generic_enum_constructor_functions,
-    generate_generic_enum_constants,
-    generate_generic_enum_structs,
-    generate_enum_constructor_call,
-    generate_enum_constructor_functions,
-    generate_enum_constants,
-    generate_enum_structs,
-    generic_enum_specialized_type_name,
-    infer_enum_constructor_type,
-    sanitize_type_name,
-)
-from .generic_struct_utils import (
-    collect_generic_struct_definitions,
-    collect_generic_struct_specialization_member_types,
-    collect_generic_struct_specializations,
-    generate_generic_structs,
-    generate_struct_constructor_expression,
-    generic_struct_specialized_type_name,
-    infer_struct_constructor_type,
-)
-from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
-    generic_function_call_name,
-    generic_function_emission_list,
-    generic_function_parameters,
-    numeric_trait_method_result_type,
-    prepare_generic_function_specializations,
-)
-from .glsl_buffer_layout import glsl_buffer_block_node_type
-from .image_access_contracts import (
-    collect_function_image_access_requirements,
-    collect_function_parameter_names,
-    default_storage_image_channel_count,
-    explicit_image_format,
-    floating_coordinate_dimension_from_type_name,
-    image_atomic_explicit_format_component_kind,
-    image_atomic_format_error,
-    image_atomic_result_kind_error,
-    image_atomic_result_kind_mismatch,
-    image_atomic_value_arguments as shared_image_atomic_value_arguments,
-    image_atomic_value_kind_error,
-    image_atomic_value_kind_mismatch,
-    image_load_result_kind_error,
-    image_load_result_kind_mismatch,
-    image_load_result_shape_error,
-    image_load_result_shape_mismatch,
-    image_format_or_default_channel_count,
-    image_format_component_kind,
-    image_format_result_type,
-    image_access_diagnostic_name,
-    image_access_requirement_label,
-    image_access_satisfies_requirement,
-    image_multisample_sample_argument_index,
-    image_multisample_sample_type_error,
-    image_multisample_sample_type_mismatch,
-    image_store_value_kind_error,
-    image_store_value_kind_mismatch,
-    image_store_value_shape_error,
-    image_store_value_shape_mismatch,
-    is_image_format_attribute,
-    is_image_atomic_operation,
-    is_image_resource_operation,
-    integer_coordinate_dimension_from_type_name,
-    is_glsl_float_image_resource,
-    is_glsl_integer_image_type,
-    is_glsl_storage_image_type,
-    is_floating_scalar_type_name,
-    is_integer_coordinate_type_name,
-    is_integer_scalar_type_name,
-    is_numeric_scalar_type_name,
-    is_resource_samples_query_operation,
-    is_resource_size_query_operation,
-    is_resource_access_attribute,
-    is_projected_texture_basic_offset_operation,
-    is_projected_texture_basic_operation,
-    is_projected_texture_compare_operation,
-    is_projected_texture_grad_offset_operation,
-    is_projected_texture_grad_operation,
-    is_projected_texture_lod_offset_operation,
-    is_projected_texture_lod_operation,
-    is_projected_texture_operation,
-    is_scalar_image_format,
-    is_storage_image_texture_comparison_operation,
-    is_storage_image_texture_operation,
-    is_texel_fetch_basic_operation,
-    is_texel_fetch_offset_operation,
-    is_texture_compare_operation,
-    is_texture_compare_basic_operation,
-    is_texture_compare_grad_offset_operation,
-    is_texture_compare_grad_operation,
-    is_texture_compare_lod_offset_operation,
-    is_texture_compare_lod_operation,
-    is_texture_compare_offset_operation,
-    is_texture_gather_compare_operation,
-    is_texture_gather_basic_operation,
-    is_texture_gather_operation,
-    is_texture_gather_multi_offset_operation,
-    is_texture_gather_offset_operation,
-    is_texture_gather_single_offset_operation,
-    is_texture_query_levels_operation,
-    is_texture_query_lod_operation,
-    is_texture_samples_query_operation,
-    is_texture_sampling_operation,
-    is_texture_sample_offset_operation,
-    is_two_component_image_format,
-    normalized_image_access,
-    numeric_component_count_from_type,
-    numeric_component_kind_from_type,
-    numeric_expression_component_count,
-    numeric_expression_component_kind,
-    numeric_scalar_expression_kind,
-    numeric_scalar_type_kind,
-    operation_argument_type_error,
-    operation_dimension_argument_error,
-    image_resource_metadata,
-    projected_texture_extra_argument_count_error,
-    record_explicit_image_metadata,
-    should_validate_image_load_result_shape,
-    storage_image_atomic_zero_value,
-    storage_image_format_store_constructor,
-    storage_image_load_component_suffix,
-    storage_image_store_constructors,
-    storage_image_store_value_expression,
-    storage_image_two_component_store_expression,
-    storage_image_zero_values,
-    supported_image_formats,
-    texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
-    texture_compare_argument_error,
-    texture_compare_coordinate_error,
-    texture_compare_extra_argument_count_error,
-    texture_compare_offset_capability_error,
-    texture_compare_projected_lod_array_error,
-    texture_compare_projected_coordinate_error,
-    texture_coordinate_arguments_error,
-    texture_gather_capability_error,
-    texture_gather_component_count_error,
-    texture_gather_component_literal_error,
-    texture_gather_compare_extra_argument_count_error,
-    texture_gather_offset_argument_count_error,
-    texture_gather_offset_capability_error,
-    texture_gather_offsets_argument_count_error,
-    texture_gather_operation_error,
-    texture_image_resource_operation_names,
-    texture_query_levels_multisample_expression,
-    texture_query_lod_coordinate_dimension_error,
-    texture_query_lod_coordinate_swizzle,
-    texture_query_lod_coordinate_type_error,
-    texture_resource_dimension_descriptor,
-    texture_resource_offset_dimension_key,
-    texture_samples_query_expression,
-    texture_sample_offset_capability_error,
-    texture_multisample_sample_type_error,
-    validate_texture_operation_arity,
-    requires_integer_coordinate,
-    unsupported_multisample_texture_compare_scalar_expression,
-    unsupported_multisample_texture_gather_compare_vector_expression,
-    unsupported_multisample_texture_query_lod_expression,
-    unsupported_projected_texture_operation_error,
-    unsupported_image_atomic_expression as image_atomic_diagnostic_expression,
-    unsupported_storage_image_texture_comparison_scalar_expression,
-    unsupported_storage_image_texture_operation_vector_expression,
-    unsupported_texture_gather_compare_call_expression,
-    unsupported_texture_gather_call_expression,
-    unsupported_texture_compare_scalar_expression,
-    unsupported_texture_compare_operation_error,
-    unsupported_texture_query_levels_expression,
-    unsupported_texture_query_lod_expression,
-    unsupported_texture_samples_query_call_expression,
-)
-from .match_utils import (
-    generate_match_expression_assignment,
-    generate_ordered_conditional_match,
-    generate_switch_match,
-    infer_match_expression_result_type,
-    is_switch_lowerable_match,
 )
 
 
@@ -601,6 +612,7 @@ class GLSLCodeGen:
         "QuadReadLaneAt": 2,
         "WaveMatch": 1,
         "WaveMultiPrefixSum": 2,
+        "WaveMultiPrefixCountBits": 2,
         "WaveMultiPrefixProduct": 2,
         "WaveMultiPrefixBitAnd": 2,
         "WaveMultiPrefixBitOr": 2,
@@ -618,7 +630,7 @@ class GLSLCodeGen:
         "WaveActiveAnyTrue": "subgroupAny",
         "WaveActiveAllEqual": "subgroupAllEqual",
         "WaveActiveBallot": "subgroupBallot",
-        "WaveReadLaneAt": "subgroupBroadcast",
+        "WaveReadLaneAt": "subgroupShuffle",
         "WaveReadLaneFirst": "subgroupBroadcastFirst",
         "WavePrefixSum": "subgroupExclusiveAdd",
         "WavePrefixProduct": "subgroupExclusiveMul",
@@ -652,37 +664,68 @@ class GLSLCodeGen:
         "QuadReadAcrossY": "#extension GL_KHR_shader_subgroup_quad : require",
         "QuadReadAcrossDiagonal": "#extension GL_KHR_shader_subgroup_quad : require",
         "QuadReadLaneAt": "#extension GL_KHR_shader_subgroup_quad : require",
+        "WaveMatch": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixSum": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixCountBits": (
+            "#extension GL_KHR_shader_subgroup_ballot : require"
+        ),
+        "WaveMultiPrefixProduct": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitAnd": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitOr": "#extension GL_KHR_shader_subgroup_ballot : require",
+        "WaveMultiPrefixBitXor": "#extension GL_KHR_shader_subgroup_ballot : require",
     }
-    GLSL_WAVE_DIAGNOSTIC_OPERATIONS = {
+    GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
         "WaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits",
         "WaveMultiPrefixProduct",
         "WaveMultiPrefixBitAnd",
         "WaveMultiPrefixBitOr",
         "WaveMultiPrefixBitXor",
     }
-    GLSL_WAVE_DIAGNOSTIC_REASONS = {
-        "WaveMatch": "has no GL_KHR_shader_subgroup equivalent",
-        "WaveMultiPrefixSum": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixProduct": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitAnd": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitOr": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
-        "WaveMultiPrefixBitXor": (
-            "requires partition-mask prefix semantics with no "
-            "GL_KHR_shader_subgroup equivalent"
-        ),
+    GLSL_WAVE_HELPER_VALUE_TYPES = (
+        "bool",
+        "bvec2",
+        "bvec3",
+        "bvec4",
+        "int",
+        "ivec2",
+        "ivec3",
+        "ivec4",
+        "uint",
+        "uvec2",
+        "uvec3",
+        "uvec4",
+        "float",
+        "vec2",
+        "vec3",
+        "vec4",
+        "double",
+        "dvec2",
+        "dvec3",
+        "dvec4",
+    )
+    GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS = {
+        "WaveMultiPrefixSum",
+        "WaveMultiPrefixProduct",
+    }
+    GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS = {
+        "WaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor",
+    }
+    GLSL_WAVE_MULTI_PREFIX_OPERATIONS = {
+        *GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS,
+        "WaveMultiPrefixCountBits",
+        *GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS,
+    }
+    GLSL_WAVE_MULTI_PREFIX_HELPERS = {
+        "WaveMultiPrefixSum": "crossglWaveMultiPrefixSum",
+        "WaveMultiPrefixCountBits": "crossglWaveMultiPrefixCountBits",
+        "WaveMultiPrefixProduct": "crossglWaveMultiPrefixProduct",
+        "WaveMultiPrefixBitAnd": "crossglWaveMultiPrefixBitAnd",
+        "WaveMultiPrefixBitOr": "crossglWaveMultiPrefixBitOr",
+        "WaveMultiPrefixBitXor": "crossglWaveMultiPrefixBitXor",
     }
     GLSL_WAVE_NUMERIC_OPERATIONS = {
         "WaveActiveSum",
@@ -785,6 +828,7 @@ class GLSLCodeGen:
         self.task_payload_shared_variables = []
         self.current_target_stage = None
         self.stage_io_used_locations = {}
+        self.stage_io_used_components = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.structs_by_name = {}
@@ -1325,7 +1369,167 @@ class GLSLCodeGen:
             line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
             if line and line not in lines:
                 lines.append(line)
+            if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
+                shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
+                if shuffle_line not in lines:
+                    lines.append(shuffle_line)
         return lines
+
+    def generate_glsl_wave_helpers(self, ast, target_stage=None):
+        operations = self.glsl_wave_operations(ast, target_stage)
+        needs_match = "WaveMatch" in operations
+        multi_prefix_operations = [
+            operation
+            for operation in self.GLSL_WAVE_MULTI_PREFIX_HELPERS
+            if operation in operations
+        ]
+        if not needs_match and not multi_prefix_operations:
+            return ""
+
+        code = self.glsl_wave_mask_contains_helper()
+        if needs_match:
+            code += self.glsl_wave_mask_set_helper()
+            code += self.glsl_wave_match_helpers()
+        for operation in multi_prefix_operations:
+            code += self.glsl_wave_multi_prefix_helper(operation)
+        return code
+
+    def glsl_wave_mask_contains_helper(self):
+        return (
+            "bool crossglWaveMaskContains(uvec4 mask, uint lane) {\n"
+            "    if (lane < 32u) {\n"
+            "        return (mask.x & (1u << lane)) != 0u;\n"
+            "    }\n"
+            "    if (lane < 64u) {\n"
+            "        return (mask.y & (1u << (lane - 32u))) != 0u;\n"
+            "    }\n"
+            "    if (lane < 96u) {\n"
+            "        return (mask.z & (1u << (lane - 64u))) != 0u;\n"
+            "    }\n"
+            "    return (mask.w & (1u << (lane - 96u))) != 0u;\n"
+            "}\n\n"
+        )
+
+    def glsl_wave_mask_set_helper(self):
+        return (
+            "void crossglWaveMaskSet(inout uvec4 mask, uint lane) {\n"
+            "    if (lane < 32u) {\n"
+            "        mask.x |= (1u << lane);\n"
+            "    } else if (lane < 64u) {\n"
+            "        mask.y |= (1u << (lane - 32u));\n"
+            "    } else if (lane < 96u) {\n"
+            "        mask.z |= (1u << (lane - 64u));\n"
+            "    } else {\n"
+            "        mask.w |= (1u << (lane - 96u));\n"
+            "    }\n"
+            "}\n\n"
+        )
+
+    def glsl_wave_match_helpers(self):
+        code = ""
+        for value_type in self.GLSL_WAVE_HELPER_VALUE_TYPES:
+            condition = self.glsl_wave_match_condition(value_type)
+            code += (
+                f"uvec4 crossglWaveMatch({value_type} value) {{\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uvec4 result = uvec4(0u);\n"
+                "    for (uint lane = 0u; lane < gl_SubgroupSize; ++lane) {\n"
+                "        if (crossglWaveMaskContains(activeMask, lane) && "
+                f"{condition}) {{\n"
+                "            crossglWaveMaskSet(result, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
+
+    def glsl_wave_match_condition(self, value_type):
+        if value_type.startswith(("bvec", "ivec", "uvec", "vec", "dvec")):
+            return "all(equal(subgroupShuffle(value, lane), value))"
+        return "subgroupShuffle(value, lane) == value"
+
+    def glsl_wave_multi_prefix_helper(self, operation):
+        helper_name = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
+        if operation == "WaveMultiPrefixCountBits":
+            return (
+                f"uint {helper_name}(bool value, uvec4 mask) {{\n"
+                "    uint laneValue = value ? 1u : 0u;\n"
+                "    uint result = 0u;\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uint limit = min(gl_SubgroupInvocationID, gl_SubgroupSize);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (crossglWaveMaskContains(mask, lane) && "
+                "crossglWaveMaskContains(activeMask, lane)) {\n"
+                "            result += subgroupShuffle(laneValue, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+
+        identity, assignment = self.glsl_wave_multi_prefix_identity_and_assignment(
+            operation
+        )
+        code = ""
+        for value_type in self.glsl_wave_multi_prefix_value_types(operation):
+            code += (
+                f"{value_type} {helper_name}({value_type} value, uvec4 mask) {{\n"
+                f"    {value_type} result = {value_type}({identity});\n"
+                "    uvec4 activeMask = subgroupBallot(true);\n"
+                "    uint limit = min(gl_SubgroupInvocationID, gl_SubgroupSize);\n"
+                "    for (uint lane = 0u; lane < limit; ++lane) {\n"
+                "        if (crossglWaveMaskContains(mask, lane) && "
+                "crossglWaveMaskContains(activeMask, lane)) {\n"
+                f"            result {assignment} subgroupShuffle(value, lane);\n"
+                "        }\n"
+                "    }\n"
+                "    return result;\n"
+                "}\n\n"
+            )
+        return code
+
+    def glsl_wave_multi_prefix_identity_and_assignment(self, operation):
+        if operation == "WaveMultiPrefixProduct":
+            return "1", "*="
+        if operation == "WaveMultiPrefixBitAnd":
+            return "~0", "&="
+        if operation == "WaveMultiPrefixBitOr":
+            return "0", "|="
+        if operation == "WaveMultiPrefixBitXor":
+            return "0", "^="
+        return "0", "+="
+
+    def glsl_wave_multi_prefix_value_types(self, operation):
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
+            return (
+                "int",
+                "ivec2",
+                "ivec3",
+                "ivec4",
+                "uint",
+                "uvec2",
+                "uvec3",
+                "uvec4",
+            )
+        return (
+            "int",
+            "ivec2",
+            "ivec3",
+            "ivec4",
+            "uint",
+            "uvec2",
+            "uvec3",
+            "uvec4",
+            "float",
+            "vec2",
+            "vec3",
+            "vec4",
+            "double",
+            "dvec2",
+            "dvec3",
+            "dvec4",
+        )
 
     def uses_ray_extension_type(self, ast, target_stage=None):
         return (
@@ -1525,6 +1729,7 @@ class GLSLCodeGen:
         self.current_target_stage = target_stage
         self.task_payload_shared_variables = []
         self.stage_io_used_locations = {}
+        self.stage_io_used_components = {}
         self.stage_io_declarations = {}
         self.flattened_stage_variables = set()
         self.fragment_output_member_layout_maps = {}
@@ -1704,6 +1909,7 @@ class GLSLCodeGen:
             self,
             self.generic_enum_specializations,
         )
+        code += self.generate_glsl_wave_helpers(ast, target_stage)
 
         global_vars = list(getattr(ast, "global_variables", []) or [])
         stage_local_resource_vars = collect_stage_local_variables(
@@ -2047,7 +2253,10 @@ class GLSLCodeGen:
                 )
             else:
                 code += self.generate_global_variable_declaration(
-                    node, declaration, vtype
+                    node,
+                    declaration,
+                    vtype,
+                    mapped_type_for_layout=f"{mapped_type}{array_suffix}",
                 )
 
         for node in stage_local_interface_vars:
@@ -2776,7 +2985,7 @@ class GLSLCodeGen:
                 )
             )
         suffix = "_".join(suffix_parts)
-        return "{}__glsl_{}".format(sanitize_type_name(func_name), suffix)
+        return f"{sanitize_type_name(func_name)}__glsl_{suffix}"
 
     def glsl_resource_function_call_specialization(self, func_name, args):
         key, _ = self.glsl_resource_function_specialization_key(
@@ -5070,6 +5279,10 @@ class GLSLCodeGen:
         return "\n".join(declarations) + ("\n" if declarations else "")
 
     def stage_io_layout_location(self, layout):
+        value = self.stage_io_layout_value(layout, "location")
+        return int(value) if value is not None and value.isdigit() else None
+
+    def stage_io_layout_value(self, layout, name):
         if not layout.startswith("layout("):
             return None
         start = layout.find("(")
@@ -5079,14 +5292,26 @@ class GLSLCodeGen:
 
         for item in layout[start + 1 : end].split(","):
             key, separator, value = item.partition("=")
-            if separator and key.strip() == "location":
-                value = value.strip()
-                return int(value) if value.isdigit() else None
+            if separator and key.strip() == name:
+                return value.strip()
         return None
 
+    def stage_io_layout_int_value(self, layout, name):
+        value = self.stage_io_layout_value(layout, name)
+        if value is None:
+            return None
+        return int(value) if value.isdigit() else None
+
+    def stage_io_layout_component(self, layout):
+        return self.stage_io_layout_int_value(layout, "component")
+
+    def stage_io_layout_index(self, layout):
+        index = self.stage_io_layout_int_value(layout, "index")
+        return 0 if index is None else index
+
     def stage_io_location_count(self, mapped_type):
-        base_type, array_size = parse_array_type(str(mapped_type))
-        array_count = max(array_size or 1, 1)
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        array_count = self.stage_io_array_location_count(array_suffix)
         matrix_count = 1
 
         matrix_size = ""
@@ -5102,6 +5327,62 @@ class GLSLCodeGen:
 
         return max(matrix_count * array_count, 1)
 
+    def stage_io_component_count(self, mapped_type):
+        base_type, _ = split_array_type_suffix(str(mapped_type))
+        normalized = str(base_type)
+        if normalized in {
+            "float",
+            "int",
+            "uint",
+            "bool",
+            "half",
+            "short",
+            "ushort",
+        }:
+            return 1
+        if normalized == "double":
+            return 2
+
+        vector_prefix_widths = {
+            "vec": 1,
+            "ivec": 1,
+            "uvec": 1,
+            "bvec": 1,
+            "dvec": 2,
+        }
+        for prefix, component_width in vector_prefix_widths.items():
+            if normalized.startswith(prefix):
+                size = normalized[len(prefix) :]
+                if size.isdigit():
+                    return int(size) * component_width
+        return 4
+
+    def stage_io_array_location_count(self, array_suffix):
+        if not array_suffix:
+            return 1
+
+        count = 1
+        index = 0
+        while index < len(array_suffix):
+            if array_suffix[index] != "[":
+                return count
+            close_index = array_suffix.find("]", index + 1)
+            if close_index == -1:
+                return count
+            size = array_suffix[index + 1 : close_index].strip()
+            if not size:
+                index = close_index + 1
+                continue
+            try:
+                dimension = int(size, 10)
+            except ValueError:
+                return count
+            if dimension <= 0:
+                return count
+            count *= dimension
+            index = close_index + 1
+        return count
+
     def reserve_stage_io_layout(
         self, used_locations, stage_name, direction, layout, mapped_type, name
     ):
@@ -5111,6 +5392,22 @@ class GLSLCodeGen:
 
         count = self.stage_io_location_count(mapped_type)
         end = start + count - 1
+        component = self.stage_io_layout_component(layout)
+        index = self.stage_io_layout_index(layout)
+        if component is not None or self.stage_io_layout_has(layout, {"index"}):
+            self.reserve_stage_io_component_layout(
+                used_locations,
+                stage_name,
+                direction,
+                start,
+                end,
+                component,
+                index,
+                mapped_type,
+                name,
+            )
+            return
+
         ranges = used_locations.setdefault((stage_name, direction), [])
         for used_start, used_end, used_name in ranges:
             if start <= used_end and used_start <= end:
@@ -5122,7 +5419,87 @@ class GLSLCodeGen:
                     f"overlaps '{used_name}' "
                     f"{self.stage_io_location_label(used_start, used_end)}"
                 )
+        for (
+            used_start,
+            used_end,
+            used_component_start,
+            used_component_end,
+            used_index,
+            used_name,
+        ) in self.stage_io_used_components.get((stage_name, direction), []):
+            if used_index != 0:
+                continue
+            if start <= used_end and used_start <= end:
+                raise ValueError(
+                    f"Conflicting OpenGL {stage_name} {direction} location "
+                    f"for '{name}': {self.stage_io_location_label(start, end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                )
         ranges.append((start, end, name))
+
+    def reserve_stage_io_component_layout(
+        self,
+        used_locations,
+        stage_name,
+        direction,
+        start,
+        end,
+        component,
+        index,
+        mapped_type,
+        name,
+    ):
+        component_start = 0 if component is None else component
+        component_count = (
+            4 if component is None else self.stage_io_component_count(mapped_type)
+        )
+        component_end = component_start + component_count - 1
+
+        for used_start, used_end, used_name in used_locations.get(
+            (stage_name, direction), []
+        ):
+            if start <= used_end and used_start <= end:
+                if index != 0:
+                    continue
+                if used_start == start and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    f"Conflicting OpenGL {stage_name} {direction} location "
+                    f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
+                    f"overlaps '{used_name}' "
+                    f"{self.stage_io_location_label(used_start, used_end)}"
+                )
+
+        entries = self.stage_io_used_components.setdefault((stage_name, direction), [])
+        for (
+            used_start,
+            used_end,
+            used_component_start,
+            used_component_end,
+            used_index,
+            used_name,
+        ) in entries:
+            if start <= used_end and used_start <= end and index == used_index:
+                if (
+                    used_start == start
+                    and used_end == end
+                    and used_component_start == component_start
+                    and used_component_end == component_end
+                    and used_name == name
+                ):
+                    return
+                if (
+                    component_start <= used_component_end
+                    and used_component_start <= component_end
+                ):
+                    raise ValueError(
+                        f"Conflicting OpenGL {stage_name} {direction} location "
+                        f"for '{name}': {self.stage_io_component_location_label(start, end, component_start, component_end)} "
+                        f"overlaps '{used_name}' "
+                        f"{self.stage_io_component_location_label(used_start, used_end, used_component_start, used_component_end)}"
+                    )
+        entries.append((start, end, component_start, component_end, index, name))
 
     def reserve_stage_io_declaration(self, stage_name, direction, name, declaration):
         key = (stage_name, direction, name)
@@ -5148,6 +5525,19 @@ class GLSLCodeGen:
         if start == end:
             return f"location {start}"
         return f"locations {start}-{end}"
+
+    def stage_io_component_label(self, start, end):
+        if start == end:
+            return f"component {start}"
+        return f"components {start}-{end}"
+
+    def stage_io_component_location_label(
+        self, start, end, component_start, component_end
+    ):
+        return (
+            f"{self.stage_io_location_label(start, end)} "
+            f"{self.stage_io_component_label(component_start, component_end)}"
+        )
 
     def struct_member_names(self, struct_names):
         names = set()
@@ -5223,6 +5613,14 @@ class GLSLCodeGen:
     def next_available_stage_io_layout(self, stage_name, direction, mapped_type):
         count = self.stage_io_location_count(mapped_type)
         ranges = sorted(self.stage_io_used_locations.get((stage_name, direction), []))
+        ranges.extend(
+            sorted(
+                (start, end, name)
+                for start, end, _, _, _, name in self.stage_io_used_components.get(
+                    (stage_name, direction), []
+                )
+            )
+        )
         location = 0
 
         while True:
@@ -5316,7 +5714,8 @@ class GLSLCodeGen:
                 member.name,
             )
             prefix = self.stage_io_declaration_prefix(member, "in")
-            declaration = f"{prefix} {member_type} {member.name};"
+            member_decl = format_c_style_array_declaration(member_type, member.name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "input", member.name, declaration
             ):
@@ -5326,7 +5725,10 @@ class GLSLCodeGen:
     def generate_legacy_output_declarations(self, node):
         code = ""
         for member in getattr(node, "members", []) or []:
-            declaration = f"out {self.member_type_name(member)} {member.name};"
+            member_decl = format_c_style_array_declaration(
+                self.member_type_name(member), member.name
+            )
+            declaration = f"out {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "output", member.name, declaration
             ):
@@ -5352,7 +5754,8 @@ class GLSLCodeGen:
             prefix = self.stage_io_declaration_prefix(member, "out")
             member_type = self.member_type_name(member)
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
-            declaration = f"{prefix} {member_type} {output_name};"
+            member_decl = format_c_style_array_declaration(member_type, output_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "vertex", "output", output_name, declaration
             ):
@@ -5378,7 +5781,8 @@ class GLSLCodeGen:
             member_type = self.member_type_name(member)
             prefix = self.stage_io_declaration_prefix(member, "in")
             prefix = self.stage_io_prefix_with_required_flat(prefix, member_type)
-            declaration = f"{prefix} {member_type} {input_name};"
+            member_decl = format_c_style_array_declaration(member_type, input_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "fragment", "input", input_name, declaration
             ):
@@ -5408,7 +5812,8 @@ class GLSLCodeGen:
                 output_name,
             )
             prefix = self.stage_io_declaration_prefix(member, "out", layout)
-            declaration = f"{prefix} {member_type} {output_name};"
+            member_decl = format_c_style_array_declaration(member_type, output_name)
+            declaration = f"{prefix} {member_decl};"
             if self.reserve_stage_io_declaration(
                 "fragment", "output", output_name, declaration
             ):
@@ -6204,7 +6609,46 @@ class GLSLCodeGen:
             return "const "
         return "uniform "
 
-    def generate_global_variable_declaration(self, node, declaration, vtype):
+    def global_stage_io_layout_direction(self, qualifier):
+        parts = qualifier.split()
+        if "in" in parts:
+            return "input"
+        if "out" in parts:
+            return "output"
+        return None
+
+    def reserve_global_stage_io_layout(self, node, qualifier, layout, mapped_type):
+        direction = self.global_stage_io_layout_direction(qualifier)
+        if direction is None:
+            return
+
+        stage_name = self.current_target_stage or "global"
+        self.reserve_stage_io_layout(
+            self.stage_io_used_locations,
+            stage_name,
+            direction,
+            layout,
+            mapped_type,
+            self.resource_node_name(node, "<unnamed>"),
+        )
+
+    def stage_io_layout_has(self, layout, names):
+        if not layout.startswith("layout("):
+            return False
+        start = layout.find("(")
+        end = layout.rfind(")")
+        if start == -1 or end == -1 or end <= start:
+            return False
+
+        for item in layout[start + 1 : end].split(","):
+            key = item.partition("=")[0].strip()
+            if key in names:
+                return True
+        return False
+
+    def generate_global_variable_declaration(
+        self, node, declaration, vtype, mapped_type_for_layout=None
+    ):
         builtin_output = self.fragment_output_variable_builtin_target(node)
         if builtin_output is not None:
             self.current_identifier_aliases[self.resource_node_name(node, "")] = (
@@ -6220,14 +6664,23 @@ class GLSLCodeGen:
                 f" = {self.generate_expression_with_expected(initial_value, vtype)}"
             )
         layout = self.glsl_variable_layout_prefix(node)
+        self.reserve_global_stage_io_layout(
+            node,
+            qualifier,
+            layout,
+            mapped_type_for_layout if mapped_type_for_layout is not None else vtype,
+        )
         return f"{layout}{qualifier}{declaration}{initializer};\n"
 
     def generate_stage_local_interface_variable_declaration(self, node):
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
+        mapped_type = f"{self.map_type(vtype)}{array_suffix}"
         declaration = format_c_style_array_declaration(
-            f"{self.map_type(vtype)}{array_suffix}", self.resource_node_name(node, "")
+            mapped_type, self.resource_node_name(node, "")
         )
-        return self.generate_global_variable_declaration(node, declaration, vtype)
+        return self.generate_global_variable_declaration(
+            node, declaration, vtype, mapped_type_for_layout=mapped_type
+        )
 
     def fragment_output_variable_builtin_target(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
@@ -6669,7 +7122,11 @@ class GLSLCodeGen:
                 "WaveActiveAllEqual",
             }:
                 return "bool"
-            if expr.operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+            if expr.operation in {
+                "WaveActiveCountBits",
+                "WavePrefixCountBits",
+                "WaveMultiPrefixCountBits",
+            }:
                 return "uint"
             if expr.operation in {"WaveActiveBallot", "WaveMatch"}:
                 return "uvec4"
@@ -7779,14 +8236,6 @@ class GLSLCodeGen:
                 operation, f"expects {expected_arity} arguments, got {actual_arity}"
             )
 
-        if operation in self.GLSL_WAVE_DIAGNOSTIC_OPERATIONS:
-            return self.glsl_wave_diagnostic_expression(
-                operation,
-                self.GLSL_WAVE_DIAGNOSTIC_REASONS.get(
-                    operation, "has no GL_KHR_shader_subgroup equivalent"
-                ),
-            )
-
         type_diagnostic = self.glsl_wave_type_diagnostic(operation, arguments)
         if type_diagnostic is not None:
             return type_diagnostic
@@ -7804,6 +8253,14 @@ class GLSLCodeGen:
         if operation == "WavePrefixCountBits":
             predicate = self.generate_expression(arguments[0])
             return f"subgroupBallotExclusiveBitCount(subgroupBallot({predicate}))"
+        if operation == "WaveMatch":
+            value = self.generate_expression(arguments[0])
+            return f"crossglWaveMatch({value})"
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_OPERATIONS:
+            value = self.generate_expression(arguments[0])
+            mask = self.generate_expression(arguments[1])
+            helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
+            return f"{helper}({value}, {mask})"
 
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
@@ -7824,7 +8281,11 @@ class GLSLCodeGen:
             "WaveActiveAllEqual",
         }:
             return "bool"
-        if operation in {"WaveActiveCountBits", "WavePrefixCountBits"}:
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+        }:
             return "uint"
         if operation in {"WaveActiveBallot", "WaveMatch"}:
             return "uvec4"
@@ -7867,6 +8328,49 @@ class GLSLCodeGen:
                 {"float", "double", "int", "uint", "bool"},
                 allow_vectors=True,
             )
+        if operation == "WaveMatch":
+            return self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a scalar or vector",
+                "value",
+                {"float", "double", "int", "uint", "bool"},
+                allow_vectors=True,
+            )
+        if operation == "WaveMultiPrefixCountBits":
+            diagnostic = self.glsl_wave_validate_argument_type(
+                operation,
+                args[0],
+                "a boolean scalar",
+                "value",
+                {"bool"},
+                allow_vectors=False,
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_NUMERIC_OPERATIONS:
+            diagnostic = self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "a numeric scalar or vector",
+                "value",
+                {"float", "double", "int", "uint"},
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
+        if operation in self.GLSL_WAVE_MULTI_PREFIX_INTEGER_OPERATIONS:
+            diagnostic = self.glsl_wave_validate_argument_kind(
+                operation,
+                args[0],
+                "an integer scalar or vector",
+                "value",
+                {"int", "uint"},
+            )
+            if diagnostic is not None:
+                return diagnostic
+            return self.glsl_wave_validate_mask_argument(operation, args[1])
         index_argument = self.GLSL_WAVE_LANE_INDEX_ARGUMENTS.get(operation)
         if index_argument is not None:
             return self.glsl_wave_validate_argument_type(
@@ -7919,6 +8423,22 @@ class GLSLCodeGen:
             ),
         )
 
+    def glsl_wave_validate_mask_argument(self, operation, arg):
+        result_type = self.expression_result_type(arg)
+        if result_type is None:
+            return None
+        mapped_type = self.map_type(result_type)
+        _base_type, array_suffix = split_array_type_suffix(mapped_type)
+        if array_suffix or mapped_type != "uvec4":
+            return self.glsl_wave_diagnostic_expression(
+                operation,
+                (
+                    "requires a uvec4 partition mask argument: "
+                    f"{expression_debug_name(arg)} has type {mapped_type}"
+                ),
+            )
+        return None
+
     def glsl_wave_diagnostic_expression(self, operation, reason):
         return (
             f"/* GLSL wave intrinsic diagnostic: {operation} {reason} */ "
@@ -7929,7 +8449,12 @@ class GLSLCodeGen:
         expected_type = self.current_expression_expected_type
         if expected_type:
             return self.zero_value_expression(expected_type)
-        if operation in {"WaveIsFirstLane", "WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+        if operation in {
+            "WaveIsFirstLane",
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveAllEqual",
+        }:
             return "false"
         if operation in {"WaveActiveBallot", "WaveMatch"}:
             return "uvec4(0u)"
@@ -13524,7 +14049,9 @@ class GLSLCodeGen:
                 array_attr, "arguments", getattr(array_attr, "args", [])
             )
             if array_args:
-                array_suffix = f"[{self.attribute_value_to_string(array_args[0])}]"
+                array_suffix = "".join(
+                    f"[{self.attribute_value_to_string(arg)}]" for arg in array_args
+                )
             else:
                 array_suffix = "[]"
         return f" {instance_name}{array_suffix}"

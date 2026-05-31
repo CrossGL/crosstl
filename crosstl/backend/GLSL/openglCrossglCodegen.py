@@ -1,30 +1,30 @@
 """Reverse code generator that emits CrossGL from GLSL AST nodes."""
 
 from .OpenglAst import (
-    ShaderNode,
-    VariableNode,
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
-    UnaryOpNode,
-    ReturnNode,
-    FunctionCallNode,
-    IfNode,
-    ForNode,
-    WhileNode,
-    DoWhileNode,
-    LayoutNode,
-    VectorConstructorNode,
-    MemberAccessNode,
-    TernaryOpNode,
-    ArrayAccessNode,
-    SwitchNode,
     BlockNode,
-    NumberNode,
-    PostfixOpNode,
     BreakNode,
     ContinueNode,
     DiscardNode,
+    DoWhileNode,
+    ForNode,
+    FunctionCallNode,
+    IfNode,
     InitializerListNode,
+    LayoutNode,
+    MemberAccessNode,
+    NumberNode,
+    PostfixOpNode,
+    ReturnNode,
+    ShaderNode,
+    SwitchNode,
+    TernaryOpNode,
+    UnaryOpNode,
+    VariableNode,
+    VectorConstructorNode,
+    WhileNode,
 )
 
 
@@ -952,13 +952,17 @@ class GLSLToCrossGLConverter:
         if instance_name:
             attributes.append(f"@glsl_interface_instance({instance_name})")
             if getattr(node, "interface_instance_is_array", False):
-                array_size = getattr(node, "interface_array_size", None)
-                if array_size is None:
+                array_sizes = getattr(node, "interface_array_sizes", None) or []
+                if not array_sizes:
+                    array_size = getattr(node, "interface_array_size", None)
+                    array_sizes = [array_size] if array_size is not None else []
+                if not array_sizes or any(size is None for size in array_sizes):
                     attributes.append("@glsl_interface_array")
                 else:
-                    attributes.append(
-                        f"@glsl_interface_array({self.generate_expression(array_size)})"
+                    sizes = ", ".join(
+                        self.generate_expression(size) for size in array_sizes
                     )
+                    attributes.append(f"@glsl_interface_array({sizes})")
 
         return f"{' '.join(attributes)} " if attributes else ""
 
@@ -1074,9 +1078,7 @@ class GLSLToCrossGLConverter:
                 var_type = self.convert_type(uniform.vtype)
                 var_name = uniform.name
                 attributes = self.image_resource_attribute_suffix(uniform)
-                array_suffix = ""
-                if getattr(uniform, "array_size", None) is not None:
-                    array_suffix = f"[{self.generate_expression(uniform.array_size)}]"
+                array_suffix = self.array_suffix(uniform)
                 result += (
                     self.indent_str
                     + f"{var_type} {var_name}{array_suffix}{attributes};\n"
@@ -1088,11 +1090,7 @@ class GLSLToCrossGLConverter:
                 for uniform in data_uniforms:
                     var_type = self.convert_type(uniform.vtype)
                     var_name = uniform.name
-                    array_suffix = ""
-                    if getattr(uniform, "array_size", None) is not None:
-                        array_suffix = (
-                            f"[{self.generate_expression(uniform.array_size)}]"
-                        )
+                    array_suffix = self.array_suffix(uniform)
                     result += self.indent() + f"{var_type} {var_name}{array_suffix};\n"
                 self.decrease_indent()
                 result += self.indent_str + "};\n"
@@ -1293,6 +1291,12 @@ class GLSLToCrossGLConverter:
         return result
 
     def array_suffix(self, node):
+        array_sizes = getattr(node, "array_sizes", None)
+        if array_sizes:
+            return "".join(
+                f"[{self.generate_expression(size)}]" if size is not None else "[]"
+                for size in array_sizes
+            )
         if getattr(node, "array_size", None) is not None:
             return f"[{self.generate_expression(node.array_size)}]"
         if getattr(node, "is_array", False):

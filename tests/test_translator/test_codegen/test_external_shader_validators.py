@@ -5,12 +5,13 @@ import subprocess
 import pytest
 
 import crosstl.translator
+from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
 from crosstl.backend.GLSL.OpenglLexer import GLSLLexer
 from crosstl.backend.GLSL.OpenglParser import GLSLParser
-from crosstl.backend.GLSL.openglCrossglCodegen import GLSLToCrossGLConverter
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 
 FRAGMENT_SMOKE_SHADER = """
 shader ExternalValidatorSmoke {
@@ -30,6 +31,172 @@ shader ExternalValidatorSynchronization {
             barrier();
             memoryBarrier();
             workgroupBarrier();
+        }
+    }
+}
+"""
+
+
+CROSSGL_WAVE_QUAD_COMPUTE_SHADER = """
+shader ExternalValidatorWaveQuad {
+    RWBuffer<uint> outputValues @register(u0);
+
+    compute {
+        @numthreads(4, 1, 1)
+        void main(uvec3 tid @gl_GlobalInvocationID) {
+            uint lane = WaveGetLaneIndex();
+            uint laneCount = WaveGetLaneCount();
+            bool firstLane = WaveIsFirstLane();
+            uint value = lane + tid.x;
+            uint sumValue = WaveActiveSum(value);
+            uint prefixValue = WavePrefixSum(sumValue);
+            bool anyLane = WaveActiveAnyTrue(prefixValue >= lane);
+            bool allLane = WaveActiveAllTrue(laneCount > 0u);
+            uvec4 ballot = WaveActiveBallot(anyLane || allLane || firstLane);
+            uvec4 matchMask = WaveMatch(prefixValue);
+            uint broadcast = WaveReadLaneAt(prefixValue, 0u);
+            uint firstValue = WaveReadLaneFirst(broadcast + ballot.x + matchMask.x);
+            uint quadX = QuadReadAcrossX(firstValue);
+            uint quadLane = QuadReadLaneAt(value, 3u);
+            bool quadAny = QuadAny(anyLane);
+            bool quadAll = QuadAll(allLane);
+            outputValues[tid.x] = quadX + quadLane
+                + (quadAny ? 1u : 0u) + (quadAll ? 1u : 0u);
+        }
+    }
+}
+"""
+
+
+CROSSGL_TEXTURE_RESOURCE_FRAGMENT_SHADER = """
+shader ExternalValidatorTextureResources {
+    sampler2D colorMap @register(t0);
+    sampler linearSampler @register(s0);
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec2 ddxValue @ TEXCOORD1;
+        vec2 ddyValue @ TEXCOORD2;
+    };
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            int lod = 0;
+            ivec2 pixel = ivec2(input.uv * 16.0);
+            ivec2 offset = ivec2(1, -1);
+            int component = int(input.uv.x);
+            vec4 base = texture(colorMap, linearSampler, input.uv);
+            vec4 biased = texture(colorMap, linearSampler, input.uv, 0.25);
+            vec4 level = textureLod(colorMap, linearSampler, input.uv, lod);
+            vec4 grad = textureGrad(
+                colorMap,
+                linearSampler,
+                input.uv,
+                input.ddxValue,
+                input.ddyValue
+            );
+            vec4 offsetSample = textureOffset(
+                colorMap,
+                linearSampler,
+                input.uv,
+                offset
+            );
+            vec4 fetched = texelFetch(colorMap, pixel, lod);
+            vec4 fetchedOffset = texelFetchOffset(colorMap, pixel, lod, offset);
+            vec4 gathered = textureGather(
+                colorMap,
+                linearSampler,
+                input.uv,
+                component
+            );
+            vec4 gatheredOffset = textureGatherOffset(
+                colorMap,
+                linearSampler,
+                input.uv,
+                offset,
+                1
+            );
+            ivec2 size = textureSize(colorMap, lod);
+            int levels = textureQueryLevels(colorMap);
+            vec2 lodInfo = textureQueryLod(colorMap, linearSampler, input.uv);
+            float scalar = float(size.x + size.y + levels) + lodInfo.x + lodInfo.y;
+            return base + biased + level + grad + offsetSample + fetched
+                + fetchedOffset + gathered + gatheredOffset
+                + vec4(scalar * 0.0001);
+        }
+    }
+}
+"""
+
+
+CROSSGL_SHADOW_TEXTURE_FRAGMENT_SHADER = """
+shader ExternalValidatorShadowTextures {
+    sampler2DShadow shadowMap @register(t1, space2);
+    sampler compareSampler @register(s0, space2);
+
+    struct FSInput {
+        vec2 uv @ TEXCOORD0;
+        vec3 projected @ TEXCOORD1;
+        float depth @ TEXCOORD2;
+    };
+
+    float sampleShadow(sampler2DShadow tex, sampler cmp, vec2 uv, float depth) {
+        return textureCompare(tex, cmp, uv, depth);
+    }
+
+    fragment {
+        vec4 main(FSInput input) @ gl_FragColor {
+            ivec2 offset = ivec2(1, 0);
+            float base = textureCompare(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            float offsetCmp = textureCompareOffset(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth,
+                offset
+            );
+            float projected = textureCompareProj(
+                shadowMap,
+                compareSampler,
+                input.projected,
+                input.depth
+            );
+            float projectedOffset = textureCompareProjOffset(
+                shadowMap,
+                compareSampler,
+                input.projected,
+                input.depth,
+                offset
+            );
+            vec4 gathered = textureGatherCompare(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            vec4 gatheredOffset = textureGatherCompareOffset(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth,
+                offset
+            );
+            vec2 lodInfo = textureQueryLod(shadowMap, input.uv);
+            float helper = sampleShadow(
+                shadowMap,
+                compareSampler,
+                input.uv,
+                input.depth
+            );
+            float sum = base + offsetCmp + projected + projectedOffset
+                + gathered.x + gatheredOffset.y + lodInfo.x + lodInfo.y
+                + helper;
+            return vec4(sum, sum, sum, 1.0);
         }
     }
 }
@@ -254,6 +421,174 @@ shader HLSLTessellationValidator {
                 + patch[1].position * bary.y
                 + patch[2].position * bary.z;
             return vec4(position, 1.0);
+        }
+    }
+}
+"""
+
+
+SLANG_TESSELLATION_VALIDATOR_SHADER = """
+shader SlangTessellationValidator {
+    struct VSOut {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct HSOut {
+        vec4 position @ gl_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct PatchConstants {
+        float outer[3] @ gl_TessLevelOuter;
+        float inner[1] @ gl_TessLevelInner;
+    };
+
+    tessellation_control {
+        PatchConstants HSConst(
+            InputPatch<VSOut, 3> inputPatch,
+            uint patchID @ gl_PrimitiveID
+        ) {
+            PatchConstants patch;
+            VSOut first = gl_in[0];
+            patch.outer[0] = first.position.x + float(patchID);
+            patch.outer[1] = first.position.y;
+            patch.outer[2] = first.position.z;
+            patch.inner[0] = 1.0;
+            return patch;
+        }
+
+        HSOut main(InputPatch<VSOut, 3> inputPatch)
+            @domain(tri)
+            @partitioning(integer)
+            @outputtopology(triangle_cw)
+            @outputcontrolpoints(3)
+            @patchconstantfunc(HSConst) {
+            HSOut output;
+            VSOut current = gl_in[gl_InvocationID];
+            output.position = current.position;
+            output.uv = current.uv;
+            return output;
+        }
+    }
+
+    tessellation_evaluation {
+        vec4 main(OutputPatch<HSOut, 3> patch, vec3 bary @ gl_TessCoord)
+            @domain(tri) @ gl_Position {
+            vec4 p0 = patch[0].position * bary.x;
+            vec4 p1 = patch[1].position * bary.y;
+            vec4 p2 = patch[2].position * bary.z;
+            return p0 + p1 + p2;
+        }
+    }
+}
+"""
+
+
+SLANG_RAY_STAGE_VALIDATOR_SHADER = """
+shader SlangRayStageValidator {
+    struct RayPayload {
+        vec3 color;
+    };
+
+    struct HitAttributes {
+        vec2 barycentrics;
+    };
+
+    struct CallableData {
+        uint value;
+    };
+
+    ray_generation {
+        void main() {
+            uvec3 launch = gl_LaunchIDEXT;
+            uint launchSizeX = gl_LaunchSizeEXT.x;
+        }
+    }
+
+    ray_closest_hit {
+        void main(
+            RayPayload payload @ payload,
+            HitAttributes attributes @ hit_attribute
+        ) {
+            payload.color = vec3(attributes.barycentrics, 1.0);
+        }
+    }
+
+    ray_any_hit {
+        void main(
+            RayPayload payload @ payload,
+            HitAttributes attributes @ hit_attribute
+        ) {
+            payload.color = vec3(attributes.barycentrics, 0.5);
+            AcceptHitAndEndSearch();
+        }
+    }
+
+    ray_miss {
+        void main(RayPayload payload @ rayPayloadInEXT) {
+            payload.color = vec3(0.0, 0.0, 0.0);
+        }
+    }
+
+    ray_callable {
+        void main(CallableData data @ callableDataInEXT) {
+            data.value = data.value + 1u;
+        }
+    }
+
+    ray_intersection {
+        void main() {
+            HitAttributes attributes;
+            attributes.barycentrics = vec2(0.25, 0.75);
+            bool accepted = ReportHit(1.0, 0, attributes);
+        }
+    }
+}
+"""
+
+
+SLANG_MESH_TASK_VALIDATOR_SHADER = """
+shader SlangMeshTaskValidator {
+    struct MeshPayload {
+        uint meshlet;
+    };
+
+    struct MeshVertex {
+        vec4 position @ SV_Position;
+        vec2 uv @ TEXCOORD0;
+    };
+
+    struct MeshPrimitive {
+        bool culled @ SV_CullPrimitive;
+    };
+
+    groupshared MeshPayload payload;
+
+    task {
+        void main(uvec3 groupId @ gl_WorkGroupID) @numthreads(1, 1, 1) {
+            payload.meshlet = groupId.x;
+            DispatchMesh(1, 1, 1, payload);
+        }
+    }
+
+    mesh {
+        void main(
+            @mesh_payload in MeshPayload payload,
+            uvec3 threadId @ gl_LocalInvocationID,
+            @vertices out MeshVertex verts[3],
+            @indices out uvec3 tris[1],
+            @primitives out MeshPrimitive prims[1]
+        ) @numthreads(32, 1, 1) @outputtopology(triangle) {
+            SetMeshOutputCounts(3, 1);
+            verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+            verts[1].position = vec4(float(threadId.x), 1.0, 0.0, 1.0);
+            verts[2].position = vec4(0.0, 0.0, 1.0, 1.0);
+            verts[0].uv = vec2(0.0, 0.0);
+            verts[1].uv = vec2(1.0, 0.0);
+            verts[2].uv = vec2(0.0, 1.0);
+            tris[0] = uvec3(0u, 1u, 2u);
+            prims[0].culled = false;
         }
     }
 }
@@ -732,6 +1067,23 @@ void main() {
     accum = vec4(uv, 0.0, 1.0);
     revealage = vec4(1.0);
     normal = vec4(0.0);
+}
+"""
+
+
+MIXED_GLSL_FRAGMENT_COMPONENT_PACKING_SHADER = """
+#version 450 core
+layout(location = 0) in vec2 uv;
+layout(location = 0, component = 0) out float luminance;
+layout(location = 0, component = 1) out vec2 velocity;
+layout(location = 0, component = 3) out float coverage;
+layout(location = 1) out vec4 color;
+
+void main() {
+    luminance = uv.x;
+    velocity = uv;
+    coverage = uv.y;
+    color = vec4(uv, 0.0, 1.0);
 }
 """
 
@@ -1239,6 +1591,33 @@ def _run_validator(command):
     assert result.returncode == 0, diagnostics
 
 
+def _compile_slang_hlsl_entry(
+    slangc,
+    source_path,
+    output_path,
+    entry,
+    stage,
+    profile,
+):
+    _run_validator(
+        [
+            slangc,
+            "-target",
+            "hlsl",
+            "-entry",
+            entry,
+            "-stage",
+            stage,
+            "-profile",
+            profile,
+            "-o",
+            str(output_path),
+            str(source_path),
+        ]
+    )
+    assert output_path.exists()
+
+
 def _run_validator_or_skip_unsupported_extension(
     command, extension, unsupported_diagnostics=()
 ):
@@ -1319,6 +1698,171 @@ def test_generated_hlsl_compute_synchronization_compiles_with_dxc(tmp_path):
             "cs_6_0",
             "-E",
             "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_wave_quad_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "wave_quad.hlsl"
+    output_path = tmp_path / "wave_quad.dxil"
+
+    code = HLSLCodeGen().generate(
+        crosstl.translator.parse(CROSSGL_WAVE_QUAD_COMPUTE_SHADER)
+    )
+    assert "[numthreads(4, 1, 1)]" in code
+    for snippet in [
+        "RWBuffer<uint> outputValues : register(u0);",
+        "WaveGetLaneIndex()",
+        "WaveGetLaneCount()",
+        "WaveIsFirstLane()",
+        "WaveActiveSum(value)",
+        "WavePrefixSum(sumValue)",
+        "WaveActiveAnyTrue((prefixValue >= lane))",
+        "WaveActiveAllTrue((laneCount > 0u))",
+        "WaveActiveBallot(((anyLane || allLane) || firstLane))",
+        "WaveMatch(prefixValue)",
+        "WaveReadLaneAt(prefixValue, 0u)",
+        "WaveReadLaneFirst(((broadcast + ballot.x) + matchMask.x))",
+        "QuadReadAcrossX(firstValue)",
+        "QuadReadLaneAt(value, 3u)",
+        "QuadAny(anyLane)",
+        "QuadAll(allLane)",
+    ]:
+        assert snippet in code
+    assert "uvec4" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "cs_6_5",
+            "-E",
+            "CSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_texture_resource_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "texture_resources.hlsl"
+    output_path = tmp_path / "texture_resources.dxil"
+
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CROSSGL_TEXTURE_RESOURCE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    for snippet in [
+        "Texture2D colorMap : register(t0);",
+        "SamplerState linearSampler : register(s0);",
+        "int textureQueryLevels(Texture2D tex)",
+        "int2 textureSize(Texture2D tex, int lod)",
+        "colorMap.Sample(linearSampler, input.uv)",
+        "colorMap.SampleBias(linearSampler, input.uv, 0.25)",
+        "colorMap.SampleLevel(linearSampler, input.uv, lod)",
+        "colorMap.SampleGrad(linearSampler, input.uv, input.ddxValue, input.ddyValue)",
+        "colorMap.Sample(linearSampler, input.uv, offset)",
+        "colorMap.Load(int3(pixel, lod))",
+        "colorMap.Load(int3((pixel + offset), lod))",
+        "component == 0 ? colorMap.GatherRed(linearSampler, input.uv)",
+        "colorMap.GatherGreen(linearSampler, input.uv, offset)",
+        "colorMap.CalculateLevelOfDetailUnclamped(linearSampler, input.uv)",
+        "colorMap.CalculateLevelOfDetail(linearSampler, input.uv)",
+    ]:
+        assert snippet in code
+    for unsupported in [
+        "textureLod(",
+        "textureGrad(",
+        "textureOffset(",
+        "textureGather(",
+        "textureGatherOffset(",
+        "texelFetch(",
+        "texelFetchOffset(",
+        "textureQueryLod(",
+    ]:
+        assert unsupported not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
+            str(shader_path),
+            "-Fo",
+            str(output_path),
+        ]
+    )
+    assert output_path.exists()
+
+
+def test_generated_hlsl_shadow_texture_intrinsics_compile_with_dxc(tmp_path):
+    shader_path = tmp_path / "shadow_textures.hlsl"
+    output_path = tmp_path / "shadow_textures.dxil"
+
+    code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(CROSSGL_SHADOW_TEXTURE_FRAGMENT_SHADER),
+        "fragment",
+    )
+    for snippet in [
+        "Texture2D shadowMap : register(t1, space2);",
+        "SamplerComparisonState compareSampler : register(s0, space2);",
+        "SamplerState shadowMapQuerySampler : register(s2, space2);",
+        (
+            "float sampleShadow(Texture2D tex, SamplerComparisonState cmp, "
+            "float2 uv, float depth)"
+        ),
+        "tex.SampleCmp(cmp, uv, depth)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth)",
+        "shadowMap.SampleCmp(compareSampler, input.uv, input.depth, offset)",
+        (
+            "shadowMap.SampleCmp(compareSampler, "
+            "input.projected.xy / input.projected.z, input.depth)"
+        ),
+        (
+            "shadowMap.SampleCmp(compareSampler, "
+            "input.projected.xy / input.projected.z, input.depth, offset)"
+        ),
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth)",
+        "shadowMap.GatherCmp(compareSampler, input.uv, input.depth, offset)",
+        (
+            "shadowMap.CalculateLevelOfDetailUnclamped("
+            "shadowMapQuerySampler, input.uv)"
+        ),
+        "shadowMap.CalculateLevelOfDetail(shadowMapQuerySampler, input.uv)",
+    ]:
+        assert snippet in code
+    for unsupported in [
+        "textureCompare(",
+        "textureCompareOffset(",
+        "textureCompareProj(",
+        "textureCompareProjOffset(",
+        "textureGatherCompare(",
+        "textureGatherCompareOffset(",
+        "textureQueryLod(",
+    ]:
+        assert unsupported not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    dxc = _require_tool("dxc")
+    _run_validator(
+        [
+            dxc,
+            "-T",
+            "ps_6_0",
+            "-E",
+            "PSMain",
             str(shader_path),
             "-Fo",
             str(output_path),
@@ -1514,6 +2058,53 @@ def test_generated_hlsl_mesh_amplification_compile_with_dxc(tmp_path):
     assert mesh_output.exists()
 
 
+def test_generated_slang_mesh_task_pair_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_mesh_task_pair.slang"
+    amplification_output = tmp_path / "slang_mesh_task_pair_as.hlsl"
+    mesh_output = tmp_path / "slang_mesh_task_pair_ms.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_MESH_TASK_VALIDATOR_SHADER)
+    )
+    assert '[numthreads(1, 1, 1)]\n[shader("amplification")]' in code
+    assert "void ASMain(uint3 groupId : SV_GroupID)" in code
+    assert "groupshared MeshPayload payload;" in code
+    assert "payload.meshlet = groupId.x;" in code
+    assert "DispatchMesh(1, 1, 1, payload);" in code
+    assert '[numthreads(32, 1, 1)]\n[outputtopology("triangle")]' in code
+    assert '[shader("mesh")]' in code
+    assert (
+        "void MSMain(in payload MeshPayload payload, "
+        "uint3 threadId : SV_GroupThreadID, "
+        "out vertices MeshVertex verts[3], out indices uint3 tris[1], "
+        "out primitives MeshPrimitive prims[1])" in code
+    )
+    assert "float4 position : SV_Position;" in code
+    assert "float2 uv : TEXCOORD0;" in code
+    assert "bool culled : SV_CullPrimitive;" in code
+    assert "SetMeshOutputCounts(3, 1);" in code
+    assert "verts[0].position = float4(float(payload.meshlet), 0.0, 0.0, 1.0);" in code
+    assert "verts[1].position = float4(float(threadId.x), 1.0, 0.0, 1.0);" in code
+    assert "tris[0] = uint3(0u, 1u, 2u);" in code
+    assert "prims[0].culled = false;" in code
+    assert ": gl_WorkGroupID" not in code
+    assert ": gl_LocalInvocationID" not in code
+    assert ": mesh_payload" not in code
+    assert ": vertices" not in code
+    assert ": indices" not in code
+    assert ": primitives" not in code
+    assert "unsupported Slang mesh intrinsic" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, amplification_output, "ASMain", "amplification", "as_6_5"
+    )
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, mesh_output, "MSMain", "mesh", "ms_6_5"
+    )
+
+
 def test_generated_hlsl_tessellation_pair_compile_with_dxc(tmp_path):
     shader_path = tmp_path / "tessellation_pair.hlsl"
     hull_output = tmp_path / "tessellation_pair_hs.dxil"
@@ -1565,6 +2156,114 @@ def test_generated_hlsl_tessellation_pair_compile_with_dxc(tmp_path):
     )
     assert hull_output.exists()
     assert domain_output.exists()
+
+
+def test_generated_slang_tessellation_pair_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_tessellation_pair.slang"
+    hull_output = tmp_path / "slang_tessellation_pair_hs.hlsl"
+    domain_output = tmp_path / "slang_tessellation_pair_ds.hlsl"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_TESSELLATION_VALIDATOR_SHADER)
+    )
+    assert "float4 position : SV_Position;" in code
+    assert "float2 uv : TEXCOORD0;" in code
+    assert "float outer[3] : SV_TessFactor;" in code
+    assert "float inner[1] : SV_InsideTessFactor;" in code
+    assert (
+        "PatchConstants HSConst(InputPatch<VSOut, 3> inputPatch, "
+        "uint patchID : SV_PrimitiveID)"
+    ) in code
+    assert '[domain("tri")]' in code
+    assert '[partitioning("integer")]' in code
+    assert '[outputtopology("triangle_cw")]' in code
+    assert "[outputcontrolpoints(3)]" in code
+    assert '[patchconstantfunc("HSConst")]' in code
+    assert '[shader("hull")]' in code
+    assert (
+        "HSOut HSMain(InputPatch<VSOut, 3> inputPatch, "
+        "uint gl_InvocationID : SV_OutputControlPointID)"
+    ) in code
+    assert "VSOut first = inputPatch[0];" in code
+    assert "VSOut current = inputPatch[gl_InvocationID];" in code
+    assert '[shader("domain")]' in code
+    assert (
+        "float4 DSMain(OutputPatch<HSOut, 3> patch, "
+        "float3 bary : SV_DomainLocation) : SV_Position"
+    ) in code
+    assert "return p0 + p1 + p2;" in code
+    assert "gl_in" not in code
+    assert ": gl_TessCoord" not in code
+    assert ": gl_TessLevelOuter" not in code
+    assert ": gl_TessLevelInner" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, hull_output, "HSMain", "hull", "hs_6_0"
+    )
+    _compile_slang_hlsl_entry(
+        slangc, shader_path, domain_output, "DSMain", "domain", "ds_6_0"
+    )
+
+
+def test_generated_slang_ray_stage_library_compiles_with_slangc(tmp_path):
+    shader_path = tmp_path / "slang_ray_stage_library.slang"
+
+    code = SlangCodeGen().generate(
+        crosstl.translator.parse(SLANG_RAY_STAGE_VALIDATOR_SHADER)
+    )
+    assert '[shader("raygeneration")]' in code
+    assert "void RayGenMain()" in code
+    assert "uint3 launch = DispatchRaysIndex();" in code
+    assert "uint launchSizeX = DispatchRaysDimensions().x;" in code
+    assert '[shader("closesthit")]' in code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in code
+    )
+    assert '[shader("anyhit")]' in code
+    assert (
+        "void AnyHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in code
+    )
+    assert "AcceptHitAndEndSearch();" in code
+    assert '[shader("miss")]' in code
+    assert "void MissMain(inout RayPayload payload)" in code
+    assert '[shader("callable")]' in code
+    assert "void CallableMain(inout CallableData data)" in code
+    assert '[shader("intersection")]' in code
+    assert "void IntersectionMain()" in code
+    assert "bool accepted = ReportHit(1.0, 0, attributes);" in code
+    assert "payload.color = float3(attributes.barycentrics, 1.0);" in code
+    assert "payload.color = float3(attributes.barycentrics, 0.5);" in code
+    assert "payload.color = float3(0.0, 0.0, 0.0);" in code
+    assert "data.value = data.value + 1u;" in code
+    assert ": payload" not in code
+    assert ": hit_attribute" not in code
+    assert "rayPayloadInEXT" not in code
+    assert "callableDataInEXT" not in code
+    assert "gl_LaunchIDEXT" not in code
+    assert "gl_LaunchSizeEXT" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    slangc = _require_tool("slangc")
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("anyhit", "AnyHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
+        ("intersection", "IntersectionMain"),
+    ]:
+        _compile_slang_hlsl_entry(
+            slangc,
+            shader_path,
+            tmp_path / f"slang_ray_stage_library_{stage}.hlsl",
+            entry,
+            stage,
+            "sm_6_3",
+        )
 
 
 @pytest.mark.parametrize(
@@ -1979,6 +2678,28 @@ def test_mixed_glsl_fragment_multiple_outputs_validate_with_glslangvalidator(
     _run_validator([glslang, "-S", "frag", str(shader_path)])
 
 
+def test_mixed_glsl_fragment_component_packing_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "mixed_glsl_fragment_component_packing.frag"
+
+    code = GLSLCodeGen().generate(
+        _mixed_glsl_ast(MIXED_GLSL_FRAGMENT_COMPONENT_PACKING_SHADER, "fragment")
+    )
+    assert "layout(location = 0) in vec2 uv;" in code
+    assert "layout(location = 0, component = 0) out float luminance;" in code
+    assert "layout(location = 0, component = 1) out vec2 velocity;" in code
+    assert "layout(location = 0, component = 3) out float coverage;" in code
+    assert "layout(location = 1) out vec4 color;" in code
+    assert "luminance = uv.x;" in code
+    assert "velocity = uv;" in code
+    assert "coverage = uv.y;" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "frag", str(shader_path)])
+
+
 def test_mixed_glsl_fragment_blend_support_validate_with_glslangvalidator(
     tmp_path,
 ):
@@ -2284,6 +3005,228 @@ def test_generated_glsl_geometry_interface_blocks_validate_with_glslangvalidator
     shader_path.write_text(code, encoding="utf-8")
 
     _run_validator([glslang, "-S", "geom", str(shader_path)])
+
+
+def test_generated_glsl_geometry_interface_block_multidimensional_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "geometry_interface_block_multidimensional.geom"
+
+    shader = """
+    shader GLSLGeometryInterfaceBlockMultidimensionalArraysValidator {
+        @glsl_interface_block(in) @glsl_interface_instance(vertexIn) @glsl_interface_array
+        struct VertexIn {
+            flat ivec2 ids[2][2];
+            noperspective vec3 positions[2];
+        };
+
+        @glsl_interface_block(out) @glsl_interface_instance(fragmentOut)
+        struct FragmentOut {
+            noperspective vec4 colors[2][2];
+        };
+
+        geometry {
+            layout(points) in;
+            layout(points, max_vertices = 1) out;
+
+            void main() {
+                fragmentOut.colors[1][0] = vec4(vertexIn[0].positions[1], 1.0)
+                    + vec4(vertexIn[0].ids[0][1], 0.0, 0.0);
+                gl_Position = gl_in[0].gl_Position;
+                EmitVertex();
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "geometry")
+    assert "in VertexIn {" in code
+    assert "flat ivec2 ids[2][2];" in code
+    assert "noperspective vec3 positions[2];" in code
+    assert "} vertexIn[];" in code
+    assert "noperspective vec4 colors[2][2];" in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "geom", str(shader_path)])
+
+
+def test_mixed_glsl_tessellation_multidimensional_patch_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    cases = [
+        (
+            "tesc",
+            "tessellation_control",
+            """
+            #version 450 core
+            layout(vertices = 4) out;
+
+            in vec3 vPosition[];
+            out vec3 tcGrid[][2];
+            patch out vec4 tcPatchColors[2][2];
+
+            void main() {
+                tcGrid[gl_InvocationID][0] = vPosition[gl_InvocationID];
+                tcGrid[gl_InvocationID][1] = vec3(1.0);
+                gl_out[gl_InvocationID].gl_Position =
+                    gl_in[gl_InvocationID].gl_Position;
+                tcPatchColors[0][1] = vec4(1.0);
+                gl_TessLevelOuter[0] = 2.0;
+                gl_TessLevelOuter[1] = 2.0;
+                gl_TessLevelOuter[2] = 2.0;
+                gl_TessLevelOuter[3] = 2.0;
+                gl_TessLevelInner[0] = 2.0;
+                gl_TessLevelInner[1] = 2.0;
+            }
+            """,
+            (
+                "out vec3 tcGrid[][2];",
+                "patch out vec4 tcPatchColors[2][2];",
+            ),
+        ),
+        (
+            "tese",
+            "tessellation_evaluation",
+            """
+            #version 450 core
+            layout(quads, equal_spacing, ccw) in;
+
+            in vec3 tcGrid[][2];
+            patch in vec4 tcPatchColors[2][2];
+            out vec4 teColor;
+
+            void main() {
+                vec3 p = mix(tcGrid[0][0], tcGrid[1][1], gl_TessCoord.x);
+                teColor = tcPatchColors[0][1];
+                gl_Position = vec4(p, 1.0);
+            }
+            """,
+            (
+                "in vec3 tcGrid[][2];",
+                "patch in vec4 tcPatchColors[2][2];",
+            ),
+        ),
+    ]
+
+    for stage_suffix, shader_type, source, expected_snippets in cases:
+        shader_path = tmp_path / f"tessellation_multidimensional_arrays.{stage_suffix}"
+        code = GLSLCodeGen().generate(_mixed_glsl_ast(source, shader_type))
+        for snippet in expected_snippets:
+            assert snippet in code
+        assert "vec3[] tcGrid" not in code
+        assert "vec4[2][2] tcPatchColors" not in code
+        shader_path.write_text(code, encoding="utf-8")
+
+        _run_validator([glslang, "-S", stage_suffix, str(shader_path)])
+
+
+def test_generated_glsl_stage_io_multidimensional_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    shader_path = tmp_path / "stage_io_multidimensional_arrays.vert"
+
+    shader = """
+    shader GLSLStageIOMultidimensionalArraysValidator {
+        vertex {
+            struct VertexInput {
+                vec3 positions[2][3];
+                ivec2 ids[2][2];
+            }
+
+            struct VertexOutput {
+                vec4 colors[2][3];
+                vec4 position @ gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.colors[1][2] = vec4(input.positions[0][1], 1.0);
+                output.position = output.colors[1][2];
+                return output;
+            }
+        }
+    }
+    """
+
+    code = GLSLCodeGen().generate_stage(crosstl.translator.parse(shader), "vertex")
+    assert "in vec3 positions[2][3];" in code
+    assert "in ivec2 ids[2][2];" in code
+    assert "out vec4 colors[2][3];" in code
+    assert "vec3[2][3] positions" not in code
+    assert "ivec2[2][2] ids" not in code
+    assert "vec4[2][3] colors" not in code
+    shader_path.write_text(code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "vert", str(shader_path)])
+
+
+def test_generated_glsl_stage_io_interpolation_arrays_validate_with_glslangvalidator(
+    tmp_path,
+):
+    glslang = _require_tool("glslangValidator")
+    vertex_path = tmp_path / "stage_io_interpolation_arrays.vert"
+    fragment_path = tmp_path / "stage_io_interpolation_arrays.frag"
+
+    shader = """
+    shader GLSLStageIOInterpolationArraysValidator {
+        vertex {
+            struct VertexInput {
+                vec3 position @location(0);
+            }
+
+            struct VertexOutput {
+                ivec2 ids[2][2] @location(1);
+                vec4 samples[2] @location(5) @sample;
+                vec3 centers[2] @location(7) @centroid;
+                vec2 noPersp[2] @location(9) @noperspective;
+                vec4 position @gl_Position;
+            }
+
+            VertexOutput main(VertexInput input) {
+                VertexOutput output;
+                output.ids[0][0] = ivec2(1, 2);
+                output.samples[0] = vec4(input.position, 1.0);
+                output.centers[0] = input.position;
+                output.noPersp[0] = input.position.xy;
+                output.position = vec4(input.position, 1.0);
+                return output;
+            }
+        }
+
+        fragment {
+            vec4 main(
+                ivec2 ids[2][2] @location(1),
+                vec4 samples[2] @location(5) @sample,
+                vec3 centers[2] @location(7) @centroid,
+                vec2 noPersp[2] @location(9) @noperspective
+            ) @gl_FragColor {
+                return samples[0]
+                    + vec4(centers[0], 1.0)
+                    + vec4(noPersp[0], 0.0, 1.0)
+                    + vec4(ids[0][0], 0.0, 1.0);
+            }
+        }
+    }
+    """
+
+    ast = crosstl.translator.parse(shader)
+    vertex_code = GLSLCodeGen().generate_stage(ast, "vertex")
+    fragment_code = GLSLCodeGen().generate_stage(ast, "fragment")
+
+    assert "layout(location = 1) flat out ivec2 ids[2][2];" in vertex_code
+    assert "layout(location = 5) sample out vec4 samples[2];" in vertex_code
+    assert "layout(location = 7) centroid out vec3 centers[2];" in vertex_code
+    assert "layout(location = 1) flat in ivec2 ids[2][2];" in fragment_code
+    assert "layout(location = 5) sample in vec4 samples[2];" in fragment_code
+    assert "layout(location = 7) centroid in vec3 centers[2];" in fragment_code
+    vertex_path.write_text(vertex_code, encoding="utf-8")
+    fragment_path.write_text(fragment_code, encoding="utf-8")
+
+    _run_validator([glslang, "-S", "vert", str(vertex_path)])
+    _run_validator([glslang, "-S", "frag", str(fragment_path)])
 
 
 @pytest.mark.parametrize(

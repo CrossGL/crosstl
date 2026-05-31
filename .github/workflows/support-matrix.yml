@@ -11,9 +11,13 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -25,11 +29,31 @@ jobs:
           python-version: "3.12"
 
       - name: Validate support matrix
-        run: python tools/support_matrix.py check
+        run: python tools/support_matrix.py check --output support/generated/support-matrix-check.json
+
+      - name: Audit support matrix evidence
+        if: always()
+        run: >
+          python tools/support_matrix.py evidence
+          --status supported
+          --evidence missing
+          --fail-on-missing
+          --output support/generated/support-evidence-check.json
+
+      - name: Upload support matrix check reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: support-matrix-check-report
+          path: |
+            support/generated/support-matrix-check.json
+            support/generated/support-evidence-check.json
+          retention-days: 30
 
   docs-probe:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -44,7 +68,9 @@ jobs:
         run: python tools/support_matrix.py docs --output support/generated/backend-docs-report.json
 
       - name: Upload documentation probe report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-docs-report
           path: support/generated/backend-docs-report.json
+          retention-days: 30

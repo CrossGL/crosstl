@@ -1,7 +1,7 @@
 """Parser for Metal source AST construction."""
 
-from .MetalLexer import *
 from .MetalAst import *
+from .MetalLexer import *
 
 # Token groups for parsing
 QUALIFIER_TOKENS = {

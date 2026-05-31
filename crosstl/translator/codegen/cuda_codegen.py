@@ -1,38 +1,103 @@
 """CrossGL-to-CUDA code generator."""
 
 from ..ast import (
+    ArrayAccessNode,
     AssignmentNode,
     BinaryOpNode,
     BreakNode,
     ContinueNode,
-    ForInNode,
-    ForNode,
-    IfNode,
-    LiteralPatternNode,
-    LiteralNode,
-    RangeNode,
-    ReturnNode,
-    StructNode,
-    VariableNode,
-    ArrayAccessNode,
-    ArrayLiteralNode,
-    ArrayNode,
-    ShaderNode,
-    FunctionNode,
-    FunctionCallNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
+    IfNode,
+    LiteralNode,
+    MatchNode,
     MemberAccessNode,
     PointerAccessNode,
-    UnaryOpNode,
+    RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
+    ReturnNode,
     TernaryOpNode,
-    BlockNode,
-    WildcardPatternNode,
+    UnaryOpNode,
+    VariableNode,
+    WaveOpNode,
 )
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
+from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .resource_arrays import format_array_declarator
+from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
+
+CUDA_WAVE_OP_ARITIES = {
+    "WaveGetLaneCount": 0,
+    "WaveGetLaneIndex": 0,
+    "WaveIsFirstLane": 0,
+    "WaveActiveSum": 1,
+    "WaveActiveProduct": 1,
+    "WaveActiveBitAnd": 1,
+    "WaveActiveBitOr": 1,
+    "WaveActiveBitXor": 1,
+    "WaveActiveMin": 1,
+    "WaveActiveMax": 1,
+    "WaveActiveAllTrue": 1,
+    "WaveActiveAnyTrue": 1,
+    "WaveActiveAllEqual": 1,
+    "WaveActiveBallot": 1,
+    "WaveActiveCountBits": 1,
+    "WaveReadLaneAt": 2,
+    "WaveReadLaneFirst": 1,
+    "WavePrefixSum": 1,
+    "WavePrefixProduct": 1,
+    "WavePrefixCountBits": 1,
+    "QuadReadAcrossX": 1,
+    "QuadReadAcrossY": 1,
+    "QuadReadAcrossDiagonal": 1,
+    "QuadReadLaneAt": 2,
+    "WaveMatch": 1,
+    "WaveMultiPrefixSum": 2,
+    "WaveMultiPrefixCountBits": 2,
+    "WaveMultiPrefixProduct": 2,
+    "WaveMultiPrefixBitAnd": 2,
+    "WaveMultiPrefixBitOr": 2,
+    "WaveMultiPrefixBitXor": 2,
+}
+
+CUDA_WAVE_PREDICATE_ARGUMENT_OPS = {
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveBallot",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+CUDA_WAVE_UINT_RESULT_OPS = {
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+CUDA_WAVE_BOOL_RESULT_OPS = {
+    "WaveIsFirstLane",
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveAllEqual",
+}
+
+CUDA_WAVE_UVEC4_RESULT_OPS = {
+    "WaveActiveBallot",
+    "WaveMatch",
+}
 
 
 class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
@@ -76,9 +141,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Initialize CUDA type maps and per-generation visitor state."""
         self.indent_level = 0
         self.output = []
+        self.current_function_return_type = None
+        self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.cuda_resource_binding_cursors = {}
+        self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
         self.helper_functions = {}
@@ -89,11 +161,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_return_sources = {}
         self.query_local_resource_names_by_function = {}
         self.query_metadata_snapshot_locals_by_function = {}
+        self.struct_query_metadata_members = {}
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
+        self.current_stage_name = None
         self.resource_query_info_required = False
+        self.assignment_lhs_depth = 0
         self.builtin_map = {
             "gl_LocalInvocationID.x": "threadIdx.x",
             "gl_LocalInvocationID.y": "threadIdx.y",
@@ -116,19 +191,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Generate complete CUDA source for a CrossGL AST."""
         self.output = []
         self.indent_level = 0
+        self.validate_supported_stage_types(ast_node)
         self.variable_types = {}
+        self.current_function_return_type = None
+        self.match_temp_variable_index = 0
         self.image_resource_accesses = {}
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.cuda_resource_binding_cursors = {}
+        self.cuda_used_resource_bindings = {}
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
         ) = self.collect_struct_member_metadata(ast_node)
+        self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
         self.query_metadata_snapshot_locals_by_function = {}
+        self.struct_query_metadata_members = self.collect_struct_query_metadata_members(
+            ast_node
+        )
         self.resource_query_info_required = False
+        self.assignment_lhs_depth = 0
+        self.current_stage_name = None
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -144,9 +232,64 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.query_functions_by_name = {
             name: func for name, func in self.query_functions_by_name.items() if name
         }
+        self.reserve_explicit_cuda_resource_bindings(ast_node)
         self.visit(ast_node)
         self.insert_helper_functions()
         return "\n".join(self.output)
+
+    def unsupported_stage_types(self):
+        return {
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "mesh",
+            "task",
+            "object",
+            "amplification",
+        }
+
+    def cuda_ray_stage_names(self):
+        return {
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+        }
+
+    def cuda_ray_stage_metadata_name(self, stage_name):
+        return {
+            "ray_any_hit": "any_hit",
+            "ray_callable": "callable",
+            "ray_closest_hit": "closest_hit",
+            "ray_generation": "ray_generation",
+            "ray_intersection": "intersection",
+            "ray_miss": "miss",
+        }.get(stage_name, stage_name)
+
+    def validate_supported_stage_types(self, ast_node, target_stage=None):
+        unsupported_stages = set()
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast_node, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(
+                f"CUDA output does not support stage type(s): {stage_list}"
+            )
 
     def visit(self, node):
         """Dispatch an AST node to its CUDA visitor method."""
@@ -157,7 +300,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def generic_visit(self, node):
         """Fallback visitor for primitive values, lists, and unknown nodes."""
         if isinstance(node, str):
-            return node
+            ray_builtin = self.cuda_ray_builtin_expression(node)
+            if ray_builtin is not None and node not in self.variable_types:
+                return ray_builtin
+            return self.builtin_map.get(node, node)
         elif isinstance(node, list):
             return [self.visit(item) for item in node]
         else:
@@ -169,6 +315,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.output.append("    " * self.indent_level + code)
         else:
             self.output.append("")
+
+    def emit_generated_code(self, code):
+        """Append pre-indented generated code to the output stream."""
+        for line in code.rstrip("\n").splitlines():
+            self.output.append(line.rstrip())
 
     def emit_statement(self, node):
         """Render and append one statement node when it produces code."""
@@ -224,7 +375,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     member_type = member.vtype
                 else:
                     member_type = "float"
-                member_type = self.apply_readonly_qualifier_to_type(member_type, member)
+                member_type = self.resource_type_with_access(member_type, member)
                 member_types[member_name] = member_type
                 member_access = self.explicit_resource_access(member)
                 if member_access is not None and self.is_storage_image_type(
@@ -235,19 +386,32 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             member_accesses_by_struct[struct_name] = member_accesses
         return member_types_by_struct, member_accesses_by_struct
 
+    def collect_struct_query_metadata_members(self, root):
+        """Collect struct resource members that need embedded query sidecars."""
+        has_resource_query = False
+        for node in self.query_walk_nodes(root):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            if self.raw_function_call_name(node) in self.query_function_names:
+                has_resource_query = True
+                break
+        if not has_resource_query:
+            return {}
+
+        metadata_members = {}
+        for struct_name, member_types in self.struct_member_types.items():
+            for member_name, member_type in member_types.items():
+                if not self.is_queryable_resource_type(member_type):
+                    continue
+                metadata_members.setdefault(struct_name, set()).add(member_name)
+        return metadata_members
+
     def statement_body_terminates(self, body):
         """Return true when the body already exits the active control flow."""
         statements = self.statement_list(body)
         if not statements:
             return False
         return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
-
-    def is_supported_switch_match_arm(self, arm):
-        """CUDA switch lowering supports only unguarded literal/default arms."""
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
 
     def visit_ShaderNode(self, node):
         """Render a full shader/program AST as a CUDA translation unit."""
@@ -278,6 +442,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Handle legacy shader structure
         if hasattr(node, "stages") and node.stages:
             emitted_local_functions = set()
+            stage_entry_name_counts = self.stage_entry_name_counts(node.stages)
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
@@ -303,15 +468,49 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         self.emit("")
                         emitted_local_functions.add(id(func))
 
+                    saved_stage_name = self.current_stage_name
+                    self.current_stage_name = stage_name
+                    saved_override = getattr(
+                        self, "current_stage_entry_function_name", None
+                    )
+                    self.current_stage_entry_function_name = (
+                        self.stage_entry_function_name(
+                            stage_name, stage.entry_point, stage_entry_name_counts
+                        )
+                    )
                     self.visit(stage.entry_point)
+                    self.current_stage_entry_function_name = saved_override
+                    self.current_stage_name = saved_stage_name
                     self.emit("")
+
+    def stage_entry_name_counts(self, stages):
+        counts = {}
+        for stage in stages.values():
+            entry_point = getattr(stage, "entry_point", None)
+            name = getattr(entry_point, "name", None)
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def stage_entry_function_name(self, stage_name, entry_point, name_counts):
+        name = getattr(entry_point, "name", None)
+        if not name:
+            return name
+        if stage_name in self.cuda_ray_stage_names() and name == "main":
+            return f"{stage_name}_{name}"
+        if name_counts.get(name, 0) > 1:
+            return f"{stage_name}_{name}"
+        return name
 
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
+        saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         saved_query_metadata_aliases = self.query_metadata_aliases
         saved_current_function_name = self.current_function_name
+        saved_current_function_return_type = self.current_function_return_type
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
         )
@@ -339,14 +538,26 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             qualifiers.append("__device__")
 
         if hasattr(node, "return_type"):
+            self.current_function_return_type = node.return_type
             return_type = self.convert_crossgl_type_to_cuda(node.return_type)
         else:
+            self.current_function_return_type = "void"
             return_type = "void"
+
+        stage_name = self.function_stage_name(node)
+        return_semantic = self.semantic_from_node(node)
+        self.validate_cuda_return_semantic(
+            stage_name, self.current_function_return_type, return_semantic
+        )
+        self.validate_cuda_struct_return_semantics(
+            stage_name, self.current_function_return_type
+        )
 
         qualifier_str = " ".join(qualifiers)
 
         params = []
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        self.validate_cuda_stage_parameter_semantics(stage_name, param_list)
 
         for param in param_list:
             if hasattr(param, "param_type"):
@@ -356,14 +567,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 param_type = "void"
 
-            self.register_variable_type(param.name, param_type, param)
-            declaration_type = self.apply_readonly_qualifier_to_type(param_type, param)
+            declaration_type = self.resource_type_with_access(param_type, param)
+            self.register_variable_type(param.name, declaration_type, param)
             params.append(self.format_typed_declarator(declaration_type, param.name))
-            metadata_param = self.query_metadata_parameter(param.name, param_type)
+            metadata_param = self.query_metadata_parameter(param.name, declaration_type)
             if metadata_param:
                 params.append(metadata_param)
             length_param = self.structured_buffer_length_parameter(
-                node.name, param.name, param_type
+                node.name, param.name, declaration_type
             )
             if length_param:
                 self.current_structured_buffer_length_parameters[param.name] = (
@@ -371,13 +582,33 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 params.append(length_param)
             counter_param = self.structured_buffer_counter_parameter(
-                param.name, param_type
+                param.name, declaration_type
             )
             if counter_param:
                 params.append(counter_param)
 
         param_str = ", ".join(params)
-        self.emit(f"{qualifier_str} {return_type} {node.name}({param_str}) {{")
+        if stage_name in self.cuda_ray_stage_names():
+            self.emit(
+                "// CrossGL ray stage: "
+                f"{self.cuda_ray_stage_metadata_name(stage_name)}"
+            )
+        if return_semantic:
+            self.emit(
+                f"// CrossGL return semantic: {self.map_semantic(return_semantic)}"
+            )
+        if stage_name:
+            for param in param_list:
+                param_semantic = self.semantic_from_node(param)
+                if param_semantic:
+                    self.emit(
+                        f"// CrossGL parameter semantic: {param.name}: "
+                        f"{self.map_semantic(param_semantic)}"
+                    )
+        function_name = getattr(self, "current_stage_entry_function_name", None)
+        if not function_name:
+            function_name = node.name
+        self.emit(f"{qualifier_str} {return_type} {function_name}({param_str}) {{")
 
         self.indent_level += 1
 
@@ -388,8 +619,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("}")
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
+        self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.query_metadata_aliases = saved_query_metadata_aliases
         self.current_function_name = saved_current_function_name
+        self.current_function_return_type = saved_current_function_return_type
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
         )
@@ -400,7 +634,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         members = getattr(node, "members", [])
         member_types = {}
+        member_semantics = {}
         member_image_accesses = {}
+        query_metadata_members = self.struct_query_metadata_members.get(
+            node.name, set()
+        )
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -409,14 +647,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             else:
                 member_type = "float"
 
-            member_type = self.apply_readonly_qualifier_to_type(member_type, member)
+            member_type = self.resource_type_with_access(member_type, member)
             member_types[member.name] = member_type
             member_access = self.explicit_resource_access(member)
             if member_access is not None and self.is_storage_image_type(member_type):
                 member_image_accesses[member.name] = member_access
-            self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
+            semantic = self.semantic_from_node(member)
+            if semantic:
+                member_semantics[member.name] = semantic
+                self.validate_cuda_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+            semantic_comment = (
+                f" // CrossGL semantic: {self.map_semantic(semantic)}"
+                if semantic
+                else ""
+            )
+            self.emit(
+                f"{self.format_typed_declarator(member_type, member.name)};"
+                f"{semantic_comment}"
+            )
+            if member.name in query_metadata_members:
+                self.resource_query_info_required = True
+                metadata_declarator = self.format_typed_declarator(
+                    self.query_metadata_type(member_type),
+                    self.query_metadata_name(member.name),
+                    dynamic_array_as_pointer=False,
+                )
+                self.emit(f"{metadata_declarator};")
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_semantics[node.name] = member_semantics
         self.struct_member_image_accesses[node.name] = member_image_accesses
         self.indent_level -= 1
         self.emit("};")
@@ -469,6 +730,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"auto {node.name} = {self.visit(initial_value)}"
 
         if var_type:
+            var_type = self.resource_type_with_access(var_type, node)
             self.register_variable_type(node.name, var_type, node, initial_value)
             if self.is_query_metadata_snapshot_local(node.name, var_type):
                 self.query_metadata_aliases[node.name] = self.query_metadata_name(
@@ -494,8 +756,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if qualifier_str:
                 qualifier_str += " "
 
+            declaration_type = self.glsl_buffer_block_declaration_type(var_type, node)
             declaration = (
-                f"{qualifier_str}{self.format_typed_declarator(var_type, node.name)}"
+                f"{qualifier_str}"
+                f"{self.format_typed_declarator(declaration_type, node.name)}"
             )
             if initial_value is not None:
                 declaration += f" = {self.visit(initial_value)}"
@@ -528,8 +792,397 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return str(size)
         return self.visit(size)
 
+    def semantic_from_node(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if self.is_semantic_name(attr_name):
+                return attr_name
+        return None
+
+    def is_semantic_name(self, name):
+        if name is None:
+            return False
+        name = str(name)
+        upper_name = name.upper()
+        if name.startswith("gl_"):
+            return True
+        if upper_name in {
+            "BINORMAL",
+            "CALLABLE_DATA",
+            "CALLABLEDATAEXT",
+            "CALLABLEDATAINEXT",
+            "COLOR",
+            "HIT_ATTRIBUTE",
+            "HITATTRIBUTEEXT",
+            "NORMAL",
+            "PAYLOAD",
+            "POSITION",
+            "RAYPAYLOADEXT",
+            "RAYPAYLOADINEXT",
+            "SV_DEPTH",
+            "SV_DISPATCHRAYSDIMENSIONS",
+            "SV_DISPATCHRAYSINDEX",
+            "SV_DISPATCHTHREADID",
+            "SV_DRAWID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_PRIMITIVEID",
+            "SV_SAMPLEINDEX",
+            "SV_STARTINSTANCELOCATION",
+            "SV_STARTVERTEXLOCATION",
+            "SV_TARGET",
+            "SV_VERTEXID",
+            "TANGENT",
+            "TEXCOORD",
+        }:
+            return True
+        for prefix in ("COLOR", "SV_TARGET", "TEXCOORD"):
+            if upper_name.startswith(prefix) and upper_name[len(prefix) :].isdigit():
+                return True
+        return False
+
+    def map_semantic(self, semantic):
+        if semantic is None:
+            return ""
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth(any)"
+        if lower_name == "gl_fragcolor":
+            return "target(0)"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "SV_TARGET":
+            return "target(0)"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "TEXCOORD":
+            return "texcoord"
+        if (
+            upper_name.startswith("TEXCOORD")
+            and upper_name[len("TEXCOORD") :].isdigit()
+        ):
+            return f"texcoord({upper_name[len('TEXCOORD'):]})"
+        if upper_name == "COLOR":
+            return "color"
+        if upper_name.startswith("COLOR") and upper_name[len("COLOR") :].isdigit():
+            return f"color({upper_name[len('COLOR'):]})"
+        generic_semantics = {
+            "BINORMAL": "binormal",
+            "NORMAL": "normal",
+            "POSITION": "position",
+            "TANGENT": "tangent",
+            "gl_FragCoord": "position",
+            "gl_FrontFacing": "front_facing",
+            "gl_PointCoord": "point_coord",
+            "gl_VertexID": "vertex_id",
+            "gl_InstanceID": "instance_id",
+            "gl_BaseVertex": "start_vertex_location",
+            "gl_BaseInstance": "start_instance_location",
+            "gl_DrawID": "draw_id",
+            "gl_WorkGroupID": "workgroup_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_DrawID": "draw_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "local_invocation_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
+            "SV_PrimitiveID": "primitive_id",
+            "SV_SampleIndex": "sample_index",
+            "SV_StartInstanceLocation": "start_instance_location",
+            "SV_StartVertexLocation": "start_vertex_location",
+            "SV_VertexID": "vertex_id",
+        }
+        return generic_semantics.get(semantic_name, semantic_name)
+
+    def cuda_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name in {
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        } or upper_name in {
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def is_cuda_float4_type(self, type_name):
+        return self.map_type(type_name) == "float4"
+
+    def is_cuda_float_scalar_type(self, type_name):
+        return self.map_type(type_name) == "float"
+
+    def validate_cuda_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.cuda_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+        if kind in {"position", "color"}:
+            if self.is_cuda_float4_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "expected vec4-compatible type"
+            )
+        if kind == "depth" and not self.is_cuda_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "expected float type"
+            )
+
+    def validate_cuda_output_semantic_stage(self, stage_name, semantic, context):
+        kind = self.cuda_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if stage_name is None:
+            return
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if stage_name not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA {stage_name} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def function_stage_name(self, node):
+        if self.current_stage_name:
+            return self.current_stage_name
+        qualifiers = list(getattr(node, "qualifiers", []) or [])
+        qualifier = getattr(node, "qualifier", None)
+        if qualifier:
+            qualifiers.append(qualifier)
+        supported_stage_names = {
+            "compute",
+            "fragment",
+            "vertex",
+        }
+        for qualifier in qualifiers:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in supported_stage_names:
+                return qualifier_name
+        return None
+
+    def validate_cuda_return_semantic(self, stage_name, return_type, semantic):
+        if semantic is None:
+            return
+        if self.map_type(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for CUDA codegen; "
+                "void return type"
+            )
+        self.validate_cuda_output_semantic_stage(
+            stage_name, semantic, "return semantic"
+        )
+        self.validate_cuda_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def validate_cuda_struct_return_semantics(self, stage_name, return_type):
+        if stage_name is None:
+            return
+        base_type = self.type_name_string(return_type)
+        if not base_type:
+            return
+        base_type = base_type.split("<", 1)[0].split("[", 1)[0].strip()
+        member_semantics = self.struct_member_semantics.get(base_type, {})
+        member_types = self.struct_member_types.get(base_type, {})
+        for member_name, semantic in member_semantics.items():
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_cuda_output_semantic_stage(stage_name, semantic, context)
+            self.validate_cuda_builtin_semantic_type(
+                semantic, member_types.get(member_name, "float"), context
+            )
+
+    def cuda_stage_parameter_semantic_key(self, semantic):
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        if lower_name.startswith("gl_"):
+            return lower_name
+        return semantic_name.upper()
+
+    def cuda_stage_parameter_semantic_rules(self):
+        ray_stages = self.cuda_ray_stage_names()
+        ray_hit_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        return {
+            "gl_vertexid": ("vertex_id", "uint", {"vertex"}),
+            "gl_instanceid": ("instance_id", "uint", {"vertex"}),
+            "gl_basevertex": ("start_vertex_location", "int", {"vertex"}),
+            "gl_baseinstance": ("start_instance_location", "uint", {"vertex"}),
+            "gl_drawid": ("draw_id", "uint", {"vertex"}),
+            "SV_VERTEXID": ("vertex_id", "uint", {"vertex"}),
+            "SV_INSTANCEID": ("instance_id", "uint", {"vertex"}),
+            "SV_STARTVERTEXLOCATION": ("start_vertex_location", "int", {"vertex"}),
+            "SV_STARTINSTANCELOCATION": ("start_instance_location", "uint", {"vertex"}),
+            "SV_DRAWID": ("draw_id", "uint", {"vertex"}),
+            "gl_position": ("position", "float4", {"fragment"}),
+            "gl_fragcoord": ("position", "float4", {"fragment"}),
+            "gl_frontfacing": ("front_facing", "bool", {"fragment"}),
+            "gl_pointcoord": ("point_coord", "float2", {"fragment"}),
+            "gl_primitiveid": (
+                "primitive_id",
+                "uint",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "gl_sampleid": ("sample_index", "uint", {"fragment"}),
+            "SV_POSITION": ("position", "float4", {"fragment"}),
+            "SV_ISFRONTFACE": ("front_facing", "bool", {"fragment"}),
+            "SV_PRIMITIVEID": (
+                "primitive_id",
+                "uint",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "SV_SAMPLEINDEX": ("sample_index", "uint", {"fragment"}),
+            "gl_workgroupid": ("workgroup_id", "uint3", {"compute"}),
+            "gl_localinvocationid": ("local_invocation_id", "uint3", {"compute"}),
+            "gl_globalinvocationid": ("global_invocation_id", "uint3", {"compute"}),
+            "gl_localinvocationindex": ("local_invocation_index", "uint", {"compute"}),
+            "SV_GROUPID": ("workgroup_id", "uint3", {"compute"}),
+            "SV_GROUPTHREADID": ("local_invocation_id", "uint3", {"compute"}),
+            "SV_DISPATCHTHREADID": ("global_invocation_id", "uint3", {"compute"}),
+            "SV_GROUPINDEX": ("local_invocation_index", "uint", {"compute"}),
+            "gl_launchidext": ("launch_id", "uint3", ray_stages),
+            "gl_launchsizeext": ("launch_size", "uint3", ray_stages),
+            "gl_hittext": ("hit_t", "float", ray_hit_stages),
+            "gl_hitkindext": ("hit_kind", "uint", {"ray_any_hit"}),
+            "SV_DISPATCHRAYSINDEX": ("launch_id", "uint3", ray_stages),
+            "SV_DISPATCHRAYSDIMENSIONS": ("launch_size", "uint3", ray_stages),
+        }
+
+    def validate_cuda_stage_parameter_semantic_type(
+        self, param, semantic, expected_type
+    ):
+        param_type = self.resource_type_with_access(
+            self.get_parameter_type(param), param
+        )
+        actual_type = self.convert_crossgl_type_to_cuda(param_type)
+        if actual_type == expected_type:
+            return
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for CUDA codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_cuda_stage_parameter_semantics(self, stage_name, parameters):
+        if stage_name is None:
+            return
+
+        rules = self.cuda_stage_parameter_semantic_rules()
+        seen_system_semantics = {}
+        for param in parameters or []:
+            semantic = self.semantic_from_node(param)
+            if semantic is None:
+                continue
+
+            semantic_key = self.cuda_stage_parameter_semantic_key(semantic)
+            rule = rules.get(semantic_key)
+            if rule is not None:
+                mapped_semantic, expected_type, allowed_stages = rule
+                if stage_name not in allowed_stages:
+                    allowed = ", ".join(sorted(allowed_stages))
+                    raise ValueError(
+                        f"Unsupported {semantic} stage parameter semantic for CUDA "
+                        f"{stage_name} stage; valid stage is {allowed}"
+                    )
+                param_name = getattr(param, "name", getattr(param, "param_name", None))
+                previous_name = seen_system_semantics.get(mapped_semantic)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate CUDA stage parameter semantic {mapped_semantic} "
+                        f"on '{previous_name}' and '{param_name}'"
+                    )
+                seen_system_semantics[mapped_semantic] = param_name
+                self.validate_cuda_stage_parameter_semantic_type(
+                    param, semantic, expected_type
+                )
+                continue
+
+            kind = self.cuda_semantic_output_kind(semantic)
+            if kind in {"color", "depth"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for CUDA "
+                    f"{stage_name} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def visit_VariableNode(self, node):
         var_type = self.get_variable_node_type(node)
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        if isinstance(initial_value, MatchNode):
+            self.emit_match_expression_variable(node, initial_value, var_type)
+            return None
+
+        metadata_comment = self.cuda_resource_metadata_comment(node, var_type)
+        if metadata_comment:
+            self.emit(metadata_comment)
         declaration = self.format_variable_declaration(node)
         if declaration != node.name:
             self.emit(f"{declaration};")
@@ -566,6 +1219,24 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         return node.name
+
+    def emit_match_expression_variable(self, node, match_node, var_type):
+        if var_type is None:
+            var_type = infer_match_expression_result_type(self, match_node)
+        var_type = var_type or "auto"
+        self.register_variable_type(node.name, var_type, node)
+
+        self.emit(f"{self.format_typed_declarator(var_type, node.name)};")
+        self.emit_generated_code(
+            generate_match_expression_assignment(
+                self,
+                match_node,
+                node.name,
+                var_type,
+                self.indent_level,
+                "CUDA",
+            )
+        )
 
     def visit_ExpressionStatementNode(self, node):
         if isinstance(node.expression, AssignmentNode):
@@ -607,7 +1278,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_IdentifierNode(self, node):
         name = getattr(node, "name", str(node))
+        ray_builtin = self.cuda_ray_builtin_expression(name)
+        if ray_builtin is not None and name not in self.variable_types:
+            return ray_builtin
         return self.builtin_map.get(name, name)
+
+    def cuda_ray_builtin_expression(self, name):
+        helper_name = {
+            "gl_LaunchIDEXT": "cgl_ray_launch_id",
+            "gl_LaunchSizeEXT": "cgl_ray_launch_size",
+            "gl_HitTEXT": "cgl_ray_hit_t",
+            "gl_HitKindEXT": "cgl_ray_hit_kind",
+            "gl_WorldRayOriginEXT": "cgl_ray_world_origin",
+            "gl_WorldRayDirectionEXT": "cgl_ray_world_direction",
+            "gl_ObjectRayOriginEXT": "cgl_ray_object_origin",
+            "gl_ObjectRayDirectionEXT": "cgl_ray_object_direction",
+            "gl_RayTminEXT": "cgl_ray_t_min",
+            "gl_IncomingRayFlagsEXT": "cgl_ray_incoming_flags",
+            "gl_InstanceCustomIndexEXT": "cgl_ray_instance_custom_index",
+            "gl_GeometryIndexEXT": "cgl_ray_geometry_index",
+        }.get(str(name))
+        if helper_name is None:
+            return None
+        self.require_cuda_ray_runtime_helpers()
+        return f"{helper_name}()"
 
     def format_literal(self, value, literal_type=None):
         if isinstance(value, bool):
@@ -654,7 +1348,14 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_assignment_expression(node)
 
     def format_assignment_expression(self, node):
-        target = self.visit(node.target)
+        diagnostic = self.glsl_buffer_block_write_diagnostic(node.target, "assignment")
+        if diagnostic is not None:
+            return diagnostic
+        self.assignment_lhs_depth += 1
+        try:
+            target = self.visit(node.target)
+        finally:
+            self.assignment_lhs_depth -= 1
         value = self.visit(node.value)
         operator = getattr(node, "operator", "=")
         compound_binary_ops = {
@@ -783,8 +1484,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         if func_name == "lambda":
             return self.generate_lambda_expression(raw_args)
+        if func_name in CUDA_WAVE_OP_ARITIES:
+            return self.generate_wave_operation(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name, raw_args
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
         if not is_user_function:
             buffer_call = self.generate_buffer_call(
                 function_expr, func_name, raw_args, args
@@ -884,6 +1593,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
+        if func_name in self.struct_member_types:
+            args = self.struct_constructor_arguments(func_name, raw_args, args)
+
         scalar_math_call = self.generate_scalar_math_call(func_name, raw_args, args)
         if scalar_math_call is not None:
             return scalar_math_call
@@ -893,6 +1605,200 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Convert built-in functions
         func_name = self.convert_builtin_function(func_name)
         return f"{func_name}({args_str})"
+
+    def visit_RayTracingOpNode(self, node):
+        operation = getattr(node, "operation", "")
+        if operation in self.function_return_types:
+            args = ", ".join(
+                self.visit(arg) for arg in getattr(node, "arguments", []) or []
+            )
+            return f"{operation}({args})"
+        return self.generate_ray_tracing_call_expression(
+            operation,
+            getattr(node, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, arguments):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        self.require_cuda_ray_runtime_helpers()
+        generated_args = [self.visit(arg) for arg in arguments or []]
+        if operation == "TraceRay" and len(generated_args) == 11:
+            ray_desc = (
+                "CglRayDesc("
+                f"{generated_args[6]}, {generated_args[7]}, "
+                f"{generated_args[8]}, {generated_args[9]}"
+                ")"
+            )
+            generated_args = generated_args[:6] + [ray_desc, generated_args[10]]
+        elif operation == "ReportHit" and len(generated_args) == 2:
+            generated_args.append("CglBuiltInTriangleIntersectionAttributes{}")
+
+        helper_name = self.convert_builtin_function(operation)
+        return f"{helper_name}({', '.join(generated_args)})"
+
+    def visit_RayQueryOpNode(self, node):
+        operation = getattr(node, "operation", "")
+        helper_name = self.require_cuda_ray_query_helper(operation)
+        args = [self.visit(getattr(node, "query_expr", None))]
+        args.extend(self.visit(arg) for arg in getattr(node, "arguments", []) or [])
+        return f"{helper_name}({', '.join(args)})"
+
+    def visit_WaveOpNode(self, node):
+        raw_args = list(getattr(node, "arguments", []) or [])
+        args = [self.visit(arg) for arg in raw_args]
+        return self.generate_wave_operation(
+            getattr(node, "operation", "WaveOp"), raw_args, args
+        )
+
+    def generate_wave_operation(self, operation, raw_args, args):
+        expected_count = CUDA_WAVE_OP_ARITIES.get(operation)
+        if expected_count is None:
+            raise ValueError(f"Unsupported CUDA wave intrinsic {operation}")
+        if len(raw_args) != expected_count:
+            raise ValueError(
+                f"CUDA wave intrinsic {operation} requires {expected_count} "
+                f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
+            )
+
+        if operation == "WaveGetLaneCount":
+            return "warpSize"
+        if operation == "WaveGetLaneIndex":
+            return "(threadIdx.x & (warpSize - 1))"
+        if operation == "WaveIsFirstLane":
+            return "((threadIdx.x & (warpSize - 1)) == 0)"
+
+        helper_name = self.require_wave_helper(operation, raw_args)
+        return f"{helper_name}({', '.join(args)})"
+
+    def require_wave_helper(self, operation, raw_args):
+        result_type = self.map_type(self.wave_result_type(operation, raw_args))
+        arg_types = [
+            self.wave_argument_type(operation, index, arg)
+            for index, arg in enumerate(raw_args)
+        ]
+        helper_name = self.wave_helper_name(operation, result_type, arg_types)
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        parameter_names = self.wave_helper_parameter_names(operation, len(arg_types))
+        params = [
+            f"{arg_type} {parameter_name}"
+            for parameter_name, arg_type in zip(parameter_names, arg_types)
+        ]
+        helper = (
+            f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
+            "{\n"
+            f"    return {self.wave_helper_return_expression(operation, result_type)};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def wave_result_type(self, operation, raw_args):
+        if operation in CUDA_WAVE_UINT_RESULT_OPS:
+            return "uint"
+        if operation in CUDA_WAVE_BOOL_RESULT_OPS:
+            return "bool"
+        if operation in CUDA_WAVE_UVEC4_RESULT_OPS:
+            return "uvec4"
+        if raw_args:
+            return self.expression_result_type(raw_args[0]) or "uint"
+        return "uint"
+
+    def wave_argument_type(self, operation, index, arg):
+        if index == 0 and operation in CUDA_WAVE_PREDICATE_ARGUMENT_OPS:
+            return self.map_type("bool")
+        if index == 1 and operation.startswith("WaveMultiPrefix"):
+            return self.map_type("uvec4")
+        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return self.map_type("uint")
+        return self.map_type(self.expression_result_type(arg) or "uint")
+
+    def wave_helper_name(self, operation, result_type, arg_types):
+        suffix_parts = [self.wave_type_suffix(result_type)]
+        suffix_parts.extend(self.wave_type_suffix(arg_type) for arg_type in arg_types)
+        return (
+            f"cgl_cuda_{self.wave_operation_suffix(operation)}_{'_'.join(suffix_parts)}"
+        )
+
+    def wave_operation_suffix(self, operation):
+        name = operation[0].lower() + operation[1:]
+        suffix = []
+        for char in name:
+            if char.isupper():
+                suffix.append("_")
+                suffix.append(char.lower())
+            else:
+                suffix.append(char)
+        return "".join(suffix)
+
+    def wave_type_suffix(self, type_name):
+        suffix = type_name.replace("unsigned int", "uint")
+        suffix = suffix.replace(" ", "_").replace("*", "_ptr")
+        suffix = suffix.replace("&", "_ref").replace("::", "_")
+        return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
+
+    def wave_helper_parameter_names(self, operation, arg_count):
+        if arg_count == 1:
+            if operation in CUDA_WAVE_PREDICATE_ARGUMENT_OPS:
+                return ["predicate"]
+            return ["value"]
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return ["value", "lane"]
+        if operation == "WaveMultiPrefixCountBits":
+            return ["predicate", "mask"]
+        return ["value", "mask"]
+
+    def wave_helper_return_expression(self, operation, result_type):
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "predicate"
+        if operation == "WaveActiveAllEqual":
+            return "true"
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+        }:
+            return "(predicate ? 1u : 0u)"
+        if operation == "WaveActiveBallot":
+            return "make_uint4((predicate ? 1u : 0u), 0u, 0u, 0u)"
+        if operation == "WaveMatch":
+            return "make_uint4(0u, 0u, 0u, 0u)"
+        if result_type == "bool":
+            return "false"
+        return "value"
+
+    def struct_constructor_arguments(self, struct_name, raw_args, args):
+        """Expand struct constructors with resource-member metadata sidecars."""
+        metadata_members = self.struct_query_metadata_members.get(struct_name, set())
+        if not metadata_members:
+            return args
+
+        expanded_args = []
+        member_types = list(self.struct_member_types.get(struct_name, {}).items())
+        for index, arg in enumerate(args):
+            expanded_args.append(arg)
+            if index >= len(raw_args) or index >= len(member_types):
+                continue
+            member_name, member_type = member_types[index]
+            if member_name not in metadata_members:
+                continue
+            metadata_arg = self.query_metadata_expression(raw_args[index])
+            if metadata_arg is None:
+                metadata_arg = self.unavailable_query_metadata_argument(
+                    member_name,
+                    member_type,
+                )
+            expanded_args.append(metadata_arg)
+        return expanded_args
 
     def generate_buffer_call(self, function_expr, func_name, raw_args, args):
         """Lower structured-buffer loads and stores to CUDA pointer indexing."""
@@ -1193,6 +2099,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 readonly_reason,
                 fallback,
             )
+        access_diagnostic = self.glsl_buffer_block_read_write_diagnostic(
+            target_expr, func_name, fallback
+        )
+        if access_diagnostic is not None:
+            return access_diagnostic
 
         scalar_kind = self.cuda_atomic_scalar_kind(atomic_type)
         if scalar_kind not in supported_kinds:
@@ -2151,6 +3062,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_MemberAccessNode(self, node):
         """Visit member access"""
+        if self.assignment_lhs_depth == 0:
+            diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
         if hasattr(node, "object_expr"):
             obj = self.visit(node.object_expr)
         else:
@@ -2205,6 +3120,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_ArrayAccessNode(self, node):
         """Visit array access"""
+        if self.assignment_lhs_depth == 0:
+            diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
         if hasattr(node, "array_expr"):
             array = self.visit(node.array_expr)
         else:
@@ -2337,32 +3256,51 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("}")
 
     def visit_MatchNode(self, node):
-        """Lower simple CrossGL match statements to CUDA switch statements."""
-        expression = self.visit(node.expression)
-        self.emit(f"switch ({expression}) {{")
+        """Lower CrossGL match statements to CUDA switch or if/else code."""
+        if is_switch_lowerable_match(node):
+            code = generate_switch_match(self, node, self.indent_level)
+        else:
+            code = generate_ordered_conditional_match(
+                self, node, self.indent_level, "CUDA"
+            )
+        self.emit_generated_code(code)
 
-        self.indent_level += 1
-        for arm in getattr(node, "arms", []):
-            if not self.is_supported_switch_match_arm(arm):
-                raise ValueError(
-                    "Unsupported match arm for CUDA codegen; only unguarded "
-                    "literal and wildcard patterns can be lowered to switch"
-                )
+    def generate_switch_case(self, label, body, indent, auto_break=False):
+        indent_str = "    " * indent
+        if not auto_break and not self.statement_body_has_statements(body):
+            return f"{indent_str}{label}:\n"
 
-            pattern = arm.pattern
-            if isinstance(pattern, WildcardPatternNode):
-                self.emit("default:")
-            else:
-                self.emit(f"case {self.visit(pattern.literal)}:")
+        code = f"{indent_str}{label}: {{\n"
+        code += self.generate_scoped_statement_body(body, indent + 1)
+        if auto_break and not self.statement_body_terminates(body):
+            code += f"{indent_str}    break;\n"
+        code += f"{indent_str}}}\n"
+        return code
 
-            self.indent_level += 1
-            self.emit_body(arm.body)
-            if not self.statement_body_terminates(arm.body):
-                self.emit("break;")
-            self.indent_level -= 1
-        self.indent_level -= 1
+    def statement_body_has_statements(self, body):
+        return bool(self.statement_list(body))
 
-        self.emit("}")
+    def generate_scoped_statement_body(self, body, indent):
+        saved_output = self.output
+        saved_indent = self.indent_level
+        self.output = []
+        self.indent_level = indent
+        try:
+            self.emit_body(body)
+            if not self.output:
+                return ""
+            return "\n".join(self.output) + "\n"
+        finally:
+            self.output = saved_output
+            self.indent_level = saved_indent
+
+    def generate_expression(self, node):
+        if node is None:
+            return ""
+        return self.visit(node)
+
+    def generate_expression_with_expected(self, node, _expected_type):
+        return self.generate_expression(node)
 
     def visit_CaseNode(self, node):
         """Visit switch case/default label"""
@@ -2380,10 +3318,34 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def visit_ReturnNode(self, node):
         """Visit return statement"""
         if node.value:
+            if isinstance(node.value, MatchNode):
+                return self.emit_match_expression_return(node.value)
             value = self.visit(node.value)
             self.emit(f"return {value};")
         else:
             self.emit("return;")
+
+    def emit_match_expression_return(self, match_node):
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            raise ValueError(
+                "Unsupported match expression for CUDA codegen; return context "
+                "requires a concrete non-void result type"
+            )
+
+        result_name = self.next_cuda_temp_variable("match_value")
+        self.emit(f"{self.format_typed_declarator(return_type, result_name)};")
+        self.emit_generated_code(
+            generate_match_expression_assignment(
+                self,
+                match_node,
+                result_name,
+                return_type,
+                self.indent_level,
+                "CUDA",
+            )
+        )
+        self.emit(f"return {result_name};")
 
     def visit_BreakNode(self, node):
         """Visit break statement"""
@@ -2545,6 +3507,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "uimage2DMS": "cudaSurfaceObject_t",
             "uimage2DMSArray": "cudaSurfaceObject_t",
             "buffer": "CUdeviceptr",
+            "accelerationStructureEXT": "CglRayTracingAccelerationStructure",
+            "AccelerationStructure": "CglRayTracingAccelerationStructure",
+            "acceleration_structure": "CglRayTracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayTracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
         }
 
         sampled_resource_type = self.canonical_sampled_resource_type(crossgl_type)
@@ -2554,6 +3526,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         storage_resource_type = self.canonical_storage_resource_type(crossgl_type)
         if storage_resource_type:
             return type_mapping.get(storage_resource_type, storage_resource_type)
+
+        ray_resource_type = self.canonical_ray_resource_type(crossgl_type)
+        if ray_resource_type:
+            return self.cuda_mapped_type_result(type_mapping[ray_resource_type])
 
         # Handle arrays
         if crossgl_type.startswith("array<") and crossgl_type.endswith(">"):
@@ -2575,7 +3551,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             cuda_element_type = self.convert_crossgl_type_to_cuda(element_type)
             return f"{cuda_element_type}*"
 
-        return type_mapping.get(crossgl_type, crossgl_type)
+        return self.cuda_mapped_type_result(
+            type_mapping.get(crossgl_type, crossgl_type)
+        )
+
+    def cuda_mapped_type_result(self, mapped_type):
+        base_type = str(mapped_type).split("[", 1)[0].strip()
+        if base_type in {
+            "CglRayTracingAccelerationStructure",
+            "CglRayDesc",
+            "CglRayQuery",
+            "CglBuiltInTriangleIntersectionAttributes",
+        }:
+            self.require_cuda_ray_runtime_helpers()
+        return mapped_type
 
     def type_name_string(self, type_name):
         """Return a stable string spelling for TypeNode or legacy type values."""
@@ -2589,6 +3578,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         ):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
+
+    def get_parameter_type(self, param):
+        """Return a parameter type with CUDA resource access metadata applied."""
+        param_type = ResourceQueryMixin.get_parameter_type(self, param)
+        return self.resource_type_with_access(param_type, param)
+
+    def get_variable_node_type(self, node):
+        """Return a variable type with CUDA resource access metadata applied."""
+        var_type = ResourceQueryMixin.get_variable_node_type(self, node)
+        return self.resource_type_with_access(var_type, node)
+
+    def map_type(self, type_name):
+        return self.convert_crossgl_type_to_cuda(type_name)
 
     def strip_cuda_indirect_type_qualifiers(self, type_name):
         """Return the underlying type after CUDA pointer/reference wrappers."""
@@ -3074,6 +4076,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def expression_result_type(self, node):
         """Infer expression result types with CUDA structured-buffer operations."""
+        if isinstance(node, WaveOpNode):
+            return self.wave_result_type(
+                getattr(node, "operation", ""), getattr(node, "arguments", []) or []
+            )
+        if isinstance(node, RayTracingOpNode):
+            if getattr(node, "operation", "") == "ReportHit":
+                return "bool"
+            return None
+        if isinstance(node, RayQueryOpNode):
+            operation = getattr(node, "operation", "")
+            if operation == "Proceed":
+                return "bool"
+            if operation in {"CandidateRayT", "CommittedRayT"}:
+                return "float"
+            return "uint"
         if isinstance(node, MemberAccessNode):
             member_type = self.member_access_member_type(node)
             if member_type is not None:
@@ -3083,6 +4100,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if member_type is not None:
                 return member_type
         if isinstance(node, FunctionCallNode):
+            function_expr = getattr(node, "function", getattr(node, "name", None))
+            func_name = getattr(function_expr, "name", function_expr)
+            if func_name in CUDA_WAVE_OP_ARITIES:
+                return self.wave_result_type(
+                    func_name,
+                    getattr(node, "arguments", getattr(node, "args", [])) or [],
+                )
+            if func_name == "ReportHit":
+                return "bool"
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -3248,6 +4274,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             target = self.structured_buffer_atomic_target(raw_args[0])
             if target is not None:
                 return target["target_type"]
+            target_type = self.expression_result_type(raw_args[0])
+            if self.cuda_atomic_scalar_kind(target_type) is not None:
+                return target_type
         return None
 
     def canonical_sampled_resource_type(self, type_name):
@@ -3278,6 +4307,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return f"u{image_type}"
         return image_type
 
+    def canonical_ray_resource_type(self, type_name):
+        if not isinstance(type_name, str):
+            return None
+        base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+        if base_type in {
+            "accelerationStructureEXT",
+            "AccelerationStructure",
+            "acceleration_structure",
+            "RaytracingAccelerationStructure",
+            "RayTracingAccelerationStructure",
+        }:
+            return "RayTracingAccelerationStructure"
+        return None
+
     def resource_base_type(self, type_name):
         """Normalize resource aliases before resource dispatch decisions."""
         type_name = self.strip_cuda_indirect_type_qualifiers(type_name)
@@ -3285,6 +4328,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return (
             self.canonical_sampled_resource_type(base_type)
             or self.canonical_storage_resource_type(base_type)
+            or self.canonical_ray_resource_type(base_type)
             or base_type
         )
 
@@ -3411,28 +4455,141 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     assigned_names.add(name)
                 continue
 
-            assignment = statement
-            if isinstance(statement, ExpressionStatementNode):
-                assignment = getattr(statement, "expression", None)
-            if not isinstance(assignment, AssignmentNode):
-                return None
-            if getattr(assignment, "operator", "=") != "=":
-                return None
+            if isinstance(statement, IfNode):
+                branch_alias = self.query_return_if_alias_source(
+                    statement,
+                    local_alias_types,
+                    assigned_names,
+                )
+                if branch_alias is None:
+                    return None
+                target_name, value = branch_alias
+                local_alias_sources[target_name] = value
+                assigned_names.add(target_name)
+                continue
 
-            target = getattr(assignment, "target", None)
-            if not isinstance(target, (IdentifierNode, VariableNode, str)):
+            assignment = self.query_return_simple_assignment(statement)
+            if assignment is None:
                 return None
-            target_name = self.get_expression_name(target)
+            target_name, value = assignment
             if target_name not in local_alias_types or target_name in assigned_names:
                 return None
 
-            value = getattr(assignment, "value", None)
-            if value is None:
-                return None
             local_alias_sources[target_name] = value
             assigned_names.add(target_name)
 
         return local_alias_sources
+
+    def query_return_simple_assignment(self, statement):
+        """Return simple assignment target/source for query-return aliases."""
+        assignment = statement
+        if isinstance(statement, ExpressionStatementNode):
+            assignment = getattr(statement, "expression", None)
+        if not isinstance(assignment, AssignmentNode):
+            return None
+        if getattr(assignment, "operator", "=") != "=":
+            return None
+
+        target = getattr(assignment, "target", None)
+        if not isinstance(target, (IdentifierNode, VariableNode, str)):
+            return None
+        target_name = self.get_expression_name(target)
+        value = getattr(assignment, "value", None)
+        if not target_name or value is None:
+            return None
+        return target_name, value
+
+    def query_return_if_alias_source(
+        self,
+        statement,
+        local_alias_types,
+        assigned_names,
+    ):
+        """Collect a deterministic if/else alias assignment chain."""
+        branch_assignments = []
+        current_if = statement
+        else_assignment = None
+
+        while isinstance(current_if, IfNode):
+            condition = getattr(
+                current_if,
+                "condition",
+                getattr(current_if, "if_condition", None),
+            )
+            then_body = getattr(
+                current_if,
+                "then_branch",
+                getattr(current_if, "if_body", None),
+            )
+            else_body = getattr(
+                current_if,
+                "else_branch",
+                getattr(current_if, "else_body", None),
+            )
+            if condition is None or then_body is None or else_body is None:
+                return None
+
+            then_assignment = self.query_return_body_alias_assignment(then_body)
+            if then_assignment is None:
+                return None
+            branch_assignments.append((condition, then_assignment))
+
+            else_if_conditions = list(
+                getattr(current_if, "else_if_conditions", None) or []
+            )
+            else_if_bodies = list(getattr(current_if, "else_if_bodies", None) or [])
+            if len(else_if_conditions) != len(else_if_bodies):
+                return None
+
+            for else_if_condition, else_if_body in zip(
+                else_if_conditions,
+                else_if_bodies,
+            ):
+                if else_if_condition is None:
+                    return None
+                else_if_assignment = self.query_return_body_alias_assignment(
+                    else_if_body
+                )
+                if else_if_assignment is None:
+                    return None
+                branch_assignments.append((else_if_condition, else_if_assignment))
+
+            if isinstance(else_body, IfNode):
+                current_if = else_body
+                continue
+
+            else_assignment = self.query_return_body_alias_assignment(else_body)
+            if else_assignment is None:
+                return None
+            break
+
+        if else_assignment is None:
+            return None
+
+        target_name = branch_assignments[0][1][0]
+        if target_name not in local_alias_types or target_name in assigned_names:
+            return None
+        if any(
+            branch_assignment[0] != target_name
+            for _, branch_assignment in branch_assignments
+        ):
+            return None
+
+        else_name, else_value = else_assignment
+        if else_name != target_name:
+            return None
+
+        value = else_value
+        for branch_condition, (_, branch_value) in reversed(branch_assignments):
+            value = TernaryOpNode(branch_condition, branch_value, value)
+        return target_name, value
+
+    def query_return_body_alias_assignment(self, body):
+        """Return a branch body's only alias assignment, if it is simple."""
+        statements = self.statement_list(body)
+        if len(statements) != 1:
+            return None
+        return self.query_return_simple_assignment(statements[0])
 
     def collect_simple_query_return_sources(self, root):
         """Collect direct resource returns that can reuse caller-side metadata."""
@@ -3687,6 +4844,127 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             }
         return None
 
+    def substitute_query_return_local_aliases(
+        self,
+        expr,
+        local_alias_sources,
+        local_visited=None,
+    ):
+        """Replace helper-local aliases in a return-source expression."""
+        if local_visited is None:
+            local_visited = set()
+
+        expr_name = self.get_expression_name(expr)
+        if isinstance(expr, (IdentifierNode, VariableNode, str)):
+            if expr_name in local_alias_sources:
+                if expr_name in local_visited:
+                    return None
+                return self.substitute_query_return_local_aliases(
+                    local_alias_sources[expr_name],
+                    local_alias_sources,
+                    local_visited | {expr_name},
+                )
+            return expr
+
+        if isinstance(expr, BinaryOpNode):
+            left = self.substitute_query_return_local_aliases(
+                expr.left,
+                local_alias_sources,
+                local_visited,
+            )
+            right = self.substitute_query_return_local_aliases(
+                expr.right,
+                local_alias_sources,
+                local_visited,
+            )
+            if left is None or right is None:
+                return None
+            return BinaryOpNode(left, expr.operator, right)
+
+        if isinstance(expr, UnaryOpNode):
+            operand = self.substitute_query_return_local_aliases(
+                expr.operand,
+                local_alias_sources,
+                local_visited,
+            )
+            if operand is None:
+                return None
+            return UnaryOpNode(expr.operator, operand, expr.is_postfix)
+
+        if isinstance(expr, TernaryOpNode):
+            condition = self.substitute_query_return_local_aliases(
+                expr.condition,
+                local_alias_sources,
+                local_visited,
+            )
+            true_expr = self.substitute_query_return_local_aliases(
+                expr.true_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            false_expr = self.substitute_query_return_local_aliases(
+                expr.false_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            if condition is None or true_expr is None or false_expr is None:
+                return None
+            return TernaryOpNode(condition, true_expr, false_expr)
+
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "array_expr", getattr(expr, "array", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            index_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "index_expr", getattr(expr, "index", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            if array_expr is None or index_expr is None:
+                return None
+            return ArrayAccessNode(array_expr, index_expr)
+
+        if isinstance(expr, MemberAccessNode):
+            object_expr = self.substitute_query_return_local_aliases(
+                getattr(expr, "object_expr", getattr(expr, "object", None)),
+                local_alias_sources,
+                local_visited,
+            )
+            if object_expr is None:
+                return None
+            return MemberAccessNode(object_expr, expr.member)
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_expr = self.substitute_query_return_local_aliases(
+                expr.pointer_expr,
+                local_alias_sources,
+                local_visited,
+            )
+            if pointer_expr is None:
+                return None
+            return PointerAccessNode(pointer_expr, expr.member)
+
+        if isinstance(expr, FunctionCallNode):
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                substituted = self.substitute_query_return_local_aliases(
+                    argument,
+                    local_alias_sources,
+                    local_visited,
+                )
+                if substituted is None:
+                    return None
+                arguments.append(substituted)
+            return FunctionCallNode(
+                expr.function,
+                arguments,
+                getattr(expr, "generic_args", []),
+            )
+
+        return expr
+
     def query_return_member_source_descriptor(
         self,
         member_expr,
@@ -3725,13 +5003,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "member": member_name,
             "indices": return_indices,
             "param_indices": all_param_indices,
+            "object_access": (
+                "->" if isinstance(member_expr, PointerAccessNode) else "."
+            ),
         }
         if object_name in local_alias_sources:
             if object_name in local_visited:
                 return None
             object_kind = "expression"
+            object_node = local_alias_sources[object_name]
             object_type = self.query_return_expression_type(
-                local_alias_sources[object_name],
+                object_node,
                 param_types,
                 global_variable_types,
                 local_alias_sources,
@@ -3772,6 +5054,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         descriptor["object_kind"] = object_kind
         descriptor["object_type"] = object_type
+        object_expr = self.substitute_query_return_local_aliases(
+            object_node,
+            local_alias_sources,
+        )
+        if object_expr is not None:
+            descriptor["object_expr"] = object_expr
         return descriptor
 
     def query_return_expression_type(
@@ -3803,6 +5091,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return param_types[expr_name]
         if expr_name in global_variable_types:
             return global_variable_types[expr_name]
+
+        if isinstance(expr, TernaryOpNode):
+            true_type = self.query_return_expression_type(
+                expr.true_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited.copy(),
+            )
+            false_type = self.query_return_expression_type(
+                expr.false_expr,
+                param_types,
+                global_variable_types,
+                local_alias_sources,
+                local_visited.copy(),
+            )
+            if self.type_name_string(true_type) == self.type_name_string(false_type):
+                return true_type
+            return None
 
         if isinstance(expr, PointerAccessNode):
             pointer_expr = getattr(expr, "pointer_expr", None)
@@ -4318,6 +5625,61 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return true_changed or false_changed
             return False
 
+        struct_metadata_member_names = {
+            member
+            for members in self.struct_query_metadata_members.values()
+            for member in members
+        }
+
+        def mark_struct_constructor_resources(func_name, call):
+            struct_name = self.raw_function_call_name(call)
+            metadata_members = self.struct_query_metadata_members.get(struct_name)
+            if not metadata_members:
+                return False
+            raw_args = getattr(call, "arguments", getattr(call, "args", []))
+            changed = False
+            member_types = list(self.struct_member_types.get(struct_name, {}).items())
+            for index, (member_name, _) in enumerate(member_types):
+                if member_name not in metadata_members or index >= len(raw_args):
+                    continue
+                changed = (
+                    mark_resolved_resource(
+                        func_name,
+                        raw_args[index],
+                    )
+                    or changed
+                )
+            return changed
+
+        def metadata_assignment_member_name(target):
+            while isinstance(target, ArrayAccessNode):
+                target = getattr(
+                    target,
+                    "array_expr",
+                    getattr(target, "array", None),
+                )
+            if isinstance(target, (MemberAccessNode, PointerAccessNode)):
+                member = getattr(target, "member", None)
+                return getattr(member, "name", member)
+            return None
+
+        for func_name, func in functions_by_name.items():
+            for node in self.query_walk_nodes(getattr(func, "body", [])):
+                if isinstance(node, FunctionCallNode):
+                    changed = mark_struct_constructor_resources(func_name, node)
+                    if changed:
+                        continue
+                if not isinstance(node, AssignmentNode):
+                    continue
+                member_name = metadata_assignment_member_name(
+                    getattr(node, "target", None)
+                )
+                if member_name not in struct_metadata_member_names:
+                    continue
+                value = getattr(node, "value", None)
+                if value is not None:
+                    mark_resolved_resource(func_name, value)
+
         for func_name, func in functions_by_name.items():
             for call in self.query_walk_nodes(getattr(func, "body", [])):
                 if not isinstance(call, FunctionCallNode):
@@ -4421,19 +5783,130 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             metadata_expr = "{}"
         return f"{declarator} = {metadata_expr}"
 
+    def struct_member_has_query_metadata(self, struct_type, member_name):
+        """Return whether a struct member has an embedded metadata sidecar."""
+        struct_type = self.struct_member_lookup_type(struct_type)
+        return member_name in self.struct_query_metadata_members.get(struct_type, set())
+
+    def can_reuse_struct_metadata_object_expression(
+        self, object_node, allow_function_call_object=False
+    ):
+        """Return whether a direct member sidecar read avoids duplicating calls."""
+        if object_node is None:
+            return False
+        if isinstance(object_node, FunctionCallNode):
+            return allow_function_call_object
+        if isinstance(object_node, ArrayAccessNode):
+            array_node = getattr(
+                object_node,
+                "array_expr",
+                getattr(object_node, "array", None),
+            )
+            index_node = getattr(
+                object_node,
+                "index_expr",
+                getattr(object_node, "index", None),
+            )
+            return self.can_reuse_struct_metadata_object_expression(
+                array_node, allow_function_call_object
+            ) and self.is_safe_query_return_actual_index(index_node)
+        if isinstance(object_node, MemberAccessNode):
+            return self.can_reuse_struct_metadata_object_expression(
+                getattr(
+                    object_node,
+                    "object_expr",
+                    getattr(object_node, "object", None),
+                ),
+                allow_function_call_object,
+            )
+        if isinstance(object_node, PointerAccessNode):
+            return self.can_reuse_struct_metadata_object_expression(
+                getattr(object_node, "pointer_expr", None),
+                allow_function_call_object,
+            )
+        return True
+
+    def query_struct_member_metadata_expression(
+        self, resource_expr, allow_function_call_object=False
+    ):
+        """Return metadata paired with a struct resource-member expression."""
+        if isinstance(resource_expr, PointerAccessNode):
+            object_node = getattr(resource_expr, "pointer_expr", None)
+            member_name = getattr(resource_expr, "member", None)
+            object_type = self.resource_expression_type(object_node)
+            pointer_info = self.cuda_indirect_type_info(object_type)
+            if pointer_info is None:
+                return None
+            struct_type = self.struct_member_lookup_type(pointer_info["pointee_type"])
+            object_access = "->"
+        elif isinstance(resource_expr, MemberAccessNode):
+            object_node = getattr(
+                resource_expr,
+                "object_expr",
+                getattr(resource_expr, "object", None),
+            )
+            member_name = getattr(resource_expr, "member", None)
+            struct_type = self.struct_member_lookup_type(
+                self.resource_expression_type(object_node)
+            )
+            object_access = "."
+        else:
+            return None
+
+        if object_node is None or not isinstance(member_name, str):
+            return None
+        if not self.can_reuse_struct_metadata_object_expression(
+            object_node, allow_function_call_object
+        ):
+            return None
+        if not self.struct_member_has_query_metadata(struct_type, member_name):
+            return None
+
+        object_expr = self.visit(object_node)
+        if not object_expr:
+            return None
+        return f"{object_expr}{object_access}{self.query_metadata_name(member_name)}"
+
+    def is_struct_member_metadata_assignment_target(self, target_node):
+        """Return whether an assignment target is a struct resource member."""
+        if isinstance(target_node, ArrayAccessNode):
+            target_node = getattr(
+                target_node,
+                "array_expr",
+                getattr(target_node, "array", None),
+            )
+        return isinstance(target_node, (MemberAccessNode, PointerAccessNode))
+
     def format_query_metadata_assignment(self, node):
         """Return a metadata sidecar update for a reassigned local resource."""
         if getattr(node, "operator", "=") != "=":
             return None
 
         target_node = getattr(node, "target", None)
-        if not isinstance(target_node, (IdentifierNode, VariableNode, str)):
-            return None
-        target_name = self.get_expression_name(target_node)
-        target_type = self.variable_types.get(target_name)
-        if not self.is_query_metadata_snapshot_local(target_name, target_type):
-            return None
+        if isinstance(target_node, (IdentifierNode, VariableNode, str)):
+            target_name = self.get_expression_name(target_node)
+            target_type = self.variable_types.get(target_name)
+            if not self.is_query_metadata_snapshot_local(target_name, target_type):
+                return None
 
+            metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
+            if metadata_expr is None:
+                resource_type = self.resource_base_type(target_type) or target_type
+                resource_type = resource_type or "resource"
+                metadata_expr = (
+                    "/* unsupported CUDA resource query: metadata unavailable for "
+                    f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
+                )
+            return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
+
+        if not self.is_struct_member_metadata_assignment_target(target_node):
+            return None
+        target_metadata = self.query_metadata_expression(target_node)
+        if target_metadata is None:
+            return None
+        target_type = self.resource_expression_type(target_node)
+        if not self.is_queryable_resource_type(target_type):
+            return None
         metadata_expr = self.query_metadata_expression(getattr(node, "value", None))
         if metadata_expr is None:
             resource_type = self.resource_base_type(target_type) or target_type
@@ -4442,9 +5915,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 "/* unsupported CUDA resource query: metadata unavailable for "
                 f"{resource_type} assignment */ CglResourceQueryInfo{{}}"
             )
-        return f"{self.query_metadata_name(target_name)} = {metadata_expr}"
+        return f"{target_metadata} = {metadata_expr}"
 
-    def query_metadata_expression(self, resource_expr):
+    def query_metadata_expression(
+        self, resource_expr, allow_function_call_object=False
+    ):
         """Return CUDA query metadata paired with a resource expression."""
         if isinstance(resource_expr, TernaryOpNode):
             if not self.is_safe_query_return_actual_index(resource_expr.condition):
@@ -4457,8 +5932,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             )
             if true_type is None or false_type is None or true_type != false_type:
                 return None
-            true_metadata = self.query_metadata_expression(resource_expr.true_expr)
-            false_metadata = self.query_metadata_expression(resource_expr.false_expr)
+            true_metadata = self.query_metadata_expression(
+                resource_expr.true_expr, allow_function_call_object
+            )
+            false_metadata = self.query_metadata_expression(
+                resource_expr.false_expr, allow_function_call_object
+            )
             if true_metadata is None or false_metadata is None:
                 return None
             condition = self.visit(resource_expr.condition)
@@ -4477,6 +5956,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.query_return_source_metadata_expression(
                 return_source,
                 raw_args,
+                allow_function_call_object,
             )
 
         if isinstance(resource_expr, ArrayAccessNode):
@@ -4494,10 +5974,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 index_node
             ):
                 return None
-            base_expr = self.query_metadata_expression(array_node)
+            base_expr = self.query_metadata_expression(
+                array_node, allow_function_call_object
+            )
             if base_expr is None:
                 return None
             return f"{base_expr}[{self.visit(index_node)}]"
+
+        member_metadata = self.query_struct_member_metadata_expression(
+            resource_expr, allow_function_call_object
+        )
+        if member_metadata is not None:
+            return member_metadata
 
         resource_name = self.get_expression_name(resource_expr)
         if not resource_name:
@@ -4527,7 +6015,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.query_metadata_name(resource_name)
         return None
 
-    def query_return_source_metadata_expression(self, return_source, raw_args):
+    def query_return_source_metadata_expression(
+        self, return_source, raw_args, allow_function_call_object=False
+    ):
         """Render query metadata for a resource returned by a user function."""
         if return_source["kind"] == "ternary":
             condition = self.format_query_return_safe_expression(
@@ -4540,10 +6030,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             true_metadata = self.query_return_source_metadata_expression(
                 return_source["true_source"],
                 raw_args,
+                allow_function_call_object,
             )
             false_metadata = self.query_return_source_metadata_expression(
                 return_source["false_source"],
                 raw_args,
+                allow_function_call_object,
             )
             if true_metadata is None or false_metadata is None:
                 return None
@@ -4555,7 +6047,29 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             index = return_source["index"]
             if index >= len(raw_args):
                 return None
-            metadata_expr = self.query_metadata_expression(raw_args[index])
+            metadata_expr = self.query_metadata_expression(
+                raw_args[index], allow_function_call_object
+            )
+        elif return_source["kind"] == "member":
+            member = return_source.get("member")
+            object_type = return_source.get("object_type")
+            if not self.struct_member_has_query_metadata(object_type, member):
+                return None
+            object_expr = return_source.get("object_expr")
+            if object_expr is None:
+                return None
+            metadata_object = self.format_query_return_metadata_object_expression(
+                object_expr,
+                return_source.get("param_indices", {}),
+                raw_args,
+            )
+            if metadata_object is None:
+                return None
+            metadata_expr = (
+                f"{metadata_object}"
+                f"{return_source.get('object_access', '.')}"
+                f"{self.query_metadata_name(member)}"
+            )
         else:
             return None
         if metadata_expr is None:
@@ -4572,6 +6086,37 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return None
             metadata_expr = f"{metadata_expr}[{rendered_index}]"
         return metadata_expr
+
+    def format_query_return_metadata_object_expression(
+        self,
+        expr,
+        param_indices,
+        raw_args,
+    ):
+        """Render a returned struct object expression for member sidecar access."""
+        if isinstance(expr, FunctionCallNode):
+            func_name = self.raw_function_call_name(expr)
+            if not func_name:
+                return None
+            arguments = []
+            for argument in getattr(expr, "arguments", getattr(expr, "args", [])):
+                argument_expr = self.format_query_return_safe_expression(
+                    argument,
+                    param_indices,
+                    raw_args,
+                    allow_free_identifiers=True,
+                )
+                if argument_expr is None:
+                    return None
+                arguments.append(argument_expr)
+            return f"{func_name}({', '.join(arguments)})"
+
+        return self.format_query_return_safe_expression(
+            expr,
+            param_indices,
+            raw_args,
+            allow_free_identifiers=True,
+        )
 
     def format_query_return_safe_expression(
         self,
@@ -4694,6 +6239,22 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if object_expr is None:
                 return None
             return f"{object_expr}.{member_name}"
+
+        if isinstance(expr, PointerAccessNode):
+            pointer_node = getattr(expr, "pointer_expr", None)
+            member = getattr(expr, "member", None)
+            member_name = getattr(member, "name", member)
+            if pointer_node is None or not isinstance(member_name, str):
+                return None
+            pointer_expr = self.format_query_return_safe_expression(
+                pointer_node,
+                param_indices,
+                raw_args,
+                allow_free_identifiers=allow_free_identifiers,
+            )
+            if pointer_expr is None:
+                return None
+            return f"{pointer_expr}->{member_name}"
 
         expr_name = self.get_expression_name(expr)
         if expr_name in param_indices:
@@ -4941,6 +6502,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "memoryBarrierBuffer": "__threadfence",
             "memoryBarrierImage": "__threadfence",
             "workgroupBarrier": "__syncthreads",
+            # Ray tracing placeholders
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
+            "TraceRay": "cgl_trace_ray",
+            "CallShader": "cgl_call_shader",
+            "ReportHit": "cgl_report_hit",
+            "IgnoreHit": "cgl_ignore_hit",
+            "AcceptHitAndEndSearch": "cgl_accept_hit_and_end_search",
             # Texture functions
             "texture": "tex2D",
             "textureLod": "tex2DLod",
@@ -4959,6 +6531,256 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if hasattr(value, "value") and value.value is not None:
             return str(value.value).strip('"')
         return str(value)
+
+    def attribute_arguments(self, attr):
+        return getattr(attr, "arguments", getattr(attr, "args", [])) or []
+
+    def resource_binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def resource_register_space_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_cuda_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_cuda_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.resource_binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.resource_register_space_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.resource_register_space_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def cuda_resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_value_to_string(argument)
+                for argument in self.attribute_arguments(attr)
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def cuda_resource_base_type_and_count(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name, 1
+        if "[" not in type_name or "]" not in type_name:
+            return type_name, 1
+        base_type = type_name.split("[", 1)[0].strip()
+        suffix = type_name[type_name.find("[") :]
+        count = 1
+        while suffix.startswith("["):
+            close_bracket = suffix.find("]")
+            if close_bracket < 0:
+                break
+            size_text = suffix[1:close_bracket].strip()
+            if size_text.isdigit():
+                count *= int(size_text)
+            suffix = suffix[close_bracket + 1 :]
+        return base_type, count
+
+    def cuda_resource_kind(self, type_name, node=None, forced_kind=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_node(node):
+            return "glsl_buffer_block"
+
+        base_type, _count = self.cuda_resource_base_type_and_count(type_name)
+        if not base_type:
+            return None
+        generic_parts = self.generic_type_parts(base_type)
+        base_name = generic_parts[0] if generic_parts is not None else base_type
+        base_name = base_name.rsplit("::", 1)[-1]
+
+        if (
+            self.structured_buffer_type_parts(base_type) is not None
+            or self.byte_address_buffer_base_type(base_type) is not None
+        ):
+            return "buffer"
+
+        canonical = self.resource_base_type(base_name) or base_name
+        canonical = canonical.rsplit("::", 1)[-1]
+        mapped_type = self.convert_crossgl_type_to_cuda(canonical)
+        mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
+        if mapped_base == "CglRayTracingAccelerationStructure":
+            return "acceleration_structure"
+        if canonical in {"sampler", "SamplerState"}:
+            return "sampler"
+        if canonical.startswith("sampler"):
+            return "texture"
+        if canonical.startswith(("image", "iimage", "uimage")):
+            return "image"
+        return None
+
+    def cuda_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def cuda_resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _used_name in self.cuda_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def next_available_cuda_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.cuda_resource_binding_cursors.get(key, 0)
+        while self.cuda_resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.cuda_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def reserve_cuda_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        ranges = self.cuda_used_resource_bindings.setdefault(key, [])
+        for used_start, used_end, used_name in ranges:
+            if binding <= used_end and used_start <= end:
+                if used_start == binding and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    "Conflicting CUDA resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        ranges.append((binding, end, name))
+        self.cuda_resource_binding_cursors[key] = max(
+            self.cuda_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def cuda_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.cuda_resource_kind(type_name, node=node, forced_kind=kind)
+        if not name or resource_kind is None:
+            return ""
+
+        _base_type, count = self.cuda_resource_base_type_and_count(type_name)
+        namespace = self.cuda_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_cuda_resource_set_index(node)
+        binding = self.explicit_cuda_resource_binding_index(node)
+        if binding is None:
+            binding = self.next_available_cuda_resource_binding(
+                namespace, set_index, count
+            )
+            binding_source = "automatic"
+            self.reserve_cuda_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+        else:
+            binding_source = "explicit"
+            self.reserve_cuda_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+
+        parts = [
+            "// CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+        ]
+        if resource_kind == "glsl_buffer_block":
+            layout = self.glsl_buffer_block_layout(node)
+            if layout:
+                parts.append(f"layout={layout}")
+            access = self.explicit_resource_access(node)
+            if access:
+                parts.append(f"access={access}")
+        parts.extend(
+            [
+                f"set={set_index}",
+                f"binding={binding}",
+                f"binding_source={binding_source}",
+            ]
+        )
+        if count != 1:
+            parts.append(f"count={count}")
+        register_metadata = self.cuda_resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        return " ".join(parts)
+
+    def reserve_explicit_cuda_resource_binding(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.cuda_resource_kind(type_name, node=node, forced_kind=kind)
+        binding = self.explicit_cuda_resource_binding_index(node)
+        if not name or resource_kind is None or binding is None:
+            return
+        _base_type, count = self.cuda_resource_base_type_and_count(type_name)
+        namespace = self.cuda_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_cuda_resource_set_index(node)
+        self.reserve_cuda_resource_binding(namespace, set_index, binding, count, name)
+
+    def reserve_explicit_cuda_resource_bindings(self, ast):
+        for node in getattr(ast, "global_variables", []) or []:
+            type_name = self.get_variable_node_type(node) or "float"
+            self.reserve_explicit_cuda_resource_binding(node, type_name)
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            self.reserve_explicit_cuda_resource_binding(
+                cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+            )
+        stages = getattr(ast, "stages", {}) or {}
+        for stage in stages.values():
+            for node in getattr(stage, "local_variables", []) or []:
+                type_name = self.get_variable_node_type(node) or "float"
+                self.reserve_explicit_cuda_resource_binding(node, type_name)
+            for cbuffer in getattr(stage, "local_cbuffers", []) or []:
+                self.reserve_explicit_cuda_resource_binding(
+                    cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+                )
 
     def explicit_resource_access(self, node):
         if node is None:
@@ -4994,6 +6816,128 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return access
         return None
 
+    def is_glsl_buffer_block_node(self, node):
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "glsl_buffer_block" in attributes:
+            return True
+        return "buffer" in qualifiers and bool(
+            attributes & {"std140", "std430", "scalar"}
+        )
+
+    def glsl_buffer_block_layout(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "glsl_buffer_block":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_value_to_string(arguments[0])
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def glsl_buffer_block_declaration_type(self, type_name, node):
+        type_name = self.type_name_string(type_name)
+        if not self.is_glsl_buffer_block_node(node):
+            return type_name
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return type_name
+        open_bracket = type_name.find("[")
+        base_type = type_name[:open_bracket].strip()
+        array_suffix = type_name[open_bracket:]
+        if array_suffix != "[]":
+            return type_name
+        if self.explicit_resource_access(node) == "readonly":
+            return f"const {base_type}{array_suffix}"
+        return type_name
+
+    def glsl_buffer_block_metadata_comment(self, node, type_name):
+        name = getattr(node, "name", None)
+        if not name or not self.is_glsl_buffer_block_node(node):
+            return ""
+        parts = [
+            "// CrossGL resource metadata:",
+            f"name={name}",
+            "kind=glsl_buffer_block",
+        ]
+        layout = self.glsl_buffer_block_layout(node)
+        if layout:
+            parts.append(f"layout={layout}")
+        access = self.explicit_resource_access(node)
+        if access:
+            parts.append(f"access={access}")
+        return " ".join(parts)
+
+    def glsl_buffer_block_root_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+            return self.glsl_buffer_block_root_name(array_expr)
+        if isinstance(expr, (MemberAccessNode, PointerAccessNode)):
+            object_expr = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", getattr(expr, "pointer_expr", None)),
+            )
+            return self.glsl_buffer_block_root_name(object_expr)
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, str):
+            return expr
+        return getattr(expr, "name", None)
+
+    def glsl_buffer_block_access(self, expr):
+        root_name = self.glsl_buffer_block_root_name(expr)
+        if root_name is None:
+            return None, None
+        return self.glsl_buffer_block_accesses.get(root_name), root_name
+
+    def glsl_buffer_block_diagnostic(self, operation, expr, reason, fallback):
+        _, resource_name = self.glsl_buffer_block_access(expr)
+        resource_name = resource_name or "unknown"
+        return (
+            f"/* unsupported {self.resource_backend_name()} GLSL buffer block "
+            f"{operation}: resource '{resource_name}' {reason} */ {fallback}"
+        )
+
+    def glsl_buffer_block_read_diagnostic(self, expr, operation):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access != "writeonly":
+            return None
+        fallback = self.diagnostic_zero_value_for_type(
+            self.expression_result_type(expr)
+        )
+        return self.glsl_buffer_block_diagnostic(
+            operation, expr, "is writeonly", fallback
+        )
+
+    def glsl_buffer_block_write_diagnostic(self, expr, operation):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access != "readonly":
+            return None
+        return self.glsl_buffer_block_diagnostic(
+            operation, expr, "is readonly", "((void)0)"
+        )
+
+    def glsl_buffer_block_read_write_diagnostic(self, expr, operation, fallback):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access == "readonly":
+            return self.glsl_buffer_block_diagnostic(
+                operation, expr, "is readonly", fallback
+            )
+        if access == "writeonly":
+            return self.glsl_buffer_block_diagnostic(
+                operation, expr, "is writeonly", fallback
+            )
+        return None
+
     def declaration_qualifier_names(self, node):
         """Return normalized qualifier and attribute names on declarations."""
         names = {
@@ -5023,6 +6967,42 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if type_string.startswith("const "):
             return type_string
         return f"const {type_string}"
+
+    def resource_type_with_access(self, type_name, node):
+        """Apply resource access metadata to CUDA declaration type spelling."""
+        type_string = self.apply_readonly_qualifier_to_type(type_name, node)
+        type_string = self.type_name_string(type_string)
+        if not type_string:
+            return type_string
+
+        access = self.explicit_resource_access(node)
+        if access is None:
+            return type_string
+
+        base_type = type_string
+        array_suffix = ""
+        if "[" in type_string and "]" in type_string:
+            open_bracket = type_string.find("[")
+            base_type = type_string[:open_bracket]
+            array_suffix = type_string[open_bracket:]
+
+        parts = self.structured_buffer_type_parts(base_type)
+        if parts is not None:
+            base_name, element_type = parts
+            if base_name in {"StructuredBuffer", "RWStructuredBuffer"}:
+                mapped_base = (
+                    "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+                )
+                return f"{mapped_base}<{element_type}>{array_suffix}"
+
+        byte_base = self.byte_address_buffer_base_type(base_type)
+        if byte_base in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            mapped_base = (
+                "ByteAddressBuffer" if access == "readonly" else "RWByteAddressBuffer"
+            )
+            return f"{mapped_base}{array_suffix}"
+
+        return type_string
 
     def is_storage_image_type(self, type_name):
         if not isinstance(type_name, str):
@@ -5054,6 +7034,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             type_name = self.convert_type_node_to_string(type_name)
         type_name = self.apply_readonly_qualifier_to_type(type_name, node)
         self.variable_types[name] = type_name
+        if self.is_glsl_buffer_block_node(node):
+            access = self.explicit_resource_access(node) or "readwrite"
+            self.glsl_buffer_block_accesses[name] = access
+            self.glsl_buffer_block_layouts[name] = self.glsl_buffer_block_layout(node)
+        else:
+            self.glsl_buffer_block_accesses.pop(name, None)
+            self.glsl_buffer_block_layouts.pop(name, None)
         if not self.is_storage_image_type(type_name):
             self.image_resource_accesses.pop(name, None)
             return
@@ -5065,6 +7052,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.image_resource_accesses.pop(name, None)
         else:
             self.image_resource_accesses[name] = access
+
+    @property
+    def local_variable_types(self):
+        return self.variable_types
+
+    @local_variable_types.setter
+    def local_variable_types(self, value):
+        self.variable_types = value
+
+    def next_cuda_temp_variable(self, prefix):
+        index = self.match_temp_variable_index
+        self.match_temp_variable_index += 1
+        return f"__crossgl_{prefix}_{index}"
 
     def get_expression_name(self, node):
         if isinstance(node, IdentifierNode):
@@ -5119,6 +7119,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             func_name, resource_type, "0"
         )
 
+    def unsupported_dimension_resource_query_call(self, func_name, resource_type):
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+        return_type = self.query_return_type(spec["dimensions"])
+        fallback = self.query_constructor(
+            return_type,
+            ["0"] * len(spec["dimensions"]),
+        )
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} on {resource_type} */ {fallback}"
+        )
+
     def generate_dimension_query(self, func_name, raw_args, args):
         if not raw_args:
             return None
@@ -5126,11 +7140,25 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         resource_type = self.resource_base_type(
             self.resource_expression_type(raw_args[0])
         )
+        if resource_type is None:
+            return None
+        if func_name == "textureSize" and not self.is_sampled_resource_type(
+            resource_type
+        ):
+            return self.unsupported_dimension_resource_query_call(
+                func_name, resource_type
+            )
+        if func_name == "imageSize" and not self.is_storage_image_type(resource_type):
+            return self.unsupported_dimension_resource_query_call(
+                func_name, resource_type
+            )
         spec = self.dimension_query_spec(resource_type)
         if spec is None:
             return None
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_dimension_metadata_query_call(
                 func_name, resource_type
@@ -5156,11 +7184,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         resource_type = self.resource_base_type(
             self.resource_expression_type(raw_args[0])
         )
+        expected_resource = (
+            self.is_sampled_resource_type(resource_type)
+            if func_name == "textureSamples"
+            else self.is_storage_image_type(resource_type)
+        )
+        if not expected_resource:
+            return None
+
         spec = self.dimension_query_spec(resource_type)
         if spec is None or not spec["samples"]:
             return None
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_scalar_metadata_query_call(func_name, resource_type)
 
@@ -5178,13 +7216,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         resource_type = self.resource_base_type(
             self.resource_expression_type(raw_args[0])
         )
-        if not self.is_sampled_resource_type(resource_type):
-            return None
         spec = self.dimension_query_spec(resource_type)
-        if spec is None:
-            return None
+        if (
+            not self.is_sampled_resource_type(resource_type)
+            or spec is None
+            or not spec["mip"]
+        ):
+            return self.unsupported_scalar_resource_query_call(
+                "textureQueryLevels", resource_type
+            )
 
-        metadata_expr = self.query_metadata_expression(raw_args[0])
+        metadata_expr = self.query_metadata_expression(
+            raw_args[0], allow_function_call_object=True
+        )
         if metadata_expr is None:
             return self.unsupported_scalar_metadata_query_call(
                 "textureQueryLevels", resource_type
@@ -5201,7 +7245,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.convert_crossgl_type_to_cuda(type_name)
 
     def insert_helper_functions(self):
-        if not self.helper_functions:
+        if not self.helper_functions and not self.resource_query_info_required:
             return
 
         helper_lines = []
@@ -5224,6 +7268,182 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             helper_lines.append("")
 
         self.output[3:3] = helper_lines
+
+    def require_cuda_ray_runtime_helpers(self):
+        helper_name = "cgl_ray_runtime_helpers"
+        if helper_name in self.helper_functions:
+            return
+
+        self.helper_functions[helper_name] = (
+            "struct CglRayTracingAccelerationStructure\n"
+            "{\n"
+            "    unsigned long long handle;\n"
+            "};\n"
+            "\n"
+            "struct CglRayDesc\n"
+            "{\n"
+            "    float3 origin;\n"
+            "    float t_min;\n"
+            "    float3 direction;\n"
+            "    float t_max;\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc()\n"
+            "        : origin(make_float3(0.0f, 0.0f, 0.0f)),\n"
+            "          t_min(0.0f),\n"
+            "          direction(make_float3(0.0f, 0.0f, 1.0f)),\n"
+            "          t_max(0.0f)\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc(\n"
+            "        float3 origin_value,\n"
+            "        float t_min_value,\n"
+            "        float3 direction_value,\n"
+            "        float t_max_value)\n"
+            "        : origin(origin_value),\n"
+            "          t_min(t_min_value),\n"
+            "          direction(direction_value),\n"
+            "          t_max(t_max_value)\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            "struct CglRayQuery\n"
+            "{\n"
+            "    unsigned int state;\n"
+            "};\n"
+            "\n"
+            "struct CglBuiltInTriangleIntersectionAttributes\n"
+            "{\n"
+            "    float2 barycentrics;\n"
+            "};\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_id()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_size()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_hit_t()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_hit_kind()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_t_min()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_incoming_flags()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_instance_custom_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_geometry_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "template <typename AS, typename Flags, typename Mask, "
+            "typename HitGroup, typename Multiplier, typename Miss, "
+            "typename Ray, typename Payload>\n"
+            "__device__ inline void cgl_trace_ray(\n"
+            "    const AS&,\n"
+            "    const Flags&,\n"
+            "    const Mask&,\n"
+            "    const HitGroup&,\n"
+            "    const Multiplier&,\n"
+            "    const Miss&,\n"
+            "    const Ray&,\n"
+            "    const Payload&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Index, typename Data>\n"
+            "__device__ inline void cgl_call_shader(const Index&, const Data&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Distance, typename Kind, typename Attributes>\n"
+            "__device__ inline bool cgl_report_hit(\n"
+            "    const Distance&,\n"
+            "    const Kind&,\n"
+            "    const Attributes&)\n"
+            "{\n"
+            "    return false;\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_ignore_hit()\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_accept_hit_and_end_search()\n"
+            "{\n"
+            "}\n"
+        )
+
+    def require_cuda_ray_query_helper(self, operation):
+        self.require_cuda_ray_runtime_helpers()
+        helper_name = f"cgl_ray_query_{self.cuda_snake_case_name(operation)}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        return_type = "bool" if operation == "Proceed" else "unsigned int"
+        return_value = "false" if return_type == "bool" else "0u"
+        self.helper_functions[helper_name] = (
+            "template <typename Query, typename... Args>\n"
+            f"__device__ inline {return_type} {helper_name}(Query&, Args&&...)\n"
+            "{\n"
+            f"    return {return_value};\n"
+            "}"
+        )
+        return helper_name
+
+    def cuda_snake_case_name(self, name):
+        text = str(name)
+        result = []
+        for index, char in enumerate(text):
+            if char.isupper() and index > 0:
+                previous = text[index - 1]
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if previous.islower() or previous.isdigit() or next_char.islower():
+                    result.append("_")
+            result.append(char.lower())
+        return "".join(result).replace("__", "_").strip("_")
 
     def vector_component_count_for_type(self, type_name):
         if not isinstance(type_name, str):
@@ -5876,6 +8096,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             texture_type = self.resource_base_type(
                 self.resource_expression_type(raw_args[0])
             )
+            if texture_type is not None and not self.is_sampled_resource_type(
+                texture_type
+            ):
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+            if self.is_shadow_resource_type(texture_type):
+                return self.unsupported_shadow_resource_call(
+                    func_name, texture_type, args
+                )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
@@ -6146,6 +8376,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_cbuffer(self, cbuffer):
         """Visit constant buffer (convert to CUDA constant memory)"""
+        metadata_comment = self.cuda_resource_metadata_comment(
+            cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+        )
+        if metadata_comment:
+            self.emit(metadata_comment)
         self.emit(f"// Constant buffer: {cbuffer.name}")
         for member in cbuffer.members:
             if hasattr(member, "member_type"):

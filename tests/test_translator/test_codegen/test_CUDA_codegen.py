@@ -4,12 +4,11 @@ import shutil
 import subprocess
 
 import pytest
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
+
 from crosstl.translator.ast import (
-    AssignmentNode,
     ArrayAccessNode,
     ArrayType,
+    AssignmentNode,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
@@ -21,10 +20,14 @@ from crosstl.translator.ast import (
     PrimitiveType,
     ReturnNode,
     ShaderNode,
+    ShaderStage,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
 )
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def compile_cuda_if_nvcc_available(cuda_code, tmp_path):
@@ -93,6 +96,228 @@ class TestCudaCodeGen:
         assert "int3 blockIdx =" not in cuda_code
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
+
+    @pytest.mark.parametrize(
+        ("stage_name", "normalized_stage"),
+        [
+            ("amplification", "amplification"),
+            ("geometry", "geometry"),
+            ("mesh", "mesh"),
+            ("object", "object"),
+            ("task", "task"),
+            ("tessellation_control", "tessellation_control"),
+            ("tessellation_evaluation", "tessellation_evaluation"),
+        ],
+    )
+    def test_unsupported_graphics_pipeline_stages_raise_diagnostics(
+        self, stage_name, normalized_stage
+    ):
+        """CUDA rejects CrossGL stages that have no CUDA shader-stage equivalent."""
+        source_code = f"""
+        shader UnsupportedCudaStages {{
+            {stage_name} {{
+                void main() {{ }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"CUDA output does not support stage type\(s\): {normalized_stage}",
+        ):
+            CudaCodeGen().generate(ast)
+
+    def test_ray_tracing_stages_emit_cuda_metadata_and_hooks(self, tmp_path):
+        source_code = """
+        shader CudaRayTracingStages {
+            struct RayPayload {
+                vec3 color;
+            };
+
+            struct HitAttributes {
+                vec2 barycentrics;
+            };
+
+            struct CallableData {
+                uint value;
+            };
+
+            accelerationStructureEXT scene @binding(3) @set(2);
+
+            ray_generation {
+                void main() {
+                    uvec3 launch = gl_LaunchIDEXT;
+                    uint launchWidth = gl_LaunchSizeEXT.x;
+                    RayDesc ray = RayDesc(
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    RayPayload payload;
+                    CallableData data;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                    CallShader(0, data);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    float hitT @ gl_HitTEXT
+                ) {
+                    payload.color = vec3(1.0, 0.0, hitT);
+                }
+            }
+
+            ray_any_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    uint hitKind @ gl_HitKindEXT
+                ) {
+                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    IgnoreHit();
+                    AcceptHitAndEndSearch();
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) {
+                    payload.color = vec3(0.0, 0.0, 0.0);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) {
+                    data.value = data.value + 1u;
+                }
+            }
+
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    bool accepted = ReportHit(1.0, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+            "set=2 binding=3 binding_source=explicit" in cuda_code
+        )
+        assert "struct CglRayTracingAccelerationStructure" in cuda_code
+        assert "struct CglRayDesc" in cuda_code
+        assert "// CrossGL ray stage: ray_generation" in cuda_code
+        assert "// CrossGL ray stage: closest_hit" in cuda_code
+        assert "// CrossGL ray stage: any_hit" in cuda_code
+        assert "// CrossGL ray stage: miss" in cuda_code
+        assert "// CrossGL ray stage: callable" in cuda_code
+        assert "// CrossGL ray stage: intersection" in cuda_code
+        assert "__device__ void ray_generation_main()" in cuda_code
+        assert "__device__ void ray_closest_hit_main(" in cuda_code
+        assert "// CrossGL parameter semantic: payload: ray_payload" in cuda_code
+        assert "// CrossGL parameter semantic: attributes: hit_attribute" in cuda_code
+        assert "// CrossGL parameter semantic: data: callable_data" in cuda_code
+        assert "uint3 launch = cgl_ray_launch_id();" in cuda_code
+        assert "uint launchWidth = cgl_ray_launch_size().x;" in cuda_code
+        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in cuda_code
+        assert "cgl_call_shader(0, data);" in cuda_code
+        assert "cgl_ignore_hit();" in cuda_code
+        assert "cgl_accept_hit_and_end_search();" in cuda_code
+        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in cuda_code
+        assert (
+            "bool acceptedWithoutAttributes = cgl_report_hit"
+            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in cuda_code
+        )
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cuda_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
+        self,
+    ):
+        invalid_type = """
+        shader InvalidCudaRayBuiltinType {
+            ray_generation {
+                void main(float launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader InvalidCudaRayBuiltinStage {
+            fragment {
+                void main(uvec3 launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        duplicate = """
+        shader DuplicateCudaRayBuiltin {
+            ray_generation {
+                void main(
+                    uvec3 launch @ gl_LaunchIDEXT,
+                    uvec3 launchAgain @ SV_DispatchRaysIndex
+                ) {
+                }
+            }
+        }
+        """
+        with pytest.raises(
+            ValueError, match="Duplicate CUDA stage parameter semantic launch_id"
+        ):
+            CudaCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+
+    def test_ray_query_methods_lower_to_cuda_hooks(self):
+        source_code = """
+        void queryRay(RayQuery query) {
+            bool active = query.Proceed();
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct CglRayQuery" in cuda_code
+        assert "__device__ void queryRay(CglRayQuery query)" in cuda_code
+        assert "__device__ inline bool cgl_ray_query_proceed" in cuda_code
+        assert "bool active = cgl_ray_query_proceed(query);" in cuda_code
+
+    def test_unsupported_function_stage_qualifiers_raise_diagnostics(self):
+        ast = ShaderNode(
+            name="UnsupportedQualifiedCudaStage",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            functions=[
+                FunctionNode(
+                    name="main",
+                    return_type=PrimitiveType("void"),
+                    parameters=[],
+                    body=BlockNode([]),
+                    qualifiers=["hull", ShaderStage.MESH],
+                )
+            ],
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"CUDA output does not support stage type\(s\): "
+                r"mesh, tessellation_control"
+            ),
+        ):
+            CudaCodeGen().generate(ast)
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
         """Test compute-stage helper functions are emitted before kernel calls."""
@@ -305,7 +530,7 @@ class TestCudaCodeGen:
         assert "[&] __device__ () { return true; }" in cuda_code
         assert "lambda(" not in cuda_code
 
-    def test_synchronization_functions_emit_cuda_intrinsics(self):
+    def test_synchronization_functions_emit_cuda_intrinsics(self, tmp_path):
         """Test CrossGL synchronization functions lower to CUDA intrinsics."""
         source_code = """
         shader TestShader {
@@ -341,6 +566,141 @@ class TestCudaCodeGen:
         assert "memoryBarrierBuffer();" not in cuda_code
         assert "memoryBarrierImage();" not in cuda_code
         assert "workgroupBarrier();" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_wave_intrinsics_lower_to_cuda_subgroup_helpers(self):
+        """Test basic Wave* calls lower to CUDA subgroup helper expressions."""
+        source_code = """
+        shader CudaWaveShader {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint count = WaveGetLaneCount();
+                    bool first = WaveIsFirstLane();
+                    uint sumValue = WaveActiveSum(lane);
+                    bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
+                    uvec4 ballot = WaveActiveBallot(anyLane);
+                    uint broadcast = WaveReadLaneAt(sumValue, 0u);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "uint lane = (threadIdx.x & (warpSize - 1));" in cuda_code
+        assert "uint count = warpSize;" in cuda_code
+        assert "bool first = ((threadIdx.x & (warpSize - 1)) == 0);" in cuda_code
+        assert (
+            "__device__ inline uint cgl_cuda_wave_active_sum_uint_uint(uint value)"
+            in cuda_code
+        )
+        assert "uint sumValue = cgl_cuda_wave_active_sum_uint_uint(lane);" in cuda_code
+        assert (
+            "bool anyLane = "
+            "cgl_cuda_wave_active_any_true_bool_bool((sumValue > 0u));" in cuda_code
+        )
+        assert (
+            "uint4 ballot = cgl_cuda_wave_active_ballot_uint4_bool(anyLane);"
+            in cuda_code
+        )
+        assert (
+            "uint broadcast = cgl_cuda_wave_read_lane_at_uint_uint_uint(sumValue, 0u);"
+            in cuda_code
+        )
+        assert "WaveOpNode(" not in cuda_code
+        assert "Unsupported CUDA wave intrinsic" not in cuda_code
+
+    def test_wave_match_count_quad_and_multi_prefix_lower_to_cuda_helpers(self):
+        """Test extended Wave* forms lower to typed CUDA helper calls."""
+        source_code = """
+        shader CudaWaveExtended {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    bool equal = WaveActiveAllEqual(lane);
+                    uint bitCount = WaveActiveCountBits(equal);
+                    uint prefixCount = WavePrefixCountBits(equal);
+                    uvec4 mask = WaveMatch(lane);
+                    uint quadLane = QuadReadLaneAt(lane, 1u);
+                    uint quadX = QuadReadAcrossX(lane);
+                    uint quadY = QuadReadAcrossY(lane);
+                    uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+                    uint sum = WaveMultiPrefixSum(lane, mask);
+                    uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                    uint count = WaveMultiPrefixCountBits(equal, mask);
+                    uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                    uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                    uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "cgl_cuda_wave_active_all_equal_bool_uint(lane)" in cuda_code
+        assert "cgl_cuda_wave_active_count_bits_uint_bool(equal)" in cuda_code
+        assert "cgl_cuda_wave_prefix_count_bits_uint_bool(equal)" in cuda_code
+        assert "cgl_cuda_wave_match_uint4_uint(lane)" in cuda_code
+        assert "cgl_cuda_quad_read_lane_at_uint_uint_uint(lane, 1u)" in cuda_code
+        assert "cgl_cuda_quad_read_across_x_uint_uint(lane)" in cuda_code
+        assert "cgl_cuda_quad_read_across_y_uint_uint(lane)" in cuda_code
+        assert "cgl_cuda_quad_read_across_diagonal_uint_uint(lane)" in cuda_code
+        assert "cgl_cuda_wave_multi_prefix_sum_uint_uint_uint4(lane, mask)" in cuda_code
+        assert (
+            "cgl_cuda_wave_multi_prefix_product_uint_uint_uint4((lane + 1u), mask)"
+            in cuda_code
+        )
+        assert (
+            "cgl_cuda_wave_multi_prefix_count_bits_uint_bool_uint4(equal, mask)"
+            in cuda_code
+        )
+        assert "cgl_cuda_wave_multi_prefix_bit_and_uint_uint_uint4(product, mask)" in (
+            cuda_code
+        )
+        assert "cgl_cuda_wave_multi_prefix_bit_or_uint_uint_uint4(bitAnd, mask)" in (
+            cuda_code
+        )
+        assert "cgl_cuda_wave_multi_prefix_bit_xor_uint_uint_uint4(bitOr, mask)" in (
+            cuda_code
+        )
+        assert "Unsupported CUDA wave intrinsic" not in cuda_code
+
+    def test_direct_wave_ir_node_lowers_to_cuda_helper(self):
+        """Test direct WaveOpNode emission avoids AST repr fallbacks."""
+        codegen = CudaCodeGen()
+
+        generated_expr = codegen.visit(
+            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+        )
+
+        assert generated_expr == "cgl_cuda_wave_active_sum_uint_uint(1u)"
+        assert "cgl_cuda_wave_active_sum_uint_uint" in codegen.helper_functions
+
+    def test_wave_intrinsic_helpers_compile_with_nvcc_if_available(self, tmp_path):
+        """Smoke compile generated CUDA wave helpers when nvcc is available."""
+        source_code = """
+        uint waveHelpers(uint lane, bool active, uvec4 mask) {
+            uint sumValue = WaveActiveSum(lane);
+            bool anyLane = WaveActiveAnyTrue(active);
+            uvec4 matched = WaveMatch(sumValue);
+            uint multi = WaveMultiPrefixSum(sumValue, mask);
+            uint quad = QuadReadLaneAt(multi, 1u);
+            return WaveReadLaneAt(quad, 0u);
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "cgl_cuda_wave_active_sum_uint_uint(lane)" in cuda_code
+        assert "cgl_cuda_wave_match_uint4_uint(sumValue)" in cuda_code
+        assert "cgl_cuda_wave_multi_prefix_sum_uint_uint_uint4(sumValue, mask)" in (
+            cuda_code
+        )
+        assert "cgl_cuda_quad_read_lane_at_uint_uint_uint(multi, 1u)" in cuda_code
+        assert "cgl_cuda_wave_read_lane_at_uint_uint_uint(quad, 0u)" in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_user_defined_synchronization_names_are_not_lowered(self):
         """Test CUDA does not remap user-defined synchronization names."""
@@ -441,7 +801,7 @@ class TestCudaCodeGen:
         ):
             CudaCodeGen().generate(ast)
 
-    def test_shared_memory_synchronization_helper_lowers_to_cuda(self):
+    def test_shared_memory_synchronization_helper_lowers_to_cuda(self, tmp_path):
         """Test shared memory and barriers lower through compute helpers."""
         source_code = """
         shader SharedSynchronizationHelper {
@@ -475,6 +835,7 @@ class TestCudaCodeGen:
         assert "synchronizeTile();" in cuda_code
         assert "__syncthreads(1)" not in cuda_code
         assert "memoryBarrierShared();" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_builtin_invocation_ids_emit_cuda_names(self):
         """Test CUDA maps CrossGL invocation built-ins in member access form."""
@@ -800,6 +1161,275 @@ class TestCudaCodeGen:
         assert "struct Vertex {" in cuda_code
         assert "float3 position;" in cuda_code
         assert "float3 normal;" in cuda_code
+
+    def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+        """Test CUDA preserves and validates struct member builtin semantics."""
+        valid_code = """
+        shader CudaStructSemantics {
+            struct FSOutput {
+                vec4 color @ SV_Target1;
+                float depth @ gl_FragDepth;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            fragment {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
+
+        assert "float4 color; // CrossGL semantic: target(1)" in cuda_code
+        assert "float depth; // CrossGL semantic: depth(any)" in cuda_code
+        assert "float2 uv; // CrossGL semantic: texcoord(0)" in cuda_code
+
+        invalid_type = """
+        shader BadCudaStructSemanticType {
+            struct FSOutput {
+                vec3 color @ gl_FragColor;
+            };
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadCudaStructSemanticStage {
+            struct FSOutput {
+                vec4 color @ gl_FragColor;
+            };
+
+            vertex {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadCudaStructInputOnlySemantic {
+            struct VSOutput {
+                uint vertexId @ gl_VertexID;
+            };
+
+            vertex {
+                VSOutput main() {
+                    VSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+        """Test CUDA validates direct builtin return semantics."""
+        invalid_depth_type = """
+        shader BadCudaDepthType {
+            fragment {
+                vec4 main() @ gl_FragDepth {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadCudaStage {
+            vertex {
+                vec4 main() @ gl_FragColor {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadCudaInputOnlyReturn {
+            vertex {
+                uint main() @ gl_VertexID {
+                    return uint(0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_direct_return_semantics_emit_metadata_for_cuda(self, tmp_path):
+        """Test CUDA preserves direct return semantics as comments."""
+        color_code = """
+        shader CudaDirectReturnSemantics {
+            vertex {
+                vec4 vertexMain() @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            fragment {
+                vec4 fragmentMain() @ gl_FragColor {
+                    return vec4(1.0, 0.5, 0.25, 1.0);
+                }
+            }
+        }
+        """
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
+
+        assert "// CrossGL return semantic: position" in cuda_code
+        assert "__device__ float4 vertexMain()" in cuda_code
+        assert "// CrossGL return semantic: target(0)" in cuda_code
+        assert "__device__ float4 fragmentMain()" in cuda_code
+
+        depth_code = """
+        shader CudaDepthReturnSemantics {
+            fragment {
+                float depthMain() @ gl_FragDepth {
+                    return 0.5;
+                }
+            }
+        }
+        """
+        depth_cuda_code = CudaCodeGen().generate(
+            Parser(Lexer(depth_code).tokens).parse()
+        )
+
+        assert "// CrossGL return semantic: depth(any)" in depth_cuda_code
+        assert "__device__ float depthMain()" in depth_cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+        compile_cuda_if_nvcc_available(depth_cuda_code, tmp_path)
+
+    def test_stage_parameter_semantics_emit_metadata_for_cuda(self, tmp_path):
+        """Test CUDA preserves builtin stage parameter semantics as comments."""
+        vertex_code = """
+        shader CudaVertexStageParameterSemantics {
+            vertex {
+                vec4 main(
+                    uint vertexId @ gl_VertexID,
+                    uint instanceId @ SV_InstanceID
+                ) @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        vertex_cuda = CudaCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
+
+        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_cuda
+        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_cuda
+        assert "__device__ float4 main(uint vertexId" in vertex_cuda
+
+        fragment_code = """
+        shader CudaFragmentStageParameterSemantics {
+            fragment {
+                vec4 main(
+                    vec4 fragCoord @ gl_FragCoord,
+                    bool front @ gl_FrontFacing
+                ) @ gl_FragColor {
+                    return vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        fragment_cuda = CudaCodeGen().generate(
+            Parser(Lexer(fragment_code).tokens).parse()
+        )
+
+        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_cuda
+        assert "// CrossGL parameter semantic: front: front_facing" in fragment_cuda
+        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_cuda
+
+        compute_code = """
+        shader CudaComputeStageParameterSemantics {
+            compute {
+                void main(
+                    uvec3 globalId @ gl_GlobalInvocationID,
+                    uvec3 localId @ SV_GroupThreadID,
+                    uint lane @ gl_LocalInvocationIndex
+                ) {
+                    uint copy = lane;
+                }
+            }
+        }
+        """
+        compute_cuda = CudaCodeGen().generate(
+            Parser(Lexer(compute_code).tokens).parse()
+        )
+
+        assert (
+            "// CrossGL parameter semantic: globalId: global_invocation_id"
+            in compute_cuda
+        )
+        assert (
+            "// CrossGL parameter semantic: localId: local_invocation_id"
+            in compute_cuda
+        )
+        assert (
+            "// CrossGL parameter semantic: lane: local_invocation_index"
+            in compute_cuda
+        )
+        assert "__global__ void main(uint3 globalId" in compute_cuda
+        compile_cuda_if_nvcc_available(vertex_cuda, tmp_path)
+        compile_cuda_if_nvcc_available(fragment_cuda, tmp_path)
+        compile_cuda_if_nvcc_available(compute_cuda, tmp_path)
+
+    def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda(self):
+        """Test CUDA rejects invalid builtin stage parameter semantics."""
+        invalid_stage = """
+        shader BadCudaStageParameterStage {
+            fragment {
+                void main(uint vertexId @ gl_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_type = """
+        shader BadCudaStageParameterType {
+            fragment {
+                void main(vec3 fragCoord @ gl_FragCoord) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        output_only = """
+        shader BadCudaStageParameterOutputOnly {
+            vertex {
+                void main(vec4 color @ SV_Target0) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+            CudaCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
+
+        duplicate_system_value = """
+        shader BadCudaStageParameterDuplicate {
+            vertex {
+                void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="Duplicate CUDA stage parameter semantic"):
+            CudaCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
 
     def test_enum_generation_and_compute_use(self):
         """Test CUDA emits top-level enums before kernels that use them."""
@@ -3631,6 +4261,127 @@ class TestCudaCodeGen:
         assert "buffer_load(" not in cuda_code
         assert "buffer_store(" not in cuda_code
 
+    def test_glsl_buffer_blocks_emit_cuda_structs_pointers_and_metadata(self):
+        """Test CUDA lowers GLSL buffer blocks to C++ struct/pointer placeholders."""
+        source_code = """
+        layout(std430, binding = 3) readonly buffer float values[];
+
+        layout(std140, binding = 4) buffer ParticleBlock {
+            vec4 positions[2];
+            uint count;
+        } particles;
+
+        float readValue(uint index) {
+            return values[index];
+        }
+
+        void writeParticle(uint index, vec4 value) {
+            particles.positions[index] = value;
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "// CrossGL resource metadata: name=values kind=glsl_buffer_block "
+            "layout=std430 access=readonly"
+        ) in cuda_code
+        assert "const float* values;" in cuda_code
+        assert "struct ParticleBlock" in cuda_code
+        assert "float4 positions[2];" in cuda_code
+        assert "uint count;" in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=particles kind=glsl_buffer_block "
+            "layout=std140"
+        ) in cuda_code
+        assert "ParticleBlock particles;" in cuda_code
+        assert "return values[index];" in cuda_code
+        assert "particles.positions[index] = value;" in cuda_code
+
+    def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_cuda(self):
+        """Test CUDA lowers GLSL buffer-block runtime-array atomics."""
+        source_code = """
+        layout(std430, binding = 1) buffer CounterBlock {
+            uint counters[];
+            int signedCounters[];
+        } counters;
+
+        uint addCounter(uint index, uint value) {
+            return atomicAdd(counters.counters[index], value);
+        }
+
+        uint swapCounter(uint index, uint expected, uint replacement) {
+            return atomicCompSwap(counters.counters[index], expected, replacement);
+        }
+
+        int maxSigned(uint index, int value) {
+            return atomicMax(counters.signedCounters[index], value);
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint* counters;" in cuda_code
+        assert "int* signedCounters;" in cuda_code
+        assert "return atomicAdd(&counters.counters[index], value);" in cuda_code
+        assert (
+            "return atomicCAS(&counters.counters[index], expected, replacement);"
+        ) in cuda_code
+        assert "return atomicMax(&counters.signedCounters[index], value);" in cuda_code
+        assert "atomicAdd(counters.counters[index]" not in cuda_code
+
+    def test_glsl_buffer_block_access_diagnostics_emit_cuda(self):
+        """Test CUDA emits deterministic diagnostics for invalid buffer-block access."""
+        source_code = """
+        layout(std430, binding = 1) readonly buffer ReadonlyBlock {
+            uint counters[];
+            uint value;
+        } readBlock;
+
+        layout(std430, binding = 2) writeonly buffer WriteonlyBlock {
+            uint counters[];
+        } writeBlock;
+
+        uint blockedAtomic(uint index, uint value) {
+            return atomicAdd(readBlock.counters[index], value);
+        }
+
+        void blockedStore(uint value) {
+            readBlock.value = value;
+        }
+
+        uint blockedRead(uint index) {
+            return writeBlock.counters[index];
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "return /* unsupported CUDA GLSL buffer block atomicAdd: resource "
+            "'readBlock' is readonly */ 0u;"
+        ) in cuda_code
+        assert (
+            "/* unsupported CUDA GLSL buffer block assignment: resource "
+            "'readBlock' is readonly */ ((void)0);"
+        ) in cuda_code
+        assert (
+            "return /* unsupported CUDA GLSL buffer block load: resource "
+            "'writeBlock' is writeonly */ 0u;"
+        ) in cuda_code
+
     def test_structured_buffer_dimensions_emit_cuda_length_sidecars(self):
         """Test CUDA lowers structured-buffer dimensions through length sidecars."""
         source_code = """
@@ -3779,7 +4530,9 @@ class TestCudaCodeGen:
         assert "RWByteAddressBuffer" not in cuda_code
         assert "buffer_dimensions(" not in cuda_code
 
-    def test_append_consume_structured_buffers_emit_cuda_counter_helpers(self):
+    def test_append_consume_structured_buffers_emit_cuda_counter_helpers(
+        self, tmp_path
+    ):
         """Test CUDA lowers append/consume buffers through explicit counters."""
         source_code = """
         shader AppendConsumeCUDA {
@@ -3871,6 +4624,185 @@ class TestCudaCodeGen:
         assert ".Consume(" not in cuda_code
         assert "buffer_append(" not in cuda_code
         assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_append_consume_buffer_references_forward_cuda_counters(self, tmp_path):
+        """Test append/consume reference parameters keep CUDA counter sidecars."""
+        source_code = """
+        shader AppendConsumeReferenceCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+            AppendStructuredBuffer<Particle> appendQueues[2];
+            ConsumeStructuredBuffer<Particle> consumeQueues[2];
+
+            void pushRef(AppendStructuredBuffer<Particle>& outRef, Particle p) {
+                outRef.Append(p);
+                buffer_append(outRef, p);
+            }
+
+            Particle popRef(ConsumeStructuredBuffer<Particle>& inRef) {
+                Particle a = inRef.Consume();
+                Particle b = buffer_consume(inRef);
+                return b;
+            }
+
+            Particle roundTrip(
+                AppendStructuredBuffer<Particle>& outRef,
+                ConsumeStructuredBuffer<Particle>& inRef,
+                Particle p
+            ) {
+                pushRef(outRef, p);
+                Particle consumed = popRef(inRef);
+                return consumed;
+            }
+
+            void process(uint which, Particle p) {
+                pushRef(appendParticles, p);
+                pushRef(appendQueues[which], p);
+                Particle a = popRef(consumeParticles);
+                Particle b = popRef(consumeQueues[which]);
+                Particle c = roundTrip(appendQueues[which], consumeQueues[which], b);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "Particle* appendParticles;" in cuda_code
+        assert "uint* appendParticles_counter;" in cuda_code
+        assert "const Particle* consumeParticles;" in cuda_code
+        assert "uint* consumeParticles_counter;" in cuda_code
+        assert "Particle* appendQueues[2];" in cuda_code
+        assert "uint* appendQueues_counter[2];" in cuda_code
+        assert "const Particle* consumeQueues[2];" in cuda_code
+        assert "uint* consumeQueues_counter[2];" in cuda_code
+        assert (
+            "__device__ void pushRef(Particle* const& outRef, "
+            "uint* outRef_counter, Particle p)"
+        ) in cuda_code
+        assert (
+            "__device__ Particle popRef(const Particle* const& inRef, "
+            "uint* inRef_counter)"
+        ) in cuda_code
+        assert (
+            "__device__ Particle roundTrip(Particle* const& outRef, "
+            "uint* outRef_counter, const Particle* const& inRef, "
+            "uint* inRef_counter, Particle p)"
+        ) in cuda_code
+        assert "cgl_append_structured_buffer(outRef, outRef_counter, p);" in cuda_code
+        assert (
+            "Particle a = cgl_consume_structured_buffer(inRef, inRef_counter);"
+            in cuda_code
+        )
+        assert (
+            "Particle b = cgl_consume_structured_buffer(inRef, inRef_counter);"
+            in cuda_code
+        )
+        assert "pushRef(outRef, outRef_counter, p);" in cuda_code
+        assert "Particle consumed = popRef(inRef, inRef_counter);" in cuda_code
+        assert "pushRef(appendParticles, appendParticles_counter, p);" in cuda_code
+        assert (
+            "pushRef(appendQueues[which], appendQueues_counter[which], p);" in cuda_code
+        )
+        assert (
+            "Particle a = popRef(consumeParticles, consumeParticles_counter);"
+            in cuda_code
+        )
+        assert (
+            "Particle b = popRef(consumeQueues[which], "
+            "consumeQueues_counter[which]);"
+        ) in cuda_code
+        assert (
+            "Particle c = roundTrip(appendQueues[which], "
+            "appendQueues_counter[which], consumeQueues[which], "
+            "consumeQueues_counter[which], b);"
+        ) in cuda_code
+        assert "AppendStructuredBuffer<" not in cuda_code
+        assert "ConsumeStructuredBuffer<" not in cuda_code
+        assert ".Append(" not in cuda_code
+        assert ".Consume(" not in cuda_code
+        assert "buffer_append(" not in cuda_code
+        assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_append_consume_untraceable_counters_emit_cuda_diagnostics(self, tmp_path):
+        """Test CUDA rejects append/consume calls when no counter sidecar is known."""
+        source_code = """
+        shader AppendConsumeCounterDiagnosticCUDA {
+            struct Particle {
+                float weight;
+            };
+
+            AppendStructuredBuffer<Particle> appendParticles;
+            ConsumeStructuredBuffer<Particle> consumeParticles;
+
+            AppendStructuredBuffer<Particle> chooseAppend(bool useGlobal) {
+                return appendParticles;
+            }
+
+            ConsumeStructuredBuffer<Particle> chooseConsume(bool useGlobal) {
+                return consumeParticles;
+            }
+
+            void process(bool useGlobal, Particle p) {
+                chooseAppend(useGlobal).Append(p);
+                buffer_append(chooseAppend(useGlobal), p);
+                Particle a = chooseConsume(useGlobal).Consume();
+                Particle b = buffer_consume(chooseConsume(useGlobal));
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "__device__ Particle* chooseAppend(bool useGlobal)" in cuda_code
+        assert "__device__ const Particle* chooseConsume(bool useGlobal)" in cuda_code
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "Append on AppendStructuredBuffer<Particle> */ ((void)0);"
+        ) in cuda_code
+        assert (
+            "/* unsupported CUDA structured buffer call: "
+            "buffer_append on AppendStructuredBuffer<Particle> */ ((void)0);"
+        ) in cuda_code
+        assert (
+            "Particle a = /* unsupported CUDA structured buffer call: "
+            "Consume on ConsumeStructuredBuffer<Particle> */ Particle{};"
+        ) in cuda_code
+        assert (
+            "Particle b = /* unsupported CUDA structured buffer call: "
+            "buffer_consume on ConsumeStructuredBuffer<Particle> */ Particle{};"
+        ) in cuda_code
+        assert "cgl_append_structured_buffer(chooseAppend" not in cuda_code
+        assert "cgl_consume_structured_buffer(chooseConsume" not in cuda_code
+        assert ".Append(" not in cuda_code
+        assert ".Consume(" not in cuda_code
+        assert "buffer_append(" not in cuda_code
+        assert "buffer_consume(" not in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_plain_shared_array_atomics_emit_cuda_pointer_atomics(self, tmp_path):
         """Test CUDA atomics on ordinary shared/array lvalues use pointer operands."""
@@ -4405,6 +5337,96 @@ class TestCudaCodeGen:
         assert "atomicCompSwap(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_structured_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
+        """Test CUDA preserves structured-buffer atomic metadata through references."""
+        source_code = """
+        shader StructuredBufferReferenceAtomicsCUDA {
+            struct Particle {
+                uint counter;
+                float weight;
+            };
+
+            RWStructuredBuffer<uint> counters;
+            RWStructuredBuffer<uint> counterArrays[2];
+            RWStructuredBuffer<Particle> particles;
+            StructuredBuffer<uint> readonlyCounts;
+
+            uint bumpRef(
+                RWStructuredBuffer<uint>& valuesRef,
+                uint index,
+                uint value
+            ) {
+                uint old = atomicAdd(valuesRef[index], value);
+                uint exchanged = atomicExchange(&valuesRef[index], old);
+                return exchanged;
+            }
+
+            uint bumpParticleRef(
+                RWStructuredBuffer<Particle>& particleRef,
+                uint index,
+                uint value
+            ) {
+                return atomicAdd(particleRef[index].counter, value);
+            }
+
+            void rejectReadOnlyRef(
+                StructuredBuffer<uint>& readonlyRef,
+                uint index,
+                uint value
+            ) {
+                uint blocked = atomicAdd(readonlyRef[index], value);
+            }
+
+            compute {
+                void main(uint which, uint index, uint value) {
+                    uint first = bumpRef(counters, index, value);
+                    uint second = bumpRef(counterArrays[which], index, first);
+                    uint third = bumpParticleRef(particles, index, second);
+                    rejectReadOnlyRef(readonlyCounts, index, third);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "uint* counters;" in cuda_code
+        assert "uint* counterArrays[2];" in cuda_code
+        assert "Particle* particles;" in cuda_code
+        assert "const uint* readonlyCounts;" in cuda_code
+        assert (
+            "__device__ uint bumpRef(uint* const& valuesRef, " "uint index, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ uint bumpParticleRef(Particle* const& particleRef, "
+            "uint index, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ void rejectReadOnlyRef("
+            "const uint* const& readonlyRef, uint index, uint value)"
+        ) in cuda_code
+        assert "uint old = atomicAdd(&valuesRef[index], value);" in cuda_code
+        assert "uint exchanged = atomicExch(&valuesRef[index], old);" in cuda_code
+        assert "return atomicAdd(&particleRef[index].counter, value);" in cuda_code
+        assert "uint first = bumpRef(counters, index, value);" in cuda_code
+        assert "uint second = bumpRef(counterArrays[which], index, first);" in cuda_code
+        assert "uint third = bumpParticleRef(particles, index, second);" in cuda_code
+        assert "rejectReadOnlyRef(readonlyCounts, index, third);" in cuda_code
+        assert (
+            "uint blocked = /* unsupported CUDA structured buffer atomic: "
+            "atomicAdd on const StructuredBuffer<uint>& requires "
+            "RWStructuredBuffer target */ 0u;" in cuda_code
+        )
+        assert "valuesRef.atomicAdd(" not in cuda_code
+        assert "atomicAdd(valuesRef[" not in cuda_code
+        assert "atomicExchange(" not in cuda_code
+        assert "atomicAdd(readonlyRef" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
     def test_float_structured_buffer_add_and_exchange_atomics_emit_cuda_atomics(
         self, tmp_path
     ):
@@ -4801,6 +5823,76 @@ class TestCudaCodeGen:
         )
         assert "InterlockedAdd(" not in cuda_code
         assert "InterlockedCompareExchange(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_byte_address_buffer_reference_atomics_keep_cuda_metadata(self, tmp_path):
+        """Test CUDA preserves byte-address atomic metadata through references."""
+        source_code = """
+        shader ByteAddressBufferReferenceAtomicsCUDA {
+            RWByteAddressBuffer output;
+            RWByteAddressBuffer outputs[2];
+            ByteAddressBuffer readonlyBytes;
+
+            uint bumpRef(RWByteAddressBuffer& outputRef, uint offset, uint value) {
+                uint old = outputRef.InterlockedAdd(offset, value);
+                uint exchanged;
+                outputRef.InterlockedExchange(offset, old, exchanged);
+                return exchanged;
+            }
+
+            void rejectReadOnlyRef(
+                ByteAddressBuffer& readonlyRef,
+                uint offset,
+                uint value
+            ) {
+                uint old;
+                readonlyRef.InterlockedAdd(offset, value, old);
+            }
+
+            compute {
+                void main(uint which, uint offset, uint value) {
+                    uint first = bumpRef(output, offset, value);
+                    uint second = bumpRef(outputs[which], offset, first);
+                    rejectReadOnlyRef(readonlyBytes, offset, second);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "unsigned char* output;" in cuda_code
+        assert "unsigned char* outputs[2];" in cuda_code
+        assert "const unsigned char* readonlyBytes;" in cuda_code
+        assert (
+            "__device__ uint bumpRef(unsigned char* const& outputRef, "
+            "uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "__device__ void rejectReadOnlyRef("
+            "const unsigned char* const& readonlyRef, uint offset, uint value)"
+        ) in cuda_code
+        assert (
+            "uint old = cgl_byte_address_atomic_add_uint(" "outputRef, offset, value);"
+        ) in cuda_code
+        assert (
+            "exchanged = cgl_byte_address_atomic_exchange_uint("
+            "outputRef, offset, old);"
+        ) in cuda_code
+        assert "uint first = bumpRef(output, offset, value);" in cuda_code
+        assert "uint second = bumpRef(outputs[which], offset, first);" in cuda_code
+        assert "rejectReadOnlyRef(readonlyBytes, offset, second);" in cuda_code
+        assert (
+            "/* unsupported CUDA byte-address buffer call: "
+            "InterlockedAdd on const ByteAddressBuffer& */ ((void)0);" in cuda_code
+        )
+        assert "outputRef.InterlockedAdd(" not in cuda_code
+        assert "outputRef.InterlockedExchange(" not in cuda_code
+        assert "readonlyRef.InterlockedAdd(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_array_and_3d_texture_calls_emit_cuda_texture_functions(self):
@@ -5559,6 +6651,9 @@ class TestCudaCodeGen:
         shader OffsetCoordinateShapes {
             sampler1d lineTex;
             sampler2d colorMap;
+            samplercube cubeMap;
+            sampler2dshadow shadowMap;
+            image2D colorImage;
             sampler2darray layerMap;
             sampler3d volumeMap;
             Texture2D<float4> typedColor;
@@ -5569,7 +6664,8 @@ class TestCudaCodeGen:
                 vec3 uvw,
                 int scalarOffset,
                 ivec2 offset2,
-                ivec3 offset3
+                ivec3 offset3,
+                ivec4 cubePixel
             ) {
                 vec4 badLineVec = textureOffset(lineTex, u, offset2);
                 vec4 badColorScalar = textureOffset(colorMap, uv, scalarOffset);
@@ -5597,6 +6693,9 @@ class TestCudaCodeGen:
                     0,
                     scalarOffset
                 );
+                vec4 imageOffset = texelFetchOffset(colorImage, offset2, 0, offset2);
+                vec4 cubeOffset = texelFetchOffset(cubeMap, cubePixel, 0, offset2);
+                float shadowOffset = texelFetchOffset(shadowMap, offset2, 0, offset2);
                 vec4 validButUnsupported = textureOffset(colorMap, uv, offset2);
             }
 
@@ -5629,6 +6728,20 @@ class TestCudaCodeGen:
             "float4 validButUnsupported = /* unsupported CUDA sampled resource call: "
             "textureOffset on sampler2D */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 imageOffset = /* unsupported CUDA sampled resource call: "
+            "texelFetchOffset on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 cubeOffset = /* unsupported CUDA sampled resource call: "
+            "texelFetchOffset on samplerCube */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float shadowOffset = /* unsupported CUDA shadow resource call: "
+            "texelFetchOffset on sampler2DShadow */ 0.0f;" in cuda_code
         )
         assert "textureOffset(" not in cuda_code
         assert "textureLodOffset(" not in cuda_code
@@ -6425,6 +7538,76 @@ class TestCudaCodeGen:
         assert "imageStore(" not in cuda_code
         assert "imageAtomicAdd(" not in cuda_code
 
+    def test_resource_memory_qualifiers_map_cuda_access_contracts(self):
+        """Test resource memory qualifiers select CUDA access forms/diagnostics."""
+        source_code = """
+        shader CUDAResourceMemoryQualifiers {
+            readonly RWStructuredBuffer<int> readOnlyValues;
+            writeonly StructuredBuffer<int> writeOnlyValues;
+            readwrite StructuredBuffer<int> readWriteValues;
+            RWStructuredBuffer<int> attrReadValues @access(read);
+            StructuredBuffer<int> attrWriteValues @access(write);
+            readonly RWByteAddressBuffer rawInput;
+            writeonly ByteAddressBuffer rawOutput;
+            readonly image2D source @rgba32f;
+            writeonly image2D target @rgba32f;
+
+            compute {
+                void main(uint index) {
+                    int value = buffer_load(readOnlyValues, index);
+                    int attrValue = buffer_load(attrReadValues, index);
+                    uint raw = buffer_load(rawInput, index);
+                    buffer_store(writeOnlyValues, index, value + attrValue);
+                    buffer_store(readWriteValues, index, value);
+                    buffer_store(attrWriteValues, index, attrValue);
+                    buffer_store(rawOutput, index, raw);
+                    vec4 color = imageLoad(source, ivec2(0));
+                    vec4 blockedLoad = imageLoad(target, ivec2(0));
+                    imageStore(target, ivec2(0), color);
+                    imageStore(source, ivec2(0), color);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "const int* readOnlyValues;" in cuda_code
+        assert "int* writeOnlyValues;" in cuda_code
+        assert "int* readWriteValues;" in cuda_code
+        assert "const int* attrReadValues;" in cuda_code
+        assert "int* attrWriteValues;" in cuda_code
+        assert "const unsigned char* rawInput;" in cuda_code
+        assert "unsigned char* rawOutput;" in cuda_code
+        assert "cudaSurfaceObject_t source;" in cuda_code
+        assert "cudaSurfaceObject_t target;" in cuda_code
+        assert "int value = readOnlyValues[index];" in cuda_code
+        assert "int attrValue = attrReadValues[index];" in cuda_code
+        assert "uint raw = cgl_byte_address_load_uint(rawInput, index);" in cuda_code
+        assert "writeOnlyValues[index] = (value + attrValue);" in cuda_code
+        assert "readWriteValues[index] = value;" in cuda_code
+        assert "attrWriteValues[index] = attrValue;" in cuda_code
+        assert "cgl_byte_address_store_uint(rawOutput, index, raw);" in cuda_code
+        assert "float4 color = surf2Dread<float4>(source," in cuda_code
+        assert (
+            "float4 blockedLoad = /* unsupported CUDA image access: imageLoad "
+            "requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "surf2Dwrite(color, target," in cuda_code
+        assert (
+            "/* unsupported CUDA image access: imageStore requires writable "
+            "image resource on image2D */ ((void)0);" in cuda_code
+        )
+        assert "readonly" not in cuda_code
+        assert "writeonly" not in cuda_code
+        assert "readwrite" not in cuda_code
+        assert "access(" not in cuda_code
+
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
         """Test CUDA preserves storage-image access metadata through local aliases."""
         source_code = """
@@ -6762,8 +7945,8 @@ class TestCudaCodeGen:
             "imageAtomicCompSwap on uimage2D */ 0u;" in cuda_code
         )
         assert (
-            "int2 dims = /* unsupported CUDA resource query: imageSize "
-            "metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 dims = cgl_imageSize_image2D(bundle->readImage_metadata);"
+            in cuda_code
         )
         assert "surf2Dread<float4>(chooseWrite(bundle)" not in cuda_code
         assert "surf2Dwrite(blockedRead, chooseRead(bundle)" not in cuda_code
@@ -6850,9 +8033,17 @@ class TestCudaCodeGen:
                             chooseOuterChainReadCounter(outer, slot),
                             pixel,
                             1
-                        );
+                    );
                     vec4 allowed = imageLoad(chooseNestedRead(bundle), pixel);
                     imageStore(chooseNestedWrite(bundle), pixel, allowed);
+                    ivec2 readDims = imageSize(chooseNestedRead(bundle));
+                    ivec2 writeDims = imageSize(chooseNestedWrite(bundle));
+                    ivec2 counterDims =
+                        imageSize(chooseNestedReadCounter(bundle, slot));
+                    ivec2 outerDims =
+                        imageSize(chooseOuterReadCounter(outer, slot));
+                    ivec2 outerChainDims =
+                        imageSize(chooseOuterChainReadCounter(outer, slot));
                 }
             }
         }
@@ -6880,6 +8071,26 @@ class TestCudaCodeGen:
         assert (
             "surf2Dwrite(allowed, chooseNestedWrite(bundle), "
             "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "int2 readDims = cgl_imageSize_image2D"
+            "(chooseBundle(bundle)->readImage_metadata);" in cuda_code
+        )
+        assert (
+            "int2 writeDims = cgl_imageSize_image2D"
+            "(chooseBundle(bundle)->writeImage_metadata);" in cuda_code
+        )
+        assert (
+            "int2 counterDims = cgl_imageSize_uimage2D"
+            "(chooseBundle(bundle)->readCounters_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 outerDims = cgl_imageSize_uimage2D"
+            "(outer->bundlePtr->readCounters_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int2 outerChainDims = cgl_imageSize_uimage2D"
+            "(chooseOuterBundle(outer)->readCounters_metadata[slot]);" in cuda_code
         )
         assert "surf2Dread<float4>(chooseNestedWrite(bundle)" not in cuda_code
         assert "surf2Dwrite(returnedBlocked, chooseNestedRead(bundle)" not in cuda_code
@@ -7094,6 +8305,397 @@ class TestCudaCodeGen:
             "surf2Dwrite(blockedRead, chooseAssignedChainedRead(bundle)"
             not in cuda_code
         )
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
+    def test_image_access_returned_struct_pointer_ternary_aliases_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks returned image metadata through ternary pointer locals."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        shader ImageAccessReturnedStructPointerTernaryAliases {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            image2D chooseTernaryWrite(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected =
+                    useLeft ? chooseBundle(left) : chooseBundle(right);
+                return selected->writeImage;
+            }
+
+            image2D chooseAssignedTernaryRead(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected;
+                selected = useLeft ? chooseBundle(left) : chooseBundle(right);
+                return selected->readImage;
+            }
+
+            uimage2D chooseTernaryCounter(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft,
+                int slot
+            ) {
+                ImageBundle* selected =
+                    useLeft ? chooseBundle(left) : chooseBundle(right);
+                return selected->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* left,
+                    ImageBundle* right,
+                    ivec2 pixel,
+                    bool useLeft,
+                    int slot
+                ) {
+                    vec4 blockedRead =
+                        imageLoad(
+                            chooseTernaryWrite(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseAssignedTernaryRead(left, right, useLeft),
+                        pixel,
+                        blockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseTernaryCounter(left, right, useLeft, slot),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed =
+                        imageLoad(
+                            chooseAssignedTernaryRead(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseTernaryWrite(left, right, useLeft),
+                        pixel,
+                        allowed
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 1
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 1
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseAssignedTernaryRead(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, chooseTernaryWrite(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseTernaryWrite(left" not in cuda_code
+        assert (
+            "surf2Dwrite(blockedRead, chooseAssignedTernaryRead(left" not in cuda_code
+        )
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
+    def test_image_access_returned_struct_pointer_if_else_aliases_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks returned image metadata through if/else pointer locals."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        shader ImageAccessReturnedStructPointerIfElseAliases {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            image2D chooseIfWrite(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->writeImage;
+            }
+
+            image2D chooseIfRead(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readImage;
+            }
+
+            uimage2D chooseIfCounter(
+                ImageBundle* left,
+                ImageBundle* right,
+                bool useLeft,
+                int slot
+            ) {
+                ImageBundle* selected;
+                if (useLeft) {
+                    selected = chooseBundle(left);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* left,
+                    ImageBundle* right,
+                    ivec2 pixel,
+                    bool useLeft,
+                    int slot
+                ) {
+                    vec4 blockedRead =
+                        imageLoad(
+                            chooseIfWrite(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseIfRead(left, right, useLeft),
+                        pixel,
+                        blockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseIfCounter(left, right, useLeft, slot),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed =
+                        imageLoad(
+                            chooseIfRead(left, right, useLeft),
+                            pixel
+                        );
+                    imageStore(
+                        chooseIfWrite(left, right, useLeft),
+                        pixel,
+                        allowed
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 1
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 1
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseIfRead(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, chooseIfWrite(left, right, useLeft), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseIfWrite(left" not in cuda_code
+        assert "surf2Dwrite(blockedRead, chooseIfRead(left" not in cuda_code
+        assert "imageAtomicAdd on uimage2D" not in cuda_code
+        assert "imageLoad(" not in cuda_code
+        assert "imageStore(" not in cuda_code
+        assert "imageAtomicAdd(" not in cuda_code
+
+    def test_image_access_returned_struct_pointer_else_if_aliases_emit_cuda_diagnostics(
+        self,
+    ):
+        """Test CUDA tracks returned image metadata through else-if pointer locals."""
+        source_code = """
+        struct ImageBundle {
+            readonly image2D readImage @rgba16f;
+            writeonly image2D writeImage @rgba16f;
+            readonly uimage2D readCounters[4] @r32ui;
+        };
+
+        shader ImageAccessReturnedStructPointerElseIfAliases {
+            fn chooseBundle(ImageBundle* bundle) -> ImageBundle* {
+                return bundle;
+            }
+
+            image2D chooseElseIfWrite(
+                ImageBundle* left,
+                ImageBundle* middle,
+                ImageBundle* right,
+                int mode
+            ) {
+                ImageBundle* selected;
+                if (mode == 0) {
+                    selected = chooseBundle(left);
+                } else if (mode == 1) {
+                    selected = chooseBundle(middle);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->writeImage;
+            }
+
+            image2D chooseElseIfRead(
+                ImageBundle* left,
+                ImageBundle* middle,
+                ImageBundle* right,
+                int mode
+            ) {
+                ImageBundle* selected;
+                if (mode == 0) {
+                    selected = chooseBundle(left);
+                } else if (mode == 1) {
+                    selected = chooseBundle(middle);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readImage;
+            }
+
+            uimage2D chooseElseIfCounter(
+                ImageBundle* left,
+                ImageBundle* middle,
+                ImageBundle* right,
+                int mode,
+                int slot
+            ) {
+                ImageBundle* selected;
+                if (mode == 0) {
+                    selected = chooseBundle(left);
+                } else if (mode == 1) {
+                    selected = chooseBundle(middle);
+                } else {
+                    selected = chooseBundle(right);
+                }
+                return selected->readCounters[slot];
+            }
+
+            compute {
+                void main(
+                    ImageBundle* left,
+                    ImageBundle* middle,
+                    ImageBundle* right,
+                    ivec2 pixel,
+                    int mode,
+                    int slot
+                ) {
+                    vec4 blockedRead =
+                        imageLoad(
+                            chooseElseIfWrite(left, middle, right, mode),
+                            pixel
+                        );
+                    imageStore(
+                        chooseElseIfRead(left, middle, right, mode),
+                        pixel,
+                        blockedRead
+                    );
+                    uint blockedAtomic =
+                        imageAtomicAdd(
+                            chooseElseIfCounter(
+                                left,
+                                middle,
+                                right,
+                                mode,
+                                slot
+                            ),
+                            pixel,
+                            1
+                        );
+                    vec4 allowed =
+                        imageLoad(
+                            chooseElseIfRead(left, middle, right, mode),
+                            pixel
+                        );
+                    imageStore(
+                        chooseElseIfWrite(left, middle, right, mode),
+                        pixel,
+                        allowed
+                    );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert cuda_code.count("imageLoad requires readable image resource") == 1
+        assert cuda_code.count("imageStore requires writable image resource") == 1
+        assert (
+            cuda_code.count(
+                "imageAtomicAdd requires readwrite image resource on uimage2D"
+            )
+            == 1
+        )
+        assert (
+            "float4 allowed = surf2Dread<float4>"
+            "(chooseElseIfRead(left, middle, right, mode), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert (
+            "surf2Dwrite(allowed, "
+            "chooseElseIfWrite(left, middle, right, mode), "
+            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+        )
+        assert "surf2Dread<float4>(chooseElseIfWrite(left" not in cuda_code
+        assert "surf2Dwrite(blockedRead, chooseElseIfRead(left" not in cuda_code
         assert "imageAtomicAdd on uimage2D" not in cuda_code
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
@@ -7552,9 +9154,8 @@ class TestCudaCodeGen:
             "0u;" in cuda_code
         )
         assert (
-            "int2 readMemberDims = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on uimage2D */ make_int2(0, 0);"
-            in cuda_code
+            "int2 readMemberDims = cgl_imageSize_uimage2D"
+            "(bundle.readCounters_metadata[slot]);" in cuda_code
         )
         assert "imageAtomicAdd(" not in cuda_code
         assert "imageAtomicCompSwap(" not in cuda_code
@@ -7692,10 +9293,10 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
 
-    def test_sampled_resource_struct_members_emit_cuda_calls_and_query_diagnostics(
+    def test_sampled_resource_struct_members_emit_cuda_calls_and_queries(
         self,
     ):
-        """Test CUDA handles sampled/image resource calls through struct members."""
+        """Test CUDA handles resource calls and queries through struct members."""
         source_code = """
         struct TextureBundle {
             sampler2d tex;
@@ -7741,21 +9342,20 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "int2 dims = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
+            "int2 dims = cgl_textureSize_sampler2D(bundle.tex_metadata, 0);"
             in cuda_code
         )
         assert (
-            "int samples = /* unsupported CUDA resource query: "
-            "textureSamples metadata unavailable on sampler2DMS */ 0;" in cuda_code
+            "int samples = cgl_textureSamples_sampler2DMS(bundle.msTex_metadata);"
+            in cuda_code
         )
         assert (
-            "int levels = /* unsupported CUDA resource query: "
-            "textureQueryLevels metadata unavailable on sampler2D */ 0;" in cuda_code
+            "int levels = cgl_textureQueryLevels_sampler2D(bundle.tex_metadata);"
+            in cuda_code
         )
         assert (
-            "int2 imageDims = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 imageDims = cgl_imageSize_image2D"
+            "(bundle.images_metadata[slot]);" in cuda_code
         )
         assert "texture(" not in cuda_code
         assert "textureLod(" not in cuda_code
@@ -8064,9 +9664,13 @@ class TestCudaCodeGen:
             sampler2d tex;
             sampler2darray layers;
             sampler3d volume;
+            samplercube cubeTex;
+            samplercubearray cubeLayers;
+            sampler2dshadow shadowTex;
+            image2D colorImage;
             Texture3D<float4> typedVolume;
 
-            void fetchShapes(int x, ivec2 pixel, ivec3 voxel) {
+            void fetchShapes(int x, ivec2 pixel, ivec3 voxel, ivec4 cubeLayerTexel) {
                 vec4 fetchedLine = texelFetch(lineTex, x, 0);
                 vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 0);
                 vec4 fetched = texelFetch(tex, pixel, 0);
@@ -8077,6 +9681,10 @@ class TestCudaCodeGen:
                 vec4 badLineLayer = texelFetch(lineLayers, x, 0);
                 vec4 badTex = texelFetch(tex, x, 0);
                 vec4 badVolume = texelFetch(volume, pixel, 0);
+                vec4 badCube = texelFetch(cubeTex, voxel, 0);
+                vec4 badCubeArray = texelFetch(cubeLayers, cubeLayerTexel, 0);
+                vec4 badImage = texelFetch(colorImage, pixel, 0);
+                float badShadow = texelFetch(shadowTex, pixel, 0);
             }
 
             compute {
@@ -8134,6 +9742,20 @@ class TestCudaCodeGen:
             "float4 badVolume = /* unsupported CUDA sampled resource call: "
             "texelFetch coordinate rank on sampler3D */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        for name, texture_type in (
+            ("badCube", "samplerCube"),
+            ("badCubeArray", "samplerCubeArray"),
+            ("badImage", "image2D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported CUDA sampled resource call: "
+                f"texelFetch on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in cuda_code
+        assert (
+            "float badShadow = /* unsupported CUDA shadow resource call: "
+            "texelFetch on sampler2DShadow */ 0.0f;" in cuda_code
         )
         assert "tex1Dfetch(lineTex, pixel)" not in cuda_code
         assert "tex1DLayered<float4>(lineLayers, x." not in cuda_code
@@ -8389,6 +10011,92 @@ class TestCudaCodeGen:
         assert "imageLoad(" not in cuda_code
         assert "imageStore(" not in cuda_code
         assert "CglResourceQueryInfo" not in cuda_code
+
+    def test_resource_binding_metadata_comments_emit_cuda_bindings(self):
+        """Test CUDA emits deterministic CrossGL resource binding metadata."""
+        source_code = """
+        shader CudaResourceBindings {
+            sampler2D colorMap @set(2) @binding(5);
+            sampler linearSampler @binding(1);
+            @binding(3) RWStructuredBuffer<int> counters[2];
+            Texture2D hlslTexture @register(t7, space3);
+
+            @binding(6)
+            cbuffer Camera {
+                float exposure;
+            };
+
+            image2D outImage;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=colorMap kind=texture set=2 "
+            "binding=5 binding_source=explicit" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+            "binding=1 binding_source=explicit" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=counters kind=buffer set=0 "
+            "binding=3 binding_source=explicit count=2" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=hlslTexture kind=texture set=3 "
+            "binding=7 binding_source=explicit register=t7,space3" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=outImage kind=image set=0 "
+            "binding=0 binding_source=automatic" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
+            "binding=6 binding_source=explicit" in cuda_code
+        )
+
+    def test_duplicate_resource_bindings_are_rejected_for_cuda_codegen(self):
+        """Test CUDA rejects duplicate explicit resource bindings."""
+        duplicate_texture_binding = """
+        shader DuplicateCudaTextureBindings {
+            @binding(2) sampler2D firstTexture;
+            @binding(2) sampler2D secondTexture;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting CUDA resource binding"):
+            CudaCodeGen().generate(
+                Parser(Lexer(duplicate_texture_binding).tokens).parse()
+            )
+
+        overlapping_buffer_range = """
+        shader DuplicateCudaBufferBindings {
+            @binding(3) RWStructuredBuffer<int> counters[2];
+            @binding(4)
+            cbuffer Camera {
+                float exposure;
+            };
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting CUDA resource binding"):
+            CudaCodeGen().generate(
+                Parser(Lexer(overlapping_buffer_range).tokens).parse()
+            )
 
     def test_typed_hlsl_dynamic_resource_arrays_emit_cuda_shapes_and_metadata(self):
         """Test CUDA preserves typed HLSL dynamic resource-array shapes."""
@@ -11011,6 +12719,9 @@ class TestCudaCodeGen:
                 int compared = imageAtomicCompSwap(signedImage, pixel, 3, 4);
                 int volumeMin = imageAtomicMin(signedVolume, voxel, 5);
                 uint layerMax = imageAtomicMax(counterLayers, pixelLayer, 6);
+                uint bitAnd = imageAtomicAnd(counters, pixel, 255);
+                uint bitOr = imageAtomicOr(counters, pixel, 8);
+                uint bitXor = imageAtomicXor(counters, pixel, 4);
                 uint vectorAtomic = imageAtomicAdd(vectorCounters, pixel, 7);
                 int missingArgs = imageAtomicAdd(signedImage);
                 uint clampedUnsigned = clamp(
@@ -11059,6 +12770,18 @@ class TestCudaCodeGen:
             "imageAtomicMax on uimage2DArray */ 0u;" in cuda_code
         )
         assert (
+            "uint bitAnd = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicAnd on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint bitOr = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicOr on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
+            "uint bitXor = /* unsupported CUDA image atomic resource call: "
+            "imageAtomicXor on uimage2D */ 0u;" in cuda_code
+        )
+        assert (
             "uint vectorAtomic = /* unsupported CUDA image atomic resource call: "
             "imageAtomicAdd on image2D */ 0;" in cuda_code
         )
@@ -11085,6 +12808,9 @@ class TestCudaCodeGen:
         assert "imageAtomicCompSwap(" not in cuda_code
         assert "imageAtomicMin(" not in cuda_code
         assert "imageAtomicMax(" not in cuda_code
+        assert "imageAtomicAnd(" not in cuda_code
+        assert "imageAtomicOr(" not in cuda_code
+        assert "imageAtomicXor(" not in cuda_code
         compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
     def test_image_atomic_coordinate_shapes_emit_cuda_diagnostics(self):
@@ -11448,6 +13174,100 @@ class TestCudaCodeGen:
         )
         assert "textureSamples(" not in cuda_code
         assert "imageSamples(" not in cuda_code
+
+    def test_target_invalid_resource_queries_emit_cuda_diagnostics(self):
+        """Test CUDA diagnoses query builtins used on incompatible resources."""
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dms msTex;
+            image2D colorImage;
+            image2DMS msImage;
+            sampler querySampler;
+
+            compute {
+                void main() {
+                    ivec2 validTextureSize = textureSize(colorMap, 0);
+                    ivec2 validImageSize = imageSize(colorImage);
+                    int validTextureSamples = textureSamples(msTex);
+                    int validImageSamples = imageSamples(msImage);
+                    int validTextureLevels = textureQueryLevels(colorMap);
+                    ivec2 badImageSizeFromTexture = imageSize(colorMap);
+                    ivec2 badTextureSizeFromImage = textureSize(colorImage, 0);
+                    int badTextureSamplesFromImage = textureSamples(msImage);
+                    int badImageSamplesFromTexture = imageSamples(msTex);
+                    int badLevelsFromImage = textureQueryLevels(colorImage);
+                    int badLevelsFromMsTexture = textureQueryLevels(msTex);
+                    int badLevelsFromSamplerState = textureQueryLevels(querySampler);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert (
+            "int2 validTextureSize = cgl_textureSize_sampler2D"
+            "(colorMap_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 validImageSize = cgl_imageSize_image2D"
+            "(colorImage_metadata);" in cuda_code
+        )
+        assert (
+            "int validTextureSamples = cgl_textureSamples_sampler2DMS"
+            "(msTex_metadata);" in cuda_code
+        )
+        assert (
+            "int validImageSamples = cgl_imageSamples_image2DMS"
+            "(msImage_metadata);" in cuda_code
+        )
+        assert (
+            "int validTextureLevels = cgl_textureQueryLevels_sampler2D"
+            "(colorMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 badImageSizeFromTexture = /* unsupported CUDA resource query: "
+            "imageSize on sampler2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "int2 badTextureSizeFromImage = /* unsupported CUDA resource query: "
+            "textureSize on image2D */ make_int2(0, 0);" in cuda_code
+        )
+        assert (
+            "int badTextureSamplesFromImage = /* unsupported CUDA resource query: "
+            "textureSamples on image2DMS */ 0;" in cuda_code
+        )
+        assert (
+            "int badImageSamplesFromTexture = /* unsupported CUDA resource query: "
+            "imageSamples on sampler2DMS */ 0;" in cuda_code
+        )
+        assert (
+            "int badLevelsFromImage = /* unsupported CUDA resource query: "
+            "textureQueryLevels on image2D */ 0;" in cuda_code
+        )
+        assert (
+            "int badLevelsFromMsTexture = /* unsupported CUDA resource query: "
+            "textureQueryLevels on sampler2DMS */ 0;" in cuda_code
+        )
+        assert (
+            "int badLevelsFromSamplerState = /* unsupported CUDA resource query: "
+            "textureQueryLevels on sampler */ 0;" in cuda_code
+        )
+        assert "cgl_imageSize_sampler2D" not in cuda_code
+        assert "cgl_textureSize_image2D" not in cuda_code
+        assert "cgl_textureSamples_image2DMS" not in cuda_code
+        assert "cgl_imageSamples_sampler2DMS" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "imageSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
 
     def test_resource_query_arrays_emit_indexed_cuda_metadata(self):
         """Test CUDA resource queries preserve resource-array metadata indexing."""
@@ -12647,25 +14467,23 @@ class TestCudaCodeGen:
             "int2 directImageSize = cgl_imageSize_image2D"
             "(imageMap_metadata);" in cuda_code
         )
+        assert "bundle.tex_metadata = colorMap_metadata;" in cuda_code
+        assert "bundle.img_metadata = imageMap_metadata;" in cuda_code
         assert (
-            "int2 bundleTexSize = /* unsupported CUDA resource query: "
-            "textureSize metadata unavailable on sampler2D */ make_int2(0, 0);"
-            in cuda_code
+            "int2 bundleTexSize = cgl_textureSize_sampler2D"
+            "(bundle.tex_metadata, 0);" in cuda_code
         )
         assert (
-            "int2 bundleImageSize = /* unsupported CUDA resource query: "
-            "imageSize metadata unavailable on image2D */ make_int2(0, 0);" in cuda_code
+            "int2 bundleImageSize = cgl_imageSize_image2D(bundle.img_metadata);"
+            in cuda_code
         )
         assert (
             "consume(chooseTex(), colorMap_metadata, chooseImage(), "
             "imageMap_metadata);" in cuda_code
         )
         assert (
-            "consume(bundle.tex, /* unsupported CUDA resource query: "
-            "metadata unavailable for sampler2D argument tex */ "
-            "CglResourceQueryInfo{}, bundle.img, /* unsupported CUDA resource "
-            "query: metadata unavailable for image2D argument img */ "
-            "CglResourceQueryInfo{});" in cuda_code
+            "consume(bundle.tex, bundle.tex_metadata, bundle.img, "
+            "bundle.img_metadata);" in cuda_code
         )
         assert (
             "consume(chooseBundle().tex, /* unsupported CUDA resource query: "
@@ -12679,6 +14497,286 @@ class TestCudaCodeGen:
         assert "consume(chooseBundle().tex, chooseBundle().img);" not in cuda_code
         assert "textureSize(" not in cuda_code
         assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_struct_member_call_objects_use_cuda_metadata_for_queries(
+        self,
+    ):
+        """Test call-object member resource queries can read returned sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+            sampler2DMS msTex;
+            image2D img;
+        };
+
+        shader ReturnedResourceQueryCallObjects {
+            sampler2d colorMap;
+            sampler2DMS samplesMap;
+            image2D imageMap;
+
+            ResourceBundle chooseBundle() {
+                return ResourceBundle(colorMap, samplesMap, imageMap);
+            }
+
+            ResourceBundle chooseLocalBundle() {
+                ResourceBundle bundle;
+                bundle.tex = colorMap;
+                bundle.msTex = samplesMap;
+                bundle.img = imageMap;
+                return bundle;
+            }
+
+            compute {
+                void main() {
+                    ivec2 directCallMember = textureSize(chooseBundle().tex, 0);
+                    int directCallLevels = textureQueryLevels(chooseBundle().tex);
+                    int directCallSamples = textureSamples(chooseBundle().msTex);
+                    ivec2 directCallImage = imageSize(chooseLocalBundle().img);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "CglResourceQueryInfo tex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo msTex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo img_metadata;" in cuda_code
+        assert (
+            "return ResourceBundle(colorMap, colorMap_metadata, samplesMap, "
+            "samplesMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 directCallMember = cgl_textureSize_sampler2D"
+            "(chooseBundle().tex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int directCallLevels = cgl_textureQueryLevels_sampler2D"
+            "(chooseBundle().tex_metadata);" in cuda_code
+        )
+        assert (
+            "int directCallSamples = cgl_textureSamples_sampler2DMS"
+            "(chooseBundle().msTex_metadata);" in cuda_code
+        )
+        assert (
+            "int2 directCallImage = cgl_imageSize_image2D"
+            "(chooseLocalBundle().img_metadata);" in cuda_code
+        )
+        assert "textureSize metadata unavailable on sampler2D" not in cuda_code
+        assert "textureSamples metadata unavailable on sampler2DMS" not in cuda_code
+        assert "imageSize metadata unavailable on image2D" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_struct_pointer_call_objects_use_cuda_metadata_for_queries(
+        self,
+    ):
+        """Test pointer-returned struct member queries read CUDA sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+            sampler2DMS msTex;
+            image2D img;
+        };
+
+        shader PointerReturnedResourceQueryCallObjects {
+            fn chooseBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                return bundle;
+            }
+
+            fn chooseLocalBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                ResourceBundle* alias = chooseBundle(bundle);
+                return alias;
+            }
+
+            compute {
+                void main(ResourceBundle* bundle) {
+                    ivec2 pointerTex = textureSize(chooseBundle(bundle)->tex, 0);
+                    int pointerLevels = textureQueryLevels(
+                        chooseBundle(bundle)->tex
+                    );
+                    int pointerSamples = textureSamples(
+                        chooseLocalBundle(bundle)->msTex
+                    );
+                    ivec2 pointerImage = imageSize(chooseLocalBundle(bundle)->img);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "CglResourceQueryInfo tex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo msTex_metadata;" in cuda_code
+        assert "CglResourceQueryInfo img_metadata;" in cuda_code
+        assert (
+            "__device__ ResourceBundle* chooseBundle(ResourceBundle* bundle)"
+            in cuda_code
+        )
+        assert "ResourceBundle* alias = chooseBundle(bundle);" in cuda_code
+        assert (
+            "int2 pointerTex = cgl_textureSize_sampler2D"
+            "(chooseBundle(bundle)->tex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int pointerLevels = cgl_textureQueryLevels_sampler2D"
+            "(chooseBundle(bundle)->tex_metadata);" in cuda_code
+        )
+        assert (
+            "int pointerSamples = cgl_textureSamples_sampler2DMS"
+            "(chooseLocalBundle(bundle)->msTex_metadata);" in cuda_code
+        )
+        assert (
+            "int2 pointerImage = cgl_imageSize_image2D"
+            "(chooseLocalBundle(bundle)->img_metadata);" in cuda_code
+        )
+        assert "textureSize metadata unavailable on sampler2D" not in cuda_code
+        assert "textureSamples metadata unavailable on sampler2DMS" not in cuda_code
+        assert "imageSize metadata unavailable on image2D" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+
+    def test_resource_query_struct_pointer_array_call_objects_use_cuda_metadata(
+        self,
+    ):
+        """Test pointer-returned struct array-member queries read CUDA sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d textures[3];
+            sampler2DMS msTextures[2];
+            image2D images[3];
+            image2DMS msImages[2];
+        };
+
+        shader PointerReturnedResourceArrayQueryCallObjects {
+            fn chooseBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                return bundle;
+            }
+
+            fn chooseLocalBundle(ResourceBundle* bundle) -> ResourceBundle* {
+                ResourceBundle* alias = chooseBundle(bundle);
+                return alias;
+            }
+
+            compute {
+                void main(ResourceBundle* bundle, int slot, int sampleSlot) {
+                    ivec2 pointerTex =
+                        textureSize(chooseBundle(bundle)->textures[slot], 0);
+                    int pointerLevels =
+                        textureQueryLevels(chooseBundle(bundle)->textures[slot]);
+                    int pointerSamples =
+                        textureSamples(
+                            chooseLocalBundle(bundle)->msTextures[sampleSlot]
+                        );
+                    ivec2 pointerImage =
+                        imageSize(chooseLocalBundle(bundle)->images[slot]);
+                    int pointerImageSamples =
+                        imageSamples(
+                            chooseLocalBundle(bundle)->msImages[sampleSlot]
+                        );
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct CglResourceQueryInfo" in cuda_code
+        assert "CglResourceQueryInfo textures_metadata[3];" in cuda_code
+        assert "CglResourceQueryInfo msTextures_metadata[2];" in cuda_code
+        assert "CglResourceQueryInfo images_metadata[3];" in cuda_code
+        assert "CglResourceQueryInfo msImages_metadata[2];" in cuda_code
+        assert (
+            "int2 pointerTex = cgl_textureSize_sampler2D"
+            "(chooseBundle(bundle)->textures_metadata[slot], 0);" in cuda_code
+        )
+        assert (
+            "int pointerLevels = cgl_textureQueryLevels_sampler2D"
+            "(chooseBundle(bundle)->textures_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int pointerSamples = cgl_textureSamples_sampler2DMS"
+            "(chooseLocalBundle(bundle)->msTextures_metadata[sampleSlot]);" in cuda_code
+        )
+        assert (
+            "int2 pointerImage = cgl_imageSize_image2D"
+            "(chooseLocalBundle(bundle)->images_metadata[slot]);" in cuda_code
+        )
+        assert (
+            "int pointerImageSamples = cgl_imageSamples_image2DMS"
+            "(chooseLocalBundle(bundle)->msImages_metadata[sampleSlot]);" in cuda_code
+        )
+        assert "textureSize metadata unavailable on sampler2D" not in cuda_code
+        assert "textureSamples metadata unavailable on sampler2DMS" not in cuda_code
+        assert "imageSize metadata unavailable on image2D" not in cuda_code
+        assert "imageSamples metadata unavailable on image2DMS" not in cuda_code
+        assert "textureSize(" not in cuda_code
+        assert "textureSamples(" not in cuda_code
+        assert "textureQueryLevels(" not in cuda_code
+        assert "imageSize(" not in cuda_code
+        assert "imageSamples(" not in cuda_code
+
+    def test_resource_query_struct_constructors_forward_cuda_member_metadata(self):
+        """Test resource struct constructors carry embedded metadata sidecars."""
+        source_code = """
+        struct ResourceBundle {
+            sampler2d tex;
+            image2D img;
+        };
+
+        shader ResourceQueryStructConstructors {
+            sampler2d colorMap;
+            image2D imageMap;
+
+            compute {
+                void main() {
+                    ResourceBundle bundle = ResourceBundle(colorMap, imageMap);
+                    ivec2 texDims = textureSize(bundle.tex, 0);
+                    ivec2 imageDims = imageSize(bundle.img);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "ResourceBundle bundle = ResourceBundle("
+            "colorMap, colorMap_metadata, imageMap, imageMap_metadata);" in cuda_code
+        )
+        assert (
+            "int2 texDims = cgl_textureSize_sampler2D"
+            "(bundle.tex_metadata, 0);" in cuda_code
+        )
+        assert (
+            "int2 imageDims = cgl_imageSize_image2D(bundle.img_metadata);" in cuda_code
+        )
+        assert "metadata unavailable for sampler2D argument tex" not in cuda_code
+        assert "metadata unavailable for image2D argument img" not in cuda_code
+        assert "textureSize(" not in cuda_code
         assert "imageSize(" not in cuda_code
 
     def test_resource_query_reference_parameters_emit_cuda_metadata(self):
@@ -14082,8 +16180,8 @@ class TestCudaCodeGen:
         assert cuda_code.count("break;") == 2
         assert "MatchNode" not in cuda_code
 
-    def test_match_guarded_arm_rejected_for_cuda_switch_lowering(self):
-        """Test CUDA rejects match forms that cannot be lowered to switch."""
+    def test_match_guarded_arm_lowers_to_cuda_if_chain(self):
+        """Test CUDA lowers guarded match arms to ordered if chains."""
         source_code = """
         shader TestShader {
             compute {
@@ -14108,8 +16206,181 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         codegen = CudaCodeGen()
-        with pytest.raises(ValueError, match="Unsupported match arm for CUDA"):
-            codegen.generate(ast)
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (mode)" not in cuda_code
+        assert "if (((mode == 0) &&" in cuda_code
+        assert "mode > 0" in cuda_code
+        assert "else {" in cuda_code
+        assert "value = 1;" in cuda_code
+        assert "value = 2;" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_identifier_binding_arm_lowers_to_cuda_scoped_else_body(self):
+        """Test CUDA lowers identifier binding match arms."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        other => {
+                            value = other;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "switch (mode)" not in cuda_code
+        assert "if ((mode == 0))" in cuda_code
+        assert "else {" in cuda_code
+        assert "int other = mode;" in cuda_code
+        assert "value = other;" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_guarded_identifier_binding_falls_through_to_later_cuda_arm(self):
+        """Test guarded CUDA binding arms fall through to later match arms."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        candidate if candidate > 2 => {
+                            value = candidate;
+                        }
+                        _ => {
+                            value = 7;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "switch (mode)" not in cuda_code
+        assert "if ((mode == 0))" in cuda_code
+        assert "else {" in cuda_code
+        assert "int candidate = mode;" in cuda_code
+        assert "candidate > 2" in cuda_code
+        assert "value = candidate;" in cuda_code
+        assert "value = 7;" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_plain_struct_pattern_binds_fields_for_cuda(self):
+        """Test CUDA lowers plain struct field pattern bindings."""
+        source_code = """
+        shader TestShader {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            compute {
+                int main(Pair pair) {
+                    int value = 0;
+                    match pair {
+                        Pair { left, right } => {
+                            value = left + right;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int main(Pair pair)" in cuda_code
+        assert "int left = pair.left;" in cuda_code
+        assert "int right = pair.right;" in cuda_code
+        assert "value = (left + right);" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_expression_initializes_cuda_local_with_bindings(self):
+        """Test CUDA lowers typed local match expressions to assignments."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = match mode {
+                        0 => 10,
+                        candidate if candidate > 1 => candidate,
+                        _ => -1,
+                    };
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int value;" in cuda_code
+        assert "value = 10;" in cuda_code
+        assert "int candidate = mode;" in cuda_code
+        assert "candidate > 1" in cuda_code
+        assert "value = candidate;" in cuda_code
+        assert "value = -1;" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_return_match_expression_lowers_to_cuda_typed_temporary(self):
+        """Test CUDA lowers return-position match expressions through a typed local."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    return match mode {
+                        0 => 10,
+                        _ => -1,
+                    };
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "int __crossgl_match_value_0;" in cuda_code
+        assert "__crossgl_match_value_0 = 10;" in cuda_code
+        assert "__crossgl_match_value_0 = -1;" in cuda_code
+        assert "return __crossgl_match_value_0;" in cuda_code
+        assert "MatchNode" not in cuda_code
 
     def test_direct_ast_expression_statements_are_emitted(self):
         """Test direct CUDA AST function bodies emit expression-returning nodes."""
@@ -14225,3 +16496,423 @@ class TestCudaCodeGen:
             "make_float3(4.0, 5.0, 6.0)};"
         ) in cuda_code
         assert "ArrayLiteralNode" not in cuda_code
+
+    def test_match_multiple_literal_arms_lower_to_switch(self):
+        """Test CUDA lowers match with multiple literal arms to switch/case."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int result = 0;
+                    match mode {
+                        0 => {
+                            result = 10;
+                        }
+                        1 => {
+                            result = 20;
+                        }
+                        2 => {
+                            result = 30;
+                        }
+                        _ => {
+                            result = -1;
+                        }
+                    }
+                    return result;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (mode) {" in cuda_code
+        assert "case 0:" in cuda_code
+        assert "result = 10;" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "result = 20;" in cuda_code
+        assert "case 2:" in cuda_code
+        assert "result = 30;" in cuda_code
+        assert "default:" in cuda_code
+        assert "result = -1;" in cuda_code
+
+    def test_match_wildcard_only_emits_default_case(self):
+        """Test CUDA match with only a wildcard arm emits a default-only switch."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int x) {
+                    int out = 0;
+                    match x {
+                        _ => {
+                            out = 99;
+                        }
+                    }
+                    return out;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (x) {" in cuda_code
+        assert "default:" in cuda_code
+        assert "out = 99;" in cuda_code
+        assert "case " not in cuda_code
+
+    def test_match_with_complex_body_expressions(self):
+        """Test CUDA match arms with multi-statement complex bodies."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int sel) {
+                    int a = 0;
+                    int b = 0;
+                    match sel {
+                        1 => {
+                            a = sel + 5;
+                            b = a * 2;
+                        }
+                        2 => {
+                            a = sel - 1;
+                            b = a + 10;
+                        }
+                        _ => {
+                            a = 0;
+                            b = 0;
+                        }
+                    }
+                    return a + b;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (sel) {" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "a = (sel + 5);" in cuda_code
+        assert "b = (a * 2);" in cuda_code
+        assert "case 2:" in cuda_code
+        assert "a = (sel - 1);" in cuda_code
+        assert "b = (a + 10);" in cuda_code
+        assert "default:" in cuda_code
+
+    def test_empty_shader_produces_valid_cuda_output(self):
+        """Test an empty shader still produces minimal valid CUDA includes."""
+        source_code = """
+        shader EmptyShader {
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "#include <cuda_runtime.h>" in cuda_code
+        assert "#include <device_launch_parameters.h>" in cuda_code
+
+    def test_struct_only_shader_without_compute_stage(self):
+        """Test shader containing only struct definitions and no compute stage."""
+        source_code = """
+        shader StructOnly {
+            struct Particle {
+                vec3 position;
+                vec3 velocity;
+                float mass;
+            };
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "#include <cuda_runtime.h>" in cuda_code
+        assert "struct Particle" in cuda_code
+        assert "float3 position;" in cuda_code
+        assert "float3 velocity;" in cuda_code
+        assert "float mass;" in cuda_code
+        assert "__global__" not in cuda_code
+
+    def test_match_arm_with_return_skips_break(self):
+        """Test CUDA match arms that terminate with return omit the break."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int code) {
+                    match code {
+                        0 => {
+                            return 100;
+                        }
+                        1 => {
+                            return 200;
+                        }
+                        _ => {
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "switch (code) {" in cuda_code
+        assert "case 0:" in cuda_code
+        assert "return 100;" in cuda_code
+        assert "case 1:" in cuda_code
+        assert "return 200;" in cuda_code
+        assert "default:" in cuda_code
+        assert "return 0;" in cuda_code
+        assert "break;" not in cuda_code
+
+    def test_texture_sampling_basic_tex2d_float4(self, tmp_path):
+        """Test basic texture sampling emits tex2D with float4 texture type."""
+        source_code = """
+        shader TextureSamplingBasic {
+            sampler2D diffuseMap;
+
+            fragment {
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec4 sample = texture(diffuseMap, uv);
+                    float r = sample.x;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "texture<float4, 2> diffuseMap;" in cuda_code
+        assert "tex2D(diffuseMap, uv.x, uv.y)" in cuda_code
+        assert "sampler2D diffuseMap;" not in cuda_code
+        assert " = texture(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_texture_lod_emits_tex2dlod(self, tmp_path):
+        """Test textureLod maps to tex2DLod in CUDA output."""
+        source_code = """
+        shader TextureLodCUDA {
+            sampler2D mipMap;
+
+            fragment {
+                void main() {
+                    vec2 uv = vec2(0.5, 0.5);
+                    vec4 mip0 = textureLod(mipMap, uv, 0.0);
+                    vec4 mip3 = textureLod(mipMap, uv, 3.0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "texture<float4, 2> mipMap;" in cuda_code
+        assert "float4 mip0 = tex2DLod(mipMap, uv.x, uv.y, 0.0);" in cuda_code
+        assert "float4 mip3 = tex2DLod(mipMap, uv.x, uv.y, 3.0);" in cuda_code
+        assert "textureLod(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cbuffer_members_lowered_to_constant_memory(self, tmp_path):
+        """Test cbuffer members emit __constant__ qualified declarations."""
+        source_code = """
+        shader CBufferConstantCUDA {
+            cbuffer SceneParams {
+                float4x4 viewProjection;
+                vec3 cameraPosition;
+                float time;
+                int frameCount;
+            };
+
+            compute {
+                void main() {
+                    float t = time;
+                    int f = frameCount;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "__constant__" in cuda_code
+        assert "__constant__ float4x4 viewProjection;" in cuda_code
+        assert "__constant__ float3 cameraPosition;" in cuda_code
+        assert "__constant__ float time;" in cuda_code
+        assert "__constant__ int frameCount;" in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=SceneParams kind=cbuffer set=0 "
+            "binding=0 binding_source=automatic"
+        ) in cuda_code
+        assert "cbuffer SceneParams" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_cbuffer_multiple_buffers_all_constant(self, tmp_path):
+        """Test multiple cbuffers all produce __constant__ declarations."""
+        source_code = """
+        shader MultiCBufferCUDA {
+            cbuffer PerFrame {
+                float deltaTime;
+                float totalTime;
+            };
+
+            cbuffer PerObject {
+                vec3 objectPosition;
+                float scale;
+            };
+
+            compute {
+                void main() {
+                    float dt = deltaTime;
+                    float s = scale;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "// Constant buffer: PerFrame" in cuda_code
+        assert "// Constant buffer: PerObject" in cuda_code
+        assert "__constant__ float deltaTime;" in cuda_code
+        assert "__constant__ float totalTime;" in cuda_code
+        assert "__constant__ float3 objectPosition;" in cuda_code
+        assert "__constant__ float scale;" in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=PerFrame kind=cbuffer set=0 "
+            "binding=0 binding_source=automatic"
+        ) in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=PerObject kind=cbuffer set=0 "
+            "binding=1 binding_source=automatic"
+        ) in cuda_code
+        assert "cbuffer PerFrame" not in cuda_code
+        assert "cbuffer PerObject" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_structured_buffer_maps_to_const_pointer_parameter(self, tmp_path):
+        """Test StructuredBuffer<T> maps to const T* in function parameters."""
+        source_code = """
+        shader StructuredBufferParamCUDA {
+            StructuredBuffer<float4> positions;
+
+            void readPositions(
+                StructuredBuffer<float4> inputData,
+                uint index
+            ) {
+                float4 pos = inputData.Load(index);
+                float4 globalPos = positions.Load(index);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "const float4* positions;" in cuda_code
+        assert "const float4* inputData" in cuda_code
+        assert "float4 pos = inputData[index];" in cuda_code
+        assert "float4 globalPos = positions[index];" in cuda_code
+        assert "StructuredBuffer<" not in cuda_code
+        assert ".Load(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self, tmp_path):
+        """Test RWStructuredBuffer<T> maps to T* with read/write access."""
+        source_code = """
+        shader RWStructuredBufferCUDA {
+            RWStructuredBuffer<float> output;
+
+            void writeValues(
+                RWStructuredBuffer<float> results,
+                StructuredBuffer<float> input,
+                uint index
+            ) {
+                float val = input.Load(index);
+                results.Store(index, val * 2.0);
+                output[index] = val + 1.0;
+                float readBack = results[index];
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = CudaCodeGen()
+        cuda_code = codegen.generate(ast)
+
+        assert "float* output;" in cuda_code
+        assert "float* results" in cuda_code
+        assert "const float* input" in cuda_code
+        assert "float val = input[index];" in cuda_code
+        assert "results[index] = (val * 2.0);" in cuda_code
+        assert "output[index] = (val + 1.0);" in cuda_code
+        assert "float readBack = results[index];" in cuda_code
+        assert "RWStructuredBuffer<" not in cuda_code
+        assert ".Store(" not in cuda_code
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)

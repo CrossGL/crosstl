@@ -50,3 +50,15 @@ dist/crosstl-1.0.0.tar.gz
 .DS_Store
 docs/_build/
 docs/doxygen/build/
+support/generated/*-failure-summary.json
+support/generated/*-failure-summary.md
+support/generated/*-pytest.xml
+support/generated/backend-docs-report.json
+support/generated/ci-coverage-base-report.json
+support/generated/ci-coverage-comparison.json
+support/generated/ci-coverage-report.md
+support/generated/support-issue-plan.json
+support/generated/support-issue-sync-summary.json
+support/generated/support-matrix-check.json
+support/generated/support-issue-ci-summary.md
+support/generated/support-signals.json

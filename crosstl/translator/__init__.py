@@ -1,13 +1,11 @@
 """Frontend API for parsing CrossGL and registering translator extensions."""
 
-from . import lexer
-from . import parser
-from . import codegen
+from . import codegen, lexer, parser
+from .codegen.registry import BackendSpec, backend_names, get_backend, register_backend
 from .lexer import Lexer
 from .parser import Parser
-from .codegen.registry import BackendSpec, register_backend, backend_names, get_backend
-from .source_registry import SourceSpec, SOURCE_REGISTRY, register_default_sources
 from .plugin_loader import discover_backend_plugins
+from .source_registry import SOURCE_REGISTRY, SourceSpec, register_default_sources
 
 
 def parse(shader_code):

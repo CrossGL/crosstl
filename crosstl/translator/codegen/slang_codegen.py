@@ -1,24 +1,26 @@
 """CrossGL-to-Slang code generator."""
 
+from hashlib import sha1
+
 from ..ast import (
-    AtomicOpNode,
-    ArrayNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
     AssignmentNode,
+    AtomicOpNode,
     BinaryOpNode,
     BreakNode,
     CaseNode,
-    CbufferNode,
-    ContinueNode,
     ConstructorPatternNode,
+    ContinueNode,
+    DoWhileNode,
     ExpressionStatementNode,
     ForInNode,
     ForNode,
     FunctionCallNode,
-    IdentifierPatternNode,
-    IdentifierNode,
     FunctionNode,
+    IdentifierNode,
+    IdentifierPatternNode,
     IfNode,
     LiteralNode,
     LiteralPatternNode,
@@ -29,28 +31,44 @@ from ..ast import (
     PointerAccessNode,
     PointerType,
     RangeNode,
-    ReferenceType,
-    ReturnNode,
     RayQueryOpNode,
     RayTracingOpNode,
+    ReferenceType,
+    ReturnNode,
     ShaderNode,
-    StructPatternNode,
     StructNode,
+    StructPatternNode,
     SwitchNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
-    DoWhileNode,
     WaveOpNode,
     WhileNode,
     WildcardPatternNode,
 )
 from .array_utils import (
+    collect_literal_int_constants,
     collect_struct_member_types,
     evaluate_literal_int_expression,
     format_c_style_array_declaration,
     get_array_size_from_node,
     split_array_type_suffix,
+)
+from .glsl_buffer_layout import (
+    byte_offset_add,
+    byte_offset_expression,
+    collect_lowered_glsl_buffer_blocks,
+    glsl_buffer_block_node_type,
+    glsl_buffer_compound_binary_operator,
+    matrix_column_offsets,
+    vector_component_offsets,
+)
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
 )
 from .stage_utils import compute_local_size
 
@@ -118,6 +136,7 @@ class SlangCodeGen:
         self.indent_level = 0
         self.indent_str = "    "
         self.variable_types = {}
+        self.local_variable_types = self.variable_types
         self.image_resource_types = {}
         self.image_resource_accesses = {}
         self.buffer_resource_types = {}
@@ -134,7 +153,16 @@ class SlangCodeGen:
         self.user_function_parameter_types = {}
         self.user_struct_names = set()
         self.user_structs_by_name = {}
+        self.structs_by_name = {}
         self.struct_member_types = {}
+        self.literal_int_constants = {}
+        self.glsl_buffer_block_struct_names = set()
+        self.lowered_glsl_buffer_blocks = {}
+        self.glsl_buffer_block_lowering_failures = {}
+        self.glsl_buffer_block_struct_lowering_failures = {}
+        self.required_glsl_buffer_aggregate_load_helpers = {}
+        self.required_byteaddress_atomic_helpers = set()
+        self.slang_byteaddress_temp_variable_index = 0
         self.slang_mesh_payload_parameter_types = set()
         self.slang_ray_payload_parameter_types = set()
         self.slang_callable_data_parameter_types = set()
@@ -230,9 +258,17 @@ class SlangCodeGen:
                 for struct in user_structs
                 if getattr(struct, "name", None)
             }
+            self.structs_by_name = dict(self.user_structs_by_name)
             self.struct_member_types = collect_struct_member_types(
                 user_structs, self.type_name_string
             )
+            self.literal_int_constants = collect_literal_int_constants(
+                getattr(ast, "constants", [])
+            )
+            self.collect_slang_glsl_buffer_blocks(ast)
+            self.required_glsl_buffer_aggregate_load_helpers = {}
+            self.required_byteaddress_atomic_helpers = set()
+            self.slang_byteaddress_temp_variable_index = 0
             self.slang_mesh_payload_parameter_types = set()
             self.slang_ray_payload_parameter_types = set()
             self.slang_callable_data_parameter_types = set()
@@ -263,7 +299,10 @@ class SlangCodeGen:
 
             structs = getattr(ast, "structs", [])
             for struct in structs:
-                result += self.generate_struct(struct) + "\n\n"
+                struct_code = self.generate_struct(struct)
+                if struct_code:
+                    result += struct_code + "\n\n"
+            result += self.slang_struct_dependent_helper_marker()
 
             global_vars = getattr(ast, "global_variables", [])
             for node in global_vars:
@@ -317,16 +356,28 @@ class SlangCodeGen:
         if not outermost:
             return result
 
+        struct_helpers = self.emit_struct_dependent_helper_functions()
+        marker = self.slang_struct_dependent_helper_marker()
+        if marker in result:
+            result = result.replace(marker, struct_helpers, 1)
+            struct_helpers = ""
         helpers = self.emit_helper_functions()
         self._generating = False
-        if helpers:
-            return helpers + result
-        return result
+        return helpers + struct_helpers + result
 
     def emit_helper_functions(self):
-        if not self.helper_functions:
-            return ""
-        return "\n\n".join(self.helper_functions.values()) + "\n\n"
+        helpers = ""
+        if self.helper_functions:
+            helpers += "\n\n".join(self.helper_functions.values()) + "\n\n"
+        return helpers
+
+    def slang_struct_dependent_helper_marker(self):
+        return "/* __crossgl_slang_struct_dependent_helpers__ */\n"
+
+    def emit_struct_dependent_helper_functions(self):
+        helpers = self.generate_slang_glsl_buffer_aggregate_load_helpers()
+        helpers += self.generate_slang_byteaddress_atomic_helpers()
+        return helpers
 
     def collect_user_function_names(self, node):
         names = set()
@@ -562,13 +613,167 @@ class SlangCodeGen:
         names.discard(None)
         return names
 
+    def collect_slang_resource_declaration_nodes(self, node):
+        declarations = []
+
+        def collect(current):
+            if current is None:
+                return
+            if isinstance(current, list):
+                for item in current:
+                    collect(item)
+                return
+
+            declarations.extend(getattr(current, "global_variables", []) or [])
+
+            stages = getattr(current, "stages", {})
+            if isinstance(stages, dict):
+                for stage_type, stage in stages.items():
+                    stage_name = self.get_stage_name(stage_type)
+                    declarations.extend(
+                        self.slang_stage_global_local_variables(
+                            stage_name, getattr(stage, "local_variables", [])
+                        )
+                    )
+
+        collect(node)
+        return declarations
+
+    def collect_slang_glsl_buffer_blocks(self, node):
+        declarations = self.collect_slang_resource_declaration_nodes(node)
+        self.glsl_buffer_block_struct_names = (
+            self.collect_glsl_buffer_block_struct_names(declarations)
+        )
+        (
+            self.lowered_glsl_buffer_blocks,
+            self.glsl_buffer_block_lowering_failures,
+            self.glsl_buffer_block_struct_lowering_failures,
+        ) = collect_lowered_glsl_buffer_blocks(
+            declarations,
+            structs_by_name=self.structs_by_name,
+            is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
+            resource_base_type=self.resource_base_type,
+            glsl_buffer_block_layout=self.glsl_buffer_block_layout,
+            convert_type_node_to_string=self.convert_type_node_to_string,
+            literal_int_value=lambda expr: evaluate_literal_int_expression(
+                expr, self.literal_int_constants
+            ),
+            map_type=self.map_type,
+            target_type_key="slang_type",
+            unsupported_type_message=(
+                "type is not supported by Slang ByteAddressBuffer lowering"
+            ),
+        )
+        self.decorate_slang_lowered_glsl_buffer_blocks(declarations)
+
+    def decorate_slang_lowered_glsl_buffer_blocks(self, declarations):
+        for node in declarations:
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            block = self.lowered_glsl_buffer_blocks.get(var_name)
+            if block is None:
+                continue
+            access = self.explicit_resource_access(node)
+            if access is None:
+                access = "readonly" if block.get("readonly") else "readwrite"
+            block["access"] = access
+            block["readonly"] = access == "readonly"
+            block["writeonly"] = access == "writeonly"
+
+    def glsl_buffer_block_attribute(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name and str(attr_name).lower() == "glsl_buffer_block":
+                return attr
+        return None
+
+    def glsl_buffer_block_layout(self, node):
+        attr = self.glsl_buffer_block_attribute(node)
+        arguments = getattr(attr, "arguments", []) if attr is not None else []
+        if arguments:
+            layout = self.attribute_value_to_string(arguments[0])
+            if layout:
+                return layout
+        return "std430"
+
+    def is_glsl_buffer_block_attribute(self, attr):
+        attr_name = getattr(attr, "name", None)
+        return bool(attr_name and str(attr_name).lower() == "glsl_buffer_block")
+
+    def is_glsl_buffer_block_variable(self, node, vtype=None):
+        if self.glsl_buffer_block_attribute(node) is None:
+            return False
+        type_name = self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
+        return str(type_name) in self.structs_by_name
+
+    def collect_glsl_buffer_block_struct_names(self, declarations):
+        names = set()
+        for node in declarations:
+            node_type = glsl_buffer_block_node_type(node)
+            if self.is_glsl_buffer_block_variable(node, node_type):
+                names.add(str(self.resource_base_type(node_type)))
+        return names
+
+    def is_glsl_buffer_array_declaration(self, node):
+        qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
+        if "buffer" not in qualifiers:
+            return False
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        if not attributes.intersection({"std140", "std430", "scalar"}):
+            return False
+        node_type = glsl_buffer_block_node_type(node)
+        if getattr(node_type, "__class__", None).__name__ == "ArrayType":
+            return True
+        type_name = self.type_name_string(node_type)
+        return isinstance(type_name, str) and type_name.endswith("[]")
+
+    def glsl_buffer_array_element_type(self, node):
+        node_type = glsl_buffer_block_node_type(node)
+        if getattr(node_type, "__class__", None).__name__ == "ArrayType":
+            return self.convert_type_node_to_string(node_type.element_type)
+        type_name = self.type_name_string(node_type)
+        if not isinstance(type_name, str) or not type_name.endswith("[]"):
+            return None
+        return type_name[:-2]
+
+    def slang_glsl_buffer_array_resource_type(self, node):
+        if not self.is_glsl_buffer_array_declaration(node):
+            return None
+        element_type = self.glsl_buffer_array_element_type(node)
+        if not element_type:
+            return None
+        access = self.explicit_resource_access(node) or "readwrite"
+        resource_type = (
+            "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+        )
+        return f"{resource_type}<{self.convert_type(element_type)}>"
+
+    def slang_glsl_buffer_block_resource_type(self, node):
+        var_name = getattr(node, "name", getattr(node, "variable_name", None))
+        block = self.lowered_glsl_buffer_blocks.get(var_name)
+        if block is None:
+            return None
+        return "ByteAddressBuffer" if block.get("readonly") else "RWByteAddressBuffer"
+
+    def slang_resource_declaration_type(self, node):
+        return (
+            self.slang_glsl_buffer_array_resource_type(node)
+            or self.slang_glsl_buffer_block_resource_type(node)
+            or self.variable_declaration_type(node)
+        )
+
     def generate_shader(self, node):
         """Render a full CrossGL shader AST as a Slang translation unit."""
         result = ""
 
         structs = getattr(node, "structs", [])
         for struct in structs:
-            result += self.generate_struct(struct) + "\n\n"
+            struct_code = self.generate_struct(struct)
+            if struct_code:
+                result += struct_code + "\n\n"
+        result += self.slang_struct_dependent_helper_marker()
 
         global_vars = getattr(node, "global_variables", [])
         for global_var in global_vars:
@@ -896,6 +1101,18 @@ class SlangCodeGen:
                 names.add(attr_name)
         return names
 
+    def slang_stage_attribute_duplicate_names(self, func):
+        seen = set()
+        duplicates = []
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = self.slang_stage_attribute_name(attr)
+            if not attr_name:
+                continue
+            if attr_name in seen and attr_name not in duplicates:
+                duplicates.append(attr_name)
+            seen.add(attr_name)
+        return duplicates
+
     def slang_stage_attribute_value_to_string(self, value):
         if value is None:
             return None
@@ -983,6 +1200,13 @@ class SlangCodeGen:
                     f"Slang {stage_name} stage does not support "
                     f"{attr_name} attribute"
                 )
+
+    def validate_slang_stage_attribute_uniqueness(self, func, stage_name):
+        for attr_name in self.slang_stage_attribute_duplicate_names(func):
+            raise ValueError(
+                f"Slang {stage_name} stage {attr_name} attribute "
+                "must appear at most once"
+            )
 
     def validate_slang_tessellation_domain(self, func, stage_name):
         shader_stage = self.slang_shader_stage_name(stage_name)
@@ -1139,6 +1363,7 @@ class SlangCodeGen:
             return
 
         self.validate_slang_stage_attribute_applicability(func, stage_name)
+        self.validate_slang_stage_attribute_uniqueness(func, stage_name)
         self.validate_positive_slang_stage_attribute(func, stage_name, "maxvertexcount")
         self.validate_positive_slang_stage_attribute(
             func, stage_name, "outputcontrolpoints"
@@ -1403,25 +1628,31 @@ class SlangCodeGen:
                 "array size must be positive"
             )
 
-    def slang_set_mesh_output_count_calls(self, func):
+    def slang_set_mesh_output_count_calls(self, func, active_helpers=None):
+        if active_helpers is None:
+            active_helpers = set()
+
+        func_name = getattr(func, "name", None)
+        if func_name in active_helpers:
+            return []
+        if func_name:
+            active_helpers = active_helpers | {func_name}
+
         calls = []
         for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, MeshOpNode):
-                if getattr(node, "operation", None) == "SetMeshOutputCounts":
-                    calls.append(getattr(node, "arguments", []))
+            call_name = self.slang_call_name(node)
+            if call_name == "SetMeshOutputCounts":
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
                 continue
             if not isinstance(node, FunctionCallNode):
                 continue
 
-            func_expr = getattr(node, "function", None) or getattr(node, "name", None)
-            if hasattr(func_expr, "name"):
-                call_name = func_expr.name
-            elif isinstance(func_expr, str):
-                call_name = func_expr
-            else:
-                call_name = None
-            if call_name == "SetMeshOutputCounts":
-                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+            helper_func = self.user_functions_by_name.get(call_name)
+            if helper_func is None:
+                continue
+            calls.extend(
+                self.slang_set_mesh_output_count_calls(helper_func, active_helpers)
+            )
         return calls
 
     def validate_slang_mesh_output_parameters(self, func, shader_type, parameters):
@@ -1564,7 +1795,16 @@ class SlangCodeGen:
 
     def slang_statement_is_set_mesh_output_counts(self, statement):
         expr = self.slang_statement_expression(statement)
-        return self.slang_call_name(expr) == "SetMeshOutputCounts"
+        call_name = self.slang_call_name(expr)
+        if call_name == "SetMeshOutputCounts":
+            return True
+        if not isinstance(expr, FunctionCallNode):
+            return False
+
+        helper_func = self.user_functions_by_name.get(call_name)
+        if helper_func is None:
+            return False
+        return bool(self.slang_set_mesh_output_count_calls(helper_func))
 
     def slang_mesh_output_role_by_parameter(self, role_parameters):
         role_by_name = {}
@@ -2016,6 +2256,269 @@ class SlangCodeGen:
                 return f"SV_Target{target_index}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
+    def slang_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        input_only_sources = {
+            "gl_baseinstance",
+            "gl_basevertex",
+            "gl_drawid",
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_invocationid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_sampleid",
+            "gl_tesscoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        }
+        if lower_name in input_only_sources:
+            return "input_only"
+
+        mapped_semantic = str(self.map_semantic(semantic))
+        mapped_upper = mapped_semantic.upper()
+        if lower_name == "gl_position" or mapped_upper == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
+            return "depth"
+        if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
+            return "tess_factor"
+        if lower_name == "gl_tesslevelinner" or mapped_upper == "SV_INSIDETESSFACTOR":
+            return "inside_tess_factor"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if mapped_upper.startswith("SV_TARGET"):
+            suffix = mapped_upper[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+
+        if mapped_upper in {
+            "SV_DISPATCHTHREADID",
+            "SV_DOMAINLOCATION",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_GSINSTANCEID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_OUTPUTCONTROLPOINTID",
+            "SV_SAMPLEINDEX",
+            "SV_STARTINSTANCELOCATION",
+            "SV_STARTVERTEXLOCATION",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+        return None
+
+    def is_slang_float_scalar_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == "float"
+
+    def is_slang_float_vector_width(self, type_name, width):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == f"float{width}"
+
+    def validate_slang_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.slang_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+        if kind in {"tess_factor", "inside_tess_factor"}:
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_slang_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected vec4-compatible type"
+            )
+
+        if kind == "depth" and not self.is_slang_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected float type"
+            )
+
+    def validate_slang_output_semantic_stage(
+        self, shader_type, semantic, context, stage_role=None
+    ):
+        kind = self.slang_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if shader_type is None:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if kind in {"tess_factor", "inside_tess_factor"}:
+            if shader_stage == "hull" and stage_role == "patch_constant":
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
+                "valid stage is tessellation_control patch constant"
+            )
+
+        allowed_stages = {
+            "position": {"domain", "geometry", "hull", "mesh", "vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_stage not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def slang_stage_input_semantic_rules(self):
+        return {
+            "vertex": {
+                "SV_VERTEXID": "uint",
+                "SV_INSTANCEID": "uint",
+                "SV_STARTVERTEXLOCATION": "int",
+                "SV_STARTINSTANCELOCATION": "uint",
+                "SV_DRAWID": "uint",
+            },
+            "fragment": {
+                "SV_POSITION": "float4",
+                "SV_ISFRONTFACE": "bool",
+                "SV_PRIMITIVEID": "uint",
+                "SV_SAMPLEINDEX": "uint",
+                "SV_RENDERTARGETARRAYINDEX": "uint",
+                "SV_VIEWPORTARRAYINDEX": "uint",
+            },
+            "compute": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "mesh": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "amplification": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "geometry": {
+                "SV_PRIMITIVEID": "uint",
+                "SV_GSINSTANCEID": "uint",
+            },
+            "hull": {
+                "SV_OUTPUTCONTROLPOINTID": "uint",
+                "SV_PRIMITIVEID": "uint",
+            },
+            "domain": {
+                "SV_DOMAINLOCATION": "float3",
+                "SV_PRIMITIVEID": "uint",
+            },
+        }
+
+    def slang_stage_input_semantic_stages(self, mapped_semantic: str) -> set:
+        mapped_upper = str(mapped_semantic).upper()
+        return {
+            stage
+            for stage, rules in self.slang_stage_input_semantic_rules().items()
+            if mapped_upper in rules
+        }
+
+    def slang_parameter_semantic_type_matches(self, type_name, expected_type) -> bool:
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == expected_type
+
+    def validate_slang_stage_parameter_semantic_type(
+        self, parameter, semantic, expected_type
+    ):
+        type_name = self.slang_parameter_type_name(parameter)
+        if self.slang_parameter_semantic_type_matches(type_name, expected_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for Slang codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_slang_stage_parameter_semantics(
+        self, shader_type, parameters, stage_role=None
+    ):
+        if shader_type is None:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        rules = self.slang_stage_input_semantic_rules().get(shader_stage, {})
+        seen_system_semantics = {}
+
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            if semantic is None:
+                continue
+            if (
+                self.slang_ray_semantic_role(parameter, shader_type)
+                or self.is_slang_mesh_payload_parameter(parameter)
+                or self.slang_mesh_output_role_from_parameter(parameter)
+            ):
+                continue
+
+            mapped_semantic = self.map_semantic(semantic, shader_type)
+            mapped_upper = str(mapped_semantic).upper()
+            expected_type = rules.get(mapped_upper)
+            if expected_type is not None:
+                previous_name = seen_system_semantics.get(mapped_upper)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate Slang stage parameter semantic "
+                        f"{mapped_semantic} on '{previous_name}' and "
+                        f"'{parameter.name}'"
+                    )
+                seen_system_semantics[mapped_upper] = parameter.name
+                self.validate_slang_stage_parameter_semantic_type(
+                    parameter, semantic, expected_type
+                )
+                continue
+
+            valid_stages = self.slang_stage_input_semantic_stages(mapped_semantic)
+            if valid_stages:
+                valid = ", ".join(sorted(valid_stages))
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; valid stage is {valid}"
+                )
+
+            kind = self.slang_semantic_output_kind(semantic)
+            if kind in {"color", "depth", "inside_tess_factor", "tess_factor"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def semantic_suffix(self, semantic, shader_type=None):
         mapped_semantic = self.map_semantic(semantic, shader_type)
         return f" : {mapped_semantic}" if mapped_semantic else ""
@@ -2447,6 +2950,9 @@ class SlangCodeGen:
         mapped_type = self.map_resource_type_with_format(type_name, node)
         return format_c_style_array_declaration(mapped_type, name)
 
+    def map_type(self, type_name):
+        return self.convert_type(type_name)
+
     def slang_declaration_qualifier_prefix(self, node):
         qualifiers = []
         seen = set()
@@ -2532,6 +3038,7 @@ class SlangCodeGen:
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
         self.variable_types[name] = type_name
+        self.local_variable_types[name] = type_name
         mapped_type = self.map_resource_type_with_format(type_name, node)
         if self.is_storage_image_type(type_name):
             self.image_resource_types[name] = mapped_type
@@ -2770,7 +3277,7 @@ class SlangCodeGen:
                 return
 
             for global_var in getattr(current, "global_variables", []) or []:
-                type_name = self.variable_declaration_type(global_var)
+                type_name = self.slang_resource_declaration_type(global_var)
                 declarations.append((global_var, type_name, None))
 
             for cbuffer in getattr(current, "cbuffers", []) or []:
@@ -2783,7 +3290,7 @@ class SlangCodeGen:
                     for local_var in self.slang_stage_global_local_variables(
                         stage_name, getattr(stage, "local_variables", [])
                     ):
-                        type_name = self.variable_declaration_type(local_var)
+                        type_name = self.slang_resource_declaration_type(local_var)
                         declarations.append((local_var, type_name, None))
 
         collect(node)
@@ -3020,6 +3527,38 @@ class SlangCodeGen:
         return result
 
     def generate_global_variable(self, node):
+        direct_buffer_type = self.slang_glsl_buffer_array_resource_type(node)
+        if direct_buffer_type is not None:
+            self.register_variable_type(node.name, direct_buffer_type, node)
+            declaration = format_c_style_array_declaration(
+                direct_buffer_type, node.name
+            )
+            declaration = self.apply_slang_resource_binding_decorations(
+                declaration, node, direct_buffer_type, auto_assign=True
+            )
+            return f"{declaration};\n"
+
+        lowered_block_type = self.slang_glsl_buffer_block_resource_type(node)
+        if lowered_block_type is not None:
+            original_type = self.type_name_string(glsl_buffer_block_node_type(node))
+            self.variable_types[node.name] = original_type
+            self.local_variable_types[node.name] = original_type
+            declaration = format_c_style_array_declaration(
+                lowered_block_type, node.name
+            )
+            declaration = self.apply_slang_resource_binding_decorations(
+                declaration, node, lowered_block_type, auto_assign=True
+            )
+            return f"{declaration};\n"
+
+        if self.is_glsl_buffer_block_variable(node, glsl_buffer_block_node_type(node)):
+            vtype = self.type_name_string(glsl_buffer_block_node_type(node))
+            diagnostic = self.glsl_buffer_block_diagnostic(
+                "Slang", vtype, node.name, node
+            )
+            placeholder_type = self.map_resource_type_with_format(vtype, node)
+            return diagnostic + f"{placeholder_type} {node.name};\n"
+
         if isinstance(node, ArrayNode):
             self.register_variable_type(node.name, node.element_type)
             element_type = self.convert_type(node.element_type)
@@ -3046,6 +3585,8 @@ class SlangCodeGen:
         return f"{declaration};\n"
 
     def generate_struct(self, node):
+        if getattr(node, "name", None) in self.glsl_buffer_block_struct_names:
+            return ""
         result = f"struct {node.name}\n{{\n"
         self.indent_level += 1
 
@@ -3060,7 +3601,13 @@ class SlangCodeGen:
             else:
                 member_type = "float"
 
-            semantic_str = self.semantic_suffix(self.semantic_from_node(member))
+            semantic = self.semantic_from_node(member)
+            self.validate_slang_builtin_semantic_type(
+                semantic,
+                self.slang_tess_factor_member_type_name(member),
+                f"struct member semantic '{node.name}.{member.name}'",
+            )
+            semantic_str = self.semantic_suffix(semantic)
             declaration = self.format_declaration(member_type, member.name)
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
@@ -3121,6 +3668,9 @@ class SlangCodeGen:
         self.validate_slang_return_semantic(
             shader_type, semantic, stage_role, ret_type_name
         )
+        self.validate_slang_struct_return_semantics(
+            shader_type, ret_type_name, stage_role=stage_role
+        )
         hull_output_rewrite = None
         if stage_role != "patch_constant":
             hull_output_rewrite = self.slang_stage_hull_output_rewrite(
@@ -3160,6 +3710,9 @@ class SlangCodeGen:
             )
             self.validate_slang_mesh_output_parameters(
                 node, shader_type, effective_param_list
+            )
+            self.validate_slang_stage_parameter_semantics(
+                shader_type, effective_param_list, stage_role=stage_role
             )
             self.validate_slang_stage_body_builtins(
                 body_statements,
@@ -3360,6 +3913,39 @@ class SlangCodeGen:
             raise ValueError(
                 f"Slang void function return cannot use return semantic {semantic}"
             )
+
+        self.validate_slang_output_semantic_stage(
+            shader_type, semantic, "return semantic", stage_role=stage_role
+        )
+        self.validate_slang_builtin_semantic_type(
+            semantic, ret_type_name, "return semantic"
+        )
+
+    def validate_slang_struct_return_semantics(
+        self, shader_type, return_type_name, stage_role=None
+    ):
+        if shader_type is None:
+            return
+
+        base_type = self.type_name_string(return_type_name)
+        if not base_type:
+            return
+        base_type = base_type.split("<", 1)[0].split("[", 1)[0].strip()
+        struct_node = self.user_structs_by_name.get(base_type)
+        if struct_node is None:
+            return
+
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            member_name = getattr(member, "name", "<anonymous>")
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_slang_output_semantic_stage(
+                shader_type, semantic, context, stage_role=stage_role
+            )
+            member_type = self.slang_tess_factor_member_type_name(member)
+            self.validate_slang_builtin_semantic_type(semantic, member_type, context)
 
     def slang_stage_hull_output_rewrite(
         self, body_statements, shader_type, ret_type_name, semantic, param_list
@@ -3910,7 +4496,9 @@ class SlangCodeGen:
             operation = getattr(node, "operation", None)
             if not include_user_functions and operation in self.user_function_names:
                 return None
-            return operation, getattr(node, "arguments", [])
+            return operation, self.normalized_slang_intrinsic_args(
+                getattr(node, "arguments", [])
+            )
 
         if not isinstance(node, FunctionCallNode):
             return None
@@ -3921,7 +4509,9 @@ class SlangCodeGen:
             return None
         if not include_user_functions and func_name in self.user_function_names:
             return None
-        return func_name, getattr(node, "arguments", getattr(node, "args", []))
+        return func_name, self.normalized_slang_intrinsic_args(
+            getattr(node, "arguments", getattr(node, "args", []))
+        )
 
     def slang_function_call_name(self, node):
         if not isinstance(node, FunctionCallNode):
@@ -4586,7 +5176,12 @@ class SlangCodeGen:
 
         query = self.generate_expression(query_expr)
         arg_list = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"{query}.{operation}({arg_list})"
+        access = (
+            "->"
+            if self.slang_ray_query_pointer_pointee_type(query_expr) is not None
+            else "."
+        )
+        return f"{query}{access}{operation}({arg_list})"
 
     def slang_ray_query_target_type_rejection_reason(self, result_type):
         expected_type = self.slang_ray_query_expected_target_type()
@@ -4668,16 +5263,38 @@ class SlangCodeGen:
                 calls.append(call)
         return calls
 
+    def slang_ray_query_pointer_pointee_type(self, query_expr):
+        pointer_type = self.expression_result_type(query_expr)
+        pointee_type = self.pointer_pointee_type_name(pointer_type)
+        if pointee_type is None:
+            return None
+        return self.reference_referent_type_name(pointee_type) or pointee_type
+
+    def is_slang_ray_query_receiver_type(self, base_type, array_suffix):
+        return not array_suffix and (
+            base_type == "RayQuery"
+            or (base_type.startswith("RayQuery<") and base_type.endswith(">"))
+        )
+
     def validate_slang_ray_query_receiver(self, query_expr, shader_type, operation):
+        pointee_type = self.slang_ray_query_pointer_pointee_type(query_expr)
+        if pointee_type is not None:
+            mapped_pointee = self.convert_type(pointee_type)
+            base_type, array_suffix = split_array_type_suffix(mapped_pointee)
+            if self.is_slang_ray_query_receiver_type(base_type, array_suffix):
+                return
+            actual_type = f"{base_type}{array_suffix}"
+            raise ValueError(
+                f"Slang {shader_type} RayQuery.{operation} receiver must be "
+                f"RayQuery, got {actual_type}"
+            )
+
         base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
             query_expr
         )
         if base_type is None:
             return
-        is_ray_query_type = base_type == "RayQuery" or (
-            base_type.startswith("RayQuery<") and base_type.endswith(">")
-        )
-        if not (not array_suffix and is_ray_query_type):
+        if not self.is_slang_ray_query_receiver_type(base_type, array_suffix):
             actual_type = f"{base_type}{array_suffix}"
             raise ValueError(
                 f"Slang {shader_type} RayQuery.{operation} receiver must be "
@@ -5129,6 +5746,33 @@ class SlangCodeGen:
         statement = self.generate_statement(node)
         return self.indent_statement_text(statement)
 
+    def generate_scoped_statement_body(self, body, indent):
+        return "".join(
+            self.indent_text(self.generate_statement(stmt), indent)
+            for stmt in self.get_statements(body)
+        )
+
+    def generate_statement_body(self, body, indent):
+        return self.generate_scoped_statement_body(body, indent)
+
+    def generate_switch_case(self, label, body, indent, auto_break=False):
+        indent_str = self.indent_str * indent
+        code = f"{indent_str}{label}: {{\n"
+        code += self.generate_scoped_statement_body(body, indent + 1)
+        if auto_break and not self.statement_body_terminates(body):
+            code += f"{indent_str}{self.indent_str}break;\n"
+        code += f"{indent_str}}}\n"
+        return code
+
+    def indent_text(self, text, indent):
+        if not text:
+            return ""
+        prefix = self.indent_str * indent
+        return (
+            "\n".join(f"{prefix}{line}" if line else line for line in text.splitlines())
+            + "\n"
+        )
+
     def indent_statement_text(self, statement):
         lines = statement.splitlines()
         return "\n".join(
@@ -5195,6 +5839,8 @@ class SlangCodeGen:
         elif isinstance(node, AssignmentNode):
             return self.generate_assignment_statement(node)
         elif isinstance(node, ExpressionStatementNode):
+            if isinstance(node.expression, AssignmentNode):
+                return self.generate_assignment_statement(node.expression)
             tail_return = self.generate_tail_expression_statement(node)
             if tail_return is not None:
                 return tail_return
@@ -5257,6 +5903,11 @@ class SlangCodeGen:
         return f"{declaration};"
 
     def generate_assignment(self, node):
+        block_store = self.generate_glsl_buffer_block_store(
+            node.left, node.right, node.operator
+        )
+        if block_store is not None:
+            return block_store
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
@@ -5268,6 +5919,11 @@ class SlangCodeGen:
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
+        block_store = self.generate_glsl_buffer_block_store(
+            node.left, node.right, node.operator
+        )
+        if block_store is not None:
+            return block_store
         left = self.slang_assignment_target_alias(
             node.left
         ) or self.generate_expression(node.left)
@@ -5625,9 +6281,13 @@ class SlangCodeGen:
         if expr is None:
             return None
         if isinstance(expr, VariableNode):
-            return self.variable_types.get(getattr(expr, "name", None))
+            return self.local_variable_types.get(
+                getattr(expr, "name", None)
+            ) or self.variable_types.get(getattr(expr, "name", None))
         if isinstance(expr, IdentifierNode):
-            return self.variable_types.get(getattr(expr, "name", None))
+            return self.local_variable_types.get(
+                getattr(expr, "name", None)
+            ) or self.variable_types.get(getattr(expr, "name", None))
         if isinstance(expr, LiteralNode):
             literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
             if literal_type:
@@ -5653,17 +6313,10 @@ class SlangCodeGen:
         if isinstance(expr, AssignmentNode):
             return self.expression_result_type(getattr(expr, "left", None))
         if isinstance(expr, MatchNode):
-            result_types = []
-            for arm in getattr(expr, "arms", []) or []:
-                _prefix, tail = self.match_expression_tail(getattr(arm, "body", []))
-                result_type = self.expression_result_type(tail)
-                if result_type is not None:
-                    result_types.append(result_type)
-            if result_types and all(
-                result_type == result_types[0] for result_type in result_types
-            ):
-                return result_types[0]
-            return None
+            try:
+                return infer_match_expression_result_type(self, expr)
+            except ValueError:
+                return None
         if isinstance(expr, ArrayAccessNode):
             array_type = self.type_name_string(self.expression_result_type(expr.array))
             if array_type and "[" in array_type and "]" in array_type:
@@ -5912,6 +6565,9 @@ class SlangCodeGen:
             hull_output_alias = self.slang_hull_output_array_alias(node)
             if hull_output_alias is not None:
                 return hull_output_alias
+            block_load = self.generate_glsl_buffer_block_array_load(node)
+            if block_load is not None:
+                return block_load
             array = self.generate_expression(
                 getattr(node, "array", getattr(node, "array_expr", None))
             )
@@ -5938,6 +6594,9 @@ class SlangCodeGen:
             hull_output_alias = self.slang_hull_output_member_alias(node)
             if hull_output_alias is not None:
                 return hull_output_alias
+            block_load = self.generate_glsl_buffer_block_member_load(node)
+            if block_load is not None:
+                return block_load
             obj = self.generate_expression(node.object)
             return f"{obj}.{node.member}"
         elif isinstance(node, PointerAccessNode):
@@ -5981,6 +6640,11 @@ class SlangCodeGen:
             if synchronization_call is not None:
                 return synchronization_call
             if callee not in self.user_function_names:
+                glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
+                    callee, node.args
+                )
+                if glsl_block_atomic_call is not None:
+                    return glsl_block_atomic_call
                 resource_call = self.generate_resource_call(
                     callee,
                     node.args,
@@ -6127,7 +6791,7 @@ class SlangCodeGen:
             args = self.generate_user_function_arguments(node.operation, node.arguments)
             return f"{self.convert_type(node.operation)}({args})"
         return self.generate_slang_ray_tracing_call_expression(
-            node.operation, node.arguments
+            node.operation, self.normalized_slang_intrinsic_args(node.arguments)
         )
 
     def generate_slang_ray_tracing_call_expression(self, operation, arguments):
@@ -6331,7 +6995,8 @@ class SlangCodeGen:
                 node.operation, "is not recognized by the Slang backend"
             )
 
-        actual_arity = len(node.arguments)
+        arguments = self.normalized_slang_intrinsic_args(node.arguments)
+        actual_arity = len(arguments)
         rejection_reason = None
         if actual_arity not in expected_arities:
             expected = " or ".join(str(arity) for arity in sorted(expected_arities))
@@ -6339,18 +7004,16 @@ class SlangCodeGen:
         else:
             self.validate_slang_mesh_op_stage(node.operation)
             rejection_reason = self.slang_mesh_argument_rejection_reason(
-                node.operation, node.arguments
+                node.operation, arguments
             )
             if rejection_reason is None:
-                self.validate_slang_dispatch_mesh_payload_argument(node)
+                self.validate_slang_dispatch_mesh_payload_argument(node, arguments)
                 target_reason = self.slang_mesh_target_type_rejection_reason()
                 if target_reason is not None:
                     return self.unsupported_slang_mesh_op_expression(
                         node.operation, target_reason
                     )
-                args = ", ".join(
-                    self.generate_expression(arg) for arg in node.arguments
-                )
+                args = ", ".join(self.generate_expression(arg) for arg in arguments)
                 return f"{node.operation}({args})"
 
         if rejection_reason is not None:
@@ -6386,7 +7049,9 @@ class SlangCodeGen:
                 calls.append(
                     (
                         getattr(node, "operation", None),
-                        getattr(node, "arguments", []),
+                        self.normalized_slang_intrinsic_args(
+                            getattr(node, "arguments", [])
+                        ),
                     )
                 )
                 continue
@@ -6545,8 +7210,10 @@ class SlangCodeGen:
                 f"{expected_label}"
             )
 
-    def validate_slang_dispatch_mesh_payload_argument(self, node):
-        if node.operation != "DispatchMesh" or len(node.arguments) != 4:
+    def validate_slang_dispatch_mesh_payload_argument(self, node, arguments=None):
+        if arguments is None:
+            arguments = self.normalized_slang_intrinsic_args(node.arguments)
+        if node.operation != "DispatchMesh" or len(arguments) != 4:
             return
 
         payload_types = sorted(self.slang_mesh_payload_parameter_types)
@@ -6556,7 +7223,7 @@ class SlangCodeGen:
                 "@mesh_payload parameter"
             )
 
-        payload_argument = node.arguments[3]
+        payload_argument = arguments[3]
         payload_type = self.slang_dispatch_mesh_payload_argument_type(payload_argument)
         if payload_type is None:
             return
@@ -6576,20 +7243,35 @@ class SlangCodeGen:
         )
 
     def slang_dispatch_mesh_payload_argument_type(self, expr):
-        type_name = self.type_name_string(self.expression_result_type(expr))
-        if not type_name:
+        base_type, array_suffix = self.slang_expression_mapped_base_and_array_suffix(
+            expr
+        )
+        if base_type is None:
             return None
-
-        base_type, array_suffix = split_array_type_suffix(type_name)
-        mapped_type = self.convert_type(base_type)
         if array_suffix:
-            return f"{mapped_type}{array_suffix}"
-        return mapped_type
+            return f"{base_type}{array_suffix}"
+        return base_type
 
     def slang_dispatch_mesh_payload_type_label(self, payload_types):
         if len(payload_types) == 1:
             return payload_types[0]
         return " or ".join(payload_types)
+
+    def normalized_slang_intrinsic_args(self, args):
+        normalized = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if self.is_unary_deref_marker(arg) and index + 1 < len(args):
+                normalized.append(UnaryOpNode("*", args[index + 1]))
+                index += 2
+                continue
+            normalized.append(arg)
+            index += 1
+        return normalized
+
+    def is_unary_deref_marker(self, arg):
+        return isinstance(arg, IdentifierNode) and getattr(arg, "name", None) == "*"
 
     def slang_mesh_argument_rejection_reason(self, operation, args):
         if operation == "SetMeshOutputCounts":
@@ -6862,55 +7544,21 @@ class SlangCodeGen:
         return self.statement_with_prelude(prelude, result)
 
     def generate_match(self, node):
-        prelude, _results, expression = self.generate_expression_with_prelude(
-            getattr(node, "expression", None)
-        )
-        result = f"switch ({expression})\n{{\n"
-
-        arms = getattr(node, "arms", []) or []
-        rejection_reason = self.match_arm_rejection_reason(arms)
-        if rejection_reason is not None:
-            raise ValueError(
-                f"Unsupported match arm for Slang codegen; {rejection_reason}"
-            )
-
-        wildcard_body = None
-        self.indent_level += 1
-        for arm in arms:
-            pattern = getattr(arm, "pattern", None)
-            if isinstance(pattern, WildcardPatternNode):
-                wildcard_body = getattr(arm, "body", [])
-                continue
-
-            result += (
-                self.indent() + f"case {self.generate_expression(pattern.literal)}:\n"
-            )
-            self.indent_level += 1
-            body = getattr(arm, "body", [])
-            for stmt in self.get_statements(body):
-                result += self.emit_statement(stmt) + "\n"
-            if not self.statement_body_terminates(body):
-                result += self.indent() + "break;\n"
-            self.indent_level -= 1
-
-        if wildcard_body is not None:
-            result += self.indent() + "default:\n"
-            self.indent_level += 1
-            for stmt in self.get_statements(wildcard_body):
-                result += self.emit_statement(stmt) + "\n"
-            if not self.statement_body_terminates(wildcard_body):
-                result += self.indent() + "break;\n"
-            self.indent_level -= 1
-
-        self.indent_level -= 1
-
-        result += self.indent() + "}"
-        return self.statement_with_prelude(prelude, result)
+        indent = self.indent_level
+        if is_switch_lowerable_match(node):
+            return generate_switch_match(self, node, indent).rstrip()
+        return generate_ordered_conditional_match(self, node, indent, "Slang").rstrip()
 
     def generate_match_expression(self, node):
         expected_type = self.type_name_string(self.current_expression_expected_type)
         if not expected_type:
-            expected_type = self.expression_result_type(node)
+            try:
+                expected_type = infer_match_expression_result_type(self, node)
+            except ValueError as error:
+                return (
+                    f"/* unsupported Slang match expression: "
+                    f"{self.slang_match_expression_error_reason(error)} */ 0"
+                )
         if not expected_type or expected_type in {"auto", "void"}:
             return "/* unsupported Slang match expression: requires typed result context */ 0"
 
@@ -6920,81 +7568,130 @@ class SlangCodeGen:
                 f"prelude context */ {self.zero_value_for_type(expected_type)}"
             )
 
-        arms = getattr(node, "arms", []) or []
-        rejection_reason = self.match_arm_rejection_reason(arms)
-        if rejection_reason is not None:
-            return (
-                f"/* unsupported Slang match expression: {rejection_reason} */ "
-                f"{self.zero_value_for_type(expected_type)}"
-            )
-
         temp_name = self.unique_expression_temp_name("cgl_match_value")
         self.register_variable_type(temp_name, expected_type)
+        try:
+            if is_switch_lowerable_match(node):
+                assignment = self.generate_switch_match_expression_assignment(
+                    node, temp_name, expected_type
+                )
+            else:
+                assignment = generate_match_expression_assignment(
+                    self,
+                    node,
+                    temp_name,
+                    expected_type,
+                    self.indent_level,
+                    "Slang",
+                ).rstrip()
+        except ValueError as error:
+            return (
+                f"/* unsupported Slang match expression: "
+                f"{self.slang_match_expression_error_reason(error)} */ "
+                f"{self.zero_value_for_type(expected_type)}"
+            )
+        lines = [f"{self.format_declaration(expected_type, temp_name)};"]
+        if assignment:
+            lines.extend(assignment.splitlines())
+        self.add_expression_prelude(lines, result_name=temp_name)
+        return temp_name
+
+    def slang_match_expression_error_reason(self, error):
+        reason = str(error)
+        prefixes = (
+            "Unsupported match expression for Slang codegen; ",
+            "Unsupported match arm for Slang codegen; ",
+        )
+        for prefix in prefixes:
+            if reason.startswith(prefix):
+                return reason[len(prefix) :]
+        return reason
+
+    def generate_match_expression_diagnostic_assignment(
+        self, temp_name, expected_type, reason, indent, _target_name
+    ):
+        indent_str = self.indent_str * indent
+        return (
+            f"{indent_str}{temp_name} = /* unsupported Slang match expression: "
+            f"{reason} */ {self.zero_value_for_type(expected_type)};\n"
+        )
+
+    def generate_switch_match_expression_assignment(
+        self, node, temp_name, expected_type
+    ):
+        indent = self.indent_level
+        indent_str = self.indent_str * indent
+        case_indent = self.indent_str * (indent + 1)
+        body_indent = self.indent_str * (indent + 2)
         expression = self.generate_expression(getattr(node, "expression", None))
         lines = [
-            f"{self.format_declaration(expected_type, temp_name)};",
-            f"switch ({expression})",
-            "{",
+            f"{indent_str}switch ({expression})",
+            f"{indent_str}{{",
         ]
 
         wildcard_body = None
-        self.indent_level += 1
-        try:
-            for arm in arms:
-                pattern = getattr(arm, "pattern", None)
-                if isinstance(pattern, WildcardPatternNode):
-                    wildcard_body = getattr(arm, "body", [])
-                    continue
+        for arm in getattr(node, "arms", []) or []:
+            pattern = getattr(arm, "pattern", None)
+            body = getattr(arm, "body", [])
+            if isinstance(pattern, WildcardPatternNode):
+                wildcard_body = body
+                continue
 
-                lines.append(
-                    self.indent() + f"case {self.generate_expression(pattern.literal)}:"
+            lines.append(
+                f"{case_indent}case {self.generate_expression(pattern.literal)}:"
+            )
+            lines.extend(
+                self.generate_switch_match_expression_arm_lines(
+                    body, temp_name, expected_type, indent + 2
                 )
-                self.indent_level += 1
-                try:
-                    body = getattr(arm, "body", [])
-                    lines.extend(
-                        self.generate_match_expression_arm_lines(
-                            body, temp_name, expected_type
-                        )
-                    )
-                    if not self.match_expression_arm_terminates(body):
-                        lines.append(self.indent() + "break;")
-                finally:
-                    self.indent_level -= 1
+            )
+            if not self.match_expression_arm_terminates(body):
+                lines.append(f"{body_indent}break;")
 
-            if wildcard_body is not None:
-                lines.append(self.indent() + "default:")
-                self.indent_level += 1
-                try:
-                    lines.extend(
-                        self.generate_match_expression_arm_lines(
-                            wildcard_body, temp_name, expected_type
-                        )
-                    )
-                    if not self.match_expression_arm_terminates(wildcard_body):
-                        lines.append(self.indent() + "break;")
-                finally:
-                    self.indent_level -= 1
-            else:
-                lines.append(self.indent() + "default:")
-                self.indent_level += 1
-                try:
-                    lines.extend(
-                        self.generate_match_expression_diagnostic_assignment_lines(
-                            temp_name,
-                            expected_type,
-                            "no wildcard arm handles remaining cases",
-                        )
-                    )
-                    lines.append(self.indent() + "break;")
-                finally:
-                    self.indent_level -= 1
-        finally:
-            self.indent_level -= 1
+        if wildcard_body is not None:
+            lines.append(f"{case_indent}default:")
+            lines.extend(
+                self.generate_switch_match_expression_arm_lines(
+                    wildcard_body, temp_name, expected_type, indent + 2
+                )
+            )
+            if not self.match_expression_arm_terminates(wildcard_body):
+                lines.append(f"{body_indent}break;")
+        else:
+            lines.append(f"{case_indent}default:")
+            lines.append(
+                f"{body_indent}{temp_name} = /* unsupported Slang match expression: "
+                "no wildcard arm handles remaining cases */ "
+                f"{self.zero_value_for_type(expected_type)};"
+            )
+            lines.append(f"{body_indent}break;")
 
-        lines.append("}")
-        self.add_expression_prelude(lines, result_name=temp_name)
-        return temp_name
+        lines.append(f"{indent_str}}}")
+        return "\n".join(lines)
+
+    def generate_switch_match_expression_arm_lines(
+        self, body, temp_name, expected_type, indent
+    ):
+        prefix, tail = self.match_expression_tail(body)
+        lines = []
+        for stmt in prefix:
+            lines.extend(
+                self.indent_text(self.generate_statement(stmt), indent).splitlines()
+            )
+        if tail is None:
+            lines.append(
+                f"{self.indent_str * indent}{temp_name} = /* unsupported Slang "
+                "match expression: arm does not produce a value */ "
+                f"{self.zero_value_for_type(expected_type)};"
+            )
+            return lines
+
+        prelude, _results, value = self.generate_expression_with_prelude(
+            tail, expected_type
+        )
+        statement = self.statement_with_prelude(prelude, f"{temp_name} = {value};")
+        lines.extend(self.indent_text(statement, indent).splitlines())
+        return lines
 
     def generate_match_expression_arm_lines(self, body, temp_name, expected_type):
         prefix, tail = self.match_expression_tail(body)
@@ -7927,6 +8624,687 @@ class SlangCodeGen:
             f"{self.zero_value_for_type(result_type)}"
         )
 
+    def glsl_buffer_block_lowering_failure_detail(self, type_name, var_name=None):
+        if var_name:
+            reason = self.glsl_buffer_block_lowering_failures.get(var_name)
+            if reason:
+                return reason
+        type_name = str(self.resource_base_type(type_name))
+        return self.glsl_buffer_block_struct_lowering_failures.get(type_name)
+
+    def glsl_buffer_block_diagnostic(
+        self, target, type_name, var_name=None, node=None, declaration_kind=None
+    ):
+        declaration = str(self.resource_base_type(type_name))
+        if declaration_kind:
+            declaration = f"{declaration_kind} {declaration}"
+        if var_name:
+            declaration += f" {var_name}"
+        details = ""
+        if node is not None:
+            layout = self.glsl_buffer_block_layout(node)
+            binding = self.explicit_resource_binding_index(
+                node, {"binding", "buffer", "texture", "uav"}, ("b", "t", "u")
+            )
+            details = f" ({layout}"
+            if binding is not None:
+                details += f", binding = {binding}"
+            details += ")"
+        failure_detail = self.glsl_buffer_block_lowering_failure_detail(
+            type_name, var_name
+        )
+        reason = f"; {failure_detail}" if failure_detail else ""
+        return (
+            f"// unsupported {target} GLSL buffer block {declaration}{details}: "
+            "requires ByteAddressBuffer offset lowering"
+            f"{reason}\n"
+        )
+
+    def glsl_buffer_block_member_access(self, expr):
+        if not isinstance(expr, MemberAccessNode):
+            return None
+        object_expr = getattr(expr, "object_expr", getattr(expr, "object", None))
+        var_name = self.get_expression_name(object_expr)
+        member_name = getattr(expr, "member", None)
+        if var_name:
+            block = self.lowered_glsl_buffer_blocks.get(var_name)
+            if block is not None:
+                buffer_expr = self.generate_expression(object_expr)
+                member = block["members"].get(member_name)
+                if member is None:
+                    return None
+                return {
+                    "buffer": buffer_expr,
+                    "member": member_name,
+                    "readonly": block.get("readonly", False),
+                    "writeonly": block.get("writeonly", False),
+                    **member,
+                }
+
+        parent = self.glsl_buffer_block_array_access(
+            object_expr
+        ) or self.glsl_buffer_block_member_access(object_expr)
+        if parent is None or not parent.get("members"):
+            return None
+        member = parent["members"].get(member_name)
+        if member is None:
+            return None
+        return {
+            "buffer": parent["buffer"],
+            "member": f"{parent['member']}.{member_name}",
+            "readonly": parent.get("readonly", False),
+            "writeonly": parent.get("writeonly", False),
+            **member,
+            "offset": byte_offset_add(parent["offset"], member["offset"]),
+        }
+
+    def glsl_buffer_block_array_access(self, expr):
+        if not isinstance(expr, ArrayAccessNode):
+            return None
+        array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+        member = self.glsl_buffer_block_member_access(array_expr)
+        if member is None or not member.get("is_array"):
+            return None
+        index_expr = getattr(expr, "index_expr", getattr(expr, "index", None))
+        index = self.generate_expression(index_expr)
+        offset = byte_offset_expression(member["offset"], index, member["stride"])
+        return {**member, "offset": offset, "offset_expr": offset}
+
+    def slang_byteaddress_load_method(self, components):
+        return "Load" if components == 1 else f"Load{components}"
+
+    def slang_byteaddress_store_method(self, components):
+        return "Store" if components == 1 else f"Store{components}"
+
+    def slang_byteaddress_load(self, buffer_name, offset, access):
+        if access.get("writeonly"):
+            return self.unsupported_glsl_buffer_block_call(
+                "load", "requires readable buffer block resource", access["type"]
+            )
+        if access.get("matrix_columns"):
+            columns = []
+            for _, column_offset in matrix_column_offsets(
+                offset, access["matrix_columns"], access["column_stride"]
+            ):
+                load = (
+                    f"{buffer_name}."
+                    f"{self.slang_byteaddress_load_method(access['matrix_rows'])}"
+                    f"({column_offset})"
+                )
+                columns.append(f"asfloat({load})")
+            return f"{access['slang_type']}({', '.join(columns)})"
+
+        if access["component_type"] == "bool" and access["components"] > 1:
+            values = []
+            for _, component_offset in vector_component_offsets(
+                offset, access["components"]
+            ):
+                values.append(f"({buffer_name}.Load({component_offset}) != 0u)")
+            return f"{access['slang_type']}({', '.join(values)})"
+
+        load = (
+            f"{buffer_name}."
+            f"{self.slang_byteaddress_load_method(access['components'])}({offset})"
+        )
+        if access["component_type"] == "bool":
+            return f"({load} != 0u)"
+        if access["component_type"] == "float":
+            return f"asfloat({load})"
+        if access["component_type"] == "int":
+            return f"asint({load})"
+        return load
+
+    def slang_byteaddress_store_value(self, value, access):
+        if access["component_type"] == "bool":
+            if access["components"] > 1:
+                value_expr = self.slang_indexable_expression(value)
+                fields = "xyzw"[: access["components"]]
+                values = [f"({value_expr}.{field} ? 1u : 0u)" for field in fields]
+                return f"uint{access['components']}({', '.join(values)})"
+            return f"(({value}) ? 1u : 0u)"
+        if access.get("layout_type") != access.get("type"):
+            if access["component_type"] == "int":
+                return f"asuint(int({value}))"
+            if access["component_type"] == "uint":
+                if access["components"] == 1:
+                    return f"uint({value})"
+                return f"uint{access['components']}({value})"
+        if access["component_type"] in {"float", "int"}:
+            return f"asuint({value})"
+        return value
+
+    def next_slang_byteaddress_temp_variable(self, prefix):
+        name = f"__crossgl_{prefix}_{self.slang_byteaddress_temp_variable_index}"
+        self.slang_byteaddress_temp_variable_index += 1
+        return name
+
+    def slang_indexable_expression(self, expression):
+        expression = str(expression)
+        if expression.isidentifier():
+            return expression
+        if all(part.isidentifier() for part in expression.split(".")):
+            return expression
+        return f"({expression})"
+
+    def slang_byteaddress_matrix_store(self, buffer_name, offset, value, access):
+        value_expr = self.slang_indexable_expression(value)
+        store_method = self.slang_byteaddress_store_method(access["matrix_rows"])
+        lines = []
+        for column, column_offset in matrix_column_offsets(
+            offset, access["matrix_columns"], access["column_stride"]
+        ):
+            lines.append(
+                f"{buffer_name}.{store_method}"
+                f"({column_offset}, asuint({value_expr}[{column}]))"
+            )
+        return "\n".join(lines)
+
+    def slang_byteaddress_bool_vector_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_slang_byteaddress_temp_variable("bool_store")
+        store_method = self.slang_byteaddress_store_method(access["components"])
+        store_value = self.slang_byteaddress_store_value(temp_name, access)
+        return "\n".join(
+            [
+                f"{access['slang_type']} {temp_name} = {value}",
+                f"{buffer_name}.{store_method}({offset}, {store_value})",
+            ]
+        )
+
+    def slang_glsl_buffer_aggregate_helper_suffix(self, access):
+        return "".join(
+            char if char.isalnum() or char == "_" else "_"
+            for char in access["slang_type"]
+        )
+
+    def slang_glsl_buffer_aggregate_layout_signature(self, access):
+        parts = []
+
+        def visit(member_name, member):
+            fields = [
+                member_name,
+                str(member.get("type")),
+                str(member.get("layout_type")),
+                str(member.get("offset")),
+                str(member.get("size")),
+                str(member.get("align")),
+                str(member.get("components")),
+                str(member.get("component_type")),
+                str(member.get("matrix_columns")),
+                str(member.get("matrix_rows")),
+                str(member.get("column_stride")),
+                str(member.get("is_array")),
+                str(member.get("array_count")),
+                str(member.get("stride")),
+                str(member.get("runtime_array")),
+            ]
+            parts.append(":".join(fields))
+            for child_name, child in (member.get("members") or {}).items():
+                visit(f"{member_name}.{child_name}", child)
+
+        for field_name, member in access["members"].items():
+            visit(field_name, member)
+        return sha1("|".join(parts).encode("utf-8")).hexdigest()[:10]
+
+    def slang_byteaddress_aggregate_load_helper_name(self, access):
+        buffer_type = (
+            "ByteAddressBuffer" if access.get("readonly") else "RWByteAddressBuffer"
+        )
+        kind = "ro" if access.get("readonly") else "rw"
+        helper_name = (
+            f"__crossgl_load_{kind}_glsl_buffer_"
+            f"{self.slang_glsl_buffer_aggregate_helper_suffix(access)}_"
+            f"{self.slang_glsl_buffer_aggregate_layout_signature(access)}"
+        )
+        self.required_glsl_buffer_aggregate_load_helpers[(helper_name, buffer_type)] = (
+            access
+        )
+        return helper_name
+
+    def slang_byteaddress_aggregate_load_assignments(
+        self, target_name, buffer_name, offset, access, indent=1
+    ):
+        indent_str = "    " * indent
+        lines = []
+        for field_name, member in access["members"].items():
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_target = f"{target_name}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access.get("readonly", False),
+                "writeonly": access.get("writeonly", False),
+            }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_target = f"{member_target}[{index}]"
+                    if member.get("members"):
+                        nested_lines = (
+                            self.slang_byteaddress_aggregate_load_assignments(
+                                element_target,
+                                buffer_name,
+                                element_offset,
+                                field_access,
+                                indent,
+                            )
+                        )
+                        if nested_lines is None:
+                            return None
+                        lines.extend(nested_lines)
+                    else:
+                        value = self.slang_byteaddress_load(
+                            buffer_name, element_offset, field_access
+                        )
+                        lines.append(f"{indent_str}{element_target} = {value};")
+                continue
+            if member.get("members"):
+                nested_lines = self.slang_byteaddress_aggregate_load_assignments(
+                    member_target, buffer_name, member_offset, field_access, indent
+                )
+                if nested_lines is None:
+                    return None
+                lines.extend(nested_lines)
+            else:
+                value = self.slang_byteaddress_load(
+                    buffer_name, member_offset, field_access
+                )
+                lines.append(f"{indent_str}{member_target} = {value};")
+        return lines
+
+    def generate_slang_glsl_buffer_aggregate_load_helpers(self):
+        if not self.required_glsl_buffer_aggregate_load_helpers:
+            return ""
+
+        helpers = []
+        for (helper_name, buffer_type), access in sorted(
+            self.required_glsl_buffer_aggregate_load_helpers.items()
+        ):
+            lines = [
+                f"{access['slang_type']} {helper_name}({buffer_type} buffer, uint offset) {{",
+                f"    {access['slang_type']} result;",
+            ]
+            assignments = self.slang_byteaddress_aggregate_load_assignments(
+                "result", "buffer", "offset", access
+            )
+            if assignments is None:
+                continue
+            lines.extend(assignments)
+            lines.extend(["    return result;", "}"])
+            helpers.append("\n".join(lines) + "\n\n")
+        return "".join(helpers)
+
+    def slang_byteaddress_aggregate_load(self, buffer_name, offset, access):
+        helper_name = self.slang_byteaddress_aggregate_load_helper_name(access)
+        return f"{helper_name}({buffer_name}, {offset})"
+
+    def slang_byteaddress_leaf_store(self, buffer_name, offset, value, access):
+        if access.get("matrix_columns"):
+            return self.slang_byteaddress_matrix_store(
+                buffer_name, offset, value, access
+            )
+        if access["component_type"] == "bool" and access["components"] > 1:
+            return self.slang_byteaddress_bool_vector_store(
+                buffer_name, offset, value, access
+            )
+        store_value = self.slang_byteaddress_store_value(value, access)
+        store_method = self.slang_byteaddress_store_method(access["components"])
+        return f"{buffer_name}.{store_method}({offset}, {store_value})"
+
+    def slang_byteaddress_aggregate_store_members(
+        self, buffer_name, offset, value, access
+    ):
+        lines = []
+        for field_name, member in access["members"].items():
+            member_offset = byte_offset_add(offset, member["offset"])
+            member_value = f"{value}.{field_name}"
+            field_access = {
+                **member,
+                "buffer": buffer_name,
+                "member": f"{access['member']}.{field_name}",
+                "readonly": access.get("readonly", False),
+                "writeonly": access.get("writeonly", False),
+            }
+            if member.get("is_array"):
+                array_count = member.get("array_count")
+                if member.get("runtime_array") or array_count is None:
+                    return None
+                for index in range(array_count):
+                    element_offset = byte_offset_add(
+                        member_offset, index * member["stride"]
+                    )
+                    element_value = f"{member_value}[{index}]"
+                    if member.get("members"):
+                        nested_stores = self.slang_byteaddress_aggregate_store_members(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if nested_stores is None:
+                            return None
+                        lines.extend(nested_stores)
+                    else:
+                        store = self.slang_byteaddress_leaf_store(
+                            buffer_name, element_offset, element_value, field_access
+                        )
+                        if store is None:
+                            return None
+                        lines.extend(store.splitlines())
+                continue
+            if member.get("members"):
+                nested_stores = self.slang_byteaddress_aggregate_store_members(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if nested_stores is None:
+                    return None
+                lines.extend(nested_stores)
+            else:
+                store = self.slang_byteaddress_leaf_store(
+                    buffer_name, member_offset, member_value, field_access
+                )
+                if store is None:
+                    return None
+                lines.extend(store.splitlines())
+        return lines
+
+    def slang_byteaddress_aggregate_store(self, buffer_name, offset, value, access):
+        temp_name = self.next_slang_byteaddress_temp_variable("aggregate_store")
+        stores = self.slang_byteaddress_aggregate_store_members(
+            buffer_name, offset, temp_name, access
+        )
+        if stores is None:
+            return (
+                "/* unsupported Slang GLSL buffer block aggregate store: "
+                "array fields require element-wise stores */"
+            )
+        return "\n".join([f"{access['slang_type']} {temp_name} = {value}", *stores])
+
+    def slang_byteaddress_matrix_compound_store(
+        self, buffer_name, offset, value, op, access
+    ):
+        compound_ops = {
+            "+=": "+",
+            "-=": "-",
+            "*=": "*",
+            "/=": "/",
+        }
+        binary_op = compound_ops.get(op)
+        if binary_op is None:
+            return (
+                "/* unsupported Slang GLSL buffer block matrix compound store: "
+                "requires explicit matrix operation lowering */"
+            )
+        temp_name = self.next_slang_byteaddress_temp_variable("matrix_store")
+        current = self.slang_byteaddress_load(buffer_name, offset, access)
+        temp = f"{access['slang_type']} {temp_name} = ({current} {binary_op} {value})"
+        stores = self.slang_byteaddress_matrix_store(
+            buffer_name, offset, temp_name, access
+        )
+        return f"{temp}\n{stores}"
+
+    def slang_byteaddress_compound_store_diagnostic(self, op, access):
+        return (
+            "/* unsupported Slang GLSL buffer block compound store: "
+            f"operator {op} is not supported for "
+            f"{access['component_type']} buffer members */"
+        )
+
+    def terminate_slang_statement_lines(self, text):
+        lines = []
+        for line in str(text).splitlines():
+            stripped = line.rstrip()
+            if not stripped:
+                lines.append(stripped)
+            elif stripped.endswith((";", "}", "*/")) and stripped.startswith("/*"):
+                lines.append(stripped)
+            elif stripped.endswith(";"):
+                lines.append(stripped)
+            else:
+                lines.append(f"{stripped};")
+        return "\n".join(lines)
+
+    def unsupported_glsl_buffer_block_call(self, operation, reason, result_type=None):
+        comment = f"/* unsupported Slang GLSL buffer block: {operation} {reason} */"
+        if result_type is None:
+            return comment
+        return f"{comment} {self.zero_value_for_type(result_type)}"
+
+    def generate_glsl_buffer_block_member_load(self, expr):
+        access = self.glsl_buffer_block_member_access(expr)
+        if access is None or access.get("runtime_array"):
+            return None
+        if access.get("writeonly"):
+            return self.unsupported_glsl_buffer_block_call(
+                "load", "requires readable buffer block resource", access["type"]
+            )
+        if access.get("members"):
+            return self.slang_byteaddress_aggregate_load(
+                access["buffer"], access["offset"], access
+            )
+        return self.slang_byteaddress_load(access["buffer"], access["offset"], access)
+
+    def generate_glsl_buffer_block_array_load(self, expr):
+        access = self.glsl_buffer_block_array_access(expr)
+        if access is None:
+            return None
+        if access.get("writeonly"):
+            return self.unsupported_glsl_buffer_block_call(
+                "load", "requires readable buffer block resource", access["type"]
+            )
+        if access.get("members"):
+            return self.slang_byteaddress_aggregate_load(
+                access["buffer"], access["offset_expr"], access
+            )
+        return self.slang_byteaddress_load(
+            access["buffer"], access["offset_expr"], access
+        )
+
+    def generate_glsl_buffer_block_store(self, target, value, op):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is None:
+            access = self.glsl_buffer_block_member_access(target)
+            if access is None or access.get("runtime_array"):
+                return None
+            offset = access["offset"]
+        else:
+            offset = access["offset_expr"]
+
+        if access.get("readonly"):
+            return (
+                "/* unsupported Slang GLSL buffer block store: "
+                "readonly ByteAddressBuffer cannot be written */;"
+            )
+        if access.get("members"):
+            if op != "=":
+                return (
+                    "/* unsupported Slang GLSL buffer block aggregate compound "
+                    "store: assign a full aggregate value explicitly */;"
+                )
+            rhs = self.generate_expression_with_expected(value, access["type"])
+            store = self.slang_byteaddress_aggregate_store(
+                access["buffer"], offset, rhs, access
+            )
+            return self.terminate_slang_statement_lines(store)
+
+        rhs = self.generate_expression_with_expected(value, access["type"])
+        if access.get("matrix_columns"):
+            if op != "=":
+                store = self.slang_byteaddress_matrix_compound_store(
+                    access["buffer"], offset, rhs, op, access
+                )
+            else:
+                store = self.slang_byteaddress_matrix_store(
+                    access["buffer"], offset, rhs, access
+                )
+            return self.terminate_slang_statement_lines(store)
+
+        if op != "=":
+            binary_op = glsl_buffer_compound_binary_operator(
+                op, access["component_type"]
+            )
+            if binary_op is None:
+                return (
+                    self.slang_byteaddress_compound_store_diagnostic(op, access) + ";"
+                )
+            current = self.slang_byteaddress_load(access["buffer"], offset, access)
+            rhs = f"({current} {binary_op} {rhs})"
+
+        store = self.slang_byteaddress_leaf_store(access["buffer"], offset, rhs, access)
+        return self.terminate_slang_statement_lines(store)
+
+    def glsl_buffer_block_atomic_access(self, target):
+        access = self.glsl_buffer_block_array_access(target)
+        if access is not None:
+            return access, access["offset_expr"]
+        access = self.glsl_buffer_block_member_access(target)
+        if access is None or access.get("runtime_array"):
+            return None, None
+        return access, access["offset"]
+
+    def slang_byteaddress_atomic_operations(self):
+        return {
+            "atomicAdd": ("add", "InterlockedAdd", 2),
+            "atomicMin": ("min", "InterlockedMin", 2),
+            "atomicMax": ("max", "InterlockedMax", 2),
+            "atomicAnd": ("and", "InterlockedAnd", 2),
+            "atomicOr": ("or", "InterlockedOr", 2),
+            "atomicXor": ("xor", "InterlockedXor", 2),
+            "atomicExchange": ("exchange", "InterlockedExchange", 2),
+            "atomicCompSwap": ("compare_exchange", "InterlockedCompareExchange", 3),
+            "atomicCompareExchange": (
+                "compare_exchange",
+                "InterlockedCompareExchange",
+                3,
+            ),
+        }
+
+    def slang_byteaddress_atomic_helper_name(self, operation, component_type):
+        return f"__crossgl_slang_byteaddress_atomic_{operation}_{component_type}"
+
+    def slang_byteaddress_atomic_uses_uint_bits(self, operation, component_type):
+        return component_type == "int" and operation in {
+            "add",
+            "and",
+            "or",
+            "xor",
+            "exchange",
+            "compare_exchange",
+        }
+
+    def generate_slang_byteaddress_atomic_helpers(self):
+        if not self.required_byteaddress_atomic_helpers:
+            return ""
+
+        helpers = []
+        for operation, intrinsic, component_type in sorted(
+            self.required_byteaddress_atomic_helpers
+        ):
+            helper_name = self.slang_byteaddress_atomic_helper_name(
+                operation, component_type
+            )
+            value_type = self.map_type(component_type)
+            use_uint_bits = self.slang_byteaddress_atomic_uses_uint_bits(
+                operation, component_type
+            )
+            original_type = "uint" if use_uint_bits else value_type
+            return_value = "asint(original)" if use_uint_bits else "original"
+            value_expr = "asuint(value)" if use_uint_bits else "value"
+            if operation == "compare_exchange":
+                compare_value_expr = (
+                    "asuint(compareValue)" if use_uint_bits else "compareValue"
+                )
+                helpers.append(
+                    f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, "
+                    f"{value_type} compareValue, {value_type} value) {{\n"
+                    f"    {original_type} original;\n"
+                    f"    buffer.{intrinsic}(offset, {compare_value_expr}, {value_expr}, original);\n"
+                    f"    return {return_value};\n"
+                    "}\n\n"
+                )
+                continue
+            helpers.append(
+                f"{value_type} {helper_name}(RWByteAddressBuffer buffer, uint offset, "
+                f"{value_type} value) {{\n"
+                f"    {original_type} original;\n"
+                f"    buffer.{intrinsic}(offset, {value_expr}, original);\n"
+                f"    return {return_value};\n"
+                "}\n\n"
+            )
+        return "".join(helpers)
+
+    def unsupported_glsl_buffer_block_atomic_call(
+        self, target, operation, reason, access=None
+    ):
+        result_type = self.expression_result_type(target) or "uint"
+        component_type = access.get("component_type") if access else None
+        if component_type is not None:
+            zero_value = "0u" if component_type == "uint" else "0"
+        else:
+            zero_value = "0u" if self.type_name_string(result_type) == "uint" else "0"
+        return (
+            "/* unsupported Slang GLSL buffer block atomic: "
+            f"{operation} {reason} */ {zero_value}"
+        )
+
+    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+        operation_info = self.slang_byteaddress_atomic_operations().get(func_name)
+        if operation_info is None or not args:
+            return None
+
+        operation, intrinsic, expected_args = operation_info
+        target = args[0]
+        access, offset = self.glsl_buffer_block_atomic_access(target)
+        if access is None:
+            return None
+        if len(args) != expected_args:
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                f"requires {expected_args} argument(s), got {len(args)}",
+                access,
+            )
+        if access.get("readonly"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "cannot write readonly ByteAddressBuffer", access
+            )
+        if access.get("components") != 1 or access.get("matrix_columns"):
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target, func_name, "requires a scalar int or uint buffer member", access
+            )
+        if access.get("component_type") not in {"int", "uint"}:
+            return self.unsupported_glsl_buffer_block_atomic_call(
+                target,
+                func_name,
+                "currently supports only int or uint buffer members",
+                access,
+            )
+
+        component_type = access["component_type"]
+        helper_name = self.slang_byteaddress_atomic_helper_name(
+            operation, component_type
+        )
+        self.required_byteaddress_atomic_helpers.add(
+            (operation, intrinsic, component_type)
+        )
+
+        if operation == "compare_exchange":
+            compare_value = self.generate_expression_with_expected(
+                args[1], access["type"]
+            )
+            replacement = self.generate_expression_with_expected(
+                args[2], access["type"]
+            )
+            return (
+                f"{helper_name}({access['buffer']}, {offset}, "
+                f"{compare_value}, {replacement})"
+            )
+
+        value = self.generate_expression_with_expected(args[1], access["type"])
+        return f"{helper_name}({access['buffer']}, {offset}, {value})"
+
     def atomic_result_expected_type(self):
         expected_type = self.convert_type(self.current_expression_expected_type)
         if not expected_type or expected_type == "auto":
@@ -8806,7 +10184,7 @@ class SlangCodeGen:
         if func_name in {"textureGatherCompare", "textureGatherCompareOffset"}:
             return self.generate_texture_gather_compare(func_name, args)
 
-        if func_name == "texelFetch":
+        if func_name in {"texelFetch", "texelFetchOffset"}:
             fetch_args = self.sampled_texture_operation_args(func_name, args)
             if fetch_args is None:
                 return self.unsupported_sampled_texture_call(
@@ -8830,6 +10208,14 @@ class SlangCodeGen:
                 return self.unsupported_sampled_texture_call(
                     func_name, fetch_index_reason
                 )
+            if func_name == "texelFetchOffset":
+                offset_reason = self.texel_fetch_offset_rank_unsupported_reason(
+                    args[0], extra_args[1]
+                )
+                if offset_reason:
+                    return self.unsupported_sampled_texture_call(
+                        func_name, offset_reason
+                    )
             expected_reason = self.texture_result_expected_type_unsupported_reason(
                 func_name, "float4"
             )
@@ -8840,7 +10226,11 @@ class SlangCodeGen:
             if self.is_multisample_sampler_type(texture_type):
                 return f"{texture_name}[{coord}, {lod_or_sample}]"
             coord_constructor = self.texel_fetch_coord_constructor(texture_type)
-            return f"{texture_name}.Load({coord_constructor}({coord}, {lod_or_sample}))"
+            load_coord = f"{coord_constructor}({coord}, {lod_or_sample})"
+            if func_name == "texelFetchOffset":
+                offset = self.generate_expression(extra_args[1])
+                return f"{texture_name}.Load({load_coord}, {offset})"
+            return f"{texture_name}.Load({load_coord})"
 
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, args)
@@ -9024,6 +10414,8 @@ class SlangCodeGen:
             return len(extra_args) <= 1
         if func_name in {"textureLod", "texelFetch"}:
             return len(extra_args) == 1
+        if func_name == "texelFetchOffset":
+            return len(extra_args) == 2
         if func_name == "textureGrad":
             return len(extra_args) == 2
         return False
@@ -9034,6 +10426,8 @@ class SlangCodeGen:
             return True
         if func_name == "texelFetch":
             return self.is_texel_fetch_sampler_type(resource_type)
+        if func_name == "texelFetchOffset":
+            return self.is_texel_fetch_offset_sampler_type(resource_type)
         return self.sampled_texture_sampling_accepts_resource(texture_arg)
 
     def sampled_texture_sampling_accepts_resource(self, texture_arg):
@@ -9058,6 +10452,11 @@ class SlangCodeGen:
     def sampled_texture_operation_resource_requirement(self, func_name):
         if func_name == "texelFetch":
             return "requires a non-shadow texel-fetchable sampled texture resource"
+        if func_name == "texelFetchOffset":
+            return (
+                "requires an offset-capable non-shadow non-multisampled sampled "
+                "texture resource"
+            )
         return "requires a non-shadow non-multisampled sampled texture resource"
 
     def sampled_texture_operation_arity_requirement(self, func_name):
@@ -9069,6 +10468,8 @@ class SlangCodeGen:
             return "requires gradient x and gradient y arguments"
         if func_name == "texelFetch":
             return "requires one lod/sample argument"
+        if func_name == "texelFetchOffset":
+            return "requires lod/sample and offset arguments"
         return "has unsupported arguments"
 
     def unsupported_sampled_texture_call(self, func_name, reason):
@@ -9742,6 +11143,23 @@ class SlangCodeGen:
             coord, expected_rank, resource_type, "coordinate"
         )
 
+    def texel_fetch_offset_rank_unsupported_reason(self, texture_node, offset):
+        resource_type = self.resource_base_type(self.get_expression_type(texture_node))
+        if resource_type is None:
+            return None
+        expected_rank = self.texture_offset_rank(resource_type)
+        if expected_rank is None:
+            return (
+                "requires an offset-capable sampler1D/1DArray/2D/2DArray/3D "
+                "texture resource"
+            )
+        rank_reason = self.texture_rank_unsupported_reason(
+            offset, expected_rank, resource_type, "offset"
+        )
+        if rank_reason:
+            return rank_reason
+        return self.texture_offset_type_unsupported_reason(offset)
+
     def texture_offset_rank_unsupported_reason(self, texture_node, offset):
         resource_type = self.resource_base_type(self.get_expression_type(texture_node))
         if resource_type is None:
@@ -10061,19 +11479,7 @@ class SlangCodeGen:
         )
 
     def literal_int_value(self, node):
-        if not isinstance(node, LiteralNode):
-            return None
-        value = node.value
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, str):
-            try:
-                return int(value, 0)
-            except ValueError:
-                return None
-        return None
+        return evaluate_literal_int_expression(node, self.literal_int_constants)
 
     def is_array_expression(self, node):
         type_name = self.type_name_string(self.expression_result_type(node))
@@ -10413,6 +11819,7 @@ class SlangCodeGen:
         return None
 
     def resource_base_type(self, type_name):
+        type_name = self.type_name_string(type_name)
         if not isinstance(type_name, str):
             return None
         return type_name.split("[", 1)[0]
@@ -10432,6 +11839,15 @@ class SlangCodeGen:
             "sampler3D",
             "sampler2DMS",
             "sampler2DMSArray",
+        }
+
+    def is_texel_fetch_offset_sampler_type(self, type_name):
+        return self.resource_base_type(type_name) in {
+            "sampler1D",
+            "sampler1DArray",
+            "sampler2D",
+            "sampler2DArray",
+            "sampler3D",
         }
 
     def texel_fetch_coord_constructor(self, type_name):

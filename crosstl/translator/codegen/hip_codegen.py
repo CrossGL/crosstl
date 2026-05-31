@@ -7,38 +7,120 @@ for GPU programming.
 """
 
 from ..ast import (
-    ASTNode,
     ArrayAccessNode,
     ArrayLiteralNode,
+    ASTNode,
     BreakNode,
     CbufferNode,
     ContinueNode,
-    ForInNode,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
-    LiteralPatternNode,
     MatchNode,
     MemberAccessNode,
     PrimitiveType,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     ShaderNode,
     StructNode,
     VariableNode,
-    WildcardPatternNode,
+    WaveOpNode,
 )
+from .match_utils import (
+    generate_match_expression_assignment,
+    generate_ordered_conditional_match,
+    generate_switch_match,
+    infer_match_expression_result_type,
+    is_switch_lowerable_match,
+)
+from .resource_arrays import format_array_declarator
 from .resource_diagnostics import ResourceDiagnosticMixin
 from .resource_query import ResourceQueryMixin
-from .resource_arrays import format_array_declarator
+from .stage_utils import normalize_stage_name, stage_matches
 from .vector_arithmetic import VectorArithmeticMixin
+
+HIP_WAVE_OP_ARITIES = {
+    "WaveGetLaneCount": 0,
+    "WaveGetLaneIndex": 0,
+    "WaveIsFirstLane": 0,
+    "WaveActiveSum": 1,
+    "WaveActiveProduct": 1,
+    "WaveActiveBitAnd": 1,
+    "WaveActiveBitOr": 1,
+    "WaveActiveBitXor": 1,
+    "WaveActiveMin": 1,
+    "WaveActiveMax": 1,
+    "WaveActiveAllTrue": 1,
+    "WaveActiveAnyTrue": 1,
+    "WaveActiveAllEqual": 1,
+    "WaveActiveBallot": 1,
+    "WaveActiveCountBits": 1,
+    "WaveReadLaneAt": 2,
+    "WaveReadLaneFirst": 1,
+    "WavePrefixSum": 1,
+    "WavePrefixProduct": 1,
+    "WavePrefixCountBits": 1,
+    "QuadReadAcrossX": 1,
+    "QuadReadAcrossY": 1,
+    "QuadReadAcrossDiagonal": 1,
+    "QuadReadLaneAt": 2,
+    "WaveMatch": 1,
+    "WaveMultiPrefixSum": 2,
+    "WaveMultiPrefixCountBits": 2,
+    "WaveMultiPrefixProduct": 2,
+    "WaveMultiPrefixBitAnd": 2,
+    "WaveMultiPrefixBitOr": 2,
+    "WaveMultiPrefixBitXor": 2,
+}
+
+HIP_WAVE_PREDICATE_ARGUMENT_OPS = {
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveBallot",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+HIP_WAVE_UINT_RESULT_OPS = {
+    "WaveGetLaneCount",
+    "WaveGetLaneIndex",
+    "WaveActiveCountBits",
+    "WavePrefixCountBits",
+    "WaveMultiPrefixCountBits",
+}
+
+HIP_WAVE_BOOL_RESULT_OPS = {
+    "WaveIsFirstLane",
+    "WaveActiveAllTrue",
+    "WaveActiveAnyTrue",
+    "WaveActiveAllEqual",
+}
+
+HIP_WAVE_UVEC4_RESULT_OPS = {
+    "WaveActiveBallot",
+    "WaveMatch",
+}
 
 
 class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMixin):
     """Emit HIP source from the shared CrossGL translator AST."""
 
     resource_diagnostic_backend = "HIP"
+    synchronization_builtins = {
+        "barrier",
+        "groupMemoryBarrier",
+        "memoryBarrier",
+        "memoryBarrierShared",
+        "memoryBarrierBuffer",
+        "memoryBarrierImage",
+        "allMemoryBarrier",
+        "deviceMemoryBarrier",
+        "workgroupBarrier",
+    }
     sampled_resource_type_aliases = {
         "Texture1D": "sampler1D",
         "Texture1DArray": "sampler1DArray",
@@ -67,9 +149,17 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.indent_level = 0
         self.code_lines = []
         self.current_function = None
+        self.current_function_return_type = None
         self.variable_counter = 0
+        self.match_temp_variable_index = 0
         self.variable_types = {}
+        self.image_resource_accesses = {}
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.hip_resource_binding_cursors = {}
+        self.hip_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.function_return_types = {}
         self.helper_functions = {}
         self.query_resource_names = set()
@@ -79,7 +169,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
+        self.current_stage_name = None
         self.resource_query_info_required = False
+        self.assignment_lhs_depth = 0
 
         # CrossGL to HIP type mapping
         self.type_map = {
@@ -192,6 +284,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "uimage2DMS": "hipSurfaceObject_t",
             "uimage2DMSArray": "hipSurfaceObject_t",
             "buffer": "hipDeviceptr_t",
+            "accelerationStructureEXT": "CglRayTracingAccelerationStructure",
+            "AccelerationStructure": "CglRayTracingAccelerationStructure",
+            "acceleration_structure": "CglRayTracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayTracingAccelerationStructure": "CglRayTracingAccelerationStructure",
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
         }
 
         # CrossGL to HIP function mapping
@@ -320,6 +422,27 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "atomicExchange": "atomicExch",
             "atomicCompareExchange": "atomicCAS",
             "atomicCompSwap": "atomicCAS",
+            # Synchronization
+            "barrier": "__syncthreads",
+            "groupMemoryBarrier": "__threadfence_block",
+            "memoryBarrier": "__threadfence",
+            "memoryBarrierShared": "__threadfence_block",
+            "memoryBarrierBuffer": "__threadfence",
+            "memoryBarrierImage": "__threadfence",
+            "allMemoryBarrier": "__threadfence",
+            "deviceMemoryBarrier": "__threadfence",
+            "workgroupBarrier": "__syncthreads",
+            # Ray tracing placeholders
+            "RayDesc": "CglRayDesc",
+            "RayQuery": "CglRayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "CglBuiltInTriangleIntersectionAttributes"
+            ),
+            "TraceRay": "cgl_trace_ray",
+            "CallShader": "cgl_call_shader",
+            "ReportHit": "cgl_report_hit",
+            "IgnoreHit": "cgl_ignore_hit",
+            "AcceptHitAndEndSearch": "cgl_accept_hit_and_end_search",
             # Texture functions
             "texture": "tex2D",
             "textureLod": "tex2DLod",
@@ -343,17 +466,52 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "gl_GlobalInvocationID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
             "gl_GlobalInvocationID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
             "gl_GlobalInvocationID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "gl_LocalInvocationIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
+            "SV_GroupThreadID": "make_uint3(threadIdx.x, threadIdx.y, threadIdx.z)",
+            "SV_GroupThreadID.x": "threadIdx.x",
+            "SV_GroupThreadID.y": "threadIdx.y",
+            "SV_GroupThreadID.z": "threadIdx.z",
+            "SV_GroupID": "make_uint3(blockIdx.x, blockIdx.y, blockIdx.z)",
+            "SV_GroupID.x": "blockIdx.x",
+            "SV_GroupID.y": "blockIdx.y",
+            "SV_GroupID.z": "blockIdx.z",
+            "SV_DispatchThreadID": (
+                "make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+                "(blockIdx.y * blockDim.y + threadIdx.y), "
+                "(blockIdx.z * blockDim.z + threadIdx.z))"
+            ),
+            "SV_DispatchThreadID.x": "(blockIdx.x * blockDim.x + threadIdx.x)",
+            "SV_DispatchThreadID.y": "(blockIdx.y * blockDim.y + threadIdx.y)",
+            "SV_DispatchThreadID.z": "(blockIdx.z * blockDim.z + threadIdx.z)",
+            "SV_GroupIndex": (
+                "(threadIdx.z * blockDim.y * blockDim.x + "
+                "threadIdx.y * blockDim.x + threadIdx.x)"
+            ),
         }
 
     def generate(self, node: ASTNode) -> str:
         """Generate complete HIP source for a CrossGL AST."""
         self.code_lines = []
         self.indent_level = 0
+        self.validate_supported_stage_types(node)
         self.variable_types = {}
+        self.image_resource_accesses = {}
+        self.glsl_buffer_block_accesses = {}
+        self.glsl_buffer_block_layouts = {}
+        self.hip_resource_binding_cursors = {}
+        self.hip_used_resource_bindings = {}
+        self.current_function_return_type = None
+        self.match_temp_variable_index = 0
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(node)
         self.helper_functions = {}
         self.resource_query_info_required = False
+        self.assignment_lhs_depth = 0
+        self.current_stage_name = None
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -369,12 +527,65 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.query_functions_by_name = {
             name: func for name, func in self.query_functions_by_name.items() if name
         }
+        self.reserve_explicit_hip_resource_bindings(node)
 
         self.add_includes()
         self.visit(node)
         self.insert_helper_functions()
 
         return "\n".join(self.code_lines)
+
+    def unsupported_stage_types(self):
+        return {
+            "amplification",
+            "geometry",
+            "mesh",
+            "object",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }
+
+    def hip_ray_stage_names(self):
+        return {
+            "ray_any_hit",
+            "ray_callable",
+            "ray_closest_hit",
+            "ray_generation",
+            "ray_intersection",
+            "ray_miss",
+        }
+
+    def hip_ray_stage_metadata_name(self, stage_name):
+        return {
+            "ray_any_hit": "any_hit",
+            "ray_callable": "callable",
+            "ray_closest_hit": "closest_hit",
+            "ray_generation": "ray_generation",
+            "ray_intersection": "intersection",
+            "ray_miss": "miss",
+        }.get(stage_name, stage_name)
+
+    def validate_supported_stage_types(self, ast_node, target_stage=None):
+        unsupported_stages = set()
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            stage_name = normalize_stage_name(stage_type)
+            if stage_name in self.unsupported_stage_types() and stage_matches(
+                target_stage, stage_name
+            ):
+                unsupported_stages.add(stage_name)
+
+        for func in getattr(ast_node, "functions", []) or []:
+            for qualifier in getattr(func, "qualifiers", []) or []:
+                stage_name = normalize_stage_name(qualifier)
+                if stage_name in self.unsupported_stage_types() and stage_matches(
+                    target_stage, stage_name
+                ):
+                    unsupported_stages.add(stage_name)
+
+        if unsupported_stages:
+            stage_list = ", ".join(sorted(unsupported_stages))
+            raise ValueError(f"HIP output does not support stage type(s): {stage_list}")
 
     def add_includes(self):
         """Emit the standard HIP runtime include block."""
@@ -398,6 +609,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.code_lines.append(self.indent() + line)
         else:
             self.code_lines.append("")
+
+    def add_generated_code(self, code: str):
+        """Append pre-indented generated code to the output stream."""
+        for line in code.rstrip("\n").splitlines():
+            self.code_lines.append(line.rstrip())
 
     def visit(self, node: ASTNode) -> str:
         """Dispatch an AST node to its HIP visitor method."""
@@ -432,6 +648,7 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         # Handle shader stages (new AST structure)
         if hasattr(node, "stages") and node.stages:
             emitted_local_functions = set()
+            stage_entry_name_counts = self.stage_entry_name_counts(node.stages)
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
@@ -456,14 +673,49 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                         self.visit(func)
                         emitted_local_functions.add(id(func))
 
+                    saved_stage_name = self.current_stage_name
+                    self.current_stage_name = stage_name
+                    saved_override = getattr(
+                        self, "current_stage_entry_function_name", None
+                    )
+                    self.current_stage_entry_function_name = (
+                        self.stage_entry_function_name(
+                            stage_name, stage.entry_point, stage_entry_name_counts
+                        )
+                    )
                     self.visit(stage.entry_point)
+                    self.current_stage_entry_function_name = saved_override
+                    self.current_stage_name = saved_stage_name
 
         return ""
+
+    def stage_entry_name_counts(self, stages):
+        counts = {}
+        for stage in stages.values():
+            entry_point = getattr(stage, "entry_point", None)
+            name = getattr(entry_point, "name", None)
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def stage_entry_function_name(self, stage_name, entry_point, name_counts):
+        name = getattr(entry_point, "name", None)
+        if not name:
+            return name
+        if stage_name in self.hip_ray_stage_names() and name == "main":
+            return f"{stage_name}_{name}"
+        if name_counts.get(name, 0) > 1:
+            return f"{stage_name}_{name}"
+        return name
 
     def visit_FunctionNode(self, node: FunctionNode) -> str:
         """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
+        saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
+        saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         self.current_function = node.name
+        saved_current_function_return_type = self.current_function_return_type
         saved_current_function_name = self.current_function_name
         saved_structured_buffer_length_parameters = (
             self.current_structured_buffer_length_parameters
@@ -491,11 +743,23 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             qualifiers.append("__device__")
 
         if hasattr(node, "return_type"):
+            self.current_function_return_type = node.return_type
             return_type = self.map_type(node.return_type)
         else:
+            self.current_function_return_type = "void"
             return_type = "void"
 
+        stage_name = self.function_stage_name(node)
+        return_semantic = self.semantic_from_node(node)
+        self.validate_hip_return_semantic(
+            stage_name, self.current_function_return_type, return_semantic
+        )
+        self.validate_hip_struct_return_semantics(
+            stage_name, self.current_function_return_type
+        )
+
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        self.validate_hip_stage_parameter_semantics(stage_name, param_list)
         param_declarations = []
         for param in param_list:
             param_declarations.append(self.visit_parameter(param))
@@ -520,8 +784,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         params = ", ".join(param_declarations)
 
         qualifier_str = " ".join(qualifiers)
-        signature = f"{qualifier_str} {return_type} {node.name}({params})"
+        function_name = getattr(self, "current_stage_entry_function_name", None)
+        if not function_name:
+            function_name = node.name
+        signature = f"{qualifier_str} {return_type} {function_name}({params})"
 
+        if stage_name in self.hip_ray_stage_names():
+            self.add_line(
+                "// CrossGL ray stage: "
+                f"{self.hip_ray_stage_metadata_name(stage_name)}"
+            )
+        if return_semantic:
+            self.add_line(
+                f"// CrossGL return semantic: {self.map_semantic(return_semantic)}"
+            )
+        if stage_name:
+            for param in param_list:
+                param_semantic = self.semantic_from_node(param)
+                if param_semantic:
+                    param_name = getattr(
+                        param, "name", getattr(param, "param_name", "param")
+                    )
+                    self.add_line(
+                        f"// CrossGL parameter semantic: {param_name}: "
+                        f"{self.map_semantic(param_semantic)}"
+                    )
         self.add_line(signature)
 
         body = getattr(node, "body", [])
@@ -537,7 +824,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         self.add_line()
         self.current_function = None
+        self.current_function_return_type = saved_current_function_return_type
         self.variable_types = saved_variable_types
+        self.image_resource_accesses = saved_image_resource_accesses
+        self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
+        self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_function_name = saved_current_function_name
         self.current_structured_buffer_length_parameters = (
             saved_structured_buffer_length_parameters
@@ -558,16 +849,408 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
             param_name = getattr(param, "name", "param")
 
-        self.register_variable_type(param_name, param_type)
+        param_type = self.resource_type_with_access(param_type, param)
+        self.register_variable_type(param_name, param_type, param)
         return self.format_typed_declarator(param_type, param_name)
 
+    def semantic_from_node(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if self.is_semantic_name(attr_name):
+                return attr_name
+        return None
+
+    def is_semantic_name(self, name):
+        if name is None:
+            return False
+        name = str(name)
+        upper_name = name.upper()
+        if name.startswith("gl_"):
+            return True
+        if upper_name in {
+            "BINORMAL",
+            "CALLABLE_DATA",
+            "CALLABLEDATAEXT",
+            "CALLABLEDATAINEXT",
+            "COLOR",
+            "HIT_ATTRIBUTE",
+            "HITATTRIBUTEEXT",
+            "NORMAL",
+            "PAYLOAD",
+            "POSITION",
+            "RAYPAYLOADEXT",
+            "RAYPAYLOADINEXT",
+            "SV_DEPTH",
+            "SV_DISPATCHRAYSDIMENSIONS",
+            "SV_DISPATCHRAYSINDEX",
+            "SV_DISPATCHTHREADID",
+            "SV_DRAWID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_PRIMITIVEID",
+            "SV_SAMPLEINDEX",
+            "SV_STARTINSTANCELOCATION",
+            "SV_STARTVERTEXLOCATION",
+            "SV_TARGET",
+            "SV_VERTEXID",
+            "TANGENT",
+            "TEXCOORD",
+        }:
+            return True
+        for prefix in ("COLOR", "SV_TARGET", "TEXCOORD"):
+            if upper_name.startswith(prefix) and upper_name[len(prefix) :].isdigit():
+                return True
+        return False
+
+    def map_semantic(self, semantic):
+        if semantic is None:
+            return ""
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth(any)"
+        if lower_name == "gl_fragcolor":
+            return "target(0)"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "SV_TARGET":
+            return "target(0)"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "TEXCOORD":
+            return "texcoord"
+        if (
+            upper_name.startswith("TEXCOORD")
+            and upper_name[len("TEXCOORD") :].isdigit()
+        ):
+            return f"texcoord({upper_name[len('TEXCOORD'):]})"
+        if upper_name == "COLOR":
+            return "color"
+        if upper_name.startswith("COLOR") and upper_name[len("COLOR") :].isdigit():
+            return f"color({upper_name[len('COLOR'):]})"
+        generic_semantics = {
+            "BINORMAL": "binormal",
+            "NORMAL": "normal",
+            "POSITION": "position",
+            "TANGENT": "tangent",
+            "gl_FragCoord": "position",
+            "gl_FrontFacing": "front_facing",
+            "gl_PointCoord": "point_coord",
+            "gl_VertexID": "vertex_id",
+            "gl_InstanceID": "instance_id",
+            "gl_BaseVertex": "start_vertex_location",
+            "gl_BaseInstance": "start_instance_location",
+            "gl_DrawID": "draw_id",
+            "gl_WorkGroupID": "workgroup_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_DrawID": "draw_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "local_invocation_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
+            "SV_PrimitiveID": "primitive_id",
+            "SV_SampleIndex": "sample_index",
+            "SV_StartInstanceLocation": "start_instance_location",
+            "SV_StartVertexLocation": "start_vertex_location",
+            "SV_VertexID": "vertex_id",
+        }
+        return generic_semantics.get(semantic_name, semantic_name)
+
+    def hip_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name in {
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        } or upper_name in {
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def is_hip_float4_type(self, type_name):
+        return self.map_type(type_name) == "float4"
+
+    def is_hip_float_scalar_type(self, type_name):
+        return self.map_type(type_name) == "float"
+
+    def validate_hip_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.hip_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+        if kind in {"position", "color"}:
+            if self.is_hip_float4_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for HIP codegen; "
+                "expected vec4-compatible type"
+            )
+        if kind == "depth" and not self.is_hip_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for HIP codegen; "
+                "expected float type"
+            )
+
+    def validate_hip_output_semantic_stage(self, stage_name, semantic, context):
+        kind = self.hip_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for HIP codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if stage_name is None:
+            return
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if stage_name not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for HIP {stage_name} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def function_stage_name(self, node):
+        if self.current_stage_name:
+            return self.current_stage_name
+        qualifiers = list(getattr(node, "qualifiers", []) or [])
+        qualifier = getattr(node, "qualifier", None)
+        if qualifier:
+            qualifiers.append(qualifier)
+        supported_stage_names = {
+            "compute",
+            "fragment",
+            "vertex",
+        } | self.hip_ray_stage_names()
+        for qualifier in qualifiers:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in supported_stage_names:
+                return qualifier_name
+        return None
+
+    def validate_hip_return_semantic(self, stage_name, return_type, semantic):
+        if semantic is None:
+            return
+        if self.map_type(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for HIP codegen; "
+                "void return type"
+            )
+        self.validate_hip_output_semantic_stage(stage_name, semantic, "return semantic")
+        self.validate_hip_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def validate_hip_struct_return_semantics(self, stage_name, return_type):
+        if stage_name is None:
+            return
+        base_type = self.type_name_string(return_type)
+        if not base_type:
+            return
+        base_type = base_type.split("<", 1)[0].split("[", 1)[0].strip()
+        member_semantics = self.struct_member_semantics.get(base_type, {})
+        member_types = self.struct_member_types.get(base_type, {})
+        for member_name, semantic in member_semantics.items():
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_hip_output_semantic_stage(stage_name, semantic, context)
+            self.validate_hip_builtin_semantic_type(
+                semantic, member_types.get(member_name, "float"), context
+            )
+
+    def hip_stage_parameter_semantic_key(self, semantic):
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        if lower_name.startswith("gl_"):
+            return lower_name
+        return semantic_name.upper()
+
+    def hip_stage_parameter_semantic_rules(self):
+        ray_stages = self.hip_ray_stage_names()
+        ray_hit_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        return {
+            "gl_vertexid": ("vertex_id", "unsigned int", {"vertex"}),
+            "gl_instanceid": ("instance_id", "unsigned int", {"vertex"}),
+            "gl_basevertex": ("start_vertex_location", "int", {"vertex"}),
+            "gl_baseinstance": ("start_instance_location", "unsigned int", {"vertex"}),
+            "gl_drawid": ("draw_id", "unsigned int", {"vertex"}),
+            "SV_VERTEXID": ("vertex_id", "unsigned int", {"vertex"}),
+            "SV_INSTANCEID": ("instance_id", "unsigned int", {"vertex"}),
+            "SV_STARTVERTEXLOCATION": ("start_vertex_location", "int", {"vertex"}),
+            "SV_STARTINSTANCELOCATION": (
+                "start_instance_location",
+                "unsigned int",
+                {"vertex"},
+            ),
+            "SV_DRAWID": ("draw_id", "unsigned int", {"vertex"}),
+            "gl_position": ("position", "float4", {"fragment"}),
+            "gl_fragcoord": ("position", "float4", {"fragment"}),
+            "gl_frontfacing": ("front_facing", "bool", {"fragment"}),
+            "gl_pointcoord": ("point_coord", "float2", {"fragment"}),
+            "gl_primitiveid": (
+                "primitive_id",
+                "unsigned int",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "gl_sampleid": ("sample_index", "unsigned int", {"fragment"}),
+            "SV_POSITION": ("position", "float4", {"fragment"}),
+            "SV_ISFRONTFACE": ("front_facing", "bool", {"fragment"}),
+            "SV_PRIMITIVEID": (
+                "primitive_id",
+                "unsigned int",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "SV_SAMPLEINDEX": ("sample_index", "unsigned int", {"fragment"}),
+            "gl_workgroupid": ("workgroup_id", "uint3", {"compute"}),
+            "gl_localinvocationid": ("local_invocation_id", "uint3", {"compute"}),
+            "gl_globalinvocationid": ("global_invocation_id", "uint3", {"compute"}),
+            "gl_localinvocationindex": (
+                "local_invocation_index",
+                "unsigned int",
+                {"compute"},
+            ),
+            "SV_GROUPID": ("workgroup_id", "uint3", {"compute"}),
+            "SV_GROUPTHREADID": ("local_invocation_id", "uint3", {"compute"}),
+            "SV_DISPATCHTHREADID": ("global_invocation_id", "uint3", {"compute"}),
+            "SV_GROUPINDEX": ("local_invocation_index", "unsigned int", {"compute"}),
+            "gl_launchidext": ("launch_id", "uint3", ray_stages),
+            "gl_launchsizeext": ("launch_size", "uint3", ray_stages),
+            "gl_hittext": ("hit_t", "float", ray_hit_stages),
+            "gl_hitkindext": ("hit_kind", "unsigned int", {"ray_any_hit"}),
+            "SV_DISPATCHRAYSINDEX": ("launch_id", "uint3", ray_stages),
+            "SV_DISPATCHRAYSDIMENSIONS": ("launch_size", "uint3", ray_stages),
+        }
+
+    def validate_hip_stage_parameter_semantic_type(
+        self, param, semantic, expected_type
+    ):
+        actual_type = self.map_type(self.get_parameter_type(param))
+        if actual_type == expected_type:
+            return
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for HIP codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_hip_stage_parameter_semantics(self, stage_name, parameters):
+        if stage_name is None:
+            return
+
+        rules = self.hip_stage_parameter_semantic_rules()
+        seen_system_semantics = {}
+        for param in parameters or []:
+            semantic = self.semantic_from_node(param)
+            if semantic is None:
+                continue
+
+            semantic_key = self.hip_stage_parameter_semantic_key(semantic)
+            rule = rules.get(semantic_key)
+            if rule is not None:
+                mapped_semantic, expected_type, allowed_stages = rule
+                if stage_name not in allowed_stages:
+                    allowed = ", ".join(sorted(allowed_stages))
+                    raise ValueError(
+                        f"Unsupported {semantic} stage parameter semantic for HIP "
+                        f"{stage_name} stage; valid stage is {allowed}"
+                    )
+                param_name = getattr(param, "name", getattr(param, "param_name", None))
+                previous_name = seen_system_semantics.get(mapped_semantic)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate HIP stage parameter semantic {mapped_semantic} "
+                        f"on '{previous_name}' and '{param_name}'"
+                    )
+                seen_system_semantics[mapped_semantic] = param_name
+                self.validate_hip_stage_parameter_semantic_type(
+                    param, semantic, expected_type
+                )
+                continue
+
+            kind = self.hip_semantic_output_kind(semantic)
+            if kind in {"color", "depth"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for HIP "
+                    f"{stage_name} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def visit_StructNode(self, node: StructNode) -> str:
+        if getattr(node, "is_cbuffer", False):
+            metadata_comment = self.hip_resource_metadata_comment(
+                node, getattr(node, "name", None), kind="cbuffer"
+            )
+            if metadata_comment:
+                self.add_line(metadata_comment)
         self.add_line(f"struct {node.name}")
         self.add_line("{")
         self.indent_level += 1
 
         members = getattr(node, "members", [])
         member_types = {}
+        member_semantics = {}
         for member in members:
             if hasattr(member, "member_type"):
                 member_type = member.member_type
@@ -578,10 +1261,26 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             else:
                 member_type = "float"
 
+            member_type = self.resource_type_with_access(member_type, member)
             member_types[member.name] = member_type
-            self.add_line(f"{self.format_typed_declarator(member_type, member.name)};")
+            semantic = self.semantic_from_node(member)
+            if semantic:
+                member_semantics[member.name] = semantic
+                self.validate_hip_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+            semantic_comment = (
+                f" // CrossGL semantic: {self.map_semantic(semantic)}"
+                if semantic
+                else ""
+            )
+            self.add_line(
+                f"{self.format_typed_declarator(member_type, member.name)};"
+                f"{semantic_comment}"
+            )
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_semantics[node.name] = member_semantics
         self.indent_level -= 1
         self.add_line("};")
         self.add_line()
@@ -589,6 +1288,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_VariableNode(self, node: VariableNode) -> str:
         var_type = self.get_variable_node_type(node)
+        initial_value = getattr(node, "initial_value", getattr(node, "value", None))
+        if isinstance(initial_value, MatchNode):
+            self.emit_match_expression_variable(node, initial_value, var_type)
+            return ""
+
+        metadata_comment = self.hip_resource_metadata_comment(node, var_type)
+        if metadata_comment:
+            self.add_line(metadata_comment)
         self.add_line(f"{self.format_variable_declaration(node)};")
         metadata_declaration = self.query_metadata_declaration(node.name, var_type)
         if metadata_declaration:
@@ -611,13 +1318,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         if var_type is None and initial_value is not None:
             inferred_type = self.expression_result_type(initial_value)
-            self.register_variable_type(node.name, inferred_type)
+            self.register_variable_type(node.name, inferred_type, node)
             declaration = self.format_typed_declarator(
                 inferred_type or "auto", node.name
             )
         else:
             var_type = var_type or "int"
-            self.register_variable_type(node.name, var_type)
+            self.register_variable_type(node.name, var_type, node)
+            var_type = self.glsl_buffer_block_declaration_type(var_type, node)
             declaration = self.format_typed_declarator(var_type, node.name)
 
         qualifiers = self.variable_memory_qualifiers(node)
@@ -639,7 +1347,35 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 qualifiers.append("__constant__")
         return qualifiers
 
+    def emit_match_expression_variable(self, node, match_node, var_type):
+        if var_type is None:
+            var_type = infer_match_expression_result_type(self, match_node)
+        var_type = var_type or "auto"
+        self.register_variable_type(node.name, var_type, node)
+
+        declaration = self.format_typed_declarator(var_type, node.name)
+        qualifiers = self.variable_memory_qualifiers(node)
+        if qualifiers:
+            declaration = f"{' '.join(qualifiers)} {declaration}"
+
+        self.add_line(f"{declaration};")
+        self.add_generated_code(
+            generate_match_expression_assignment(
+                self,
+                match_node,
+                node.name,
+                var_type,
+                self.indent_level,
+                "HIP",
+            )
+        )
+
     def visit_CbufferNode(self, node: CbufferNode) -> str:
+        metadata_comment = self.hip_resource_metadata_comment(
+            node, getattr(node, "name", None), kind="cbuffer"
+        )
+        if metadata_comment:
+            self.add_line(metadata_comment)
         self.add_line(f"struct {node.name}")
         self.add_line("{")
         self.indent_level += 1
@@ -696,23 +1432,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if not statements:
             return False
         return isinstance(statements[-1], (BreakNode, ContinueNode, ReturnNode))
-
-    def is_supported_match_arm(self, arm):
-        if getattr(arm, "guard", None) is not None:
-            return False
-        pattern = getattr(arm, "pattern", None)
-        return isinstance(pattern, (LiteralPatternNode, WildcardPatternNode))
-
-    def validate_match_arms(self, arms):
-        wildcard_index = None
-        for index, arm in enumerate(arms):
-            if not self.is_supported_match_arm(arm):
-                return False
-            if isinstance(getattr(arm, "pattern", None), WildcardPatternNode):
-                if wildcard_index is not None:
-                    return False
-                wildcard_index = index
-        return wildcard_index is None or wildcard_index == len(arms) - 1
 
     def visit_IfNode(self, node) -> str:
         condition = self.visit(node.if_condition)
@@ -814,46 +1533,51 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return ""
 
     def visit_MatchNode(self, node) -> str:
-        expression = self.visit(getattr(node, "expression", None))
-
-        self.add_line(f"switch ({expression})")
-        self.add_line("{")
-        self.indent_level += 1
-
-        arms = getattr(node, "arms", []) or []
-        if not self.validate_match_arms(arms):
-            raise ValueError(
-                "Unsupported match arm for HIP codegen; only unguarded "
-                "literal patterns and a final wildcard can be lowered to switch"
+        if is_switch_lowerable_match(node):
+            code = generate_switch_match(self, node, self.indent_level)
+        else:
+            code = generate_ordered_conditional_match(
+                self, node, self.indent_level, "HIP"
             )
-
-        wildcard_body = None
-        for arm in arms:
-            pattern = getattr(arm, "pattern", None)
-            if isinstance(pattern, WildcardPatternNode):
-                wildcard_body = getattr(arm, "body", [])
-                continue
-
-            self.add_line(f"case {self.visit(pattern.literal)}:")
-            self.indent_level += 1
-            body = getattr(arm, "body", [])
-            self.emit_body(body)
-            if not self.statement_body_terminates(body):
-                self.add_line("break;")
-            self.indent_level -= 1
-
-        if wildcard_body is not None:
-            self.add_line("default:")
-            self.indent_level += 1
-            self.emit_body(wildcard_body)
-            if not self.statement_body_terminates(wildcard_body):
-                self.add_line("break;")
-            self.indent_level -= 1
-
-        self.indent_level -= 1
-        self.add_line("}")
-
+        self.add_generated_code(code)
         return ""
+
+    def generate_switch_case(self, label, body, indent, auto_break=False):
+        indent_str = "    " * indent
+        if not auto_break and not self.statement_body_has_statements(body):
+            return f"{indent_str}{label}:\n"
+
+        code = f"{indent_str}{label}: {{\n"
+        code += self.generate_scoped_statement_body(body, indent + 1)
+        if auto_break and not self.statement_body_terminates(body):
+            code += f"{indent_str}    break;\n"
+        code += f"{indent_str}}}\n"
+        return code
+
+    def statement_body_has_statements(self, body):
+        return bool(self.statement_list(body))
+
+    def generate_scoped_statement_body(self, body, indent):
+        saved_lines = self.code_lines
+        saved_indent = self.indent_level
+        self.code_lines = []
+        self.indent_level = indent
+        try:
+            self.emit_body(body)
+            if not self.code_lines:
+                return ""
+            return "\n".join(self.code_lines) + "\n"
+        finally:
+            self.code_lines = saved_lines
+            self.indent_level = saved_indent
+
+    def generate_expression(self, node):
+        if node is None:
+            return ""
+        return self.visit(node)
+
+    def generate_expression_with_expected(self, node, _expected_type):
+        return self.generate_expression(node)
 
     def visit_CaseNode(self, node) -> str:
         if getattr(node, "value", None) is None:
@@ -870,14 +1594,46 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_ReturnNode(self, node) -> str:
         if node.value:
+            if isinstance(node.value, MatchNode):
+                return self.emit_match_expression_return(node.value)
             value = self.visit(node.value)
             self.add_line(f"return {value};")
         else:
             self.add_line("return;")
         return ""
 
+    def emit_match_expression_return(self, match_node) -> str:
+        return_type = self.type_name_string(self.current_function_return_type)
+        if not return_type or return_type == "void":
+            raise ValueError(
+                "Unsupported match expression for HIP codegen; return context "
+                "requires a concrete non-void result type"
+            )
+
+        result_name = self.next_hip_temp_variable("match_value")
+        self.add_line(f"{self.format_typed_declarator(return_type, result_name)};")
+        self.add_generated_code(
+            generate_match_expression_assignment(
+                self,
+                match_node,
+                result_name,
+                return_type,
+                self.indent_level,
+                "HIP",
+            )
+        )
+        self.add_line(f"return {result_name};")
+        return ""
+
     def visit_AssignmentNode(self, node) -> str:
-        left = self.visit(node.left)
+        diagnostic = self.glsl_buffer_block_write_diagnostic(node.left, "assignment")
+        if diagnostic is not None:
+            return diagnostic
+        self.assignment_lhs_depth += 1
+        try:
+            left = self.visit(node.left)
+        finally:
+            self.assignment_lhs_depth -= 1
         right = self.visit(node.right)
         operator = getattr(node, "operator", getattr(node, "op", "="))
         compound_binary_ops = {
@@ -1020,8 +1776,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         if func_name == "lambda":
             return self.generate_lambda_expression(raw_args)
+        if func_name in HIP_WAVE_OP_ARITIES:
+            return self.generate_wave_operation(func_name, raw_args, args)
 
         is_user_function = self.is_user_defined_function(func_name)
+        if not is_user_function:
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name, raw_args
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
         if not is_user_function:
             buffer_call = self.generate_buffer_call(
                 func_expr, func_name, raw_args, args
@@ -1035,6 +1799,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if structured_atomic_call is not None:
                 return structured_atomic_call
 
+            plain_atomic_call = self.generate_plain_atomic_call(
+                func_name, raw_args, args
+            )
+            if plain_atomic_call is not None:
+                return plain_atomic_call
+
             resource_call = self.generate_resource_call(func_name, raw_args, args)
             if resource_call is not None:
                 return resource_call
@@ -1042,6 +1812,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if is_user_function:
             args = self.hip_user_function_call_arguments(func_name, raw_args, args)
             return f"{callee}({', '.join(args)})"
+
+        if func_name in self.synchronization_builtins and raw_args:
+            raise ValueError(
+                f"HIP synchronization builtin '{func_name}' requires 0 "
+                f"arguments; got {len(raw_args)}"
+            )
 
         args = self.query_metadata_call_arguments(func_name, raw_args, args)
 
@@ -1106,10 +1882,6 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                     f"{self.coord_component(args[1], 'x')}, "
                     f"{self.coord_component(args[1], 'y')})"
                 )
-        elif func_name in {"barrier", "workgroupBarrier"}:
-            return "__syncthreads()"
-        elif func_name == "memoryBarrier":
-            return "__threadfence()"
 
         vector_info = self.vector_type_info(func_name)
         if vector_info:
@@ -1132,6 +1904,176 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         args_str = ", ".join(args)
         target = mapped_name if mapped_name is not None else callee
         return f"{target}({args_str})"
+
+    def visit_RayTracingOpNode(self, node: RayTracingOpNode) -> str:
+        operation = getattr(node, "operation", "")
+        if operation in self.function_return_types:
+            args = ", ".join(
+                self.visit(arg) for arg in getattr(node, "arguments", []) or []
+            )
+            return f"{operation}({args})"
+        return self.generate_ray_tracing_call_expression(
+            operation,
+            getattr(node, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, arguments):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        self.require_hip_ray_runtime_helpers()
+        generated_args = [self.visit(arg) for arg in arguments or []]
+        if operation == "TraceRay" and len(generated_args) == 11:
+            ray_desc = (
+                "CglRayDesc("
+                f"{generated_args[6]}, {generated_args[7]}, "
+                f"{generated_args[8]}, {generated_args[9]}"
+                ")"
+            )
+            generated_args = generated_args[:6] + [ray_desc, generated_args[10]]
+        elif operation == "ReportHit" and len(generated_args) == 2:
+            generated_args.append("CglBuiltInTriangleIntersectionAttributes{}")
+
+        helper_name = self.function_map.get(operation, operation)
+        return f"{helper_name}({', '.join(generated_args)})"
+
+    def visit_RayQueryOpNode(self, node: RayQueryOpNode) -> str:
+        operation = getattr(node, "operation", "")
+        helper_name = self.require_hip_ray_query_helper(operation)
+        args = [self.visit(getattr(node, "query_expr", None))]
+        args.extend(self.visit(arg) for arg in getattr(node, "arguments", []) or [])
+        return f"{helper_name}({', '.join(args)})"
+
+    def visit_WaveOpNode(self, node: WaveOpNode) -> str:
+        raw_args = list(getattr(node, "arguments", []) or [])
+        args = [self.visit(arg) for arg in raw_args]
+        return self.generate_wave_operation(
+            getattr(node, "operation", "WaveOp"), raw_args, args
+        )
+
+    def generate_wave_operation(self, operation, raw_args, args):
+        expected_count = HIP_WAVE_OP_ARITIES.get(operation)
+        if expected_count is None:
+            raise ValueError(f"Unsupported HIP wave intrinsic {operation}")
+        if len(raw_args) != expected_count:
+            raise ValueError(
+                f"HIP wave intrinsic {operation} requires {expected_count} "
+                f"argument{'s' if expected_count != 1 else ''}, got {len(raw_args)}"
+            )
+
+        if operation == "WaveGetLaneCount":
+            return "warpSize"
+        if operation == "WaveGetLaneIndex":
+            return "(threadIdx.x & (warpSize - 1))"
+        if operation == "WaveIsFirstLane":
+            return "((threadIdx.x & (warpSize - 1)) == 0)"
+
+        helper_name = self.require_wave_helper(operation, raw_args)
+        return f"{helper_name}({', '.join(args)})"
+
+    def require_wave_helper(self, operation, raw_args):
+        result_type = self.map_type(self.wave_result_type(operation, raw_args))
+        arg_types = [
+            self.wave_argument_type(operation, index, arg)
+            for index, arg in enumerate(raw_args)
+        ]
+        helper_name = self.wave_helper_name(operation, result_type, arg_types)
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        parameter_names = self.wave_helper_parameter_names(operation, len(arg_types))
+        params = [
+            f"{arg_type} {parameter_name}"
+            for parameter_name, arg_type in zip(parameter_names, arg_types)
+        ]
+        helper = (
+            f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
+            "{\n"
+            f"    return {self.wave_helper_return_expression(operation, result_type)};\n"
+            "}"
+        )
+        self.helper_functions[helper_name] = helper
+        return helper_name
+
+    def wave_result_type(self, operation, raw_args):
+        if operation in HIP_WAVE_UINT_RESULT_OPS:
+            return "uint"
+        if operation in HIP_WAVE_BOOL_RESULT_OPS:
+            return "bool"
+        if operation in HIP_WAVE_UVEC4_RESULT_OPS:
+            return "uvec4"
+        if raw_args:
+            return self.expression_result_type(raw_args[0]) or "uint"
+        return "uint"
+
+    def wave_argument_type(self, operation, index, arg):
+        if index == 0 and operation in HIP_WAVE_PREDICATE_ARGUMENT_OPS:
+            return self.map_type("bool")
+        if index == 1 and operation.startswith("WaveMultiPrefix"):
+            return self.map_type("uvec4")
+        if index == 1 and operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return self.map_type("uint")
+        return self.map_type(self.expression_result_type(arg) or "uint")
+
+    def wave_helper_name(self, operation, result_type, arg_types):
+        suffix_parts = [self.wave_type_suffix(result_type)]
+        suffix_parts.extend(self.wave_type_suffix(arg_type) for arg_type in arg_types)
+        return (
+            f"cgl_hip_{self.wave_operation_suffix(operation)}_{'_'.join(suffix_parts)}"
+        )
+
+    def wave_operation_suffix(self, operation):
+        name = operation[0].lower() + operation[1:]
+        suffix = []
+        for char in name:
+            if char.isupper():
+                suffix.append("_")
+                suffix.append(char.lower())
+            else:
+                suffix.append(char)
+        return "".join(suffix)
+
+    def wave_type_suffix(self, type_name):
+        suffix = type_name.replace("unsigned int", "uint")
+        suffix = suffix.replace(" ", "_").replace("*", "_ptr")
+        suffix = suffix.replace("&", "_ref").replace("::", "_")
+        return "".join(char if char.isalnum() else "_" for char in suffix).strip("_")
+
+    def wave_helper_parameter_names(self, operation, arg_count):
+        if arg_count == 1:
+            if operation in HIP_WAVE_PREDICATE_ARGUMENT_OPS:
+                return ["predicate"]
+            return ["value"]
+        if operation in {"WaveReadLaneAt", "QuadReadLaneAt"}:
+            return ["value", "lane"]
+        if operation == "WaveMultiPrefixCountBits":
+            return ["predicate", "mask"]
+        return ["value", "mask"]
+
+    def wave_helper_return_expression(self, operation, result_type):
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "predicate"
+        if operation == "WaveActiveAllEqual":
+            return "true"
+        if operation in {
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+        }:
+            return "(predicate ? 1u : 0u)"
+        if operation == "WaveActiveBallot":
+            return "make_uint4((predicate ? 1u : 0u), 0u, 0u, 0u)"
+        if operation == "WaveMatch":
+            return "make_uint4(0u, 0u, 0u, 0u)"
+        if result_type == "bool":
+            return "false"
+        return "value"
 
     def generate_lambda_expression(self, args):
         """Render CrossGL's pseudo-lambda as a HIP device lambda."""
@@ -1624,12 +2566,217 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             helpers.append("")
         self.code_lines[5:5] = helpers
 
-    def register_variable_type(self, name, type_name):
+    def require_hip_ray_runtime_helpers(self):
+        helper_name = "cgl_ray_runtime_helpers"
+        if helper_name in self.helper_functions:
+            return
+
+        self.helper_functions[helper_name] = (
+            "struct CglRayTracingAccelerationStructure\n"
+            "{\n"
+            "    unsigned long long handle;\n"
+            "};\n"
+            "\n"
+            "struct CglRayDesc\n"
+            "{\n"
+            "    float3 origin;\n"
+            "    float t_min;\n"
+            "    float3 direction;\n"
+            "    float t_max;\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc()\n"
+            "        : origin(make_float3(0.0f, 0.0f, 0.0f)),\n"
+            "          t_min(0.0f),\n"
+            "          direction(make_float3(0.0f, 0.0f, 1.0f)),\n"
+            "          t_max(0.0f)\n"
+            "    {\n"
+            "    }\n"
+            "\n"
+            "    __host__ __device__ CglRayDesc(\n"
+            "        float3 origin_value,\n"
+            "        float t_min_value,\n"
+            "        float3 direction_value,\n"
+            "        float t_max_value)\n"
+            "        : origin(origin_value),\n"
+            "          t_min(t_min_value),\n"
+            "          direction(direction_value),\n"
+            "          t_max(t_max_value)\n"
+            "    {\n"
+            "    }\n"
+            "};\n"
+            "\n"
+            "struct CglRayQuery\n"
+            "{\n"
+            "    unsigned int state;\n"
+            "};\n"
+            "\n"
+            "struct CglBuiltInTriangleIntersectionAttributes\n"
+            "{\n"
+            "    float2 barycentrics;\n"
+            "};\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_id()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline uint3 cgl_ray_launch_size()\n"
+            "{\n"
+            "    return make_uint3(0u, 0u, 0u);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_hit_t()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_hit_kind()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_world_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_origin()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float3 cgl_ray_object_direction()\n"
+            "{\n"
+            "    return make_float3(0.0f, 0.0f, 0.0f);\n"
+            "}\n"
+            "\n"
+            "__device__ inline float cgl_ray_t_min()\n"
+            "{\n"
+            "    return 0.0f;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_incoming_flags()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_instance_custom_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "__device__ inline unsigned int cgl_ray_geometry_index()\n"
+            "{\n"
+            "    return 0u;\n"
+            "}\n"
+            "\n"
+            "template <typename AS, typename Flags, typename Mask, "
+            "typename HitGroup, typename Multiplier, typename Miss, "
+            "typename Ray, typename Payload>\n"
+            "__device__ inline void cgl_trace_ray(\n"
+            "    const AS&,\n"
+            "    const Flags&,\n"
+            "    const Mask&,\n"
+            "    const HitGroup&,\n"
+            "    const Multiplier&,\n"
+            "    const Miss&,\n"
+            "    const Ray&,\n"
+            "    const Payload&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Index, typename Data>\n"
+            "__device__ inline void cgl_call_shader(const Index&, const Data&)\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "template <typename Distance, typename Kind, typename Attributes>\n"
+            "__device__ inline bool cgl_report_hit(\n"
+            "    const Distance&,\n"
+            "    const Kind&,\n"
+            "    const Attributes&)\n"
+            "{\n"
+            "    return false;\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_ignore_hit()\n"
+            "{\n"
+            "}\n"
+            "\n"
+            "__device__ inline void cgl_accept_hit_and_end_search()\n"
+            "{\n"
+            "}\n"
+        )
+
+    def require_hip_ray_query_helper(self, operation):
+        self.require_hip_ray_runtime_helpers()
+        helper_name = f"cgl_ray_query_{self.hip_snake_case_name(operation)}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        return_type = "bool" if operation == "Proceed" else "unsigned int"
+        return_value = "false" if return_type == "bool" else "0u"
+        self.helper_functions[helper_name] = (
+            "template <typename Query, typename... Args>\n"
+            f"__device__ inline {return_type} {helper_name}(Query&, Args&&...)\n"
+            "{\n"
+            f"    return {return_value};\n"
+            "}"
+        )
+        return helper_name
+
+    def hip_snake_case_name(self, name):
+        text = str(name)
+        result = []
+        for index, char in enumerate(text):
+            if char.isupper() and index > 0:
+                previous = text[index - 1]
+                next_char = text[index + 1] if index + 1 < len(text) else ""
+                if previous.islower() or previous.isdigit() or next_char.islower():
+                    result.append("_")
+            result.append(char.lower())
+        return "".join(result).replace("__", "_").strip("_")
+
+    def register_variable_type(self, name, type_name, node=None):
         if not name or type_name is None:
             return
         if not isinstance(type_name, str):
             type_name = self.convert_type_node_to_string(type_name)
         self.variable_types[name] = type_name
+        if self.is_glsl_buffer_block_node(node):
+            access = self.explicit_resource_access(node) or "readwrite"
+            self.glsl_buffer_block_accesses[name] = access
+            self.glsl_buffer_block_layouts[name] = self.glsl_buffer_block_layout(node)
+        else:
+            self.glsl_buffer_block_accesses.pop(name, None)
+            self.glsl_buffer_block_layouts.pop(name, None)
+        if not self.is_storage_image_type(type_name):
+            self.image_resource_accesses.pop(name, None)
+            return
+
+        access = self.explicit_resource_access(node)
+        if access is None:
+            self.image_resource_accesses.pop(name, None)
+        else:
+            self.image_resource_accesses[name] = access
+
+    @property
+    def local_variable_types(self):
+        return self.variable_types
+
+    @local_variable_types.setter
+    def local_variable_types(self, value):
+        self.variable_types = value
+
+    def next_hip_temp_variable(self, prefix):
+        index = self.match_temp_variable_index
+        self.match_temp_variable_index += 1
+        return f"__crossgl_{prefix}_{index}"
 
     def get_expression_name(self, node):
         if isinstance(node, IdentifierNode):
@@ -1887,6 +3034,44 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return self.unsupported_image_coordinate_rank_call(func_name, image_type)
         return None
 
+    def image_resource_access(self, image_arg):
+        if isinstance(image_arg, ArrayAccessNode):
+            array_node = getattr(
+                image_arg, "array", getattr(image_arg, "array_expr", None)
+            )
+            return self.image_resource_access(array_node)
+
+        image_name = self.get_expression_name(image_arg)
+        if not image_name:
+            return None
+        return self.image_resource_accesses.get(image_name)
+
+    def unsupported_image_access_call(self, func_name, image_type, reason):
+        image_type = image_type or "unknown resource"
+        fallback = "((void)0)"
+        if func_name == "imageLoad":
+            fallback = self.zero_value_for_type(self.image_value_type(image_type))
+        return (
+            f"/* unsupported {self.resource_backend_name()} image access: "
+            f"{func_name} {reason} on {image_type} */ {fallback}"
+        )
+
+    def image_access_diagnostic(self, func_name, image_type, raw_image):
+        access = self.image_resource_access(raw_image)
+        if func_name == "imageLoad" and access == "writeonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires readable image resource",
+            )
+        if func_name == "imageStore" and access == "readonly":
+            return self.unsupported_image_access_call(
+                func_name,
+                image_type,
+                "requires writable image resource",
+            )
+        return None
+
     def unsupported_image_atomic_coordinate_rank_call(self, func_name, image_type):
         image_type = image_type or "unknown resource"
         return (
@@ -1912,6 +3097,111 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if "1D" in image_type and "Array" not in image_type:
             return f"{coord} * sizeof({value_type})"
         return self.surface_x_offset(coord, value_type)
+
+    def is_storage_image_type(self, type_name):
+        if not isinstance(type_name, str):
+            type_name = self.convert_type_node_to_string(type_name)
+        base_type = self.resource_base_type(type_name)
+        if not isinstance(base_type, str):
+            return False
+        image_shapes = {
+            "image1D",
+            "image1DArray",
+            "image2D",
+            "image2DArray",
+            "image3D",
+            "imageCube",
+            "imageCubeArray",
+            "image2DMS",
+            "image2DMSArray",
+        }
+        return base_type in image_shapes or any(
+            base_type == f"{prefix}{shape}"
+            for prefix in ("i", "u")
+            for shape in image_shapes
+        )
+
+    def unsupported_scalar_resource_query_call(self, func_name, resource_type):
+        resource_type = resource_type or "unknown resource"
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} on {resource_type} */ 0"
+        )
+
+    def unsupported_dimension_resource_query_call(self, func_name, resource_type):
+        spec = self.dimension_query_spec(resource_type)
+        if spec is None:
+            return None
+        return_type = self.query_return_type(spec["dimensions"])
+        fallback = self.query_constructor(
+            return_type,
+            ["0"] * len(spec["dimensions"]),
+        )
+        return (
+            f"/* unsupported {self.resource_backend_name()} resource query: "
+            f"{func_name} on {resource_type} */ {fallback}"
+        )
+
+    def generate_dimension_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        if resource_type is None:
+            return None
+        if func_name == "textureSize" and not self.is_sampled_resource_type(
+            resource_type
+        ):
+            return self.unsupported_dimension_resource_query_call(
+                func_name, resource_type
+            )
+        if func_name == "imageSize" and not self.is_storage_image_type(resource_type):
+            return self.unsupported_dimension_resource_query_call(
+                func_name, resource_type
+            )
+        return ResourceQueryMixin.generate_dimension_query(
+            self, func_name, raw_args, args
+        )
+
+    def generate_sample_count_query(self, func_name, raw_args, args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        if resource_type is None:
+            return None
+
+        expected_resource = (
+            self.is_sampled_resource_type(resource_type)
+            if func_name == "textureSamples"
+            else self.is_storage_image_type(resource_type)
+        )
+        sample_count_query = None
+        if expected_resource:
+            sample_count_query = ResourceQueryMixin.generate_sample_count_query(
+                self, func_name, raw_args, args
+            )
+        if sample_count_query is not None:
+            return sample_count_query
+        return self.unsupported_scalar_resource_query_call(func_name, resource_type)
+
+    def generate_texture_query_levels(self, raw_args):
+        if not raw_args:
+            return None
+
+        resource_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        if resource_type is None:
+            return None
+        spec = self.dimension_query_spec(resource_type)
+        if (
+            not self.is_sampled_resource_type(resource_type)
+            or spec is None
+            or not spec["mip"]
+        ):
+            return self.unsupported_scalar_resource_query_call(
+                "textureQueryLevels", resource_type
+            )
+        return ResourceQueryMixin.generate_texture_query_levels(self, raw_args)
 
     def generate_resource_call(self, func_name, raw_args, args):
         if func_name in {"textureSize", "imageSize"}:
@@ -2183,6 +3473,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             texture_type = self.resource_base_type(
                 self.get_expression_type(raw_args[0])
             )
+            if texture_type is not None and not self.is_sampled_resource_type(
+                texture_type
+            ):
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+            if self.is_shadow_resource_type(texture_type):
+                return self.unsupported_shadow_resource_call(
+                    func_name, texture_type, args
+                )
             if self.is_multisample_resource_type(texture_type):
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
@@ -2245,6 +3545,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
@@ -2305,6 +3610,11 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
                 return self.unsupported_multisample_resource_call(
                     func_name, image_type, args
                 )
+            access_diagnostic = self.image_access_diagnostic(
+                func_name, image_type, raw_args[0]
+            )
+            if access_diagnostic is not None:
+                return access_diagnostic
 
             image_name = args[0]
             coord = args[1]
@@ -2648,6 +3958,66 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         target_expr = args[0]
         value_args = ", ".join(args[1:])
         return f"{intrinsic}(&{target_expr}, {value_args})"
+
+    def generate_plain_atomic_call(self, func_name, raw_args, args):
+        """Lower HIP atomics on ordinary scalar lvalues to pointer operands."""
+        operation = self.structured_buffer_atomic_operations().get(func_name)
+        if operation is None:
+            return None
+
+        intrinsic, required_arg_count, supported_kinds, supported_kinds_label = (
+            operation
+        )
+        target_expr = raw_args[0] if raw_args else None
+        block_access, _ = self.glsl_buffer_block_access(target_expr)
+        if block_access is None:
+            return None
+        target_type = self.expression_result_type(target_expr) if target_expr else None
+        fallback = self.diagnostic_zero_value_for_type(target_type)
+
+        if len(args) != required_arg_count:
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"requires {required_arg_count} argument(s)",
+                fallback,
+            )
+        if target_expr is None or not self.is_plain_atomic_lvalue(target_expr):
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                "requires assignable scalar target",
+                fallback,
+            )
+
+        access_diagnostic = self.glsl_buffer_block_read_write_diagnostic(
+            target_expr, func_name, fallback
+        )
+        if access_diagnostic is not None:
+            return access_diagnostic
+
+        scalar_kind = self.hip_atomic_scalar_kind(target_type)
+        if scalar_kind not in supported_kinds:
+            type_label = self.type_name_string(target_type) or "unknown target"
+            return self.unsupported_plain_atomic_call(
+                func_name,
+                f"on {type_label} requires supported scalar "
+                f"{supported_kinds_label} target",
+                fallback,
+            )
+
+        target_code = args[0]
+        value_args = ", ".join(args[1:])
+        return f"{intrinsic}(&{target_code}, {value_args})"
+
+    def is_plain_atomic_lvalue(self, expr):
+        """Return whether an expression can be addressed for a HIP atomic."""
+        return isinstance(expr, (IdentifierNode, ArrayAccessNode, MemberAccessNode))
+
+    def unsupported_plain_atomic_call(self, operation, reason, fallback):
+        """Return diagnostic code for unsupported ordinary HIP atomics."""
+        return (
+            f"/* unsupported {self.resource_backend_name()} atomic: "
+            f"{operation} {reason} */ {fallback}"
+        )
 
     def structured_buffer_atomic_target(self, target_expr):
         """Return RWStructuredBuffer target metadata for an atomic lvalue."""
@@ -3292,6 +4662,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return str(node)
 
     def visit_ArrayAccessNode(self, node) -> str:
+        if self.assignment_lhs_depth == 0:
+            diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
         array = self.visit(node.array)
         index = self.visit(node.index)
         return f"{array}[{index}]"
@@ -3301,6 +4675,19 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         return f"{{{elements}}}"
 
     def visit_MemberAccessNode(self, node) -> str:
+        if self.assignment_lhs_depth == 0:
+            diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
+        raw_object_name = getattr(node.object, "name", None)
+        if raw_object_name is not None:
+            ray_builtin = self.hip_ray_builtin_expression(raw_object_name)
+            if ray_builtin is not None:
+                return f"{ray_builtin}.{node.member}"
+            raw_member_access = f"{raw_object_name}.{node.member}"
+            if raw_member_access in self.builtin_map:
+                return self.builtin_map[raw_member_access]
+
         object_expr = self.visit(node.object)
         member_access = f"{object_expr}.{node.member}"
         if member_access in self.builtin_map:
@@ -3419,8 +4806,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def visit_IdentifierNode(self, node) -> str:
         name = getattr(node, "name", str(node))
+        ray_builtin = self.hip_ray_builtin_expression(name)
+        if ray_builtin is not None and name not in self.variable_types:
+            return ray_builtin
         # Handle built-in variables mapping
         return self.builtin_map.get(name, name)
+
+    def hip_ray_builtin_expression(self, name):
+        helper_name = {
+            "gl_LaunchIDEXT": "cgl_ray_launch_id",
+            "gl_LaunchSizeEXT": "cgl_ray_launch_size",
+            "gl_HitTEXT": "cgl_ray_hit_t",
+            "gl_HitKindEXT": "cgl_ray_hit_kind",
+            "gl_WorldRayOriginEXT": "cgl_ray_world_origin",
+            "gl_WorldRayDirectionEXT": "cgl_ray_world_direction",
+            "gl_ObjectRayOriginEXT": "cgl_ray_object_origin",
+            "gl_ObjectRayDirectionEXT": "cgl_ray_object_direction",
+            "gl_RayTminEXT": "cgl_ray_t_min",
+            "gl_IncomingRayFlagsEXT": "cgl_ray_incoming_flags",
+            "gl_InstanceCustomIndexEXT": "cgl_ray_instance_custom_index",
+            "gl_GeometryIndexEXT": "cgl_ray_geometry_index",
+        }.get(str(name))
+        if helper_name is None:
+            return None
+        self.require_hip_ray_runtime_helpers()
+        return f"{helper_name}()"
 
     def visit_ExpressionStatementNode(self, node) -> str:
         expr = self.visit(node.expression)
@@ -3471,6 +4881,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         if hasattr(type_name, "name") or hasattr(type_name, "element_type"):
             return self.convert_type_node_to_string(type_name)
         return str(type_name)
+
+    def get_parameter_type(self, param):
+        """Return a parameter type with HIP resource access metadata applied."""
+        param_type = ResourceQueryMixin.get_parameter_type(self, param)
+        return self.resource_type_with_access(param_type, param)
+
+    def get_variable_node_type(self, node):
+        """Return a variable type with HIP resource access metadata applied."""
+        var_type = ResourceQueryMixin.get_variable_node_type(self, node)
+        return self.resource_type_with_access(var_type, node)
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
@@ -3531,7 +4951,466 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return byte_address_buffer_type
 
         canonical_type = self.canonical_resource_type(type_str)
-        return self.type_map.get(canonical_type or type_str, type_str)
+        mapped_type = self.type_map.get(canonical_type or type_str, type_str)
+        return self.hip_mapped_type_result(mapped_type)
+
+    def hip_mapped_type_result(self, mapped_type):
+        base_type = str(mapped_type).split("[", 1)[0].strip()
+        if base_type in {
+            "CglRayTracingAccelerationStructure",
+            "CglRayDesc",
+            "CglRayQuery",
+            "CglBuiltInTriangleIntersectionAttributes",
+        }:
+            self.require_hip_ray_runtime_helpers()
+        return mapped_type
+
+    def attribute_value_to_string(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if hasattr(value, "name") and value.name is not None:
+            return str(value.name)
+        if hasattr(value, "value") and value.value is not None:
+            return str(value.value).strip('"')
+        return str(value)
+
+    def attribute_arguments(self, attr):
+        return getattr(attr, "arguments", getattr(attr, "args", [])) or []
+
+    def resource_binding_index_value(self, value, prefixes=()):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        for prefix in prefixes:
+            if raw_value.startswith(prefix) and raw_value[len(prefix) :].isdigit():
+                return int(raw_value[len(prefix) :])
+        return None
+
+    def resource_register_space_value(self, value):
+        raw_value = self.attribute_value_to_string(value)
+        if raw_value is None:
+            return None
+        raw_value = str(raw_value).strip().lower()
+        if raw_value.isdigit():
+            return int(raw_value)
+        if raw_value.startswith("space") and raw_value[5:].isdigit():
+            return int(raw_value[5:])
+        return None
+
+    def explicit_hip_resource_binding_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            elif attr_name == "register":
+                binding = self.resource_binding_index_value(
+                    arguments[0], ("b", "s", "t", "u")
+                )
+            else:
+                binding = None
+            if binding is not None:
+                return binding
+        return None
+
+    def explicit_hip_resource_set_index(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            arguments = self.attribute_arguments(attr)
+            if attr_name in {"set", "group"} and arguments:
+                set_index = self.resource_binding_index_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "space" and arguments:
+                set_index = self.resource_register_space_value(arguments[0])
+                if set_index is not None:
+                    return set_index
+            if attr_name == "register":
+                for argument in arguments[1:]:
+                    set_index = self.resource_register_space_value(argument)
+                    if set_index is not None:
+                        return set_index
+        return 0
+
+    def hip_resource_register_metadata(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            values = [
+                self.attribute_value_to_string(argument)
+                for argument in self.attribute_arguments(attr)
+            ]
+            values = [value for value in values if value]
+            if values:
+                return ",".join(values)
+        return None
+
+    def hip_resource_base_type_and_count(self, type_name):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name, 1
+        if "[" not in type_name or "]" not in type_name:
+            return type_name, 1
+        base_type = type_name.split("[", 1)[0].strip()
+        suffix = type_name[type_name.find("[") :]
+        count = 1
+        while suffix.startswith("["):
+            close_bracket = suffix.find("]")
+            if close_bracket < 0:
+                break
+            size_text = suffix[1:close_bracket].strip()
+            if size_text.isdigit():
+                count *= int(size_text)
+            suffix = suffix[close_bracket + 1 :]
+        return base_type, count
+
+    def hip_resource_kind(self, type_name, node=None, forced_kind=None):
+        if forced_kind is not None:
+            return forced_kind
+        if node is not None and self.is_glsl_buffer_block_node(node):
+            return "glsl_buffer_block"
+
+        base_type, _count = self.hip_resource_base_type_and_count(type_name)
+        if not base_type:
+            return None
+        generic_parts = self.generic_type_parts(base_type)
+        base_name = generic_parts[0] if generic_parts is not None else base_type
+        base_name = base_name.rsplit("::", 1)[-1]
+
+        if (
+            self.structured_buffer_type_parts(base_type) is not None
+            or self.byte_address_buffer_base_type(base_type) is not None
+        ):
+            return "buffer"
+
+        canonical = self.canonical_resource_type(base_name) or base_name
+        canonical = canonical.rsplit("::", 1)[-1]
+        mapped_type = self.type_map.get(canonical, canonical)
+        mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
+        if mapped_base == "CglRayTracingAccelerationStructure":
+            return "acceleration_structure"
+        if canonical in {"sampler", "SamplerState"}:
+            return "sampler"
+        if canonical.startswith("sampler"):
+            return "texture"
+        if canonical.startswith(("image", "iimage", "uimage")):
+            return "image"
+        return None
+
+    def hip_resource_binding_namespace(self, kind):
+        if kind in {"cbuffer", "glsl_buffer_block"}:
+            return "buffer"
+        return kind
+
+    def hip_resource_binding_range_conflicts(self, key, binding, count):
+        end = binding + count - 1
+        for used_start, used_end, _used_name in self.hip_used_resource_bindings.get(
+            key, []
+        ):
+            if binding <= used_end and used_start <= end:
+                return True
+        return False
+
+    def next_available_hip_resource_binding(self, namespace, set_index, count):
+        key = (namespace, set_index)
+        binding = self.hip_resource_binding_cursors.get(key, 0)
+        while self.hip_resource_binding_range_conflicts(key, binding, count):
+            binding += 1
+        self.hip_resource_binding_cursors[key] = binding + count
+        return binding
+
+    def reserve_hip_resource_binding(self, namespace, set_index, binding, count, name):
+        key = (namespace, set_index)
+        end = binding + count - 1
+        ranges = self.hip_used_resource_bindings.setdefault(key, [])
+        for used_start, used_end, used_name in ranges:
+            if binding <= used_end and used_start <= end:
+                if used_start == binding and used_end == end and used_name == name:
+                    return
+                raise ValueError(
+                    "Conflicting HIP resource binding for "
+                    f"'{name}': {namespace} set {set_index} binding "
+                    f"{binding}-{end} overlaps '{used_name}' binding "
+                    f"{used_start}-{used_end}"
+                )
+        ranges.append((binding, end, name))
+        self.hip_resource_binding_cursors[key] = max(
+            self.hip_resource_binding_cursors.get(key, 0), end + 1
+        )
+
+    def hip_resource_metadata_comment(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.hip_resource_kind(type_name, node=node, forced_kind=kind)
+        if not name or resource_kind is None:
+            return ""
+
+        _base_type, count = self.hip_resource_base_type_and_count(type_name)
+        namespace = self.hip_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_hip_resource_set_index(node)
+        binding = self.explicit_hip_resource_binding_index(node)
+        if binding is None:
+            binding = self.next_available_hip_resource_binding(
+                namespace, set_index, count
+            )
+            binding_source = "automatic"
+            self.reserve_hip_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+        else:
+            binding_source = "explicit"
+            self.reserve_hip_resource_binding(
+                namespace, set_index, binding, count, name
+            )
+
+        parts = [
+            "// CrossGL resource metadata:",
+            f"name={name}",
+            f"kind={resource_kind}",
+        ]
+        if resource_kind == "glsl_buffer_block":
+            layout = self.glsl_buffer_block_layout(node)
+            if layout:
+                parts.append(f"layout={layout}")
+            access = self.explicit_resource_access(node)
+            if access:
+                parts.append(f"access={access}")
+        parts.extend(
+            [
+                f"set={set_index}",
+                f"binding={binding}",
+                f"binding_source={binding_source}",
+            ]
+        )
+        if count != 1:
+            parts.append(f"count={count}")
+        register_metadata = self.hip_resource_register_metadata(node)
+        if register_metadata:
+            parts.append(f"register={register_metadata}")
+        return " ".join(parts)
+
+    def reserve_explicit_hip_resource_binding(self, node, type_name, kind=None):
+        name = getattr(node, "name", None)
+        resource_kind = self.hip_resource_kind(type_name, node=node, forced_kind=kind)
+        binding = self.explicit_hip_resource_binding_index(node)
+        if not name or resource_kind is None or binding is None:
+            return
+        _base_type, count = self.hip_resource_base_type_and_count(type_name)
+        namespace = self.hip_resource_binding_namespace(resource_kind)
+        set_index = self.explicit_hip_resource_set_index(node)
+        self.reserve_hip_resource_binding(namespace, set_index, binding, count, name)
+
+    def reserve_explicit_hip_resource_bindings(self, ast):
+        for node in getattr(ast, "global_variables", []) or []:
+            type_name = self.get_variable_node_type(node) or "float"
+            self.reserve_explicit_hip_resource_binding(node, type_name)
+        for cbuffer in getattr(ast, "cbuffers", []) or []:
+            self.reserve_explicit_hip_resource_binding(
+                cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+            )
+        stages = getattr(ast, "stages", {}) or {}
+        for stage in stages.values():
+            for node in getattr(stage, "local_variables", []) or []:
+                type_name = self.get_variable_node_type(node) or "float"
+                self.reserve_explicit_hip_resource_binding(node, type_name)
+            for cbuffer in getattr(stage, "local_cbuffers", []) or []:
+                self.reserve_explicit_hip_resource_binding(
+                    cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
+                )
+
+    def explicit_resource_access(self, node):
+        if node is None:
+            return None
+
+        access_names = {
+            "read": "readonly",
+            "readonly": "readonly",
+            "write": "writeonly",
+            "writeonly": "writeonly",
+            "read_write": "readwrite",
+            "readwrite": "readwrite",
+            "access::read": "readonly",
+            "access::write": "writeonly",
+            "access::read_write": "readwrite",
+        }
+        for qualifier in getattr(node, "qualifiers", []) or []:
+            access = access_names.get(str(qualifier).lower())
+            if access is not None:
+                return access
+
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "access":
+                arguments = getattr(attr, "arguments", []) or []
+                if not arguments:
+                    continue
+                raw_access = self.attribute_value_to_string(arguments[0])
+                access = access_names.get(str(raw_access).lower())
+            else:
+                access = access_names.get(attr_name)
+            if access is not None:
+                return access
+        return None
+
+    def is_glsl_buffer_block_node(self, node):
+        attributes = {
+            str(getattr(attr, "name", "")).lower()
+            for attr in getattr(node, "attributes", []) or []
+        }
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(node, "qualifiers", []) or []
+        }
+        if "glsl_buffer_block" in attributes:
+            return True
+        return "buffer" in qualifiers and bool(
+            attributes & {"std140", "std430", "scalar"}
+        )
+
+    def glsl_buffer_block_layout(self, node):
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = str(getattr(attr, "name", "")).lower()
+            if attr_name == "glsl_buffer_block":
+                arguments = getattr(attr, "arguments", []) or []
+                if arguments:
+                    return self.attribute_value_to_string(arguments[0])
+            if attr_name in {"std140", "std430", "scalar"}:
+                return attr_name
+        return None
+
+    def glsl_buffer_block_declaration_type(self, type_name, node):
+        type_name = self.type_name_string(type_name)
+        if not self.is_glsl_buffer_block_node(node):
+            return type_name
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return type_name
+        open_bracket = type_name.find("[")
+        base_type = type_name[:open_bracket].strip()
+        array_suffix = type_name[open_bracket:]
+        if array_suffix != "[]":
+            return type_name
+        if self.explicit_resource_access(node) == "readonly":
+            return f"const {base_type}{array_suffix}"
+        return type_name
+
+    def glsl_buffer_block_metadata_comment(self, node, type_name):
+        name = getattr(node, "name", None)
+        if not name or not self.is_glsl_buffer_block_node(node):
+            return ""
+        parts = [
+            "// CrossGL resource metadata:",
+            f"name={name}",
+            "kind=glsl_buffer_block",
+        ]
+        layout = self.glsl_buffer_block_layout(node)
+        if layout:
+            parts.append(f"layout={layout}")
+        access = self.explicit_resource_access(node)
+        if access:
+            parts.append(f"access={access}")
+        return " ".join(parts)
+
+    def glsl_buffer_block_root_name(self, expr):
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array", getattr(expr, "array_expr", None))
+            return self.glsl_buffer_block_root_name(array_expr)
+        if isinstance(expr, MemberAccessNode):
+            object_expr = getattr(expr, "object", getattr(expr, "object_expr", None))
+            return self.glsl_buffer_block_root_name(object_expr)
+        if isinstance(expr, IdentifierNode):
+            return expr.name
+        if isinstance(expr, VariableNode):
+            return expr.name
+        if isinstance(expr, str):
+            return expr
+        return getattr(expr, "name", None)
+
+    def glsl_buffer_block_access(self, expr):
+        root_name = self.glsl_buffer_block_root_name(expr)
+        if root_name is None:
+            return None, None
+        return self.glsl_buffer_block_accesses.get(root_name), root_name
+
+    def glsl_buffer_block_diagnostic(self, operation, expr, reason, fallback):
+        _, resource_name = self.glsl_buffer_block_access(expr)
+        resource_name = resource_name or "unknown"
+        return (
+            f"/* unsupported {self.resource_backend_name()} GLSL buffer block "
+            f"{operation}: resource '{resource_name}' {reason} */ {fallback}"
+        )
+
+    def glsl_buffer_block_read_diagnostic(self, expr, operation):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access != "writeonly":
+            return None
+        fallback = self.diagnostic_zero_value_for_type(
+            self.expression_result_type(expr)
+        )
+        return self.glsl_buffer_block_diagnostic(
+            operation, expr, "is writeonly", fallback
+        )
+
+    def glsl_buffer_block_write_diagnostic(self, expr, operation):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access != "readonly":
+            return None
+        return self.glsl_buffer_block_diagnostic(
+            operation, expr, "is readonly", "((void)0)"
+        )
+
+    def glsl_buffer_block_read_write_diagnostic(self, expr, operation, fallback):
+        access, _ = self.glsl_buffer_block_access(expr)
+        if access == "readonly":
+            return self.glsl_buffer_block_diagnostic(
+                operation, expr, "is readonly", fallback
+            )
+        if access == "writeonly":
+            return self.glsl_buffer_block_diagnostic(
+                operation, expr, "is writeonly", fallback
+            )
+        return None
+
+    def resource_type_with_access(self, type_name, node):
+        type_name = self.type_name_string(type_name)
+        if not type_name:
+            return type_name
+
+        access = self.explicit_resource_access(node)
+        if access is None:
+            return type_name
+
+        base_type = type_name
+        array_suffix = ""
+        if "[" in type_name and "]" in type_name:
+            open_bracket = type_name.find("[")
+            base_type = type_name[:open_bracket]
+            array_suffix = type_name[open_bracket:]
+
+        parts = self.structured_buffer_type_parts(base_type)
+        if parts is not None:
+            base_name, element_type = parts
+            if base_name in {"StructuredBuffer", "RWStructuredBuffer"}:
+                mapped_base = (
+                    "StructuredBuffer" if access == "readonly" else "RWStructuredBuffer"
+                )
+                return f"{mapped_base}<{element_type}>{array_suffix}"
+
+        byte_base = self.byte_address_buffer_base_type(base_type)
+        if byte_base in {"ByteAddressBuffer", "RWByteAddressBuffer"}:
+            mapped_base = (
+                "ByteAddressBuffer" if access == "readonly" else "RWByteAddressBuffer"
+            )
+            return f"{mapped_base}{array_suffix}"
+
+        return type_name
 
     def generic_type_parts(self, type_name):
         """Split a generic type name into base name and top-level arguments."""
@@ -3649,7 +5528,31 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def expression_result_type(self, node):
         """Infer expression result types with HIP buffer operations."""
+        if isinstance(node, WaveOpNode):
+            return self.wave_result_type(
+                getattr(node, "operation", ""), getattr(node, "arguments", []) or []
+            )
+        if isinstance(node, RayTracingOpNode):
+            if getattr(node, "operation", "") == "ReportHit":
+                return "bool"
+            return None
+        if isinstance(node, RayQueryOpNode):
+            operation = getattr(node, "operation", "")
+            if operation == "Proceed":
+                return "bool"
+            if operation in {"CandidateRayT", "CommittedRayT"}:
+                return "float"
+            return "uint"
         if isinstance(node, FunctionCallNode):
+            function_expr = getattr(node, "function", getattr(node, "name", None))
+            func_name = getattr(function_expr, "name", function_expr)
+            if func_name in HIP_WAVE_OP_ARITIES:
+                return self.wave_result_type(
+                    func_name,
+                    getattr(node, "arguments", getattr(node, "args", [])) or [],
+                )
+            if func_name == "ReportHit":
+                return "bool"
             buffer_result_type = self.buffer_call_result_type(node)
             if buffer_result_type is not None:
                 return buffer_result_type
@@ -3705,6 +5608,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             target = self.structured_buffer_atomic_target(raw_args[0])
             if target is not None:
                 return target["target_type"]
+            target_type = self.expression_result_type(raw_args[0])
+            if self.hip_atomic_scalar_kind(target_type) is not None:
+                return target_type
         return None
 
     def canonical_sampled_resource_type(self, type_name):
@@ -3738,6 +5644,16 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def canonical_resource_type(self, type_name):
         """Return the canonical sampler/image resource type for an alias."""
+        if isinstance(type_name, str):
+            base_type = type_name.split("[", 1)[0].split("<", 1)[0].strip()
+            if base_type in {
+                "accelerationStructureEXT",
+                "AccelerationStructure",
+                "acceleration_structure",
+                "RaytracingAccelerationStructure",
+                "RayTracingAccelerationStructure",
+            }:
+                return "RayTracingAccelerationStructure"
         return self.canonical_sampled_resource_type(
             type_name
         ) or self.canonical_storage_resource_type(type_name)

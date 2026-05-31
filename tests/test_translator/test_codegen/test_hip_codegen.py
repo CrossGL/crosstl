@@ -4,24 +4,32 @@ import shutil
 import subprocess
 
 import pytest
-from crosstl.translator.lexer import Lexer
-from crosstl.translator.parser import Parser
+
 from crosstl.translator.ast import (
-    AssignmentNode,
     ArrayAccessNode,
+    AssignmentNode,
     BlockNode,
+    ConstructorPatternNode,
     ExecutionModel,
     FunctionCallNode,
     FunctionNode,
     IdentifierNode,
     LiteralNode,
+    MatchArmNode,
+    MatchNode,
     MemberAccessNode,
     ParameterNode,
     PrimitiveType,
     ShaderNode,
+    ShaderStage,
+    StructNode,
     VariableNode,
+    WaveOpNode,
+    WildcardPatternNode,
 )
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 
 
 def compile_hip_if_hipcc_available(hip_code, tmp_path):
@@ -86,6 +94,226 @@ class TestHipCodeGen:
         hip_code = codegen.generate(ast)
 
         assert "__global__ void main()" in hip_code
+
+    @pytest.mark.parametrize(
+        ("stage_name", "normalized_stage"),
+        [
+            ("amplification", "amplification"),
+            ("geometry", "geometry"),
+            ("mesh", "mesh"),
+            ("object", "object"),
+            ("task", "task"),
+            ("tessellation_control", "tessellation_control"),
+            ("tessellation_evaluation", "tessellation_evaluation"),
+        ],
+    )
+    def test_unsupported_shader_stages_are_rejected_for_hip_codegen(
+        self, stage_name, normalized_stage
+    ):
+        source_code = f"""
+        shader UnsupportedHipStage {{
+            {stage_name} {{
+                void main() {{
+                }}
+            }}
+        }}
+        """
+
+        with pytest.raises(
+            ValueError,
+            match=rf"HIP output does not support stage type\(s\): {normalized_stage}",
+        ):
+            HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+    def test_unsupported_function_stage_qualifiers_are_rejected_for_hip_codegen(self):
+        ast = ShaderNode(
+            name="UnsupportedQualifiedHipStage",
+            execution_model=ExecutionModel.GRAPHICS_PIPELINE,
+            functions=[
+                FunctionNode(
+                    name="main",
+                    return_type=PrimitiveType("void"),
+                    parameters=[],
+                    body=BlockNode([]),
+                    qualifiers=["hull", ShaderStage.MESH],
+                )
+            ],
+        )
+
+        with pytest.raises(
+            ValueError,
+            match=(
+                r"HIP output does not support stage type\(s\): "
+                r"mesh, tessellation_control"
+            ),
+        ):
+            HipCodeGen().generate(ast)
+
+    def test_ray_tracing_stages_emit_hip_metadata_and_hooks(self, tmp_path):
+        source_code = """
+        shader HipRayTracingStages {
+            struct RayPayload {
+                vec3 color;
+            };
+
+            struct HitAttributes {
+                vec2 barycentrics;
+            };
+
+            struct CallableData {
+                uint value;
+            };
+
+            accelerationStructureEXT scene @binding(3) @set(2);
+
+            ray_generation {
+                void main() {
+                    uvec3 launch = gl_LaunchIDEXT;
+                    uint launchWidth = gl_LaunchSizeEXT.x;
+                    RayDesc ray = RayDesc(
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    RayPayload payload;
+                    CallableData data;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                    CallShader(0, data);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    float hitT @ gl_HitTEXT
+                ) {
+                    payload.color = vec3(1.0, 0.0, hitT);
+                }
+            }
+
+            ray_any_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    uint hitKind @ gl_HitKindEXT
+                ) {
+                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    IgnoreHit();
+                    AcceptHitAndEndSearch();
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) {
+                    payload.color = vec3(0.0, 0.0, 0.0);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) {
+                    data.value = data.value + 1u;
+                }
+            }
+
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    bool accepted = ReportHit(1.0, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+            "set=2 binding=3 binding_source=explicit" in hip_code
+        )
+        assert "struct CglRayTracingAccelerationStructure" in hip_code
+        assert "struct CglRayDesc" in hip_code
+        assert "// CrossGL ray stage: ray_generation" in hip_code
+        assert "// CrossGL ray stage: closest_hit" in hip_code
+        assert "// CrossGL ray stage: any_hit" in hip_code
+        assert "// CrossGL ray stage: miss" in hip_code
+        assert "// CrossGL ray stage: callable" in hip_code
+        assert "// CrossGL ray stage: intersection" in hip_code
+        assert "__device__ void ray_generation_main()" in hip_code
+        assert "__device__ void ray_closest_hit_main(" in hip_code
+        assert "// CrossGL parameter semantic: payload: ray_payload" in hip_code
+        assert "// CrossGL parameter semantic: attributes: hit_attribute" in hip_code
+        assert "// CrossGL parameter semantic: data: callable_data" in hip_code
+        assert "uint3 launch = cgl_ray_launch_id();" in hip_code
+        assert "unsigned int launchWidth = cgl_ray_launch_size().x;" in hip_code
+        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in hip_code
+        assert "cgl_call_shader(0, data);" in hip_code
+        assert "cgl_ignore_hit();" in hip_code
+        assert "cgl_accept_hit_and_end_search();" in hip_code
+        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in hip_code
+        assert (
+            "bool acceptedWithoutAttributes = cgl_report_hit"
+            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in hip_code
+        )
+
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_hip_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
+        self,
+    ):
+        invalid_type = """
+        shader InvalidHipRayBuiltinType {
+            ray_generation {
+                void main(float launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader InvalidHipRayBuiltinStage {
+            fragment {
+                void main(uvec3 launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        duplicate = """
+        shader DuplicateHipRayBuiltin {
+            ray_generation {
+                void main(
+                    uvec3 launch @ gl_LaunchIDEXT,
+                    uvec3 launchAgain @ SV_DispatchRaysIndex
+                ) {
+                }
+            }
+        }
+        """
+        with pytest.raises(
+            ValueError, match="Duplicate HIP stage parameter semantic launch_id"
+        ):
+            HipCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+
+    def test_ray_query_methods_lower_to_hip_hooks(self):
+        source_code = """
+        void queryRay(RayQuery query) {
+            bool active = query.Proceed();
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct CglRayQuery" in hip_code
+        assert "__device__ void queryRay(CglRayQuery query)" in hip_code
+        assert "__device__ inline bool cgl_ray_query_proceed" in hip_code
+        assert "bool active = cgl_ray_query_proceed(query);" in hip_code
 
     def test_generated_basic_compute_kernel_smoke_compiles_with_hipcc(self, tmp_path):
         """Smoke compile a generated HIP kernel when hipcc is available."""
@@ -2227,6 +2455,96 @@ class TestHipCodeGen:
         assert "gl_WorkGroupSize" not in hip_code
         assert "gl_NumWorkGroups" not in hip_code
 
+    def test_hlsl_compute_builtins_emit_hip_names(self):
+        """Test HIP maps HLSL compute built-in aliases to native indices."""
+        source_code = """
+        shader TestShader {
+            compute {
+                void main() {
+                    int lx = SV_GroupThreadID.x;
+                    int gy = SV_DispatchThreadID.y;
+                    int wz = SV_GroupID.z;
+                    uint lane = SV_GroupIndex;
+                    uint localLane = gl_LocalInvocationIndex;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        linear_index = (
+            "(threadIdx.z * blockDim.y * blockDim.x + "
+            "threadIdx.y * blockDim.x + threadIdx.x)"
+        )
+        assert "int lx = threadIdx.x;" in hip_code
+        assert "int gy = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "int wz = blockIdx.z;" in hip_code
+        assert f"unsigned int lane = {linear_index};" in hip_code
+        assert f"unsigned int localLane = {linear_index};" in hip_code
+        assert "SV_GroupThreadID" not in hip_code
+        assert "SV_DispatchThreadID" not in hip_code
+        assert "SV_GroupID" not in hip_code
+        assert "SV_GroupIndex" not in hip_code
+        assert "gl_LocalInvocationIndex" not in hip_code
+
+    def test_direct_hlsl_compute_vector_builtins_emit_hip_vectors(self):
+        """Test direct AST HLSL compute vector built-ins map to uint3 values."""
+        ast = ShaderNode(
+            name="DirectHlslBuiltins",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            functions=[
+                FunctionNode(
+                    "main",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            VariableNode(
+                                "local",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_GroupThreadID"),
+                            ),
+                            VariableNode(
+                                "global",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_DispatchThreadID"),
+                            ),
+                            VariableNode(
+                                "group",
+                                PrimitiveType("uvec3"),
+                                IdentifierNode("SV_GroupID"),
+                            ),
+                        ]
+                    ),
+                )
+            ],
+        )
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert (
+            "uint3 local = make_uint3(threadIdx.x, threadIdx.y, threadIdx.z);"
+            in hip_code
+        )
+        assert (
+            "uint3 global = make_uint3((blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z));"
+        ) in hip_code
+        assert (
+            "uint3 group = make_uint3(blockIdx.x, blockIdx.y, blockIdx.z);" in hip_code
+        )
+        assert "SV_GroupThreadID" not in hip_code
+        assert "SV_DispatchThreadID" not in hip_code
+        assert "SV_GroupID" not in hip_code
+
     def test_direct_builtin_identifier_nodes_emit_hip_names(self):
         """Test HIP maps direct AST built-in identifiers with component suffixes."""
         ast = ShaderNode(
@@ -2821,6 +3139,21 @@ class TestHipCodeGen:
                 float comparedLod = textureCompareLod(shadowMap, uv, depth, 2.0);
                 float comparedGrad = textureCompareGrad(shadowMap, uv, depth, ddx, ddy);
                 float comparedOffset = textureCompareOffset(shadowMap, uv, depth, offset);
+                float comparedLodOffset = textureCompareLodOffset(
+                    shadowMap,
+                    uv,
+                    depth,
+                    2.0,
+                    offset
+                );
+                float comparedGradOffset = textureCompareGradOffset(
+                    shadowMap,
+                    uv,
+                    depth,
+                    ddx,
+                    ddy,
+                    offset
+                );
                 vec4 gathered = textureGatherCompare(shadowMap, cmpSampler, uv, depth);
                 vec4 gatheredOffset = textureGatherCompareOffset(
                     shadowMap,
@@ -2828,6 +3161,50 @@ class TestHipCodeGen:
                     depth,
                     offset
                 );
+                float projected = textureCompareProj(shadowMap, uvw, depth);
+                float projectedOffset = textureCompareProjOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    offset
+                );
+                float projectedLod = textureCompareProjLod(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    2.0
+                );
+                float projectedLodOffset = textureCompareProjLodOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    2.0,
+                    offset
+                );
+                float projectedGrad = textureCompareProjGrad(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    ddx,
+                    ddy
+                );
+                float projectedGradOffset = textureCompareProjGradOffset(
+                    shadowMap,
+                    uvw,
+                    depth,
+                    ddx,
+                    ddy,
+                    offset
+                );
+                float projectedSum = textureCompareProj(shadowMap, uvw, depth) +
+                    textureCompareProjGradOffset(
+                        shadowMap,
+                        uvw,
+                        depth,
+                        ddx,
+                        ddy,
+                        offset
+                    );
             }
 
             compute {
@@ -2880,6 +3257,14 @@ class TestHipCodeGen:
             "textureCompareOffset on sampler2DShadow */ 0.0f;" in hip_code
         )
         assert (
+            "float comparedLodOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareLodOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float comparedGradOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareGradOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
             "float4 gathered = /* unsupported HIP shadow resource call: "
             "textureGatherCompare on sampler2DShadow */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
@@ -2889,10 +3274,49 @@ class TestHipCodeGen:
             "textureGatherCompareOffset on sampler2DShadow */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
         )
+        assert (
+            "float projected = /* unsupported HIP shadow resource call: "
+            "textureCompareProj on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareProjOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedLod = /* unsupported HIP shadow resource call: "
+            "textureCompareProjLod on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedLodOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareProjLodOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedGrad = /* unsupported HIP shadow resource call: "
+            "textureCompareProjGrad on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedGradOffset = /* unsupported HIP shadow resource call: "
+            "textureCompareProjGradOffset on sampler2DShadow */ 0.0f;" in hip_code
+        )
+        assert (
+            "float projectedSum = "
+            "(/* unsupported HIP shadow resource call: "
+            "textureCompareProj on sampler2DShadow */ 0.0f + "
+            "/* unsupported HIP shadow resource call: textureCompareProjGradOffset "
+            "on sampler2DShadow */ 0.0f);" in hip_code
+        )
         assert "textureCompare(" not in hip_code
         assert "textureCompareLod(" not in hip_code
         assert "textureCompareGrad(" not in hip_code
         assert "textureCompareOffset(" not in hip_code
+        assert "textureCompareLodOffset(" not in hip_code
+        assert "textureCompareGradOffset(" not in hip_code
+        assert "textureCompareProj(" not in hip_code
+        assert "textureCompareProjOffset(" not in hip_code
+        assert "textureCompareProjLod(" not in hip_code
+        assert "textureCompareProjLodOffset(" not in hip_code
+        assert "textureCompareProjGrad(" not in hip_code
+        assert "textureCompareProjGradOffset(" not in hip_code
         assert "textureGatherCompare(" not in hip_code
         assert "textureGatherCompareOffset(" not in hip_code
         assert "texture(shadowMap" not in hip_code
@@ -2999,11 +3423,13 @@ class TestHipCodeGen:
         source_code = """
         shader Resources {
             sampler2d colorMap;
+            samplercube cubeMap;
             sampler2dms msTex;
             sampler2dshadow shadowMap;
+            image2D colorImage;
             sampler querySampler;
 
-            void sampleResources(vec2 uv, ivec2 offset) {
+            void sampleResources(vec2 uv, ivec2 offset, ivec4 cubePixel) {
                 vec4 offsetSample = textureOffset(colorMap, uv, offset);
                 vec4 lodOffsetSample = textureLodOffset(
                     colorMap,
@@ -3045,7 +3471,15 @@ class TestHipCodeGen:
                     offset
                 );
                 vec4 fetchedOffset = texelFetchOffset(colorMap, offset, 0, offset);
+                vec4 imageOffset = texelFetchOffset(colorImage, offset, 0, offset);
+                vec4 cubeOffset = texelFetchOffset(cubeMap, cubePixel, 0, offset);
                 vec4 msOffset = texelFetchOffset(msTex, offset, 0, offset);
+                float shadowFetchOffset = texelFetchOffset(
+                    shadowMap,
+                    offset,
+                    0,
+                    offset
+                );
                 float shadowProjected = textureCompareProj(
                     shadowMap,
                     vec4(uv, 0.5, 1.0)
@@ -3101,6 +3535,20 @@ class TestHipCodeGen:
             "float4 msOffset = /* unsupported HIP multisample resource call: "
             "texelFetchOffset on sampler2DMS */ "
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert (
+            "float4 imageOffset = /* unsupported HIP sampled resource call: "
+            "texelFetchOffset on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert (
+            "float4 cubeOffset = /* unsupported HIP sampled resource call: "
+            "texelFetchOffset on samplerCube */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert (
+            "float shadowFetchOffset = /* unsupported HIP shadow resource call: "
+            "texelFetchOffset on sampler2DShadow */ 0.0f;" in hip_code
         )
         assert (
             "float shadowProjected = /* unsupported HIP shadow resource call: "
@@ -3482,8 +3930,12 @@ class TestHipCodeGen:
             sampler2d tex;
             sampler2darray layers;
             sampler3d volume;
+            samplercube cubeTex;
+            samplercubearray cubeLayers;
+            sampler2dshadow shadowTex;
+            image2D colorImage;
 
-            void fetchShapes(int x, ivec2 pixel, ivec3 voxel) {
+            void fetchShapes(int x, ivec2 pixel, ivec3 voxel, ivec4 cubeLayerTexel) {
                 vec4 fetchedLine = texelFetch(lineTex, x, 0);
                 vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 0);
                 vec4 fetched = texelFetch(tex, pixel, 0);
@@ -3493,6 +3945,10 @@ class TestHipCodeGen:
                 vec4 badLineLayer = texelFetch(lineLayers, x, 0);
                 vec4 badTex = texelFetch(tex, x, 0);
                 vec4 badVolume = texelFetch(volume, pixel, 0);
+                vec4 badCube = texelFetch(cubeTex, voxel, 0);
+                vec4 badCubeArray = texelFetch(cubeLayers, cubeLayerTexel, 0);
+                vec4 badImage = texelFetch(colorImage, pixel, 0);
+                float badShadow = texelFetch(shadowTex, pixel, 0);
             }
 
             compute {
@@ -3532,6 +3988,20 @@ class TestHipCodeGen:
                 f"texelFetch coordinate rank on {texture_type} */ "
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in hip_code
+        for name, texture_type in (
+            ("badCube", "samplerCube"),
+            ("badCubeArray", "samplerCubeArray"),
+            ("badImage", "image2D"),
+        ):
+            assert (
+                f"float4 {name} = /* unsupported HIP sampled resource call: "
+                f"texelFetch on {texture_type} */ "
+                "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
+            ) in hip_code
+        assert (
+            "float badShadow = /* unsupported HIP shadow resource call: "
+            "texelFetch on sampler2DShadow */ 0.0f;" in hip_code
+        )
         assert "tex1Dfetch<float4>(lineTex, pixel)" not in hip_code
         assert "tex1DLayered<float4>(lineLayers, x." not in hip_code
         assert "tex2D<float4>(tex, x." not in hip_code
@@ -4129,6 +4599,92 @@ class TestHipCodeGen:
         assert "imageLoad(" not in hip_code
         assert "imageStore(" not in hip_code
         assert "CglResourceQueryInfo" not in hip_code
+
+    def test_resource_binding_metadata_comments_emit_hip_bindings(self):
+        """Test HIP emits deterministic CrossGL resource binding metadata."""
+        source_code = """
+        shader HipResourceBindings {
+            sampler2D colorMap @set(2) @binding(5);
+            sampler linearSampler @binding(1);
+            @binding(3) RWStructuredBuffer<int> counters[2];
+            Texture2D hlslTexture @register(t7, space3);
+
+            @binding(6)
+            cbuffer Camera {
+                float exposure;
+            };
+
+            image2D outImage;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=colorMap kind=texture set=2 "
+            "binding=5 binding_source=explicit" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+            "binding=1 binding_source=explicit" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=counters kind=buffer set=0 "
+            "binding=3 binding_source=explicit count=2" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=hlslTexture kind=texture set=3 "
+            "binding=7 binding_source=explicit register=t7,space3" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=outImage kind=image set=0 "
+            "binding=0 binding_source=automatic" in hip_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
+            "binding=6 binding_source=explicit" in hip_code
+        )
+
+    def test_duplicate_resource_bindings_are_rejected_for_hip_codegen(self):
+        """Test HIP rejects duplicate explicit resource bindings."""
+        duplicate_texture_binding = """
+        shader DuplicateHipTextureBindings {
+            @binding(2) sampler2D firstTexture;
+            @binding(2) sampler2D secondTexture;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting HIP resource binding"):
+            HipCodeGen().generate(
+                Parser(Lexer(duplicate_texture_binding).tokens).parse()
+            )
+
+        overlapping_buffer_range = """
+        shader DuplicateHipBufferBindings {
+            @binding(3) RWStructuredBuffer<int> counters[2];
+            @binding(4)
+            cbuffer Camera {
+                float exposure;
+            };
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting HIP resource binding"):
+            HipCodeGen().generate(
+                Parser(Lexer(overlapping_buffer_range).tokens).parse()
+            )
 
     def test_forwarded_dynamic_resource_arrays_emit_hip_metadata_arguments(self):
         """Test HIP forwards query metadata sidecars through dynamic arrays."""
@@ -6671,6 +7227,127 @@ class TestHipCodeGen:
         assert "buffer_dimensions(" not in hip_code
         assert ".GetDimensions(" not in hip_code
 
+    def test_glsl_buffer_blocks_emit_hip_structs_pointers_and_metadata(self):
+        """Test HIP lowers GLSL buffer blocks to C++ struct/pointer placeholders."""
+        source_code = """
+        layout(std430, binding = 3) readonly buffer float values[];
+
+        layout(std140, binding = 4) buffer ParticleBlock {
+            vec4 positions[2];
+            uint count;
+        } particles;
+
+        float readValue(uint index) {
+            return values[index];
+        }
+
+        void writeParticle(uint index, vec4 value) {
+            particles.positions[index] = value;
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "// CrossGL resource metadata: name=values kind=glsl_buffer_block "
+            "layout=std430 access=readonly"
+        ) in hip_code
+        assert "const float* values;" in hip_code
+        assert "struct ParticleBlock" in hip_code
+        assert "float4 positions[2];" in hip_code
+        assert "unsigned int count;" in hip_code
+        assert (
+            "// CrossGL resource metadata: name=particles kind=glsl_buffer_block "
+            "layout=std140"
+        ) in hip_code
+        assert "ParticleBlock particles;" in hip_code
+        assert "return values[index];" in hip_code
+        assert "particles.positions[index] = value;" in hip_code
+
+    def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_hip(self):
+        """Test HIP lowers GLSL buffer-block runtime-array atomics."""
+        source_code = """
+        layout(std430, binding = 1) buffer CounterBlock {
+            uint counters[];
+            int signedCounters[];
+        } counters;
+
+        uint addCounter(uint index, uint value) {
+            return atomicAdd(counters.counters[index], value);
+        }
+
+        uint swapCounter(uint index, uint expected, uint replacement) {
+            return atomicCompSwap(counters.counters[index], expected, replacement);
+        }
+
+        int maxSigned(uint index, int value) {
+            return atomicMax(counters.signedCounters[index], value);
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "unsigned int* counters;" in hip_code
+        assert "int* signedCounters;" in hip_code
+        assert "return atomicAdd(&counters.counters[index], value);" in hip_code
+        assert (
+            "return atomicCAS(&counters.counters[index], expected, replacement);"
+        ) in hip_code
+        assert "return atomicMax(&counters.signedCounters[index], value);" in hip_code
+        assert "atomicAdd(counters.counters[index]" not in hip_code
+
+    def test_glsl_buffer_block_access_diagnostics_emit_hip(self):
+        """Test HIP emits deterministic diagnostics for invalid buffer-block access."""
+        source_code = """
+        layout(std430, binding = 1) readonly buffer ReadonlyBlock {
+            uint counters[];
+            uint value;
+        } readBlock;
+
+        layout(std430, binding = 2) writeonly buffer WriteonlyBlock {
+            uint counters[];
+        } writeBlock;
+
+        uint blockedAtomic(uint index, uint value) {
+            return atomicAdd(readBlock.counters[index], value);
+        }
+
+        void blockedStore(uint value) {
+            readBlock.value = value;
+        }
+
+        uint blockedRead(uint index) {
+            return writeBlock.counters[index];
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert (
+            "return /* unsupported HIP GLSL buffer block atomicAdd: resource "
+            "'readBlock' is readonly */ 0u;"
+        ) in hip_code
+        assert (
+            "/* unsupported HIP GLSL buffer block assignment: resource "
+            "'readBlock' is readonly */ ((void)0);"
+        ) in hip_code
+        assert (
+            "return /* unsupported HIP GLSL buffer block load: resource "
+            "'writeBlock' is writeonly */ 0u;"
+        ) in hip_code
+
     def test_byte_address_buffer_dimensions_emit_hip_length_sidecars(self, tmp_path):
         """Test HIP lowers byte-address dimensions through byte-length sidecars."""
         source_code = """
@@ -7346,6 +8023,9 @@ class TestHipCodeGen:
                 int compared = imageAtomicCompSwap(signedImage, pixel, 3, 4);
                 int volumeMin = imageAtomicMin(signedVolume, voxel, 5);
                 uint layerMax = imageAtomicMax(counterLayers, pixelLayer, 6);
+                uint bitAnd = imageAtomicAnd(counters, pixel, 255);
+                uint bitOr = imageAtomicOr(counters, pixel, 8);
+                uint bitXor = imageAtomicXor(counters, pixel, 4);
                 uint vectorAtomic = imageAtomicAdd(vectorCounters, pixel, 7);
                 int missingArgs = imageAtomicAdd(signedImage);
             }
@@ -7384,6 +8064,18 @@ class TestHipCodeGen:
             "imageAtomicMax on uimage2DArray */ 0u;" in hip_code
         )
         assert (
+            "unsigned int bitAnd = /* unsupported HIP image atomic resource call: "
+            "imageAtomicAnd on uimage2D */ 0u;" in hip_code
+        )
+        assert (
+            "unsigned int bitOr = /* unsupported HIP image atomic resource call: "
+            "imageAtomicOr on uimage2D */ 0u;" in hip_code
+        )
+        assert (
+            "unsigned int bitXor = /* unsupported HIP image atomic resource call: "
+            "imageAtomicXor on uimage2D */ 0u;" in hip_code
+        )
+        assert (
             "unsigned int vectorAtomic = /* unsupported HIP image atomic resource call: "
             "imageAtomicAdd on image2D */ 0;" in hip_code
         )
@@ -7396,6 +8088,9 @@ class TestHipCodeGen:
         assert "imageAtomicCompSwap(" not in hip_code
         assert "imageAtomicMin(" not in hip_code
         assert "imageAtomicMax(" not in hip_code
+        assert "imageAtomicAnd(" not in hip_code
+        assert "imageAtomicOr(" not in hip_code
+        assert "imageAtomicXor(" not in hip_code
 
     def test_image_atomic_coordinate_shapes_emit_hip_diagnostics(self):
         """Test HIP image atomic diagnostics distinguish coordinate-rank errors."""
@@ -7882,6 +8577,98 @@ class TestHipCodeGen:
         assert "CglResourceQueryInfo" not in hip_code
         assert "textureQueryLod(" not in hip_code
 
+    def test_target_invalid_resource_queries_emit_hip_diagnostics(self):
+        """Test HIP diagnoses query builtins used on incompatible resources."""
+        source_code = """
+        shader Resources {
+            sampler2d colorMap;
+            sampler2dms msTex;
+            image2D colorImage;
+            image2DMS msImage;
+            sampler querySampler;
+
+            compute {
+                void main() {
+                    ivec2 validTextureSize = textureSize(colorMap, 0);
+                    ivec2 validImageSize = imageSize(colorImage);
+                    int validTextureSamples = textureSamples(msTex);
+                    int validImageSamples = imageSamples(msImage);
+                    int validTextureLevels = textureQueryLevels(colorMap);
+                    ivec2 badImageSizeFromTexture = imageSize(colorMap);
+                    ivec2 badTextureSizeFromImage = textureSize(colorImage, 0);
+                    int badTextureSamples = textureSamples(colorMap);
+                    int badImageSamples = imageSamples(colorImage);
+                    int badLevelsFromImage = textureQueryLevels(colorImage);
+                    int badLevelsFromMsTexture = textureQueryLevels(msTex);
+                    int badLevelsFromSamplerState = textureQueryLevels(querySampler);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert (
+            "int2 validTextureSize = cgl_textureSize_sampler2D"
+            "(colorMap_metadata, 0);" in hip_code
+        )
+        assert (
+            "int2 validImageSize = cgl_imageSize_image2D"
+            "(colorImage_metadata);" in hip_code
+        )
+        assert (
+            "int validTextureSamples = cgl_textureSamples_sampler2DMS"
+            "(msTex_metadata);" in hip_code
+        )
+        assert (
+            "int validImageSamples = cgl_imageSamples_image2DMS"
+            "(msImage_metadata);" in hip_code
+        )
+        assert (
+            "int validTextureLevels = cgl_textureQueryLevels_sampler2D"
+            "(colorMap_metadata);" in hip_code
+        )
+        assert (
+            "int2 badImageSizeFromTexture = /* unsupported HIP resource query: "
+            "imageSize on sampler2D */ make_int2(0, 0);" in hip_code
+        )
+        assert (
+            "int2 badTextureSizeFromImage = /* unsupported HIP resource query: "
+            "textureSize on image2D */ make_int2(0, 0);" in hip_code
+        )
+        assert (
+            "int badTextureSamples = /* unsupported HIP resource query: "
+            "textureSamples on sampler2D */ 0;" in hip_code
+        )
+        assert (
+            "int badImageSamples = /* unsupported HIP resource query: "
+            "imageSamples on image2D */ 0;" in hip_code
+        )
+        assert (
+            "int badLevelsFromImage = /* unsupported HIP resource query: "
+            "textureQueryLevels on image2D */ 0;" in hip_code
+        )
+        assert (
+            "int badLevelsFromMsTexture = /* unsupported HIP resource query: "
+            "textureQueryLevels on sampler2DMS */ 0;" in hip_code
+        )
+        assert (
+            "int badLevelsFromSamplerState = /* unsupported HIP resource query: "
+            "textureQueryLevels on sampler */ 0;" in hip_code
+        )
+        assert "cgl_imageSize_sampler2D" not in hip_code
+        assert "cgl_textureSize_image2D" not in hip_code
+        assert "textureSize(" not in hip_code
+        assert "imageSize(" not in hip_code
+        assert "textureSamples(" not in hip_code
+        assert "imageSamples(" not in hip_code
+        assert "textureQueryLevels(" not in hip_code
+
     def test_resource_query_arrays_emit_indexed_hip_metadata(self):
         """Test HIP resource queries preserve resource-array metadata indexing."""
         source_code = """
@@ -8168,7 +8955,7 @@ class TestHipCodeGen:
                     } else {
                         i = i - 1;
                     }
-                    
+
                     for (int j = 0; j < 10; j++) {
                         i = i * 2;
                     }
@@ -8358,8 +9145,8 @@ class TestHipCodeGen:
         assert hip_code.count("break;") == 2
         assert "MatchNode" not in hip_code
 
-    def test_match_guarded_arm_rejected_for_hip_switch_lowering(self):
-        """Test HIP rejects match forms that cannot be lowered to switch."""
+    def test_match_guarded_arm_lowers_to_hip_if_chain(self):
+        """Test HIP lowers guarded match arms to ordered if chains."""
         source_code = """
         shader TestShader {
             compute {
@@ -8384,8 +9171,181 @@ class TestHipCodeGen:
         ast = parser.parse()
 
         codegen = HipCodeGen()
-        with pytest.raises(ValueError, match="Unsupported match arm for HIP"):
-            codegen.generate(ast)
+        hip_code = codegen.generate(ast)
+
+        assert "switch (mode)" not in hip_code
+        assert "if (((mode == 0) &&" in hip_code
+        assert "mode > 0" in hip_code
+        assert "else {" in hip_code
+        assert "value = 1;" in hip_code
+        assert "value = 2;" in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_identifier_binding_arm_lowers_to_hip_scoped_else_body(self):
+        """Test HIP lowers identifier binding match arms."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        other => {
+                            value = other;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "switch (mode)" not in hip_code
+        assert "if ((mode == 0))" in hip_code
+        assert "else {" in hip_code
+        assert "int other = mode;" in hip_code
+        assert "value = other;" in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_guarded_identifier_binding_falls_through_to_later_hip_arm(self):
+        """Test guarded HIP binding arms fall through to later match arms."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = 0;
+                    match mode {
+                        0 => {
+                            value = 1;
+                        }
+                        candidate if candidate > 2 => {
+                            value = candidate;
+                        }
+                        _ => {
+                            value = 7;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "switch (mode)" not in hip_code
+        assert "if ((mode == 0))" in hip_code
+        assert "else {" in hip_code
+        assert "int candidate = mode;" in hip_code
+        assert "candidate > 2" in hip_code
+        assert "value = candidate;" in hip_code
+        assert "value = 7;" in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_plain_struct_pattern_binds_fields_for_hip(self):
+        """Test HIP lowers plain struct field pattern bindings."""
+        source_code = """
+        shader TestShader {
+            struct Pair {
+                int left;
+                int right;
+            };
+
+            compute {
+                int main(Pair pair) {
+                    int value = 0;
+                    match pair {
+                        Pair { left, right } => {
+                            value = left + right;
+                        }
+                    }
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int main(Pair pair)" in hip_code
+        assert "int left = pair.left;" in hip_code
+        assert "int right = pair.right;" in hip_code
+        assert "value = (left + right);" in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_match_expression_initializes_hip_local_with_bindings(self):
+        """Test HIP lowers typed local match expressions to assignments."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    int value = match mode {
+                        0 => 10,
+                        candidate if candidate > 1 => candidate,
+                        _ => -1,
+                    };
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int value;" in hip_code
+        assert "value = 10;" in hip_code
+        assert "int candidate = mode;" in hip_code
+        assert "candidate > 1" in hip_code
+        assert "value = candidate;" in hip_code
+        assert "value = -1;" in hip_code
+        assert "MatchNode" not in hip_code
+
+    def test_return_match_expression_lowers_to_hip_typed_temporary(self):
+        """Test HIP lowers return-position match expressions through a typed local."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int mode) {
+                    return match mode {
+                        0 => 10,
+                        _ => -1,
+                    };
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int __crossgl_match_value_0;" in hip_code
+        assert "__crossgl_match_value_0 = 10;" in hip_code
+        assert "__crossgl_match_value_0 = -1;" in hip_code
+        assert "return __crossgl_match_value_0;" in hip_code
+        assert "MatchNode" not in hip_code
 
     def test_direct_ast_expression_statements_are_emitted(self):
         """Test direct HIP AST function bodies emit expression-returning nodes."""
@@ -8679,3 +9639,1418 @@ class TestHipCodeGen:
         # Check for HIP includes
         assert "#include <hip/hip_runtime.h>" in hip_code
         assert "#include <hip/hip_runtime_api.h>" in hip_code
+
+    def test_barrier_emits_syncthreads(self):
+        """Test barrier() call lowers to __syncthreads() in HIP."""
+        source_code = """
+        shader BarrierShader {
+            compute {
+                void main() {
+                    barrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__syncthreads();" in hip_code
+        assert "barrier()" not in hip_code
+
+    def test_memory_barrier_emits_threadfence(self):
+        """Test memoryBarrier() call lowers to __threadfence() in HIP."""
+        source_code = """
+        shader MemoryBarrierShader {
+            compute {
+                void main() {
+                    memoryBarrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__threadfence();" in hip_code
+        assert "memoryBarrier()" not in hip_code
+
+    def test_workgroup_barrier_emits_syncthreads(self):
+        """Test workgroupBarrier() call lowers to __syncthreads() in HIP."""
+        source_code = """
+        shader WorkgroupBarrierShader {
+            compute {
+                void main() {
+                    workgroupBarrier();
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__syncthreads();" in hip_code
+        assert "workgroupBarrier()" not in hip_code
+
+    def test_hip_memory_barrier_variants_emit_sync_intrinsics(self):
+        """Test CrossGL memory barrier variants lower to HIP fences."""
+        source_code = """
+        shader HipMemoryBarrierVariants {
+            compute {
+                void main() {
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    allMemoryBarrier();
+                    deviceMemoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert hip_code.count("__threadfence_block();") == 2
+        assert hip_code.count("__threadfence();") == 4
+        assert "groupMemoryBarrier();" not in hip_code
+        assert "memoryBarrierShared();" not in hip_code
+        assert "memoryBarrierBuffer();" not in hip_code
+        assert "memoryBarrierImage();" not in hip_code
+        assert "allMemoryBarrier();" not in hip_code
+        assert "deviceMemoryBarrier();" not in hip_code
+
+    def test_hip_user_defined_synchronization_names_are_not_lowered(self):
+        """Test HIP does not remap user-defined synchronization names."""
+        source_code = """
+        shader HipSynchronizationShadowing {
+            compute {
+                void barrier() {
+                    return;
+                }
+
+                void memoryBarrier() {
+                    return;
+                }
+
+                void workgroupBarrier() {
+                    return;
+                }
+
+                void groupMemoryBarrier() {
+                    return;
+                }
+
+                void memoryBarrierShared() {
+                    return;
+                }
+
+                void memoryBarrierBuffer() {
+                    return;
+                }
+
+                void memoryBarrierImage() {
+                    return;
+                }
+
+                void allMemoryBarrier() {
+                    return;
+                }
+
+                void deviceMemoryBarrier() {
+                    return;
+                }
+
+                void main() {
+                    barrier();
+                    memoryBarrier();
+                    workgroupBarrier();
+                    groupMemoryBarrier();
+                    memoryBarrierShared();
+                    memoryBarrierBuffer();
+                    memoryBarrierImage();
+                    allMemoryBarrier();
+                    deviceMemoryBarrier();
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "void barrier()" in hip_code
+        assert "void memoryBarrier()" in hip_code
+        assert "void workgroupBarrier()" in hip_code
+        assert "void groupMemoryBarrier()" in hip_code
+        assert "void memoryBarrierShared()" in hip_code
+        assert "void memoryBarrierBuffer()" in hip_code
+        assert "void memoryBarrierImage()" in hip_code
+        assert "void allMemoryBarrier()" in hip_code
+        assert "void deviceMemoryBarrier()" in hip_code
+        assert "barrier();" in hip_code
+        assert "memoryBarrier();" in hip_code
+        assert "workgroupBarrier();" in hip_code
+        assert "groupMemoryBarrier();" in hip_code
+        assert "memoryBarrierShared();" in hip_code
+        assert "memoryBarrierBuffer();" in hip_code
+        assert "memoryBarrierImage();" in hip_code
+        assert "allMemoryBarrier();" in hip_code
+        assert "deviceMemoryBarrier();" in hip_code
+        assert "__syncthreads();" not in hip_code
+        assert "__threadfence();" not in hip_code
+        assert "__threadfence_block();" not in hip_code
+
+    @pytest.mark.parametrize(
+        "builtin",
+        [
+            "barrier",
+            "groupMemoryBarrier",
+            "memoryBarrier",
+            "memoryBarrierShared",
+            "memoryBarrierBuffer",
+            "memoryBarrierImage",
+            "allMemoryBarrier",
+            "deviceMemoryBarrier",
+            "workgroupBarrier",
+        ],
+    )
+    def test_hip_synchronization_builtins_reject_arguments(self, builtin):
+        """Test HIP synchronization builtins reject invalid arguments."""
+        source_code = f"""
+        shader BadHipSynchronizationBuiltinArgs {{
+            compute {{
+                void main() {{
+                    {builtin}(1);
+                }}
+            }}
+        }}
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(
+            ValueError,
+            match=rf"HIP synchronization builtin '{builtin}' requires 0 argument",
+        ):
+            HipCodeGen().generate(ast)
+
+    def test_wave_intrinsics_lower_to_hip_subgroup_helpers(self):
+        """Test basic Wave* calls lower to HIP subgroup helper expressions."""
+        source_code = """
+        shader HipWaveShader {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    uint count = WaveGetLaneCount();
+                    bool first = WaveIsFirstLane();
+                    uint sumValue = WaveActiveSum(lane);
+                    bool anyLane = WaveActiveAnyTrue(sumValue > 0u);
+                    uvec4 ballot = WaveActiveBallot(anyLane);
+                    uint broadcast = WaveReadLaneAt(sumValue, 0u);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "unsigned int lane = (threadIdx.x & (warpSize - 1));" in hip_code
+        assert "unsigned int count = warpSize;" in hip_code
+        assert "bool first = ((threadIdx.x & (warpSize - 1)) == 0);" in hip_code
+        assert (
+            "__device__ inline unsigned int "
+            "cgl_hip_wave_active_sum_uint_uint(unsigned int value)" in hip_code
+        )
+        assert (
+            "unsigned int sumValue = cgl_hip_wave_active_sum_uint_uint(lane);"
+            in hip_code
+        )
+        assert (
+            "bool anyLane = "
+            "cgl_hip_wave_active_any_true_bool_bool((sumValue > 0u));" in hip_code
+        )
+        assert (
+            "uint4 ballot = cgl_hip_wave_active_ballot_uint4_bool(anyLane);" in hip_code
+        )
+        assert (
+            "unsigned int broadcast = "
+            "cgl_hip_wave_read_lane_at_uint_uint_uint(sumValue, 0u);" in hip_code
+        )
+        assert "WaveOpNode(" not in hip_code
+        assert "Unsupported HIP wave intrinsic" not in hip_code
+
+    def test_wave_match_count_quad_and_multi_prefix_lower_to_hip_helpers(self):
+        """Test extended Wave* forms lower to typed HIP helper calls."""
+        source_code = """
+        shader HipWaveExtended {
+            compute {
+                void main() {
+                    uint lane = WaveGetLaneIndex();
+                    bool equal = WaveActiveAllEqual(lane);
+                    uint bitCount = WaveActiveCountBits(equal);
+                    uint prefixCount = WavePrefixCountBits(equal);
+                    uvec4 mask = WaveMatch(lane);
+                    uint quadLane = QuadReadLaneAt(lane, 1u);
+                    uint quadX = QuadReadAcrossX(lane);
+                    uint quadY = QuadReadAcrossY(lane);
+                    uint quadDiagonal = QuadReadAcrossDiagonal(lane);
+                    uint sum = WaveMultiPrefixSum(lane, mask);
+                    uint product = WaveMultiPrefixProduct(lane + 1u, mask);
+                    uint count = WaveMultiPrefixCountBits(equal, mask);
+                    uint bitAnd = WaveMultiPrefixBitAnd(product, mask);
+                    uint bitOr = WaveMultiPrefixBitOr(bitAnd, mask);
+                    uint bitXor = WaveMultiPrefixBitXor(bitOr, mask);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "cgl_hip_wave_active_all_equal_bool_uint(lane)" in hip_code
+        assert "cgl_hip_wave_active_count_bits_uint_bool(equal)" in hip_code
+        assert "cgl_hip_wave_prefix_count_bits_uint_bool(equal)" in hip_code
+        assert "cgl_hip_wave_match_uint4_uint(lane)" in hip_code
+        assert "cgl_hip_quad_read_lane_at_uint_uint_uint(lane, 1u)" in hip_code
+        assert "cgl_hip_quad_read_across_x_uint_uint(lane)" in hip_code
+        assert "cgl_hip_quad_read_across_y_uint_uint(lane)" in hip_code
+        assert "cgl_hip_quad_read_across_diagonal_uint_uint(lane)" in hip_code
+        assert "cgl_hip_wave_multi_prefix_sum_uint_uint_uint4(lane, mask)" in hip_code
+        assert (
+            "cgl_hip_wave_multi_prefix_product_uint_uint_uint4((lane + 1u), mask)"
+            in hip_code
+        )
+        assert (
+            "cgl_hip_wave_multi_prefix_count_bits_uint_bool_uint4(equal, mask)"
+            in hip_code
+        )
+        assert "cgl_hip_wave_multi_prefix_bit_and_uint_uint_uint4(product, mask)" in (
+            hip_code
+        )
+        assert "cgl_hip_wave_multi_prefix_bit_or_uint_uint_uint4(bitAnd, mask)" in (
+            hip_code
+        )
+        assert "cgl_hip_wave_multi_prefix_bit_xor_uint_uint_uint4(bitOr, mask)" in (
+            hip_code
+        )
+        assert "Unsupported HIP wave intrinsic" not in hip_code
+
+    def test_direct_wave_ir_node_lowers_to_hip_helper(self):
+        """Test direct WaveOpNode emission avoids AST repr fallbacks."""
+        codegen = HipCodeGen()
+
+        generated_expr = codegen.visit(
+            WaveOpNode("WaveActiveSum", [LiteralNode(1, PrimitiveType("uint"))])
+        )
+
+        assert generated_expr == "cgl_hip_wave_active_sum_uint_uint(1u)"
+        assert "cgl_hip_wave_active_sum_uint_uint" in codegen.helper_functions
+
+    def test_wave_intrinsic_helpers_compile_with_hipcc_if_available(self, tmp_path):
+        """Smoke compile generated HIP wave helpers when hipcc is available."""
+        source_code = """
+        uint waveHelpers(uint lane, bool active, uvec4 mask) {
+            uint sumValue = WaveActiveSum(lane);
+            bool anyLane = WaveActiveAnyTrue(active);
+            uvec4 matched = WaveMatch(sumValue);
+            uint multi = WaveMultiPrefixSum(sumValue, mask);
+            uint quad = QuadReadLaneAt(multi, 1u);
+            return WaveReadLaneAt(quad, 0u);
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "cgl_hip_wave_active_sum_uint_uint(lane)" in hip_code
+        assert "cgl_hip_wave_match_uint4_uint(sumValue)" in hip_code
+        assert "cgl_hip_wave_multi_prefix_sum_uint_uint_uint4(sumValue, mask)" in (
+            hip_code
+        )
+        assert "cgl_hip_quad_read_lane_at_uint_uint_uint(multi, 1u)" in hip_code
+        assert "cgl_hip_wave_read_lane_at_uint_uint_uint(quad, 0u)" in hip_code
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_cbuffer_members_lowered_to_struct(self):
+        """Test cbuffer declaration lowers to a struct in HIP."""
+        source_code = """
+        shader CbufferShader {
+            cbuffer Params {
+                float4x4 mvp;
+                float time;
+                int frameCount;
+            };
+            compute {
+                void main() {
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "struct Params" in hip_code
+        assert "float4x4 mvp;" in hip_code or "mat4 mvp;" in hip_code
+        assert "float time;" in hip_code
+        assert "int frameCount;" in hip_code
+        assert (
+            "// CrossGL resource metadata: name=Params kind=cbuffer set=0 "
+            "binding=0 binding_source=automatic"
+        ) in hip_code
+        assert "cbuffer Params" not in hip_code
+
+    def test_structured_buffer_maps_to_device_pointer(self):
+        """Test StructuredBuffer<T> maps to const T* device pointer in HIP."""
+        source_code = """
+        shader StructuredBufferPointerShader {
+            StructuredBuffer<float> inputData;
+
+            void readBuffer(StructuredBuffer<int> src, uint idx) {
+                int val = src[idx];
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* inputData;" in hip_code
+        assert "const int* src" in hip_code
+        assert "StructuredBuffer" not in hip_code
+
+    def test_rw_structured_buffer_maps_to_device_pointer_readwrite(self):
+        """Test RWStructuredBuffer<T> maps to T* device pointer with read/write."""
+        source_code = """
+        shader RWStructuredBufferShader {
+            RWStructuredBuffer<int> outputData;
+
+            void writeBuffer(RWStructuredBuffer<float> dst, uint idx, float value) {
+                dst[idx] = value;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int* outputData;" in hip_code
+        assert "float* dst" in hip_code
+        assert "dst[idx] = value;" in hip_code
+        assert "RWStructuredBuffer" not in hip_code
+
+    def test_texture_sampling_tex3d_and_combined_sampler2d(self):
+        """Test HIP generates tex3D for 3D textures and tex2D for combined sampler2D."""
+        source_code = """
+        shader TextureSamplingShader {
+            sampler3d volumeTex;
+            sampler2D colorTex;
+
+            void sampleTextures(
+                sampler3d paramVolume,
+                sampler2D paramColor,
+                vec3 uvw,
+                vec2 uv
+            ) {
+                vec4 volume = texture(paramVolume, uvw);
+                vec4 volumeLod = textureLod(paramVolume, uvw, 2.0);
+                vec4 color = texture(paramColor, uv);
+                vec4 colorLod = textureLod(paramColor, uv, 1.0);
+                vec4 direct = tex2D(paramColor, uv);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t volumeTex;" in hip_code
+        assert "hipTextureObject_t colorTex;" in hip_code
+        assert (
+            "float4 volume = tex3D<float4>(paramVolume, uvw.x, uvw.y, uvw.z);"
+            in hip_code
+        )
+        assert (
+            "float4 volumeLod = tex3DLod<float4>(paramVolume, uvw.x, uvw.y, uvw.z, 2.0);"
+            in hip_code
+        )
+        assert "float4 color = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
+        assert (
+            "float4 colorLod = tex2DLod<float4>(paramColor, uv.x, uv.y, 1.0);"
+            in hip_code
+        )
+        assert "float4 direct = tex2D<float4>(paramColor, uv.x, uv.y);" in hip_code
+        assert "sampler3d" not in hip_code
+        assert "sampler2D" not in hip_code
+        assert " = texture(" not in hip_code
+        assert " = textureLod(" not in hip_code
+
+    def test_struct_members_with_semantics_produce_hip_struct_fields(self):
+        """Test struct members with CrossGL semantics generate proper HIP struct fields."""
+        source_code = """
+        struct VertexInput {
+            vec3 position;
+            vec3 normal;
+            vec2 texCoord;
+        };
+
+        struct VertexOutput {
+            vec4 clipPos;
+            vec3 worldNormal;
+            vec2 uv;
+        };
+
+        shader StructSemanticShader {
+            compute {
+                void main() {
+                    VertexInput input;
+                    input.position = vec3(1.0, 2.0, 3.0);
+                    input.normal = vec3(0.0, 1.0, 0.0);
+                    input.texCoord = vec2(0.5, 0.5);
+                    VertexOutput output;
+                    output.clipPos = vec4(input.position, 1.0);
+                    output.worldNormal = input.normal;
+                    output.uv = input.texCoord;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "struct VertexInput" in hip_code
+        assert "float3 position;" in hip_code
+        assert "float3 normal;" in hip_code
+        assert "float2 texCoord;" in hip_code
+        assert "struct VertexOutput" in hip_code
+        assert "float4 clipPos;" in hip_code
+        assert "float3 worldNormal;" in hip_code
+        assert "float2 uv;" in hip_code
+        assert "input.position = make_float3(1.0, 2.0, 3.0);" in hip_code
+        assert "output.worldNormal = input.normal;" in hip_code
+        assert "output.uv = input.texCoord;" in hip_code
+        assert "VertexInput input;" in hip_code
+        assert "VertexOutput output;" in hip_code
+
+    def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+        """Test HIP preserves and validates struct member builtin semantics."""
+        valid_code = """
+        shader HipStructSemantics {
+            struct FSOutput {
+                vec4 color @ SV_Target1;
+                float depth @ gl_FragDepth;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            fragment {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        hip_code = HipCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
+
+        assert "float4 color; // CrossGL semantic: target(1)" in hip_code
+        assert "float depth; // CrossGL semantic: depth(any)" in hip_code
+        assert "float2 uv; // CrossGL semantic: texcoord(0)" in hip_code
+
+        invalid_type = """
+        shader BadHipStructSemanticType {
+            struct FSOutput {
+                vec3 color @ gl_FragColor;
+            };
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadHipStructSemanticStage {
+            struct FSOutput {
+                vec4 color @ gl_FragColor;
+            };
+
+            vertex {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadHipStructInputOnlySemantic {
+            struct VSOutput {
+                uint vertexId @ gl_VertexID;
+            };
+
+            vertex {
+                VSOutput main() {
+                    VSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_return_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+        """Test HIP validates direct builtin return semantics."""
+        invalid_depth_type = """
+        shader BadHipDepthType {
+            fragment {
+                vec4 main() @ gl_FragDepth {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadHipStage {
+            vertex {
+                vec4 main() @ gl_FragColor {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadHipInputOnlyReturn {
+            vertex {
+                uint main() @ gl_VertexID {
+                    return uint(0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_direct_return_semantics_emit_metadata_for_hip(self, tmp_path):
+        """Test HIP preserves direct return semantics as comments."""
+        color_code = """
+        shader HipDirectReturnSemantics {
+            vertex {
+                vec4 vertexMain() @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            fragment {
+                vec4 fragmentMain() @ gl_FragColor {
+                    return vec4(1.0, 0.5, 0.25, 1.0);
+                }
+            }
+        }
+        """
+        hip_code = HipCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
+
+        assert "// CrossGL return semantic: position" in hip_code
+        assert "__device__ float4 vertexMain()" in hip_code
+        assert "// CrossGL return semantic: target(0)" in hip_code
+        assert "__device__ float4 fragmentMain()" in hip_code
+
+        depth_code = """
+        shader HipDepthReturnSemantics {
+            fragment {
+                float depthMain() @ gl_FragDepth {
+                    return 0.5;
+                }
+            }
+        }
+        """
+        depth_hip_code = HipCodeGen().generate(Parser(Lexer(depth_code).tokens).parse())
+
+        assert "// CrossGL return semantic: depth(any)" in depth_hip_code
+        assert "__device__ float depthMain()" in depth_hip_code
+
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+            compile_hip_if_hipcc_available(depth_hip_code, tmp_path)
+
+    def test_stage_parameter_semantics_emit_metadata_for_hip(self, tmp_path):
+        """Test HIP preserves builtin stage parameter semantics as comments."""
+        vertex_code = """
+        shader HipVertexStageParameterSemantics {
+            vertex {
+                vec4 main(
+                    uint vertexId @ gl_VertexID,
+                    uint instanceId @ SV_InstanceID
+                ) @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        vertex_hip = HipCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
+
+        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_hip
+        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_hip
+        assert "__device__ float4 main(unsigned int vertexId" in vertex_hip
+
+        fragment_code = """
+        shader HipFragmentStageParameterSemantics {
+
+            fragment {
+                vec4 main(
+                    vec4 fragCoord @ gl_FragCoord,
+                    bool front @ gl_FrontFacing
+                ) @ gl_FragColor {
+                    return vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        fragment_hip = HipCodeGen().generate(
+            Parser(Lexer(fragment_code).tokens).parse()
+        )
+
+        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_hip
+        assert "// CrossGL parameter semantic: front: front_facing" in fragment_hip
+        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_hip
+
+        compute_code = """
+        shader HipComputeStageParameterSemantics {
+
+            compute {
+                void main(
+                    uvec3 globalId @ gl_GlobalInvocationID,
+                    uvec3 localId @ SV_GroupThreadID,
+                    uint lane @ gl_LocalInvocationIndex
+                ) {
+                    uint copy = lane;
+                }
+            }
+        }
+        """
+        compute_hip = HipCodeGen().generate(Parser(Lexer(compute_code).tokens).parse())
+
+        assert (
+            "// CrossGL parameter semantic: globalId: global_invocation_id"
+            in compute_hip
+        )
+        assert (
+            "// CrossGL parameter semantic: localId: local_invocation_id" in compute_hip
+        )
+        assert (
+            "// CrossGL parameter semantic: lane: local_invocation_index" in compute_hip
+        )
+        assert "__global__ void main(uint3 globalId" in compute_hip
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(vertex_hip, tmp_path)
+            compile_hip_if_hipcc_available(fragment_hip, tmp_path)
+            compile_hip_if_hipcc_available(compute_hip, tmp_path)
+
+    def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip(self):
+        """Test HIP rejects invalid builtin stage parameter semantics."""
+        invalid_stage = """
+        shader BadHipStageParameterStage {
+            fragment {
+                void main(uint vertexId @ gl_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_type = """
+        shader BadHipStageParameterType {
+            fragment {
+                void main(vec3 fragCoord @ gl_FragCoord) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        output_only = """
+        shader BadHipStageParameterOutputOnly {
+            vertex {
+                void main(vec4 color @ SV_Target0) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+            HipCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
+
+        duplicate_system_value = """
+        shader BadHipStageParameterDuplicate {
+            vertex {
+                void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="Duplicate HIP stage parameter semantic"):
+            HipCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
+
+    def test_stage_parameter_semantics_thread_position_in_grid(self):
+        """Test HIP maps compute stage builtins to threadIdx/blockIdx/blockDim."""
+        source_code = """
+        shader ComputeBuiltinsShader {
+            compute {
+                void main() {
+                    int localX = gl_LocalInvocationID.x;
+                    int localY = gl_LocalInvocationID.y;
+                    int localZ = gl_LocalInvocationID.z;
+                    int globalX = gl_GlobalInvocationID.x;
+                    int globalY = gl_GlobalInvocationID.y;
+                    int globalZ = gl_GlobalInvocationID.z;
+                    int groupX = gl_WorkGroupID.x;
+                    int groupY = gl_WorkGroupID.y;
+                    int groupZ = gl_WorkGroupID.z;
+                    int sizeX = gl_WorkGroupSize.x;
+                    int sizeY = gl_WorkGroupSize.y;
+                    int sizeZ = gl_WorkGroupSize.z;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "int localX = threadIdx.x;" in hip_code
+        assert "int localY = threadIdx.y;" in hip_code
+        assert "int localZ = threadIdx.z;" in hip_code
+        assert "int globalX = (blockIdx.x * blockDim.x + threadIdx.x);" in hip_code
+        assert "int globalY = (blockIdx.y * blockDim.y + threadIdx.y);" in hip_code
+        assert "int globalZ = (blockIdx.z * blockDim.z + threadIdx.z);" in hip_code
+        assert "int groupX = blockIdx.x;" in hip_code
+        assert "int groupY = blockIdx.y;" in hip_code
+        assert "int groupZ = blockIdx.z;" in hip_code
+        assert "int sizeX = blockDim.x;" in hip_code
+        assert "int sizeY = blockDim.y;" in hip_code
+        assert "int sizeZ = blockDim.z;" in hip_code
+        assert "gl_LocalInvocationID" not in hip_code
+        assert "gl_GlobalInvocationID" not in hip_code
+        assert "gl_WorkGroupID" not in hip_code
+        assert "gl_WorkGroupSize" not in hip_code
+
+    def test_vertex_stage_with_position_output(self):
+        """Test HIP generates a device function for vertex stage with position output."""
+        source_code = """
+        shader VertexPositionShader {
+            vertex {
+                void main() {
+                    vec4 position = vec4(1.0, 2.0, 3.0, 1.0);
+                    vec3 normal = vec3(0.0, 1.0, 0.0);
+                    vec2 uv = vec2(0.5, 0.5);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "__device__ void main()" in hip_code
+        assert "float4 position = make_float4(1.0, 2.0, 3.0, 1.0);" in hip_code
+        assert "float3 normal = make_float3(0.0, 1.0, 0.0);" in hip_code
+        assert "float2 uv = make_float2(0.5, 0.5);" in hip_code
+        assert "vec4" not in hip_code
+        assert "vec3" not in hip_code
+        assert "vec2(" not in hip_code
+
+    def test_texture_sampling_with_cubemap_and_1d_types(self):
+        """Test HIP generates correct texture intrinsics for cubemap and 1D types."""
+        source_code = """
+        shader CubeAndLinearShader {
+            void sampleVariety(
+                sampler1d paramRamp,
+                samplercube paramEnv,
+                float u,
+                vec3 dir
+            ) {
+                vec4 ramp = texture(paramRamp, u);
+                vec4 rampLod = textureLod(paramRamp, u, 1.0);
+                vec4 env = texture(paramEnv, dir);
+                vec4 envLod = textureLod(paramEnv, dir, 2.0);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "float4 ramp = tex1D<float4>(paramRamp, u);" in hip_code
+        assert "float4 rampLod = tex1DLod<float4>(paramRamp, u, 1.0);" in hip_code
+        assert (
+            "float4 env = texCubemap<float4>(paramEnv, dir.x, dir.y, dir.z);"
+            in hip_code
+        )
+        assert (
+            "float4 envLod = texCubemapLod<float4>(paramEnv, dir.x, dir.y, dir.z, 2.0);"
+            in hip_code
+        )
+        assert " = texture(" not in hip_code
+        assert " = textureLod(" not in hip_code
+
+    def test_match_multiple_literal_arms_emit_switch_cases(self):
+        """Test HIP emits multiple case labels for match with several literals."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int code) {
+                    int result = 0;
+                    match code {
+                        1 => {
+                            result = 10;
+                        }
+                        2 => {
+                            result = 20;
+                        }
+                        3 => {
+                            result = 30;
+                        }
+                        _ => {
+                            result = -1;
+                        }
+                    }
+                    return result;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (code)" in hip_code
+        assert "case 1:" in hip_code
+        assert "case 2:" in hip_code
+        assert "case 3:" in hip_code
+        assert "result = 10;" in hip_code
+        assert "result = 20;" in hip_code
+        assert "result = 30;" in hip_code
+        assert "default:" in hip_code
+        assert "result = -1;" in hip_code
+        assert hip_code.count("break;") == 4
+
+    def test_match_wildcard_only_emits_default_case(self):
+        """Test HIP emits only a default case when match has just a wildcard."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int x) {
+                    int out = 0;
+                    match x {
+                        _ => {
+                            out = 99;
+                        }
+                    }
+                    return out;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (x)" in hip_code
+        assert "default:" in hip_code
+        assert "out = 99;" in hip_code
+        assert "case " not in hip_code
+
+    def test_match_constructor_pattern_rejected_for_hip(self):
+        """Test HIP rejects constructor patterns that cannot lower to switch."""
+        match_ast = ShaderNode(
+            name="ConstructorMatch",
+            execution_model=ExecutionModel.COMPUTE_KERNEL,
+            functions=[
+                FunctionNode(
+                    "main",
+                    PrimitiveType("void"),
+                    [],
+                    BlockNode(
+                        [
+                            MatchNode(
+                                expression=IdentifierNode("val"),
+                                arms=[
+                                    MatchArmNode(
+                                        pattern=ConstructorPatternNode(
+                                            "Some", [WildcardPatternNode()]
+                                        ),
+                                        guard=None,
+                                        body=[
+                                            AssignmentNode(
+                                                IdentifierNode("x"),
+                                                LiteralNode(1, PrimitiveType("int")),
+                                                "=",
+                                            )
+                                        ],
+                                    ),
+                                    MatchArmNode(
+                                        pattern=WildcardPatternNode(),
+                                        guard=None,
+                                        body=[
+                                            AssignmentNode(
+                                                IdentifierNode("x"),
+                                                LiteralNode(0, PrimitiveType("int")),
+                                                "=",
+                                            )
+                                        ],
+                                    ),
+                                ],
+                            )
+                        ]
+                    ),
+                    qualifiers=["compute"],
+                )
+            ],
+        )
+
+        codegen = HipCodeGen()
+        with pytest.raises(ValueError, match="Unsupported match arm for HIP"):
+            codegen.generate(match_ast)
+
+    def test_shader_with_only_structs_produces_valid_output(self):
+        """Test HIP generates struct definitions even without any kernel or function."""
+        struct_ast = ShaderNode(
+            name="StructsOnly",
+            execution_model=ExecutionModel.GENERAL_PURPOSE,
+            structs=[
+                StructNode(
+                    "Particle",
+                    [
+                        VariableNode("position", PrimitiveType("float3")),
+                        VariableNode("velocity", PrimitiveType("float3")),
+                        VariableNode("mass", PrimitiveType("float")),
+                    ],
+                ),
+            ],
+            functions=[],
+        )
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(struct_ast)
+
+        assert "#include <hip/hip_runtime.h>" in hip_code
+        assert "struct Particle" in hip_code
+        assert "float3 position;" in hip_code
+        assert "float3 velocity;" in hip_code
+        assert "float mass;" in hip_code
+        assert "__global__" not in hip_code
+
+    def test_invalid_mixed_stage_vertex_and_compute_still_generates(self):
+        """Test HIP handles shader with both vertex and compute stages."""
+        source_code = """
+        shader MixedStageShader {
+            vertex {
+                void main() {
+                    int a = 1;
+                }
+            }
+            compute {
+                void main() {
+                    int b = 2;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "__device__" in hip_code
+        assert "__global__" in hip_code
+        assert "int a = 1;" in hip_code
+        assert "int b = 2;" in hip_code
+
+    def test_match_literals_without_wildcard_emits_no_default(self):
+        """Test HIP match with only literal arms produces no default case."""
+        source_code = """
+        shader TestShader {
+            compute {
+                int main(int flag) {
+                    int r = 0;
+                    match flag {
+                        0 => {
+                            r = 100;
+                        }
+                        1 => {
+                            r = 200;
+                        }
+                    }
+                    return r;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        codegen = HipCodeGen()
+        hip_code = codegen.generate(ast)
+
+        assert "switch (flag)" in hip_code
+        assert "case 0:" in hip_code
+        assert "case 1:" in hip_code
+        assert "r = 100;" in hip_code
+        assert "r = 200;" in hip_code
+        assert "default:" not in hip_code
+
+    def test_readonly_qualifier_on_buffer_produces_const_pointer(self):
+        """Test StructuredBuffer (readonly) generates const pointer in HIP."""
+        source_code = """
+        shader ReadonlyBufferShader {
+            StructuredBuffer<float> weights;
+            StructuredBuffer<int> indices[4];
+
+            float sumWeights(StructuredBuffer<float> input, uint count) {
+                float total = 0.0;
+                for (uint i = 0; i < count; i = i + 1) {
+                    total = total + input.Load(i);
+                }
+                return total;
+            }
+
+            compute {
+                void main() {
+                    float w = weights.Load(0);
+                    int idx = indices[0].Load(0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* weights;" in hip_code
+        assert "const int* indices[4];" in hip_code
+        assert "const float* input" in hip_code
+        assert "float w = weights[0];" in hip_code
+        assert "int idx = indices[0][0];" in hip_code
+        assert "float total = 0.0;" in hip_code
+        assert "total = (total + input[i]);" in hip_code
+        assert "StructuredBuffer" not in hip_code
+        assert "RWStructuredBuffer" not in hip_code
+
+    def test_writeonly_buffer_produces_mutable_pointer(self):
+        """Test RWStructuredBuffer (read-write) generates mutable pointer in HIP."""
+        source_code = """
+        shader WriteBufferShader {
+            struct Pixel {
+                float r;
+                float g;
+                float b;
+            };
+
+            RWStructuredBuffer<Pixel> output;
+            RWStructuredBuffer<int> counters;
+
+            void writePixel(RWStructuredBuffer<Pixel> dest, uint index, Pixel value) {
+                dest.Store(index, value);
+            }
+
+            compute {
+                void main() {
+                    Pixel p;
+                    p.r = 1.0;
+                    p.g = 0.5;
+                    p.b = 0.0;
+                    output.Store(0, p);
+                    counters[0] = 1;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "Pixel* output;" in hip_code
+        assert "int* counters;" in hip_code
+        assert "__device__ void writePixel(Pixel* dest," in hip_code
+        assert "dest[index] = value;" in hip_code
+        assert "output[0] = p;" in hip_code
+        assert "counters[0] = 1;" in hip_code
+
+    def test_resource_memory_qualifiers_map_hip_access_contracts(self):
+        """Test resource memory qualifiers select HIP access forms/diagnostics."""
+        source_code = """
+        shader HIPResourceMemoryQualifiers {
+            readonly RWStructuredBuffer<int> readOnlyValues;
+            writeonly StructuredBuffer<int> writeOnlyValues;
+            readwrite StructuredBuffer<int> readWriteValues;
+            RWStructuredBuffer<int> attrReadValues @access(read);
+            StructuredBuffer<int> attrWriteValues @access(write);
+            readonly RWByteAddressBuffer rawInput;
+            writeonly ByteAddressBuffer rawOutput;
+            readonly image2D source @rgba32f;
+            writeonly image2D target @rgba32f;
+
+            compute {
+                void main(uint index) {
+                    int value = buffer_load(readOnlyValues, index);
+                    int attrValue = buffer_load(attrReadValues, index);
+                    uint raw = buffer_load(rawInput, index);
+                    buffer_store(writeOnlyValues, index, value + attrValue);
+                    buffer_store(readWriteValues, index, value);
+                    buffer_store(attrWriteValues, index, attrValue);
+                    buffer_store(rawOutput, index, raw);
+                    vec4 color = imageLoad(source, ivec2(0));
+                    vec4 blockedLoad = imageLoad(target, ivec2(0));
+                    imageStore(target, ivec2(0), color);
+                    imageStore(source, ivec2(0), color);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const int* readOnlyValues;" in hip_code
+        assert "int* writeOnlyValues;" in hip_code
+        assert "int* readWriteValues;" in hip_code
+        assert "const int* attrReadValues;" in hip_code
+        assert "int* attrWriteValues;" in hip_code
+        assert "const unsigned char* rawInput;" in hip_code
+        assert "unsigned char* rawOutput;" in hip_code
+        assert "hipSurfaceObject_t source;" in hip_code
+        assert "hipSurfaceObject_t target;" in hip_code
+        assert "int value = readOnlyValues[index];" in hip_code
+        assert "int attrValue = attrReadValues[index];" in hip_code
+        assert "unsigned int raw = cgl_byte_address_load_uint(rawInput, index);" in (
+            hip_code
+        )
+        assert "writeOnlyValues[index] = (value + attrValue);" in hip_code
+        assert "readWriteValues[index] = value;" in hip_code
+        assert "attrWriteValues[index] = attrValue;" in hip_code
+        assert "cgl_byte_address_store_uint(rawOutput, index, raw);" in hip_code
+        assert "float4 color = cgl_surf2Dread<float4>(source," in hip_code
+        assert (
+            "float4 blockedLoad = /* unsupported HIP image access: imageLoad "
+            "requires readable image resource on image2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in hip_code
+        )
+        assert "surf2Dwrite(color, target," in hip_code
+        assert (
+            "/* unsupported HIP image access: imageStore requires writable "
+            "image resource on image2D */ ((void)0);" in hip_code
+        )
+        assert "readonly" not in hip_code
+        assert "writeonly" not in hip_code
+        assert "readwrite" not in hip_code
+        assert "access(" not in hip_code
+
+    def test_explicit_binding_annotations_on_resources_parse_without_error(self):
+        """Test explicit @binding annotations on resources produce valid HIP code."""
+        source_code = """
+        shader ExplicitBindingShader {
+            sampler2D albedoTex @texture(0);
+            sampler2D normalTex @texture(1);
+            sampler2D roughnessTex @binding(2);
+            image2D outputImage @binding(3);
+
+            compute {
+                void main() {
+                    vec4 color = texelFetch(albedoTex, ivec2(0, 0), 0);
+                    vec4 normal = texelFetch(normalTex, ivec2(0, 0), 0);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t albedoTex;" in hip_code
+        assert "hipTextureObject_t normalTex;" in hip_code
+        assert "hipSurfaceObject_t outputImage;" in hip_code
+        assert "@binding" not in hip_code
+        assert "@texture" not in hip_code
+        assert "__global__ void main()" in hip_code
+
+    def test_automatic_sequential_binding_for_multiple_resources(self):
+        """Test multiple resources without explicit bindings all generate valid globals."""
+        source_code = """
+        shader MultiResourceShader {
+            StructuredBuffer<float> positionBuffer;
+            StructuredBuffer<float> normalBuffer;
+            StructuredBuffer<float> uvBuffer;
+            RWStructuredBuffer<float> outputBuffer;
+
+            void transformVertex(
+                StructuredBuffer<float> positions,
+                StructuredBuffer<float> normals,
+                RWStructuredBuffer<float> dest,
+                uint index
+            ) {
+                float pos = positions.Load(index);
+                float nrm = normals.Load(index);
+                dest.Store(index, pos + nrm);
+            }
+
+            compute {
+                void main() {
+                    float p = positionBuffer.Load(0);
+                    float n = normalBuffer.Load(0);
+                    float u = uvBuffer.Load(0);
+                    outputBuffer.Store(0, p + n + u);
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "const float* positionBuffer;" in hip_code
+        assert "const float* normalBuffer;" in hip_code
+        assert "const float* uvBuffer;" in hip_code
+        assert "float* outputBuffer;" in hip_code
+        assert (
+            "__device__ void transformVertex("
+            "const float* positions, const float* normals, "
+            "float* dest, unsigned int index)"
+        ) in hip_code
+        assert "float pos = positions[index];" in hip_code
+        assert "float nrm = normals[index];" in hip_code
+        assert "dest[index] = (pos + nrm);" in hip_code
+
+        pos_idx = hip_code.index("const float* positionBuffer;")
+        norm_idx = hip_code.index("const float* normalBuffer;")
+        uv_idx = hip_code.index("const float* uvBuffer;")
+        out_idx = hip_code.index("float* outputBuffer;")
+        assert pos_idx < norm_idx < uv_idx < out_idx
+
+    def test_multiple_textures_with_explicit_binding_slots(self):
+        """Test multiple texture resources with explicit binding slots produce valid HIP."""
+        source_code = """
+        shader MultiTextureBindingShader {
+            sampler2D diffuse @texture(0);
+            sampler2D specular @texture(1);
+            sampler2D ambient @texture(2);
+            sampler samp @sampler(0);
+
+            vec4 sampleAll(vec2 uv) {
+                vec4 d = texture(diffuse, samp, uv);
+                vec4 s = texture(specular, samp, uv);
+                vec4 a = texture(ambient, samp, uv);
+                return d + s + a;
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        hip_code = HipCodeGen().generate(ast)
+
+        assert "hipTextureObject_t diffuse;" in hip_code
+        assert "hipTextureObject_t specular;" in hip_code
+        assert "hipTextureObject_t ambient;" in hip_code
+        assert "@texture" not in hip_code
+        assert "@sampler" not in hip_code
+        assert "sampler2D" not in hip_code
+
+        diff_idx = hip_code.index("hipTextureObject_t diffuse;")
+        spec_idx = hip_code.index("hipTextureObject_t specular;")
+        amb_idx = hip_code.index("hipTextureObject_t ambient;")
+        assert diff_idx < spec_idx < amb_idx

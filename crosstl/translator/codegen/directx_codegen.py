@@ -3,12 +3,15 @@
 from hashlib import sha1
 
 from ..ast import (
+    ArrayAccessNode,
+    ArrayLiteralNode,
+    ArrayNode,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    ContinueNode,
     ConstructorNode,
+    ContinueNode,
     DoWhileNode,
     ForInNode,
     ForNode,
@@ -19,42 +22,30 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
-    PreprocessorNode,
     PointerAccessNode,
+    PreprocessorNode,
+    RangeNode,
     RayQueryOpNode,
     RayTracingOpNode,
-    RangeNode,
     ReturnNode,
     StructNode,
-    SwizzleNode,
     SwitchNode,
+    SwizzleNode,
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
     WhileNode,
-    ArrayAccessNode,
-    ArrayLiteralNode,
-    ArrayNode,
-)
-from .array_utils import (
-    parse_array_type,
-    format_c_style_array_declaration,
-    split_array_type_suffix,
-    get_array_size_from_node,
-    evaluate_literal_int_expression,
-    collect_literal_int_constants,
-    collect_struct_member_types,
 )
 from ..validation import (
+    IMAGE_RESOURCE_INTRINSIC_NAMES,
+    INTEGER_COORDINATE_INTRINSIC_NAMES,
     collect_cbuffer_declaration_name_conflicts,
     collect_cbuffer_member_global_conflicts,
     collect_duplicate_cbuffer_member_names,
     collect_duplicate_cbuffer_names,
     collect_non_resource_global_resource_shadows,
     expression_debug_name,
-    IMAGE_RESOURCE_INTRINSIC_NAMES,
-    INTEGER_COORDINATE_INTRINSIC_NAMES,
     texture_bias_argument_index,
     texture_compare_argument_index,
     texture_gather_component_argument_index,
@@ -65,26 +56,21 @@ from ..validation import (
     texture_query_lod_coordinate_argument_index,
     texture_sample_index_argument_index,
 )
-from .stage_utils import (
-    assign_stage_entry_names,
-    collect_stage_entry_records,
-    collect_stage_entry_reserved_function_names,
-    collect_stage_local_structs,
-    collect_stage_local_variables,
-    compute_local_size,
-    deduplicate_named_declarations,
-    normalize_stage_name,
-    order_functions_by_dependencies,
-    should_emit_qualified_function,
-    stage_matches,
+from .array_utils import (
+    collect_literal_int_constants,
+    collect_struct_member_types,
+    evaluate_literal_int_expression,
+    format_c_style_array_declaration,
+    get_array_size_from_node,
+    parse_array_type,
+    split_array_type_suffix,
 )
-from .resource_arrays import collect_resource_array_size_hints
 from .enum_utils import (
-    collect_enum_type_names,
     collect_enum_struct_variant_fields,
+    collect_enum_type_names,
+    collect_enum_variant_constants,
     collect_enum_variant_constructor_fields,
     collect_enum_variant_constructors,
-    collect_enum_variant_constants,
     collect_generic_enum_specialization_member_types,
     collect_generic_enum_specializations,
     collect_generic_enum_struct_definitions,
@@ -93,16 +79,25 @@ from .enum_utils import (
     collect_struct_payload_enums,
     default_value_expression,
     enum_value_expression,
-    generate_enum_constructor_expression,
-    generate_generic_enum_constructor_functions,
-    generate_generic_enum_constants,
-    generate_generic_enum_structs,
-    generate_enum_constructor_call,
-    generate_enum_constructor_functions,
     generate_enum_constants,
+    generate_enum_constructor_call,
+    generate_enum_constructor_expression,
+    generate_enum_constructor_functions,
     generate_enum_structs,
+    generate_generic_enum_constants,
+    generate_generic_enum_constructor_functions,
+    generate_generic_enum_structs,
     generic_enum_specialized_type_name,
     infer_enum_constructor_type,
+)
+from .generic_function_utils import (
+    generate_numeric_trait_method_call,
+    generate_static_generic_numeric_call,
+    generic_function_call_name,
+    generic_function_emission_list,
+    generic_function_parameters,
+    numeric_trait_method_result_type,
+    prepare_generic_function_specializations,
 )
 from .generic_struct_utils import (
     collect_generic_struct_definitions,
@@ -114,21 +109,12 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
     infer_struct_constructor_type,
 )
-from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
-    generic_function_call_name,
-    generic_function_emission_list,
-    generic_function_parameters,
-    numeric_trait_method_result_type,
-    prepare_generic_function_specializations,
-)
 from .glsl_buffer_layout import (
     byte_offset_add,
     byte_offset_expression,
     collect_lowered_glsl_buffer_blocks,
-    glsl_buffer_compound_binary_operator,
     glsl_buffer_block_node_type,
+    glsl_buffer_compound_binary_operator,
     matrix_column_offsets,
     vector_component_offsets,
 )
@@ -143,38 +129,43 @@ from .image_access_contracts import (
     collect_function_parameter_names,
     explicit_image_format,
     floating_coordinate_dimension_from_type_name,
-    image_atomic_result_kind_error,
-    image_atomic_result_kind_mismatch,
-    image_atomic_value_arguments as shared_image_atomic_value_arguments,
-    image_atomic_value_kind_error,
-    image_atomic_value_kind_mismatch,
-    image_load_result_kind_error,
-    image_load_result_kind_mismatch,
-    image_load_result_shape_error,
-    image_load_result_shape_mismatch,
-    image_format_or_default_channel_count,
-    image_format_channel_count,
-    image_format_component_kind,
-    image_format_result_type,
-    image_format_component_type,
-    image_format_vector_type,
     image_access_diagnostic_name,
     image_access_requirement_label,
     image_access_satisfies_requirement,
     image_atomic_helper_descriptor_fields,
     image_atomic_helper_resource_metadata,
+    image_atomic_result_kind_error,
+    image_atomic_result_kind_mismatch,
+)
+from .image_access_contracts import (
+    image_atomic_value_arguments as shared_image_atomic_value_arguments,
+)
+from .image_access_contracts import (
+    image_atomic_value_kind_error,
+    image_atomic_value_kind_mismatch,
+    image_format_channel_count,
+    image_format_component_kind,
+    image_format_component_type,
+    image_format_or_default_channel_count,
+    image_format_result_type,
+    image_format_vector_type,
+    image_load_result_kind_error,
+    image_load_result_kind_mismatch,
+    image_load_result_shape_error,
+    image_load_result_shape_mismatch,
     image_multisample_sample_argument_index,
     image_multisample_sample_type_error,
     image_multisample_sample_type_mismatch,
+    image_resource_metadata,
     image_store_value_kind_error,
     image_store_value_kind_mismatch,
     image_store_value_shape_error,
     image_store_value_shape_mismatch,
-    is_image_format_attribute,
-    is_image_atomic_operation,
-    is_image_resource_operation,
     integer_coordinate_dimension_from_type_name,
     is_floating_scalar_type_name,
+    is_image_atomic_operation,
+    is_image_format_attribute,
+    is_image_resource_operation,
     is_integer_coordinate_type_name,
     is_integer_scalar_type_name,
     is_numeric_scalar_type_name,
@@ -186,38 +177,38 @@ from .image_access_contracts import (
     is_projected_texture_lod_offset_operation,
     is_projected_texture_lod_operation,
     is_projected_texture_operation,
+    is_resource_access_attribute,
     is_resource_samples_query_operation,
     is_resource_size_query_operation,
-    is_resource_access_attribute,
     is_storage_image_texture_comparison_operation,
     is_storage_image_texture_operation,
     is_texel_fetch_basic_operation,
     is_texel_fetch_offset_operation,
-    is_texture_compare_operation,
     is_texture_compare_basic_operation,
-    is_texture_gather_compare_operation,
-    is_texture_gather_compare_offset_operation,
     is_texture_compare_grad_offset_operation,
     is_texture_compare_grad_operation,
     is_texture_compare_lod_offset_operation,
     is_texture_compare_lod_operation,
     is_texture_compare_non_projected_offset_operation,
     is_texture_compare_offset_operation,
+    is_texture_compare_operation,
     is_texture_gather_basic_operation,
-    is_texture_gather_operation,
+    is_texture_gather_compare_offset_operation,
+    is_texture_gather_compare_operation,
     is_texture_gather_multi_offset_operation,
     is_texture_gather_offset_operation,
+    is_texture_gather_operation,
     is_texture_gather_single_offset_operation,
-    is_texture_query_lod_operation,
     is_texture_query_levels_operation,
+    is_texture_query_lod_operation,
     is_texture_sample_basic_offset_operation,
     is_texture_sample_basic_operation,
     is_texture_sample_grad_offset_operation,
     is_texture_sample_grad_operation,
     is_texture_sample_lod_offset_operation,
     is_texture_sample_lod_operation,
-    is_texture_sample_operation,
     is_texture_sample_offset_operation,
+    is_texture_sample_operation,
     numeric_component_count_from_type,
     numeric_component_kind_from_type,
     numeric_expression_component_count,
@@ -226,8 +217,9 @@ from .image_access_contracts import (
     numeric_scalar_type_kind,
     operation_argument_type_error,
     operation_dimension_argument_error,
-    image_resource_metadata,
+    projected_texture_extra_argument_count_error,
     record_explicit_image_metadata,
+    requires_integer_coordinate,
     resolve_image_atomic_component_kind,
     resource_query_scalar_constant_helper_descriptor,
     resource_query_scalar_helper_descriptor,
@@ -238,56 +230,58 @@ from .image_access_contracts import (
     storage_image_store_vector_constructor,
     storage_image_zero_values,
     supported_image_formats,
-    projected_texture_extra_argument_count_error,
+)
+from .image_access_contracts import (
     texture_argument_diagnostic_type as shared_texture_argument_diagnostic_type,
+)
+from .image_access_contracts import (
     texture_compare_argument_error,
     texture_compare_extra_argument_count_error,
     texture_compare_offset_capability_error,
     texture_compare_projected_coordinate_error,
     texture_coordinate_arguments_error,
     texture_gather_capability_error,
+    texture_gather_compare_extra_argument_count_error,
     texture_gather_component_count_error,
     texture_gather_component_literal_error,
-    texture_gather_compare_extra_argument_count_error,
     texture_gather_offset_argument_count_error,
     texture_gather_offset_capability_error,
     texture_gather_offsets_argument_count_error,
     texture_gather_operation_error,
     texture_image_resource_operation_names,
+    texture_multisample_sample_type_error,
     texture_query_levels_multisample_expression,
     texture_query_lod_coordinate_dimension_error,
     texture_query_lod_coordinate_swizzle,
     texture_query_lod_coordinate_type_error,
     texture_resource_dimension_descriptor,
     texture_resource_offset_dimension_key,
-    texture_samples_query_expression,
-    texture_sample_offset_extra_argument_count_error,
     texture_sample_offset_capability_error,
-    texture_multisample_sample_type_error,
-    validate_texture_operation_arity,
-    requires_integer_coordinate,
+    texture_sample_offset_extra_argument_count_error,
+    texture_samples_query_expression,
+    unsupported_cube_texel_fetch_expression,
     unsupported_image_atomic_expression,
     unsupported_multisample_image_atomic_expression,
     unsupported_multisample_image_store_expression,
-    unsupported_cube_texel_fetch_expression,
+    unsupported_multisample_texel_fetch_offset_expression,
     unsupported_multisample_texture_call_vector_expression,
     unsupported_multisample_texture_compare_scalar_expression,
     unsupported_multisample_texture_gather_compare_vector_expression,
     unsupported_multisample_texture_query_lod_expression,
-    unsupported_multisample_texel_fetch_offset_expression,
     unsupported_projected_texture_call_expression,
+    unsupported_projected_texture_operation_error,
     unsupported_storage_image_texture_comparison_scalar_expression,
     unsupported_storage_image_texture_operation_vector_expression,
-    unsupported_texture_gather_compare_call_expression,
-    unsupported_texture_gather_call_expression,
-    unsupported_texture_compare_scalar_expression,
     unsupported_texture_compare_operation_error,
+    unsupported_texture_compare_scalar_expression,
+    unsupported_texture_gather_call_expression,
+    unsupported_texture_gather_compare_call_expression,
     unsupported_texture_offset_call_expression,
     unsupported_texture_offset_operation_error,
-    unsupported_projected_texture_operation_error,
     unsupported_texture_query_levels_expression,
     unsupported_texture_query_lod_expression,
     unsupported_texture_samples_query_call_expression,
+    validate_texture_operation_arity,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -295,6 +289,20 @@ from .match_utils import (
     generate_switch_match,
     infer_match_expression_result_type,
     is_switch_lowerable_match,
+)
+from .resource_arrays import collect_resource_array_size_hints
+from .stage_utils import (
+    assign_stage_entry_names,
+    collect_stage_entry_records,
+    collect_stage_entry_reserved_function_names,
+    collect_stage_local_structs,
+    collect_stage_local_variables,
+    compute_local_size,
+    deduplicate_named_declarations,
+    normalize_stage_name,
+    order_functions_by_dependencies,
+    should_emit_qualified_function,
+    stage_matches,
 )
 
 
@@ -509,8 +517,10 @@ class HLSLCodeGen:
         self.resource_array_size_hints = {}
         self.function_resource_array_size_hints = {}
         self.literal_int_constants = {}
+        self.literal_bool_constants = {}
         self.current_function_return_type = None
         self.current_expression_expected_type = None
+        self.current_hlsl_visible_int_constants = None
         self.allow_hlsl_byteaddress_interlocked_member_expression = False
         self.current_generic_function_substitutions = {}
         self.local_variable_types = {}
@@ -821,6 +831,10 @@ class HLSLCodeGen:
         self.literal_int_constants = collect_literal_int_constants(
             getattr(ast, "constants", [])
         )
+        self.literal_bool_constants = self.collect_hlsl_literal_bool_constants(
+            getattr(ast, "constants", [])
+        )
+        self.current_hlsl_visible_int_constants = None
         structs = deduplicate_named_declarations(
             list(getattr(ast, "structs", []) or [])
             + collect_stage_local_structs(ast, target_stage),
@@ -2263,13 +2277,20 @@ class HLSLCodeGen:
             for texture_name, sampler_info in implicit_texture_samplers.items()
             if sampler_info.get("query_lod")
         }
-        body = getattr(func, "body", [])
-        if hasattr(body, "statements"):
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
-        elif isinstance(body, list):
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
+        previous_hlsl_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = self.hlsl_initial_int_constants(func)
+        try:
+            body = getattr(func, "body", [])
+            if hasattr(body, "statements"):
+                for stmt in body.statements:
+                    code += self.generate_statement(stmt, indent + 1)
+            elif isinstance(body, list):
+                for stmt in body:
+                    code += self.generate_statement(stmt, indent + 1)
+        finally:
+            self.current_hlsl_visible_int_constants = (
+                previous_hlsl_visible_int_constants
+            )
         self.current_sampler_parameters = previous_sampler_parameters
         self.current_texture_parameters = previous_texture_parameters
         self.current_image_access_parameters = previous_image_access_parameters
@@ -2316,9 +2337,10 @@ class HLSLCodeGen:
                 self.current_unsupported_glsl_buffer_block_local_variables.add(
                     stmt.name
                 )
-                return (
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt,
                     f"{indent_str}"
-                    f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n"
+                    f"{self.unsupported_glsl_buffer_block_local_variable_placeholder('HLSL', vtype, stmt.name)};\n",
                 )
 
             declaration = format_c_style_array_declaration(
@@ -2336,7 +2358,7 @@ class HLSLCodeGen:
                     indent,
                     "HLSL",
                 )
-                return code
+                return self.hlsl_record_generated_statement_int_constants(stmt, code)
             if initial_value is not None:
                 ternary_init = (
                     self.generate_hlsl_typed_buffer_atomic_ternary_initialization(
@@ -2348,14 +2370,17 @@ class HLSLCodeGen:
                     )
                 )
                 if ternary_init is not None:
-                    return ternary_init
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, ternary_init
+                    )
                 atomic_init = self.generate_hlsl_typed_buffer_atomic_statement(
                     initial_value, stmt.name, vtype
                 )
                 if atomic_init is not None:
-                    return (
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt,
                         f"{indent_str}{declaration};\n"
-                        f"{self.generate_statement_code(atomic_init, indent)}"
+                        f"{self.generate_statement_code(atomic_init, indent)}",
                     )
                 if self.hlsl_expression_contains_typed_buffer_atomic(initial_value):
                     code, init_expr = (
@@ -2364,7 +2389,9 @@ class HLSLCodeGen:
                         )
                     )
                     code += f"{indent_str}{declaration} = {init_expr};\n"
-                    return code
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, code
+                    )
                 lifted_init = self.hlsl_typed_buffer_atomic_lifted_expression(
                     initial_value
                 )
@@ -2374,11 +2401,17 @@ class HLSLCodeGen:
                         "\n".join(lift_statements), indent
                     )
                     code += f"{indent_str}{declaration} = {init_expr};\n"
-                    return code
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt, code
+                    )
                 init_expr = self.generate_expression_with_expected(initial_value, vtype)
-                return f"{indent_str}{declaration} = {init_expr};\n"
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, f"{indent_str}{declaration} = {init_expr};\n"
+                )
             else:
-                return f"{indent_str}{declaration};\n"
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, f"{indent_str}{declaration};\n"
+                )
 
         elif isinstance(stmt, ArrayNode):
             # Improved array node handling
@@ -2399,15 +2432,22 @@ class HLSLCodeGen:
                 )
             )
             if ternary_assignment is not None:
-                return ternary_assignment
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, ternary_assignment
+                )
             atomic_assignment = (
                 self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
                     stmt, indent
                 )
             )
             if atomic_assignment is not None:
-                return atomic_assignment
-            return self.generate_statement_code(self.generate_assignment(stmt), indent)
+                return self.hlsl_record_generated_statement_int_constants(
+                    stmt, atomic_assignment
+                )
+            return self.hlsl_record_generated_statement_int_constants(
+                stmt,
+                self.generate_statement_code(self.generate_assignment(stmt), indent),
+            )
 
         elif isinstance(stmt, BlockNode):
             return self.generate_block(stmt, indent)
@@ -2508,14 +2548,21 @@ class HLSLCodeGen:
                         stmt.expression, indent
                     )
                     if ternary_assignment is not None:
-                        return ternary_assignment
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, ternary_assignment
+                        )
                     atomic_assignment = self.generate_hlsl_typed_buffer_atomic_value_assignment_statement(
                         stmt.expression, indent
                     )
                     if atomic_assignment is not None:
-                        return atomic_assignment
-                    return self.generate_statement_code(
-                        self.generate_assignment(stmt.expression), indent
+                        return self.hlsl_record_generated_statement_int_constants(
+                            stmt, atomic_assignment
+                        )
+                    return self.hlsl_record_generated_statement_int_constants(
+                        stmt,
+                        self.generate_statement_code(
+                            self.generate_assignment(stmt.expression), indent
+                        ),
                     )
                 atomic_statement = self.generate_hlsl_typed_buffer_atomic_statement(
                     stmt.expression
@@ -2733,6 +2780,19 @@ class HLSLCodeGen:
                 return component_type, suffix[0], suffix[2]
         return None
 
+    def hlsl_boolean_expression_result_type(self, *operand_types):
+        for operand_type in operand_types:
+            mapped_type = self.map_type(operand_type)
+            if self.is_vector_value_type(mapped_type):
+                size = mapped_type[-1:]
+                if size in {"2", "3", "4"}:
+                    return f"bool{size}"
+            matrix_shape = self.hlsl_matrix_shape(mapped_type)
+            if matrix_shape:
+                _, rows, columns = matrix_shape
+                return f"bool{rows}x{columns}"
+        return "bool"
+
     def expression_result_type(self, expr):
         if expr is None:
             return None
@@ -2745,6 +2805,9 @@ class HLSLCodeGen:
         if isinstance(expr, BinaryOpNode):
             left_type = self.expression_result_type(expr.left)
             right_type = self.expression_result_type(expr.right)
+            operator = str(getattr(expr, "operator", getattr(expr, "op", "")))
+            if operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                return self.hlsl_boolean_expression_result_type(left_type, right_type)
             if self.is_vector_value_type(left_type):
                 return left_type
             if self.is_vector_value_type(right_type):
@@ -3113,6 +3176,11 @@ class HLSLCodeGen:
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
+        )
 
         try:
             # Handle for loop components
@@ -3152,6 +3220,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_block(self, node, indent):
         indent_str = "    " * indent
@@ -3167,6 +3236,11 @@ class HLSLCodeGen:
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
         )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
+        )
         try:
             return self.generate_statement_body(body, indent)
         finally:
@@ -3174,6 +3248,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_for_in(self, node, indent):
         indent_str = "    " * indent
@@ -3182,6 +3257,11 @@ class HLSLCodeGen:
         previous_local_variable_types = dict(self.local_variable_types)
         previous_unsupported_locals = set(
             self.current_unsupported_glsl_buffer_block_local_variables
+        )
+        previous_visible_int_constants = (
+            None
+            if self.current_hlsl_visible_int_constants is None
+            else dict(self.current_hlsl_visible_int_constants)
         )
 
         try:
@@ -3213,6 +3293,7 @@ class HLSLCodeGen:
             self.current_unsupported_glsl_buffer_block_local_variables = (
                 previous_unsupported_locals
             )
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def generate_while(self, node, indent):
         indent_str = "    " * indent
@@ -3901,7 +3982,9 @@ class HLSLCodeGen:
             )
 
     def validate_hlsl_quad_lane_index_range(self, operation, argument):
-        lane_index = self.literal_int_value(argument, self.literal_int_constants)
+        lane_index = self.literal_int_value(
+            argument, self.hlsl_current_visible_int_constants()
+        )
         if lane_index is None:
             return
         if not 0 <= lane_index <= 3:
@@ -5987,6 +6070,14 @@ class HLSLCodeGen:
         except ValueError:
             return None
 
+    def hlsl_constant_int_value(self, value, constants=None):
+        if constants is None:
+            constants = self.literal_int_constants
+        parsed = self.literal_int_value(value, constants)
+        if parsed is not None:
+            return parsed
+        return self.hlsl_int_literal_value(value)
+
     def hlsl_float_literal_value(self, value):
         if value is None:
             return None
@@ -6025,18 +6116,10 @@ class HLSLCodeGen:
         return type_name.split("<", 1)[0].strip()
 
     def hlsl_parameter_array_count(self, parameter):
-        param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-        if str(type(param_type)).find("ArrayType") != -1:
-            return self.hlsl_int_literal_value(getattr(param_type, "size", None))
-
-        type_name = self.type_name_string(param_type)
-        if not type_name:
+        size_expr = self.hlsl_parameter_array_size_expression(parameter)
+        if size_expr is None:
             return None
-        _base_type, array_suffix = split_array_type_suffix(str(type_name))
-        if not array_suffix:
-            return None
-        first_dimension = array_suffix[1:].split("]", 1)[0]
-        return self.hlsl_int_literal_value(first_dimension)
+        return self.hlsl_constant_int_value(size_expr)
 
     def hlsl_parameter_mapped_base_and_array_suffix(self, parameter):
         param_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
@@ -6772,9 +6855,9 @@ class HLSLCodeGen:
                 f"{expected}, got {actual}"
             )
 
-    def hlsl_ray_tracing_calls(self, func):
+    def hlsl_ray_tracing_calls_in_node(self, root):
         calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
+        for node in self.walk_ast(root):
             if isinstance(node, RayTracingOpNode):
                 calls.append(
                     (getattr(node, "operation", None), getattr(node, "arguments", []))
@@ -6792,6 +6875,9 @@ class HLSLCodeGen:
                         (name, getattr(node, "arguments", getattr(node, "args", [])))
                     )
         return calls
+
+    def hlsl_ray_tracing_calls(self, func):
+        return self.hlsl_ray_tracing_calls_in_node(getattr(func, "body", []))
 
     def hlsl_ray_query_method_return_type(self, operation):
         return {
@@ -6889,13 +6975,16 @@ class HLSLCodeGen:
             getattr(node, "arguments", getattr(node, "args", [])),
         )
 
-    def hlsl_ray_query_calls(self, func):
+    def hlsl_ray_query_calls_in_node(self, root):
         calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
+        for node in self.walk_ast(root):
             call = self.hlsl_ray_query_call_parts(node)
             if call is not None:
                 calls.append(call)
         return calls
+
+    def hlsl_ray_query_calls(self, func):
+        return self.hlsl_ray_query_calls_in_node(getattr(func, "body", []))
 
     def validate_hlsl_ray_struct_argument(self, argument, shader_type, operation, role):
         argument_type = self.expression_result_type(argument)
@@ -6988,7 +7077,9 @@ class HLSLCodeGen:
             argument,
             f"DirectX {shader_type} {operation} instance inclusion mask argument",
         )
-        mask_value = self.literal_int_value(argument, self.literal_int_constants)
+        mask_value = self.literal_int_value(
+            argument, self.hlsl_current_visible_int_constants()
+        )
         if mask_value is None or 0 <= mask_value <= 0xFF:
             return
         raise ValueError(
@@ -6998,7 +7089,7 @@ class HLSLCodeGen:
 
     def hlsl_ray_flag_literal_constants(self):
         constants = dict(self.HLSL_RAY_FLAG_VALUES)
-        constants.update(self.literal_int_constants)
+        constants.update(self.hlsl_current_visible_int_constants())
         return constants
 
     def hlsl_ray_flag_literal_int_value(self, expr):
@@ -7180,12 +7271,8 @@ class HLSLCodeGen:
         elif operation == "ReportHit":
             self.validate_hlsl_report_hit_arguments(args, shader_type)
 
-    def validate_hlsl_ray_tracing_calls(self, func, shader_type):
-        calls = self.hlsl_ray_tracing_calls(func)
-        if not calls:
-            return
-
-        allowed_stages = {
+    def hlsl_ray_tracing_allowed_stages(self):
+        return {
             "TraceRay": {
                 "ray_generation",
                 "ray_closest_hit",
@@ -7206,45 +7293,207 @@ class HLSLCodeGen:
             "AcceptHitAndEndSearch": {"ray_any_hit", "anyhit"},
             "IgnoreHit": {"ray_any_hit", "anyhit"},
         }
-        expected_arg_counts = {
+
+    def hlsl_ray_tracing_expected_arg_counts(self):
+        return {
             "TraceRay": {8, 11},
             "CallShader": {2},
             "ReportHit": {2, 3},
             "AcceptHitAndEndSearch": {0},
             "IgnoreHit": {0},
         }
+
+    def validate_hlsl_ray_tracing_call(
+        self, operation, args, shader_type, allowed_stages, expected_arg_counts
+    ):
+        if operation not in allowed_stages:
+            return
+        if shader_type is not None and shader_type not in allowed_stages[operation]:
+            valid_stages = ", ".join(sorted(allowed_stages[operation]))
+            raise ValueError(
+                f"DirectX {shader_type} stage cannot call {operation}; "
+                f"{operation} is only valid in: {valid_stages}"
+            )
+        expected_counts = expected_arg_counts[operation]
+        if len(args) not in expected_counts:
+            expected = " or ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"DirectX {shader_type} {operation} requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+        self.validate_hlsl_ray_tracing_call_arguments(operation, args, shader_type)
+
+    def validate_hlsl_ray_tracing_call_sequence(
+        self,
+        statements,
+        shader_type,
+        allowed_stages,
+        expected_arg_counts,
+        visible_int_constants,
+    ):
+        previous_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = visible_int_constants
+        try:
+            for stmt in self.hlsl_statement_body_items(statements):
+                if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(stmt),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                if isinstance(stmt, IfNode):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(
+                            getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                        ),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    else_branch = getattr(
+                        stmt, "else_branch", getattr(stmt, "else_body", None)
+                    )
+                    if else_branch is not None:
+                        self.validate_hlsl_ray_tracing_call_sequence(
+                            self.hlsl_statement_body_items(else_branch),
+                            shader_type,
+                            allowed_stages,
+                            expected_arg_counts,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(stmt, SwitchNode):
+                    case_entries = self.hlsl_switch_case_entries(stmt)
+                    for start_index in range(len(case_entries)):
+                        self.validate_hlsl_ray_tracing_call_sequence(
+                            self.hlsl_switch_fallthrough_path_body(
+                                case_entries, start_index
+                            ),
+                            shader_type,
+                            allowed_stages,
+                            expected_arg_counts,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(
+                    stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+                ):
+                    self.validate_hlsl_ray_tracing_call_sequence(
+                        self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                for operation, args in self.hlsl_ray_tracing_calls_in_node(stmt):
+                    self.validate_hlsl_ray_tracing_call(
+                        operation,
+                        args,
+                        shader_type,
+                        allowed_stages,
+                        expected_arg_counts,
+                    )
+                self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
+        finally:
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
+
+    def validate_hlsl_ray_tracing_calls(self, func, shader_type):
+        calls = self.hlsl_ray_tracing_calls(func)
+        if not calls:
+            return
+
+        allowed_stages = self.hlsl_ray_tracing_allowed_stages()
+        expected_arg_counts = self.hlsl_ray_tracing_expected_arg_counts()
         previous_local_variable_types = self.local_variable_types
         self.local_variable_types = {
             **previous_local_variable_types,
             **self.function_scope_variable_types(func),
         }
         try:
-            for operation, args in calls:
-                if operation not in allowed_stages:
-                    continue
-                if (
-                    shader_type is not None
-                    and shader_type not in allowed_stages[operation]
-                ):
-                    valid_stages = ", ".join(sorted(allowed_stages[operation]))
-                    raise ValueError(
-                        f"DirectX {shader_type} stage cannot call {operation}; "
-                        f"{operation} is only valid in: {valid_stages}"
-                    )
-                expected_counts = expected_arg_counts[operation]
-                if len(args) not in expected_counts:
-                    expected = " or ".join(
-                        str(count) for count in sorted(expected_counts)
-                    )
-                    raise ValueError(
-                        f"DirectX {shader_type} {operation} requires {expected} "
-                        f"argument(s), got {len(args)}"
-                    )
-                self.validate_hlsl_ray_tracing_call_arguments(
-                    operation, args, shader_type
-                )
+            self.validate_hlsl_ray_tracing_call_sequence(
+                self.hlsl_statement_body_items(getattr(func, "body", [])),
+                shader_type,
+                allowed_stages,
+                expected_arg_counts,
+                self.hlsl_initial_int_constants(func),
+            )
         finally:
             self.local_variable_types = previous_local_variable_types
+
+    def validate_hlsl_ray_query_call_sequence(
+        self, statements, shader_type, visible_int_constants
+    ):
+        previous_visible_int_constants = self.current_hlsl_visible_int_constants
+        self.current_hlsl_visible_int_constants = visible_int_constants
+        try:
+            for stmt in self.hlsl_statement_body_items(statements):
+                if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(stmt),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                if isinstance(stmt, IfNode):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(
+                            getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                        ),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    else_branch = getattr(
+                        stmt, "else_branch", getattr(stmt, "else_body", None)
+                    )
+                    if else_branch is not None:
+                        self.validate_hlsl_ray_query_call_sequence(
+                            self.hlsl_statement_body_items(else_branch),
+                            shader_type,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(stmt, SwitchNode):
+                    case_entries = self.hlsl_switch_case_entries(stmt)
+                    for start_index in range(len(case_entries)):
+                        self.validate_hlsl_ray_query_call_sequence(
+                            self.hlsl_switch_fallthrough_path_body(
+                                case_entries, start_index
+                            ),
+                            shader_type,
+                            dict(visible_int_constants),
+                        )
+                    continue
+
+                if isinstance(
+                    stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)
+                ):
+                    self.validate_hlsl_ray_query_call_sequence(
+                        self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                        shader_type,
+                        dict(visible_int_constants),
+                    )
+                    continue
+
+                for operation, query_expr, args in self.hlsl_ray_query_calls_in_node(
+                    stmt
+                ):
+                    self.validate_hlsl_ray_query_call_arguments(
+                        operation, query_expr, args, shader_type
+                    )
+                self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
+        finally:
+            self.current_hlsl_visible_int_constants = previous_visible_int_constants
 
     def validate_hlsl_ray_query_calls(self, func, shader_type):
         calls = self.hlsl_ray_query_calls(func)
@@ -7257,10 +7506,11 @@ class HLSLCodeGen:
             **self.function_scope_variable_types(func),
         }
         try:
-            for operation, query_expr, args in calls:
-                self.validate_hlsl_ray_query_call_arguments(
-                    operation, query_expr, args, shader_type
-                )
+            self.validate_hlsl_ray_query_call_sequence(
+                self.hlsl_statement_body_items(getattr(func, "body", [])),
+                shader_type,
+                self.hlsl_initial_int_constants(func),
+            )
         finally:
             self.local_variable_types = previous_local_variable_types
 
@@ -7801,24 +8051,29 @@ class HLSLCodeGen:
     def hlsl_mesh_output_parameter_literal_count(self, parameter):
         return self.hlsl_parameter_array_count(parameter)
 
-    def hlsl_set_mesh_output_count_calls(self, func):
+    def hlsl_set_mesh_output_count_args_in_node(self, root):
         calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
+        for node in self.walk_ast(root):
+            if not self.hlsl_expression_is_set_mesh_output_counts(node):
+                continue
             if isinstance(node, FunctionCallNode):
-                if self.function_call_name(node) == "SetMeshOutputCounts":
-                    calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
             elif isinstance(node, MeshOpNode):
-                if getattr(node, "operation", None) == "SetMeshOutputCounts":
-                    calls.append(getattr(node, "arguments", []))
+                calls.append(getattr(node, "arguments", []))
         return calls
+
+    def hlsl_set_mesh_output_count_calls(self, func):
+        return self.hlsl_set_mesh_output_count_args_in_node(getattr(func, "body", []))
 
     def hlsl_mesh_output_call_count(self, func):
         return len(self.hlsl_set_mesh_output_count_calls(func))
 
-    def hlsl_integer_constant_value(self, expr):
+    def hlsl_integer_constant_value(self, expr, constants=None):
         if isinstance(expr, UnaryOpNode):
             operator = getattr(expr, "operator", getattr(expr, "op", None))
-            value = self.hlsl_integer_constant_value(getattr(expr, "operand", None))
+            value = self.hlsl_integer_constant_value(
+                getattr(expr, "operand", None), constants
+            )
             if value is None:
                 return None
             if operator == "-":
@@ -7826,23 +8081,140 @@ class HLSLCodeGen:
             if operator == "+":
                 return value
             return None
-        return self.hlsl_int_literal_value(expr)
+        return self.hlsl_constant_int_value(expr, constants)
 
-    def hlsl_bool_constant_value(self, expr):
+    def hlsl_literal_bool_value(self, expr, constants=None):
+        constants = constants or {}
         if expr is None:
             return None
         if isinstance(expr, bool):
             return expr
+        if isinstance(expr, str):
+            return constants.get(expr)
         if hasattr(expr, "value") and isinstance(expr.value, bool):
             return expr.value
+        name = getattr(expr, "name", None)
+        if isinstance(name, str) and name in constants:
+            return constants[name]
         if isinstance(expr, UnaryOpNode):
             operator = getattr(expr, "operator", getattr(expr, "op", None))
-            value = self.hlsl_bool_constant_value(getattr(expr, "operand", None))
+            value = self.hlsl_literal_bool_value(
+                getattr(expr, "operand", None), constants
+            )
             if value is None:
                 return None
             if operator == "!":
                 return not value
         return None
+
+    def collect_hlsl_literal_bool_constants(self, constants):
+        resolved = {}
+        pending = list(constants or [])
+
+        changed = True
+        while changed:
+            changed = False
+            remaining = []
+            for const in pending:
+                name = getattr(const, "name", None)
+                if not name or name in resolved:
+                    continue
+
+                value = self.hlsl_literal_bool_value(
+                    getattr(const, "value", None), resolved
+                )
+                if value is None:
+                    remaining.append(const)
+                    continue
+
+                resolved[name] = value
+                changed = True
+            pending = remaining
+
+        return resolved
+
+    def hlsl_bool_constant_value(self, expr, constants=None):
+        if constants is None:
+            constants = self.literal_bool_constants
+        return self.hlsl_literal_bool_value(expr, constants)
+
+    def hlsl_initial_bool_constants(self, func):
+        visible_constants = dict(self.literal_bool_constants)
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+        return visible_constants
+
+    def hlsl_initial_int_constants(self, func):
+        visible_constants = dict(self.literal_int_constants)
+        for param in getattr(func, "parameters", getattr(func, "params", [])) or []:
+            visible_constants.pop(getattr(param, "name", None), None)
+        return visible_constants
+
+    def hlsl_update_visible_bool_constants(self, stmt, visible_bool_constants):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+
+            visible_bool_constants.pop(name, None)
+            if "const" not in getattr(stmt, "qualifiers", []):
+                return
+
+            value = self.hlsl_bool_constant_value(
+                getattr(stmt, "initial_value", None), visible_bool_constants
+            )
+            if value is not None:
+                visible_bool_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            visible_bool_constants.pop(target_name, None)
+
+    def hlsl_update_visible_int_constants(self, stmt, visible_int_constants):
+        if isinstance(stmt, VariableNode):
+            name = getattr(stmt, "name", None)
+            if not name:
+                return
+
+            visible_int_constants.pop(name, None)
+            if "const" not in getattr(stmt, "qualifiers", []):
+                return
+
+            value = self.hlsl_integer_constant_value(
+                getattr(stmt, "initial_value", None), visible_int_constants
+            )
+            if value is not None:
+                visible_int_constants[name] = value
+            return
+
+        assignment = self.hlsl_assignment_from_statement(stmt)
+        if assignment is None:
+            return
+
+        target_name = self.expression_name(
+            getattr(assignment, "target", getattr(assignment, "left", None))
+        )
+        if target_name:
+            visible_int_constants.pop(target_name, None)
+
+    def hlsl_current_visible_int_constants(self):
+        if self.current_hlsl_visible_int_constants is not None:
+            return self.current_hlsl_visible_int_constants
+        return self.literal_int_constants
+
+    def hlsl_record_generated_statement_int_constants(self, stmt, generated_code):
+        if self.current_hlsl_visible_int_constants is not None:
+            self.hlsl_update_visible_int_constants(
+                stmt, self.current_hlsl_visible_int_constants
+            )
+        return generated_code
 
     def validate_hlsl_scalar_int_uint_expression(self, argument, context):
         argument_type = self.expression_result_type(argument)
@@ -7865,10 +8237,12 @@ class HLSLCodeGen:
         )
 
     def validate_hlsl_set_mesh_output_count_bounds(
-        self, args, role_parameters, count_parameters
+        self, args, role_parameters, count_parameters, visible_int_constants=None
     ):
         for index, (label, max_count) in enumerate(count_parameters):
-            literal_count = self.hlsl_integer_constant_value(args[index])
+            literal_count = self.hlsl_integer_constant_value(
+                args[index], visible_int_constants
+            )
             if literal_count is None:
                 continue
 
@@ -7885,6 +8259,50 @@ class HLSLCodeGen:
                     f"({literal_count}) cannot exceed {role} output array "
                     f"'{parameter_name}' size ({max_count})"
                 )
+
+    def hlsl_set_mesh_output_count_bound_parameters(self, role_parameters):
+        return (
+            (
+                "numVertices",
+                self.hlsl_mesh_output_parameter_literal_count(
+                    role_parameters["vertices"][0]
+                ),
+            ),
+            (
+                "numPrimitives",
+                self.hlsl_mesh_output_parameter_literal_count(
+                    role_parameters["indices"][0]
+                ),
+            ),
+        )
+
+    def hlsl_update_set_mesh_output_count_literals(
+        self,
+        args,
+        role_parameters,
+        set_count_literals,
+        visible_int_constants=None,
+    ):
+        if len(args) != 2:
+            return
+
+        self.validate_hlsl_set_mesh_output_count_bounds(
+            args,
+            role_parameters,
+            self.hlsl_set_mesh_output_count_bound_parameters(role_parameters),
+            visible_int_constants,
+        )
+        vertex_count = self.hlsl_integer_constant_value(args[0], visible_int_constants)
+        primitive_count = self.hlsl_integer_constant_value(
+            args[1], visible_int_constants
+        )
+        set_count_literals.update(
+            {
+                "vertices": vertex_count,
+                "indices": primitive_count,
+                "primitives": primitive_count,
+            }
+        )
 
     def hlsl_thread_varying_mesh_condition_names(self, func):
         names = set()
@@ -8085,20 +8503,7 @@ class HLSLCodeGen:
                 self.validate_hlsl_set_mesh_output_count_bounds(
                     args,
                     role_parameters,
-                    (
-                        (
-                            "numVertices",
-                            self.hlsl_mesh_output_parameter_literal_count(
-                                role_parameters["vertices"][0]
-                            ),
-                        ),
-                        (
-                            "numPrimitives",
-                            self.hlsl_mesh_output_parameter_literal_count(
-                                role_parameters["indices"][0]
-                            ),
-                        ),
-                    ),
+                    self.hlsl_set_mesh_output_count_bound_parameters(role_parameters),
                 )
         finally:
             self.local_variable_types = previous_local_variable_types
@@ -8119,10 +8524,7 @@ class HLSLCodeGen:
         return False
 
     def hlsl_statement_contains_set_mesh_output_counts(self, stmt):
-        return any(
-            self.hlsl_expression_is_set_mesh_output_counts(node)
-            for node in self.walk_ast(stmt)
-        )
+        return bool(self.hlsl_set_mesh_output_count_args_in_node(stmt))
 
     def hlsl_statement_body_items(self, body):
         if body is None:
@@ -8168,9 +8570,11 @@ class HLSLCodeGen:
                 break
         return path_body
 
-    def hlsl_switch_possible_start_indices(self, switch_node, case_entries):
+    def hlsl_switch_possible_start_indices(
+        self, switch_node, case_entries, visible_int_constants=None
+    ):
         selector_value = self.hlsl_integer_constant_value(
-            getattr(switch_node, "expression", None)
+            getattr(switch_node, "expression", None), visible_int_constants
         )
         default_index = None
         for index, case in enumerate(case_entries):
@@ -8178,7 +8582,9 @@ class HLSLCodeGen:
             if case_value is None:
                 default_index = index
                 continue
-            literal_value = self.hlsl_integer_constant_value(case_value)
+            literal_value = self.hlsl_integer_constant_value(
+                case_value, visible_int_constants
+            )
             if selector_value is not None and literal_value == selector_value:
                 return [index], True
 
@@ -8197,6 +8603,9 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        visible_bool_constants=None,
+        visible_int_constants=None,
+        role_parameters=None,
     ):
         counts_seen, _ = self.validate_hlsl_mesh_output_write_switch_result(
             switch_node,
@@ -8205,6 +8614,9 @@ class HLSLCodeGen:
             declared_counts,
             set_count_literals,
             active_helper_calls,
+            visible_bool_constants=visible_bool_constants,
+            visible_int_constants=visible_int_constants,
+            role_parameters=role_parameters,
         )
         return counts_seen
 
@@ -8217,18 +8629,25 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
+        visible_int_constants=None,
+        role_parameters=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
+        if visible_int_constants is None:
+            visible_int_constants = dict(self.literal_int_constants)
 
         case_entries = self.hlsl_switch_case_entries(switch_node)
         if not case_entries:
             return set_mesh_output_counts_seen, True
 
         start_indices, covers_all_paths = self.hlsl_switch_possible_start_indices(
-            switch_node, case_entries
+            switch_node, case_entries, visible_int_constants
         )
         path_results = []
         case_loop_exit_nodes = tuple(
@@ -8244,6 +8663,9 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     case_loop_exit_nodes,
+                    visible_bool_constants=dict(visible_bool_constants),
+                    visible_int_constants=dict(visible_int_constants),
+                    role_parameters=role_parameters,
                 )
             )
 
@@ -8346,6 +8768,7 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls,
+        role_parameters=None,
     ):
         helper_name = self.function_call_name(call)
         helper = (self.current_hlsl_available_functions or {}).get(helper_name)
@@ -8371,6 +8794,9 @@ class HLSLCodeGen:
                 declared_counts,
                 set_count_literals,
                 active_helper_calls,
+                visible_bool_constants=self.hlsl_initial_bool_constants(helper),
+                visible_int_constants=self.hlsl_initial_int_constants(helper),
+                role_parameters=role_parameters,
             )
         finally:
             active_helper_calls.remove(helper_id)
@@ -8382,6 +8808,7 @@ class HLSLCodeGen:
         role_by_name,
         declared_counts,
         set_count_literals,
+        visible_int_constants=None,
     ):
         target = getattr(assignment, "target", getattr(assignment, "left", None))
         target_info = self.hlsl_mesh_output_assignment_target_info(target, role_by_name)
@@ -8402,7 +8829,9 @@ class HLSLCodeGen:
                 "written as a whole uint2/uint3 element"
             )
 
-        index_value = self.hlsl_integer_constant_value(target_info["index"])
+        index_value = self.hlsl_integer_constant_value(
+            target_info["index"], visible_int_constants
+        )
         if index_value is None:
             return
 
@@ -8437,6 +8866,9 @@ class HLSLCodeGen:
         declared_counts,
         set_count_literals,
         active_helper_calls=None,
+        visible_bool_constants=None,
+        visible_int_constants=None,
+        role_parameters=None,
     ):
         counts_seen, _ = self.validate_hlsl_mesh_output_write_sequence_result(
             statements,
@@ -8445,6 +8877,9 @@ class HLSLCodeGen:
             declared_counts,
             set_count_literals,
             active_helper_calls,
+            visible_bool_constants=visible_bool_constants,
+            visible_int_constants=visible_int_constants,
+            role_parameters=role_parameters,
         )
         return counts_seen
 
@@ -8457,11 +8892,18 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls=None,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
+        visible_int_constants=None,
+        role_parameters=None,
     ):
         if active_helper_calls is None:
             active_helper_calls = set()
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
+        if visible_int_constants is None:
+            visible_int_constants = dict(self.literal_int_constants)
 
         counts_seen = set_mesh_output_counts_seen
         for stmt in statements:
@@ -8475,6 +8917,9 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants=dict(visible_bool_constants),
+                        visible_int_constants=dict(visible_int_constants),
+                        role_parameters=role_parameters,
                     )
                 )
                 if not can_continue:
@@ -8491,6 +8936,9 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants,
+                        visible_int_constants,
+                        role_parameters,
                     )
                 )
                 if not can_continue:
@@ -8507,6 +8955,9 @@ class HLSLCodeGen:
                         set_count_literals,
                         active_helper_calls,
                         loop_exit_nodes,
+                        visible_bool_constants,
+                        visible_int_constants,
+                        role_parameters,
                     )
                 )
                 if not can_continue:
@@ -8522,6 +8973,9 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     (BreakNode, ContinueNode),
+                    visible_bool_constants=dict(visible_bool_constants),
+                    visible_int_constants=dict(visible_int_constants),
+                    role_parameters=role_parameters,
                 )
                 continue
 
@@ -8533,6 +8987,7 @@ class HLSLCodeGen:
                     role_by_name,
                     declared_counts,
                     set_count_literals,
+                    visible_int_constants,
                 )
 
             for node in self.walk_ast(stmt):
@@ -8545,10 +9000,23 @@ class HLSLCodeGen:
                     declared_counts,
                     set_count_literals,
                     active_helper_calls,
+                    role_parameters,
                 )
 
-            if self.hlsl_statement_contains_set_mesh_output_counts(stmt):
+            count_calls = self.hlsl_set_mesh_output_count_args_in_node(stmt)
+            if count_calls:
+                if role_parameters is not None:
+                    for args in count_calls:
+                        self.hlsl_update_set_mesh_output_count_literals(
+                            args,
+                            role_parameters,
+                            set_count_literals,
+                            visible_int_constants,
+                        )
                 counts_seen = True
+
+            self.hlsl_update_visible_bool_constants(stmt, visible_bool_constants)
+            self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
 
             if isinstance(stmt, ReturnNode):
                 return counts_seen, False
@@ -8566,9 +9034,16 @@ class HLSLCodeGen:
         set_count_literals,
         active_helper_calls,
         loop_exit_nodes=None,
+        visible_bool_constants=None,
+        visible_int_constants=None,
+        role_parameters=None,
     ):
         if loop_exit_nodes is None:
             loop_exit_nodes = ()
+        if visible_bool_constants is None:
+            visible_bool_constants = dict(self.literal_bool_constants)
+        if visible_int_constants is None:
+            visible_int_constants = dict(self.literal_int_constants)
 
         then_statements = self.hlsl_statement_body_items(
             getattr(if_node, "then_branch", getattr(if_node, "if_body", None))
@@ -8577,7 +9052,8 @@ class HLSLCodeGen:
             if_node, "else_branch", getattr(if_node, "else_body", None)
         )
         condition_value = self.hlsl_bool_constant_value(
-            getattr(if_node, "condition", getattr(if_node, "if_condition", None))
+            getattr(if_node, "condition", getattr(if_node, "if_condition", None)),
+            visible_bool_constants,
         )
         if condition_value is True:
             return self.validate_hlsl_mesh_output_write_sequence_result(
@@ -8588,6 +9064,9 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
+                visible_int_constants=dict(visible_int_constants),
+                role_parameters=role_parameters,
             )
 
         if condition_value is False:
@@ -8601,6 +9080,9 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
+                visible_int_constants=dict(visible_int_constants),
+                role_parameters=role_parameters,
             )
 
         branch_results = [
@@ -8612,6 +9094,9 @@ class HLSLCodeGen:
                 set_count_literals,
                 active_helper_calls,
                 loop_exit_nodes,
+                visible_bool_constants=dict(visible_bool_constants),
+                visible_int_constants=dict(visible_int_constants),
+                role_parameters=role_parameters,
             )
         ]
         if else_branch is not None:
@@ -8624,6 +9109,9 @@ class HLSLCodeGen:
                     set_count_literals,
                     active_helper_calls,
                     loop_exit_nodes,
+                    visible_bool_constants=dict(visible_bool_constants),
+                    visible_int_constants=dict(visible_int_constants),
+                    role_parameters=role_parameters,
                 )
             )
         else:
@@ -8664,6 +9152,9 @@ class HLSLCodeGen:
             role_by_name,
             declared_counts,
             set_count_literals,
+            visible_bool_constants=self.hlsl_initial_bool_constants(func),
+            visible_int_constants=self.hlsl_initial_int_constants(func),
+            role_parameters=role_parameters,
         )
 
     def validate_hlsl_mesh_output_parameters(self, func, parameters):
@@ -8850,15 +9341,7 @@ class HLSLCodeGen:
         return base_type
 
     def hlsl_dispatch_mesh_calls(self, func):
-        calls = []
-        for node in self.walk_ast(getattr(func, "body", [])):
-            if isinstance(node, FunctionCallNode):
-                if self.function_call_name(node) == "DispatchMesh":
-                    calls.append(getattr(node, "arguments", getattr(node, "args", [])))
-            elif isinstance(node, MeshOpNode):
-                if getattr(node, "operation", None) == "DispatchMesh":
-                    calls.append(getattr(node, "arguments", []))
-        return calls
+        return self.hlsl_dispatch_mesh_args_in_node(getattr(func, "body", []))
 
     def hlsl_function_call_names(self, func):
         names = []
@@ -8893,7 +9376,9 @@ class HLSLCodeGen:
         visit(func)
         return reachable
 
-    def validate_hlsl_dispatch_mesh_group_count_arguments(self, args, shader_type):
+    def validate_hlsl_dispatch_mesh_group_count_arguments(
+        self, args, shader_type, visible_int_constants=None
+    ):
         labels = ("ThreadGroupCountX", "ThreadGroupCountY", "ThreadGroupCountZ")
         literal_counts = []
         for label, argument in zip(labels, args[:3]):
@@ -8901,7 +9386,9 @@ class HLSLCodeGen:
                 argument,
                 f"DirectX {shader_type} DispatchMesh {label} argument",
             )
-            literal_count = self.hlsl_integer_constant_value(argument)
+            literal_count = self.hlsl_integer_constant_value(
+                argument, visible_int_constants
+            )
             literal_counts.append(literal_count)
             if literal_count is None:
                 continue
@@ -8932,6 +9419,145 @@ class HLSLCodeGen:
         if isinstance(expr, MeshOpNode):
             return getattr(expr, "operation", None) == "DispatchMesh"
         return False
+
+    def hlsl_dispatch_mesh_args_in_node(self, root):
+        calls = []
+        for node in self.walk_ast(root):
+            if not self.hlsl_expression_is_dispatch_mesh(node):
+                continue
+            if isinstance(node, FunctionCallNode):
+                calls.append(getattr(node, "arguments", getattr(node, "args", [])))
+            elif isinstance(node, MeshOpNode):
+                calls.append(getattr(node, "arguments", []))
+        return calls
+
+    def hlsl_call_literal_int_parameter_constants(
+        self, call, callee, visible_int_constants
+    ):
+        args = getattr(call, "arguments", getattr(call, "args", [])) or []
+        parameters = getattr(callee, "parameters", getattr(callee, "params", [])) or []
+        parameter_constants = {}
+        for index, parameter in enumerate(parameters):
+            if index >= len(args):
+                break
+            parameter_name = getattr(parameter, "name", None)
+            if not parameter_name:
+                continue
+            value = self.hlsl_integer_constant_value(args[index], visible_int_constants)
+            if value is not None:
+                parameter_constants[parameter_name] = value
+        return parameter_constants
+
+    def validate_hlsl_dispatch_mesh_helper_group_count_arguments(
+        self, stmt, shader_type, visible_int_constants, active_helper_calls
+    ):
+        available_functions = self.current_hlsl_available_functions or {}
+        for node in self.walk_ast(stmt):
+            if not isinstance(node, FunctionCallNode):
+                continue
+
+            helper_name = self.function_call_name(node)
+            helper = available_functions.get(helper_name)
+            if helper is None or not self.hlsl_function_contains_dispatch_mesh(helper):
+                continue
+
+            helper_parameter_constants = self.hlsl_call_literal_int_parameter_constants(
+                node, helper, visible_int_constants
+            )
+            if not helper_parameter_constants:
+                continue
+
+            helper_id = id(helper)
+            if helper_id in active_helper_calls:
+                continue
+
+            helper_visible_int_constants = self.hlsl_initial_int_constants(helper)
+            helper_visible_int_constants.update(helper_parameter_constants)
+            active_helper_calls.add(helper_id)
+            try:
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(getattr(helper, "body", [])),
+                    shader_type,
+                    helper_visible_int_constants,
+                    active_helper_calls,
+                )
+            finally:
+                active_helper_calls.remove(helper_id)
+
+    def validate_hlsl_dispatch_mesh_group_count_sequence(
+        self,
+        statements,
+        shader_type,
+        visible_int_constants=None,
+        active_helper_calls=None,
+    ):
+        if visible_int_constants is None:
+            visible_int_constants = dict(self.literal_int_constants)
+        if active_helper_calls is None:
+            active_helper_calls = set()
+
+        for stmt in self.hlsl_statement_body_items(statements):
+            if isinstance(stmt, BlockNode) or hasattr(stmt, "statements"):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(stmt),
+                    shader_type,
+                    dict(visible_int_constants),
+                    active_helper_calls,
+                )
+                continue
+
+            if isinstance(stmt, IfNode):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(
+                        getattr(stmt, "then_branch", getattr(stmt, "if_body", None))
+                    ),
+                    shader_type,
+                    dict(visible_int_constants),
+                    active_helper_calls,
+                )
+                else_branch = getattr(
+                    stmt, "else_branch", getattr(stmt, "else_body", None)
+                )
+                if else_branch is not None:
+                    self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                        self.hlsl_statement_body_items(else_branch),
+                        shader_type,
+                        dict(visible_int_constants),
+                        active_helper_calls,
+                    )
+                continue
+
+            if isinstance(stmt, SwitchNode):
+                case_entries = self.hlsl_switch_case_entries(stmt)
+                for start_index in range(len(case_entries)):
+                    self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                        self.hlsl_switch_fallthrough_path_body(
+                            case_entries, start_index
+                        ),
+                        shader_type,
+                        dict(visible_int_constants),
+                        active_helper_calls,
+                    )
+                continue
+
+            if isinstance(stmt, (ForNode, ForInNode, WhileNode, DoWhileNode, LoopNode)):
+                self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                    self.hlsl_statement_body_items(getattr(stmt, "body", None)),
+                    shader_type,
+                    dict(visible_int_constants),
+                    active_helper_calls,
+                )
+                continue
+
+            for args in self.hlsl_dispatch_mesh_args_in_node(stmt):
+                self.validate_hlsl_dispatch_mesh_group_count_arguments(
+                    args, shader_type, visible_int_constants
+                )
+            self.validate_hlsl_dispatch_mesh_helper_group_count_arguments(
+                stmt, shader_type, visible_int_constants, active_helper_calls
+            )
+
+            self.hlsl_update_visible_int_constants(stmt, visible_int_constants)
 
     def hlsl_function_contains_dispatch_mesh(self, func, visited=None):
         if func is None:
@@ -9165,8 +9791,12 @@ class HLSLCodeGen:
                     "three thread group count arguments and an optional "
                     "mesh payload argument"
                 )
-            self.validate_hlsl_dispatch_mesh_group_count_arguments(args, shader_type)
         for reachable_func in reachable_functions:
+            self.validate_hlsl_dispatch_mesh_group_count_sequence(
+                self.hlsl_statement_body_items(getattr(reachable_func, "body", [])),
+                shader_type,
+                self.hlsl_initial_int_constants(reachable_func),
+            )
             self.validate_hlsl_dispatch_mesh_placement(reachable_func, shader_type)
 
     def hlsl_dispatch_mesh_payload_types_for_function(self, func):

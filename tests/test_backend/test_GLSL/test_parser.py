@@ -103,6 +103,10 @@ def test_parse_const_array_initializers():
                 ivec2(-1, 1),
                 ivec2(1, 1)
             );
+            const ivec2 nested[2][2] = {
+                { ivec2(-1, 0), ivec2(1, 0) },
+                { ivec2(0, -1), ivec2(0, 1) },
+            };
         }
         """)
 
@@ -110,11 +114,12 @@ def test_parse_const_array_initializers():
     main = next(function for function in ast.functions if function.name == "main")
     declarations = [stmt for stmt in main.body if isinstance(stmt, VariableNode)]
 
-    offsets, ctor_offsets = declarations
+    offsets, ctor_offsets, nested = declarations
     assert offsets.name == "offsets"
     assert offsets.is_const is True
     assert offsets.is_array is True
     assert offsets.array_size.value == "4"
+    assert [size.value for size in offsets.array_sizes] == ["4"]
     assert isinstance(offsets.value, InitializerListNode)
     assert len(offsets.value.elements) == 4
 
@@ -122,8 +127,20 @@ def test_parse_const_array_initializers():
     assert ctor_offsets.is_const is True
     assert ctor_offsets.is_array is True
     assert ctor_offsets.array_size.value == "4"
+    assert [size.value for size in ctor_offsets.array_sizes] == ["4"]
     assert isinstance(ctor_offsets.value, InitializerListNode)
     assert len(ctor_offsets.value.elements) == 4
+
+    assert nested.name == "nested"
+    assert nested.is_const is True
+    assert nested.is_array is True
+    assert nested.array_size.value == "2"
+    assert [size.value for size in nested.array_sizes] == ["2", "2"]
+    assert isinstance(nested.value, InitializerListNode)
+    assert len(nested.value.elements) == 2
+    assert all(
+        isinstance(element, InitializerListNode) for element in nested.value.elements
+    )
 
 
 def test_parse_control_flow_constructs():
@@ -254,25 +271,47 @@ def test_parse_interface_blocks_and_uniform_block():
     code = textwrap.dedent("""
         #version 450 core
         layout(std140, binding = 0) uniform Globals {
-            mat4 mvp;
-            vec4 baseColor;
-        };
+            mat4 mvp[2][3];
+            vec4 baseColor[2][2];
+        } globals[2][3];
 
         in VertexIn {
-            vec3 position;
-            vec2 uv;
-        } vin;
+            vec3 position[2][3];
+            vec2 uv[2];
+        } vin[2];
 
         out VertexOut {
-            vec4 color;
+            vec4 color[2][3];
         } vout;
 
         void main() {
-            vout.color = vec4(vin.position, 1.0);
-            gl_Position = mvp * vec4(vin.position, 1.0);
+            vout.color[1][2] = vec4(vin[1].position[0][1], 1.0);
+            gl_Position = globals[1][2].mvp[0][1] * vec4(vin[1].position[0][1], 1.0);
         }
         """)
-    parse_ok(code, "vertex")
+    ast = parse_ok(code, "vertex")
+
+    globals_struct = next(struct for struct in ast.structs if struct.name == "Globals")
+    vertex_in = next(struct for struct in ast.structs if struct.name == "VertexIn")
+    vertex_out = next(struct for struct in ast.structs if struct.name == "VertexOut")
+
+    assert [size.value for size in globals_struct.interface_array_sizes] == ["2", "3"]
+    assert [
+        [size.value for size in member.array_sizes] for member in globals_struct.members
+    ] == [["2", "3"], ["2", "2"]]
+    assert [size.value for size in vertex_in.interface_array_sizes] == ["2"]
+    assert [
+        [size.value for size in member.array_sizes] for member in vertex_in.members
+    ] == [
+        ["2", "3"],
+        ["2"],
+    ]
+    assert [size.value for size in vertex_out.members[0].array_sizes] == ["2", "3"]
+
+    globals_var = next(var for var in ast.uniforms if var.name == "globals")
+    vin_var = next(var for var in ast.io_variables if var.name == "vin")
+    assert [size.value for size in globals_var.array_sizes] == ["2", "3"]
+    assert [size.value for size in vin_var.array_sizes] == ["2"]
 
 
 def test_parse_compute_layout_qualifier():

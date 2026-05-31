@@ -1,4 +1,5 @@
-from hypothesis import given, settings, strategies as st
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from crosstl.translator.ast import (
     ArrayType,
@@ -7,6 +8,7 @@ from crosstl.translator.ast import (
     BlockNode,
     CastNode,
     ConstructorNode,
+    ExecutionModel,
     FunctionCallNode,
     FunctionNode,
     FunctionType,
@@ -23,7 +25,6 @@ from crosstl.translator.ast import (
     ReferenceType,
     ReturnNode,
     ShaderNode,
-    ExecutionModel,
     VariableNode,
     VectorType,
 )

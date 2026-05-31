@@ -1,5 +1,5 @@
-import json
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -50,7 +50,7 @@ def _backend(backend_id, aliases, extension):
         "translator_codegen": codegen_path,
         "native_backend": native_backend,
         "tests": [test_path],
-        "docs": [{"name": "Docs", "url": "https://example.com/{}".format(backend_id)}],
+        "docs": [{"name": "Docs", "url": f"https://example.com/{backend_id}"}],
     }
 
 
@@ -90,6 +90,121 @@ def test_support_matrix_generated_artifacts_are_current():
     )
 
     assert "generated artifacts are current" in result.stdout
+
+
+def test_current_supported_rows_have_evidence():
+    module = load_support_matrix_module()
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    rows = module.filtered_support_rows(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+    )
+
+    assert rows == []
+
+
+def test_support_matrix_check_writes_machine_readable_report(tmp_path):
+    report_path = tmp_path / "support-matrix-check.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/support_matrix.py",
+            "check",
+            "--output",
+            str(report_path),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert "Wrote" in result.stdout
+    assert report["schema_version"] == 1
+    assert report["ok"] is True
+    assert report["summary"] == {
+        "artifact_count": 3,
+        "stale_count": 0,
+        "stale_artifacts": [],
+        "total_diff_line_count": 0,
+    }
+    assert {artifact["path"] for artifact in report["artifacts"]} == {
+        "support/generated/support-matrix.json",
+        "support/generated/graphics-backend-roadmap.json",
+        "docs/source/support-matrix.rst",
+    }
+    assert all(artifact["diff"] == [] for artifact in report["artifacts"])
+
+
+def test_generated_check_report_includes_stale_artifact_diff(tmp_path, monkeypatch):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    matrix_path = tmp_path / "support-matrix.json"
+    roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    docs_path = tmp_path / "support-matrix.rst"
+    monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
+    monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
+    module.write_generated(matrix)
+    matrix_path.write_text("{}\n", encoding="utf-8")
+
+    report = module.build_generated_check_report(matrix)
+    stale_artifacts = [
+        artifact for artifact in report["artifacts"] if artifact["stale"]
+    ]
+
+    assert report["ok"] is False
+    assert report["summary"] == {
+        "artifact_count": 3,
+        "stale_count": 1,
+        "stale_artifacts": [stale_artifacts[0]["path"]],
+        "total_diff_line_count": stale_artifacts[0]["diff_line_count"],
+    }
+    assert len(stale_artifacts) == 1
+    assert stale_artifacts[0]["path"].endswith("support-matrix.json")
+    assert stale_artifacts[0]["exists"] is True
+    assert stale_artifacts[0]["actual_sha256"] != stale_artifacts[0]["expected_sha256"]
+    assert stale_artifacts[0]["diff_line_count"] == len(stale_artifacts[0]["diff"])
+    assert any(line.startswith("-{}") for line in stale_artifacts[0]["diff"])
+
+
+def test_print_generated_failures_reports_stale_artifact_summary(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    matrix_path = tmp_path / "support-matrix.json"
+    roadmap_path = tmp_path / "graphics-backend-roadmap.json"
+    docs_path = tmp_path / "support-matrix.rst"
+    monkeypatch.setattr(module, "MATRIX_JSON_PATH", matrix_path)
+    monkeypatch.setattr(module, "GRAPHICS_ROADMAP_JSON_PATH", roadmap_path)
+    monkeypatch.setattr(module, "DOCS_RST_PATH", docs_path)
+    module.write_generated(matrix)
+    matrix_path.write_text("{}\n", encoding="utf-8")
+    report = module.build_generated_check_report(matrix)
+
+    module.print_generated_failures(report)
+
+    captured = capsys.readouterr()
+    assert "Generated support matrix artifacts are stale." in captured.err
+    assert "Run: python tools/support_matrix.py update" in captured.err
+    assert "Stale artifact summary:" in captured.err
+    assert "support-matrix.json:" in captured.err
+    assert "diff lines (exists); actual=" in captured.err
+    assert "expected=" in captured.err
+    assert "Diff for" in captured.err
 
 
 def test_validate_backend_catalog_rejects_duplicate_aliases():
@@ -205,6 +320,68 @@ def test_audit_rejects_unknown_status_filters():
 
     with pytest.raises(module.SupportMatrixError, match="Unknown status filter"):
         module.audit(matrix, [], statuses=["partial,nope"])
+
+
+def test_evidence_audit_reports_supported_rows_missing_evidence(tmp_path, capsys):
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+    output_path = tmp_path / "evidence.json"
+
+    result = module.evidence_audit(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+        output=output_path,
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result == 0
+    assert "Evidence rows: 1" in captured.out
+    assert "directx: present=0, missing=1" in captured.out
+    assert report["generator"] == "tools/support_matrix.py evidence"
+    assert report["filters"] == {
+        "backend_ids": [],
+        "categories": [],
+        "statuses": ["supported"],
+        "evidence": "missing",
+    }
+    assert report["summary"]["row_count"] == 1
+    assert report["summary"]["missing_evidence_count"] == 1
+    assert report["summary"]["present_evidence_count"] == 0
+    assert report["summary"]["by_backend"]["directx"] == {
+        "rows": 1,
+        "present": 0,
+        "missing": 1,
+    }
+    assert report["rows"][0]["backend_id"] == "directx"
+    assert report["rows"][0]["feature_id"] == "target.codegen"
+    assert report["rows"][0]["evidence_count"] == 0
+
+
+def test_evidence_audit_can_fail_on_missing_evidence():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    result = module.evidence_audit(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+        fail_on_missing=True,
+    )
+
+    assert result == 1
+
+
+def test_evidence_audit_rejects_unknown_evidence_filter():
+    module = load_support_matrix_module()
+    backends, features = _minimal_catalogs(module)
+    matrix = module.build_matrix(backends, features)
+
+    with pytest.raises(module.SupportMatrixError, match="Unknown evidence filter"):
+        module.evidence_audit(matrix, evidence="stale")
 
 
 def test_support_matrix_covers_all_cataloged_backends():
@@ -332,6 +509,28 @@ def test_graphics_match_row_is_supported_with_evidence():
         assert support["evidence"]
 
     assert all(item["feature_id"] != "language.match" for item in roadmap["backlog"])
+
+
+def test_graphics_metal_wave_intrinsics_row_is_supported_with_evidence():
+    roadmap_path = ROOT / "support" / "generated" / "graphics-backend-roadmap.json"
+    roadmap = json.loads(roadmap_path.read_text(encoding="utf-8"))
+
+    wave_intrinsics = next(
+        feature
+        for feature in roadmap["features"]
+        if feature["id"] == "language.wave_intrinsics"
+    )
+    support = wave_intrinsics["support"]["metal"]
+
+    assert support["status"] == "supported"
+    assert len(support["evidence"]) >= 13
+    assert all(
+        not (
+            item["backend_id"] == "metal"
+            and item["feature_id"] == "language.wave_intrinsics"
+        )
+        for item in roadmap["backlog"]
+    )
 
 
 def test_support_matrix_audit_writes_filtered_json(tmp_path):

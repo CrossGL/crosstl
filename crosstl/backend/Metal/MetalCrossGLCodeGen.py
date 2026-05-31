@@ -1,8 +1,8 @@
 """Reverse code generator that emits CrossGL from Metal AST nodes."""
 
 from .MetalAst import *
-from .MetalParser import *
 from .MetalLexer import *
+from .MetalParser import *
 
 
 class MetalToCrossGLConverter:
@@ -739,15 +739,12 @@ class MetalToCrossGLConverter:
         if node is None or isinstance(node, (str, int, float, bool)):
             return
         if isinstance(node, dict):
-            for value in node.values():
-                yield value
+            yield from node.values()
             return
         if isinstance(node, (list, tuple, set)):
-            for value in node:
-                yield value
+            yield from node
             return
-        for value in getattr(node, "__dict__", {}).values():
-            yield value
+        yield from getattr(node, "__dict__", {}).values()
 
     def collect_storage_texture_declaration_ids(self, root):
         storage_ids = set()

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Sequence, Tuple, Any
 import os
+from dataclasses import dataclass
+from typing import Any, Callable, Sequence
 
 from .lexer import Lexer as CglLexer
 from .parser import Parser as CglParser
@@ -52,8 +52,8 @@ class SourceSpec:
 
     name: str
     extensions: Sequence[str]
-    load_lexer_parser: Callable[[], Tuple[type, type]]
-    reverse_codegen_factory: Optional[Callable[[], Any]] = None
+    load_lexer_parser: Callable[[], tuple[type, type]]
+    reverse_codegen_factory: Callable[[], Any] | None = None
     aliases: Sequence[str] = ()
 
     def parse(self, code: str):
@@ -69,9 +69,9 @@ class SourceRegistry:
     """Lookup table for source parsers by name, alias, and extension."""
 
     def __init__(self) -> None:
-        self._by_name: Dict[str, SourceSpec] = {}
-        self._by_alias: Dict[str, str] = {}
-        self._by_extension: Dict[str, str] = {}
+        self._by_name: dict[str, SourceSpec] = {}
+        self._by_alias: dict[str, str] = {}
+        self._by_extension: dict[str, str] = {}
 
     def register(self, spec: SourceSpec, *, overwrite: bool = False) -> SourceSpec:
         """Register a source spec and all of its aliases/extensions."""
@@ -104,7 +104,7 @@ class SourceRegistry:
 
         return spec
 
-    def resolve_name(self, name: str) -> Optional[str]:
+    def resolve_name(self, name: str) -> str | None:
         """Resolve a source name or alias to its canonical registry name."""
         if not name:
             return None
@@ -113,14 +113,14 @@ class SourceRegistry:
             return key
         return self._by_alias.get(key)
 
-    def get(self, name: str) -> Optional[SourceSpec]:
+    def get(self, name: str) -> SourceSpec | None:
         """Return the source spec registered for a name or alias."""
         resolved = self.resolve_name(name)
         if not resolved:
             return None
         return self._by_name.get(resolved)
 
-    def get_by_extension(self, path_or_ext: str) -> Optional[SourceSpec]:
+    def get_by_extension(self, path_or_ext: str) -> SourceSpec | None:
         """Return the source spec registered for a file path or extension."""
         ext = path_or_ext
         if path_or_ext:

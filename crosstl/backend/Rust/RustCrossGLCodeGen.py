@@ -3,8 +3,8 @@
 import re
 
 from .RustAst import *
-from .RustParser import *
 from .RustLexer import *
+from .RustParser import *
 
 RUST_NUMERIC_LITERAL_RE = re.compile(
     r"^(?P<body>"
@@ -410,17 +410,27 @@ class RustToCrossGLConverter:
             "texture_gather_compare_offset": "textureGatherCompareOffset",
             "texture_gather_compare_offset_sampler": "textureGatherCompareOffset",
             "image_load": "imageLoad",
+            "image_load_sample": "imageLoad",
             "image_store": "imageStore",
+            "image_store_sample": "imageStore",
             "image_size": "imageSize",
             "image_samples": "imageSamples",
             "image_atomic_add": "imageAtomicAdd",
+            "image_atomic_add_sample": "imageAtomicAdd",
             "image_atomic_min": "imageAtomicMin",
+            "image_atomic_min_sample": "imageAtomicMin",
             "image_atomic_max": "imageAtomicMax",
+            "image_atomic_max_sample": "imageAtomicMax",
             "image_atomic_and": "imageAtomicAnd",
+            "image_atomic_and_sample": "imageAtomicAnd",
             "image_atomic_or": "imageAtomicOr",
+            "image_atomic_or_sample": "imageAtomicOr",
             "image_atomic_xor": "imageAtomicXor",
+            "image_atomic_xor_sample": "imageAtomicXor",
             "image_atomic_exchange": "imageAtomicExchange",
+            "image_atomic_exchange_sample": "imageAtomicExchange",
             "image_atomic_comp_swap": "imageAtomicCompSwap",
+            "image_atomic_comp_swap_sample": "imageAtomicCompSwap",
             "buffer_load": "buffer_load",
             "buffer_store": "buffer_store",
             "buffer_dimensions": "buffer_dimensions",

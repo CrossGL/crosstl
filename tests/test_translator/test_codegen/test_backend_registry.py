@@ -1,10 +1,11 @@
 import os
+
 import pytest
 
 import crosstl.translator.codegen as codegen
 from crosstl.translator import parse
-from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 from crosstl.translator.plugin_loader import discover_backend_plugins
+from crosstl.translator.source_registry import SOURCE_REGISTRY, register_default_sources
 
 SMOKE_SHADER = """
 shader main {

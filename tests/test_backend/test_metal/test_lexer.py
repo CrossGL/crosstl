@@ -1,5 +1,7 @@
-import pytest
 from typing import Iterable, List, Optional
+
+import pytest
+
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 
 
