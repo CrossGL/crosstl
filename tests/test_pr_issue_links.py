@@ -626,10 +626,21 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
     assert summary["traceability_failed"] == 1
     assert summary["support_link_audit"] == {
         "inspection_failed": False,
+        "matrix_delta": {
+            "base_backlog_rows": 1,
+            "head_backlog_rows": 0,
+            "removed_backlog_rows": 1,
+            "changed_backlog_rows": 0,
+            "has_delta": True,
+        },
         "closure_links": [],
         "reference_links": [],
         "missing_closure_keys": ["backlog:metal:language.wave_intrinsics"],
         "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 1,
+        },
     }
 
     module.emit_support_link_audit(summary)
@@ -640,6 +651,96 @@ def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
         in captured.out
     )
     assert "backlog:metal:language.wave_intrinsics" in captured.out
+
+
+def test_sync_audit_reports_no_matrix_delta_for_support_relevant_pr(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix = {
+        "features": [
+            {
+                "id": "language.wave_intrinsics",
+                "support": {
+                    "metal": {
+                        "status": "partial",
+                        "notes": "Wave active ops are missing.",
+                        "evidence": ["tests/old.py::test_wave_active"],
+                    }
+                },
+            }
+        ],
+        "backlog": [
+            {
+                "backend_id": "metal",
+                "feature_id": "language.wave_intrinsics",
+                "status": "partial",
+                "notes": "Wave active ops are missing.",
+            }
+        ],
+    }
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal wave support implementation",
+        body="No linked issue.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("crosstl/translator/codegen/metal_codegen.py",),
+    )
+    client = FakeClient(
+        module,
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): matrix
+        },
+        support_issues=[],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        sync_support_references=True,
+        check_support_traceability=True,
+    )
+
+    assert summary["traceability_failed"] == 1
+    assert summary["support_link_audit"] == {
+        "inspection_failed": False,
+        "matrix_delta": {
+            "base_backlog_rows": 1,
+            "head_backlog_rows": 1,
+            "removed_backlog_rows": 0,
+            "changed_backlog_rows": 0,
+            "has_delta": False,
+        },
+        "closure_links": [],
+        "reference_links": [],
+        "missing_closure_keys": [],
+        "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 0,
+        },
+    }
+
+    module.emit_support_link_audit(summary)
+    captured = capsys.readouterr()
+    assert "Support matrix delta: base_backlog_rows=1" in captured.out
+    assert "matrix_delta_detected=0" in captured.out
+    assert (
+        "::warning::No support matrix backlog delta detected for support-relevant "
+        "PR files"
+    ) in captured.out
+    assert "support/generated/support-matrix.json was not changed" in captured.out
 
 
 def test_support_link_audit_writes_step_summary(tmp_path, monkeypatch):
@@ -735,6 +836,42 @@ def test_support_link_step_summary_includes_change_reasons(tmp_path, monkeypatch
     ) in text
 
 
+def test_support_link_step_summary_reports_no_matrix_delta(tmp_path, monkeypatch):
+    module = load_sync_module()
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    summary = {
+        "support_link_audit": {
+            "inspection_failed": False,
+            "matrix_delta": {
+                "base_backlog_rows": 1,
+                "head_backlog_rows": 1,
+                "removed_backlog_rows": 0,
+                "changed_backlog_rows": 0,
+                "has_delta": False,
+            },
+            "closure_links": [],
+            "reference_links": [],
+            "missing_closure_keys": [],
+            "missing_reference_keys": [],
+            "changed_files": {
+                "support_relevant": 2,
+                "support_matrix_artifact": 0,
+            },
+        }
+    }
+
+    module.write_support_link_step_summary(summary)
+
+    text = summary_path.read_text(encoding="utf-8")
+    assert (
+        "- Matrix delta: removed 0, changed 0, base backlog 1, head backlog 1" in text
+    )
+    assert "- Support-relevant files: 2" in text
+    assert "- Support matrix artifact changed: no" in text
+    assert "no support matrix backlog delta was detected" in text
+
+
 def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
     tmp_path, monkeypatch, capsys
 ):
@@ -799,6 +936,10 @@ def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
         "reference_links": [],
         "missing_closure_keys": [],
         "missing_reference_keys": [],
+        "changed_files": {
+            "support_relevant": 1,
+            "support_matrix_artifact": 1,
+        },
     }
     assert client.updated_bodies == []
 

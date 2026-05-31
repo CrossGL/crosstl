@@ -103,6 +103,7 @@ SUPPORT_RELEVANT_PATHS = (
     "tests/test_translator/test_parser.py",
     "tests/test_translator/test_translation_pipeline.py",
 )
+SUPPORT_MATRIX_ARTIFACT_PATH = "support/generated/support-matrix.json"
 
 
 class GitHubApiError(RuntimeError):
@@ -142,6 +143,10 @@ class SupportMatrixIssueLinks:
     reference_links: tuple[SupportIssueLink, ...]
     missing_closure_keys: tuple[str, ...]
     missing_reference_keys: tuple[str, ...]
+    base_backlog_count: int
+    head_backlog_count: int
+    closure_keys: tuple[str, ...]
+    reference_keys: tuple[str, ...]
 
     @property
     def closure_numbers(self) -> list[int]:
@@ -345,8 +350,12 @@ def extract_closing_issue_numbers(title: str, body: str, repo: str) -> list[int]
     return numbers
 
 
+def normalize_repo_path(path: str) -> str:
+    return path.replace("\\", "/").lstrip("/")
+
+
 def is_support_relevant_path(path: str) -> bool:
-    normalized = path.replace("\\", "/").lstrip("/")
+    normalized = normalize_repo_path(path)
     return normalized in SUPPORT_RELEVANT_PATHS or normalized.startswith(
         SUPPORT_RELEVANT_PATH_PREFIXES
     )
@@ -354,6 +363,12 @@ def is_support_relevant_path(path: str) -> bool:
 
 def support_relevant_paths(paths: list[str] | tuple[str, ...]) -> list[str]:
     return [path for path in paths if is_support_relevant_path(path)]
+
+
+def support_matrix_artifact_changed(paths: list[str] | tuple[str, ...]) -> bool:
+    return any(
+        normalize_repo_path(path) == SUPPORT_MATRIX_ARTIFACT_PATH for path in paths
+    )
 
 
 def has_support_traceability_opt_out(body: str) -> bool:
@@ -553,6 +568,10 @@ def support_matrix_issue_numbers(
             reference_links=(),
             missing_closure_keys=(),
             missing_reference_keys=(),
+            base_backlog_count=len(base_backlog_keys),
+            head_backlog_count=len(head_backlog_keys),
+            closure_keys=(),
+            reference_keys=(),
         )
 
     support_issues = client.list_open_support_issues()
@@ -584,6 +603,10 @@ def support_matrix_issue_numbers(
         missing_reference_keys=support_issue_missing_keys(
             numbers_by_key, progress_keys
         ),
+        base_backlog_count=len(base_backlog_keys),
+        head_backlog_count=len(head_backlog_keys),
+        closure_keys=tuple(sorted(closure_keys)),
+        reference_keys=tuple(sorted(progress_keys)),
     )
 
 
@@ -613,6 +636,13 @@ def support_link_audit_from_issue_links(
 ) -> dict[str, Any]:
     return {
         "inspection_failed": False,
+        "matrix_delta": {
+            "base_backlog_rows": issue_links.base_backlog_count,
+            "head_backlog_rows": issue_links.head_backlog_count,
+            "removed_backlog_rows": len(issue_links.closure_keys),
+            "changed_backlog_rows": len(issue_links.reference_keys),
+            "has_delta": bool(issue_links.closure_keys or issue_links.reference_keys),
+        },
         "closure_links": support_issue_link_audit(issue_links.closure_links),
         "reference_links": support_issue_link_audit(issue_links.reference_links),
         "missing_closure_keys": list(issue_links.missing_closure_keys),
@@ -720,6 +750,13 @@ def sync_pr_issue_links(
     if check_support_traceability or enforce_support_traceability:
         changed_files = list(pr.changed_files) or client.list_pull_files(pr.number)
         relevant_paths = support_relevant_paths(changed_files)
+        if support_link_audit is not None:
+            support_link_audit["changed_files"] = {
+                "support_relevant": len(relevant_paths),
+                "support_matrix_artifact": int(
+                    support_matrix_artifact_changed(changed_files)
+                ),
+            }
         traceability_required = bool(relevant_paths)
         traceability_satisfied = bool(
             valid_issue_numbers or reference_issue_numbers
@@ -741,6 +778,8 @@ def support_link_audit_counts(audit: dict[str, Any]) -> dict[str, int]:
     reference_links = audit.get("reference_links", [])
     missing_closure_keys = audit.get("missing_closure_keys", [])
     missing_reference_keys = audit.get("missing_reference_keys", [])
+    matrix_delta = audit.get("matrix_delta") or {}
+    changed_files = audit.get("changed_files") or {}
     return {
         "closure_candidates": len(closure_links) + len(missing_closure_keys),
         "closure_links": sum(len(entry["issues"]) for entry in closure_links),
@@ -749,6 +788,15 @@ def support_link_audit_counts(audit: dict[str, Any]) -> dict[str, int]:
         "missing_closure_links": len(missing_closure_keys),
         "missing_reference_links": len(missing_reference_keys),
         "inspection_failed": int(bool(audit.get("inspection_failed"))),
+        "base_backlog_rows": int(matrix_delta.get("base_backlog_rows", 0)),
+        "head_backlog_rows": int(matrix_delta.get("head_backlog_rows", 0)),
+        "removed_backlog_rows": int(matrix_delta.get("removed_backlog_rows", 0)),
+        "changed_backlog_rows": int(matrix_delta.get("changed_backlog_rows", 0)),
+        "matrix_delta_detected": int(bool(matrix_delta.get("has_delta"))),
+        "support_relevant_files": int(changed_files.get("support_relevant", 0)),
+        "support_matrix_artifact": int(
+            bool(changed_files.get("support_matrix_artifact"))
+        ),
     }
 
 
@@ -823,6 +871,15 @@ def emit_support_link_audit(summary: dict[str, Any]) -> None:
             **counts
         )
     )
+    if audit.get("matrix_delta"):
+        print(
+            "Support matrix delta: base_backlog_rows={base_backlog_rows}, "
+            "head_backlog_rows={head_backlog_rows}, removed_backlog_rows={removed_backlog_rows}, "
+            "changed_backlog_rows={changed_backlog_rows}, matrix_delta_detected={matrix_delta_detected}, "
+            "support_relevant_files={support_relevant_files}, support_matrix_artifact={support_matrix_artifact}".format(
+                **counts
+            )
+        )
     if audit.get("closure_links"):
         print(
             "Support closure links: "
@@ -844,6 +901,26 @@ def emit_support_link_audit(summary: dict[str, Any]) -> None:
         print(
             "::warning::Support backlog rows changed without open managed "
             "support issues: " + format_support_link_keys(missing_reference_keys)
+        )
+    if (
+        audit.get("matrix_delta")
+        and not counts["inspection_failed"]
+        and counts["support_relevant_files"]
+        and not counts["matrix_delta_detected"]
+    ):
+        if counts["support_matrix_artifact"]:
+            detail = (
+                f"{SUPPORT_MATRIX_ARTIFACT_PATH} changed, but no support backlog "
+                "rows were removed or changed."
+            )
+        else:
+            detail = (
+                f"{SUPPORT_MATRIX_ARTIFACT_PATH} was not changed, and no support "
+                "backlog delta was detected."
+            )
+        print(
+            "::warning::No support matrix backlog delta detected for "
+            f"support-relevant PR files: {detail}"
         )
 
 
@@ -868,6 +945,22 @@ def write_support_link_step_summary(summary: dict[str, Any]) -> None:
                 **counts
             )
         )
+        if audit.get("matrix_delta"):
+            handle.write(
+                "- Matrix delta: removed {removed_backlog_rows}, changed {changed_backlog_rows}, "
+                "base backlog {base_backlog_rows}, head backlog {head_backlog_rows}\n".format(
+                    **counts
+                )
+            )
+        if audit.get("changed_files"):
+            handle.write(
+                "- Support-relevant files: {support_relevant_files}\n".format(**counts)
+            )
+            handle.write(
+                "- Support matrix artifact changed: {}\n".format(
+                    "yes" if counts["support_matrix_artifact"] else "no"
+                )
+            )
         if audit.get("closure_links"):
             handle.write(
                 "- Closes: {}\n".format(
@@ -891,6 +984,17 @@ def write_support_link_step_summary(summary: dict[str, Any]) -> None:
                 "- Missing reference issue links: {}\n".format(
                     format_support_link_keys(audit["missing_reference_keys"])
                 )
+            )
+        if (
+            audit.get("matrix_delta")
+            and not counts["inspection_failed"]
+            and counts["support_relevant_files"]
+            and not counts["matrix_delta_detected"]
+        ):
+            handle.write(
+                "- Attention: no support matrix backlog delta was detected for "
+                "support-relevant files; update support/generated/support-matrix.json "
+                "or add `Support issue traceability: no issue closed` when intentional.\n"
             )
         handle.write("\n")
 
