@@ -1138,6 +1138,29 @@ def test_load_optional_json_reports_invalid_issue_plan_contract(tmp_path):
     }
 
 
+def test_load_optional_json_reports_invalid_issue_plan_budget_violation_contract(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    report["planned_action_budget"]["violations"][0]["actual"] = "ten"
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "planned_action_budget.violations[0].actual must be int, got str",
+    }
+
+
 def test_load_optional_json_reports_invalid_sync_summary_contract(tmp_path):
     module = load_summary_module()
     sync_path = tmp_path / "support-issue-sync-summary.json"
@@ -1156,6 +1179,96 @@ def test_load_optional_json_reports_invalid_sync_summary_contract(tmp_path):
         "path": str(sync_path),
         "type": "InvalidReportField",
         "message": "operation_ledger must be list, got object",
+    }
+
+
+def test_load_optional_json_reports_invalid_operation_ledger_contract(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_ledger"][0]["reasons"] = ["body", 17]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "operation_ledger[0].reasons[1] must be str, got int",
+    }
+
+
+def test_load_optional_json_reports_invalid_reconciliation_counter_contract(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["actual_actions"]["updated"] = "two"
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "operation_reconciliation.actual_actions.updated must be int, got str"
+        ),
+    }
+
+
+def test_load_optional_json_reports_missing_reconciliation_fields(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    del report["operation_reconciliation"]["action_shortfalls"]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "MissingReportFields",
+        "message": (
+            "operation_reconciliation missing required fields: action_shortfalls"
+        ),
+    }
+
+
+def test_load_optional_json_reports_invalid_reconciliation_difference_contract(
+    tmp_path,
+):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["action_shortfalls"][0]["planned"] = "one"
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "action_shortfalls[0].planned must be int, got str",
     }
 
 

@@ -199,6 +199,20 @@ def validate_counter_map(
     value = report.get(field)
     if value is None and allow_none:
         return None
+    return validate_counter_map_value(
+        value,
+        path,
+        field,
+        counters,
+    )
+
+
+def validate_counter_map_value(
+    value: Any,
+    path: Path | None,
+    field: str,
+    counters: tuple[str, ...],
+) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return invalid_field_error(path, field, dict, value)
 
@@ -251,6 +265,25 @@ def validate_optional_object_list(
                 dict,
                 item,
             )
+    return None
+
+
+def validate_object_list_item_fields(
+    report: dict[str, Any],
+    path: Path | None,
+    field: str,
+    fields: dict[str, type | tuple[type, ...]],
+) -> dict[str, Any] | None:
+    error = validate_optional_object_list(report, path, field)
+    if error is not None:
+        return error
+    value = report.get(field)
+    if value is None:
+        return None
+    for index, item in enumerate(value):
+        error = validate_nested_field_types(item, path, f"{field}[{index}]", fields)
+        if error is not None:
+            return error
     return None
 
 
@@ -313,6 +346,36 @@ def validate_budget_contract(
                 f"{field}.violations[{index}]",
                 dict,
                 violation,
+            )
+        if "actual" in violation and not value_matches_type(violation["actual"], int):
+            return invalid_field_error(
+                path,
+                f"{field}.violations[{index}].actual",
+                int,
+                violation["actual"],
+            )
+        if "limit" in violation and not value_matches_type(violation["limit"], int):
+            return invalid_field_error(
+                path,
+                f"{field}.violations[{index}].limit",
+                int,
+                violation["limit"],
+            )
+        if "action" in violation and not value_matches_type(violation["action"], str):
+            return invalid_field_error(
+                path,
+                f"{field}.violations[{index}].action",
+                str,
+                violation["action"],
+            )
+        if "category" in violation and not value_matches_type(
+            violation["category"], str
+        ):
+            return invalid_field_error(
+                path,
+                f"{field}.violations[{index}].category",
+                str,
+                violation["category"],
             )
     return None
 
@@ -493,6 +556,7 @@ def validate_issue_plan_contract(
         lambda: validate_optional_object(report, path, "preflight_failure"),
         lambda: validate_budget_contract(report, path, "planned_action_budget"),
         lambda: validate_budget_contract(report, path, "planned_closure_budget"),
+        lambda: validate_operation_reconciliation_contract(report, path),
     ):
         error = validator()
         if error is not None:
@@ -582,6 +646,189 @@ def validate_sync_failure_contract(
     )
 
 
+def validate_operation_ledger_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    error = validate_object_list_item_fields(
+        report,
+        path,
+        "operation_ledger",
+        {
+            "action": str,
+            "key": str,
+            "number": int,
+            "title": str,
+            "state": str,
+            "parent_key": str,
+            "parent_number": int,
+            "child_key": str,
+            "child_number": int,
+            "reason": str,
+            "reasons": list,
+        },
+    )
+    if error is not None:
+        return error
+
+    for index, entry in enumerate(report.get("operation_ledger") or []):
+        reasons = entry.get("reasons")
+        if reasons is None:
+            continue
+        for reason_index, reason in enumerate(reasons):
+            if not value_matches_type(reason, str):
+                return invalid_field_error(
+                    path,
+                    f"operation_ledger[{index}].reasons[{reason_index}]",
+                    str,
+                    reason,
+                )
+    return None
+
+
+def validate_reconciliation_differences(
+    reconciliation: dict[str, Any],
+    path: Path | None,
+    field: str,
+    key_field: str,
+) -> dict[str, Any] | None:
+    error = validate_object_list_item_fields(
+        reconciliation,
+        path,
+        field,
+        {
+            key_field: str,
+            "actual": int,
+            "planned": int,
+        },
+    )
+    if error is not None:
+        return error
+    for index, item in enumerate(reconciliation.get(field) or []):
+        missing = [
+            required
+            for required in (key_field, "actual", "planned")
+            if required not in item
+        ]
+        if missing:
+            return load_error(
+                path,
+                "MissingReportFields",
+                "{}[{}] missing required fields: {}".format(
+                    field,
+                    index,
+                    ", ".join(missing),
+                ),
+            )
+    return None
+
+
+def validate_operation_reconciliation_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    reconciliation = report.get("operation_reconciliation")
+    if reconciliation is None:
+        return None
+    if not isinstance(reconciliation, dict):
+        return invalid_field_error(
+            path,
+            "operation_reconciliation",
+            dict,
+            reconciliation,
+        )
+    missing_fields = [
+        field
+        for field in (
+            "evaluated",
+            "planned_actions",
+            "actual_actions",
+            "action_overruns",
+            "action_shortfalls",
+            "planned_closures",
+            "actual_closures",
+            "closure_overruns",
+            "closure_shortfalls",
+        )
+        if field not in reconciliation
+    ]
+    if missing_fields:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "operation_reconciliation missing required fields: {}".format(
+                ", ".join(missing_fields)
+            ),
+        )
+    if reconciliation.get("evaluated") and "ok" not in reconciliation:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "operation_reconciliation missing required fields: ok",
+        )
+
+    error = validate_nested_field_types(
+        reconciliation,
+        path,
+        "operation_reconciliation",
+        {
+            "evaluated": bool,
+            "action_overruns": list,
+            "action_shortfalls": list,
+            "closure_overruns": list,
+            "closure_shortfalls": list,
+        },
+    )
+    if error is not None:
+        return error
+    if reconciliation.get("ok") is not None and not value_matches_type(
+        reconciliation["ok"], bool
+    ):
+        return invalid_field_error(
+            path,
+            "operation_reconciliation.ok",
+            bool,
+            reconciliation["ok"],
+        )
+
+    for counter_field, counters in (
+        ("planned_actions", ISSUE_ACTION_COUNTERS),
+        ("actual_actions", ISSUE_ACTION_COUNTERS[:-1]),
+        ("planned_closures", ISSUE_CLOSURE_COUNTERS),
+        ("actual_closures", ISSUE_CLOSURE_COUNTERS),
+    ):
+        if reconciliation.get(counter_field) is None:
+            continue
+        error = validate_counter_map_value(
+            reconciliation[counter_field],
+            path,
+            f"operation_reconciliation.{counter_field}",
+            counters,
+        )
+        if error is not None:
+            return error
+
+    for field in ("action_overruns", "action_shortfalls"):
+        error = validate_reconciliation_differences(
+            reconciliation,
+            path,
+            field,
+            "action",
+        )
+        if error is not None:
+            return error
+    for field in ("closure_overruns", "closure_shortfalls"):
+        error = validate_reconciliation_differences(
+            reconciliation,
+            path,
+            field,
+            "category",
+        )
+        if error is not None:
+            return error
+    return None
+
+
 def validate_sync_summary_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -603,8 +850,8 @@ def validate_sync_summary_contract(
         lambda: validate_counter_map(
             report, path, "sync_summary", ISSUE_ACTION_COUNTERS
         ),
-        lambda: validate_optional_object_list(report, path, "operation_ledger"),
-        lambda: validate_optional_object(report, path, "operation_reconciliation"),
+        lambda: validate_operation_ledger_contract(report, path),
+        lambda: validate_operation_reconciliation_contract(report, path),
         lambda: validate_sync_failure_contract(report, path),
     ):
         error = validator()
