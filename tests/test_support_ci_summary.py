@@ -76,17 +76,15 @@ def evidence_check_report(missing=2):
             "notes": "",
             "evidence_count": 1,
             "evidence": [
-                {
-                    "path": "tests/test_translator/test_codegen/test_slang_codegen.py",
-                    "pattern": "test_struct_constructor",
-                }
+                "tests/test_translator/test_codegen/"
+                "test_slang_codegen.py::test_struct_constructor"
             ],
         },
     ]
     if missing == 0:
         for row in rows:
             row["evidence_count"] = 1
-            row["evidence"] = [{"path": "tests/test_support_matrix.py"}]
+            row["evidence"] = ["tests/test_support_matrix.py"]
     return {
         "schema_version": 1,
         "generator": "tools/support_matrix.py evidence",
@@ -1114,6 +1112,154 @@ def test_load_optional_json_reports_invalid_evidence_check_contract(tmp_path):
         "path": str(evidence_path),
         "type": "InvalidReportField",
         "message": "summary.by_backend.directx.missing must be int, got str",
+    }
+
+
+def test_load_optional_json_rejects_invalid_evidence_filters(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["filters"]["statuses"] = ["supported", 7]
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "filters.statuses[1] must be str, got int",
+    }
+
+
+def test_load_optional_json_rejects_invalid_evidence_row_items(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["rows"][2]["evidence"] = [{"path": "tests/test_support_matrix.py"}]
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "rows[2].evidence[0] must be str, got object",
+    }
+
+
+def test_load_optional_json_rejects_missing_evidence_row_fields(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    del report["rows"][2]["feature_id"]
+    del report["rows"][2]["evidence"]
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "MissingReportFields",
+        "message": "rows[2] missing required fields: feature_id, evidence",
+    }
+
+
+def test_load_optional_json_rejects_evidence_count_mismatch(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["rows"][2]["evidence_count"] = 2
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "rows[2].evidence_count must match evidence length: 2 != 1",
+    }
+
+
+def test_load_optional_json_rejects_evidence_summary_mismatch(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["summary"]["row_count"] = 99
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "summary.row_count must match rows length: 99 != 3",
+    }
+
+
+def test_load_optional_json_rejects_evidence_backend_summary_mismatch(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["summary"]["by_backend"]["directx"]["missing"] = 0
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "summary.by_backend must match rows",
+    }
+
+
+def test_load_optional_json_rejects_evidence_status_summary_mismatch(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["summary"]["by_status"]["supported"] = 99
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(evidence_path),
+        "type": "InvalidReportField",
+        "message": "summary.by_status must match rows",
     }
 
 

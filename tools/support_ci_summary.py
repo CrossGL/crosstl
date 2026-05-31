@@ -674,6 +674,46 @@ def validate_evidence_check_contract(
     )
     if error is not None:
         return error
+    filters = report["filters"]
+    error = validate_nested_field_types(
+        filters,
+        path,
+        "filters",
+        {
+            "backend_ids": list,
+            "categories": list,
+            "statuses": list,
+            "evidence": str,
+        },
+    )
+    if error is not None:
+        return error
+    for filter_field in ("backend_ids", "categories", "statuses"):
+        if filter_field not in filters:
+            return load_error(
+                path,
+                "MissingReportFields",
+                f"filters missing required fields: {filter_field}",
+            )
+        error = validate_string_list_value(
+            filters[filter_field], path, f"filters.{filter_field}"
+        )
+        if error is not None:
+            return error
+    if "evidence" not in filters:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "filters missing required fields: evidence",
+        )
+    if filters["evidence"] not in {"any", "present", "missing"}:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "filters.evidence must be any, present, or missing, got {}".format(
+                filters["evidence"]
+            ),
+        )
     error = validate_counter_map(
         report,
         path,
@@ -682,6 +722,16 @@ def validate_evidence_check_contract(
     )
     if error is not None:
         return error
+
+    if report["summary"]["row_count"] != len(report["rows"]):
+        return load_error(
+            path,
+            "InvalidReportField",
+            "summary.row_count must match rows length: {} != {}".format(
+                report["summary"]["row_count"],
+                len(report["rows"]),
+            ),
+        )
 
     by_backend = report["summary"].get("by_backend", {})
     if not isinstance(by_backend, dict):
@@ -706,9 +756,56 @@ def validate_evidence_check_contract(
                     counts[counter],
                 )
 
+    by_status = report["summary"].get("by_status")
+    if by_status is None:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "summary missing required fields: by_status",
+        )
+    if not isinstance(by_status, dict):
+        return invalid_field_error(path, "summary.by_status", dict, by_status)
+    for status, count in by_status.items():
+        if not isinstance(status, str):
+            return invalid_field_error(path, "summary.by_status key", str, status)
+        if not value_matches_type(count, int):
+            return invalid_field_error(
+                path,
+                f"summary.by_status.{status}",
+                int,
+                count,
+            )
+
+    actual_missing = 0
+    actual_present = 0
+    actual_by_backend: dict[str, dict[str, int]] = {}
+    actual_by_status: dict[str, int] = {}
+    row_required_fields = (
+        "backend",
+        "backend_id",
+        "category",
+        "feature",
+        "feature_id",
+        "status",
+        "evidence_count",
+        "notes",
+        "evidence",
+    )
     for index, row in enumerate(report["rows"]):
         if not isinstance(row, dict):
             return invalid_field_error(path, f"rows[{index}]", dict, row)
+        missing_row_fields = [
+            field for field in row_required_fields if field not in row
+        ]
+        if missing_row_fields:
+            return load_error(
+                path,
+                "MissingReportFields",
+                "rows[{}] missing required fields: {}".format(
+                    index,
+                    ", ".join(missing_row_fields),
+                ),
+            )
         error = validate_nested_field_types(
             row,
             path,
@@ -721,13 +818,69 @@ def validate_evidence_check_contract(
                 "feature_id": str,
                 "status": str,
                 "evidence_count": int,
+                "notes": str,
+                "evidence": list,
             },
         )
         if error is not None:
             return error
-        evidence = row.get("evidence")
-        if evidence is not None and not isinstance(evidence, list):
-            return invalid_field_error(path, f"rows[{index}].evidence", list, evidence)
+        evidence = row["evidence"]
+        error = validate_string_list_value(evidence, path, f"rows[{index}].evidence")
+        if error is not None:
+            return error
+        if row["evidence_count"] != len(evidence):
+            return load_error(
+                path,
+                "InvalidReportField",
+                "rows[{}].evidence_count must match evidence length: {} != {}".format(
+                    index,
+                    row["evidence_count"],
+                    len(evidence),
+                ),
+            )
+
+        backend_counts = actual_by_backend.setdefault(
+            row["backend_id"], {"rows": 0, "present": 0, "missing": 0}
+        )
+        backend_counts["rows"] += 1
+        actual_by_status[row["status"]] = actual_by_status.get(row["status"], 0) + 1
+        if row["evidence_count"]:
+            actual_present += 1
+            backend_counts["present"] += 1
+        else:
+            actual_missing += 1
+            backend_counts["missing"] += 1
+
+    if report["summary"]["missing_evidence_count"] != actual_missing:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "summary.missing_evidence_count must match rows: {} != {}".format(
+                report["summary"]["missing_evidence_count"],
+                actual_missing,
+            ),
+        )
+    if report["summary"]["present_evidence_count"] != actual_present:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "summary.present_evidence_count must match rows: {} != {}".format(
+                report["summary"]["present_evidence_count"],
+                actual_present,
+            ),
+        )
+    if by_backend != actual_by_backend:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "summary.by_backend must match rows",
+        )
+    if by_status != actual_by_status:
+        return load_error(
+            path,
+            "InvalidReportField",
+            "summary.by_status must match rows",
+        )
     return None
 
 
