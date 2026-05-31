@@ -1903,6 +1903,8 @@ def test_load_optional_json_allows_unprovided_budget_with_null_status(tmp_path):
     )
 
     assert "load_error" not in loaded
+    assert loaded["planned_action_budget"]["ok"] is None
+    assert loaded["planned_closure_budget"]["ok"] is None
 
 
 def test_load_optional_json_rejects_evaluated_budget_with_null_status(tmp_path):

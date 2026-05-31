@@ -880,18 +880,24 @@ class TestCudaCodeGen:
             "__device__ inline uint cgl_cuda_wave_active_sum_uint_uint(uint value)"
             in cuda_code
         )
+        assert "__shfl_down_sync(mask, result, offset)" in cuda_code
         assert "uint sumValue = cgl_cuda_wave_active_sum_uint_uint(lane);" in cuda_code
         assert (
             "bool anyLane = "
             "cgl_cuda_wave_active_any_true_bool_bool((sumValue > 0u));" in cuda_code
         )
+        assert "__any_sync(mask, predicate)" in cuda_code
         assert (
             "uint4 ballot = cgl_cuda_wave_active_ballot_uint4_bool(anyLane);"
             in cuda_code
         )
+        assert "__ballot_sync(__activemask(), predicate)" in cuda_code
         assert (
             "uint broadcast = cgl_cuda_wave_read_lane_at_uint_uint_uint(sumValue, 0u);"
             in cuda_code
+        )
+        assert "__shfl_sync(__activemask(), value, static_cast<int>(lane))" in (
+            cuda_code
         )
         assert "WaveOpNode(" not in cuda_code
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
@@ -928,11 +934,14 @@ class TestCudaCodeGen:
         assert "cgl_cuda_wave_active_count_bits_uint_bool(equal)" in cuda_code
         assert "cgl_cuda_wave_prefix_count_bits_uint_bool(equal)" in cuda_code
         assert "cgl_cuda_wave_match_uint4_uint(lane)" in cuda_code
+        assert "matching |= (1u << candidate);" in cuda_code
         assert "cgl_cuda_quad_read_lane_at_uint_uint_uint(lane, 1u)" in cuda_code
         assert "cgl_cuda_quad_read_across_x_uint_uint(lane)" in cuda_code
         assert "cgl_cuda_quad_read_across_y_uint_uint(lane)" in cuda_code
         assert "cgl_cuda_quad_read_across_diagonal_uint_uint(lane)" in cuda_code
+        assert "__shfl_xor_sync(__activemask(), value, 1)" in cuda_code
         assert "cgl_cuda_wave_multi_prefix_sum_uint_uint_uint4(lane, mask)" in cuda_code
+        assert "unsigned int partition = mask.x & active;" in cuda_code
         assert (
             "cgl_cuda_wave_multi_prefix_product_uint_uint_uint4((lane + 1u), mask)"
             in cuda_code
@@ -951,6 +960,43 @@ class TestCudaCodeGen:
             cuda_code
         )
         assert "Unsupported CUDA wave intrinsic" not in cuda_code
+
+    def test_wave_intrinsic_type_gaps_emit_cuda_diagnostics(self):
+        """Test CUDA emits compile-safe diagnostics for unsupported wave shapes."""
+        source_code = """
+        shader CudaWaveDiagnostics {
+            compute {
+                void main() {
+                    float scalar = 1.0;
+                    vec2 pair = vec2(1.0, 2.0);
+                    float bitwiseFloat = WaveActiveBitAnd(scalar);
+                    uint count = WaveActiveCountBits(1u);
+                    uint badMask = WaveMultiPrefixSum(1u, 7u);
+                    vec2 vectorSum = WaveActiveSum(pair);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "float bitwiseFloat = /* unsupported CUDA wave intrinsic "
+            "WaveActiveBitAnd: requires integer scalar input */ 0.0f;" in cuda_code
+        )
+        assert (
+            "uint count = /* unsupported CUDA wave intrinsic "
+            "WaveActiveCountBits: requires bool predicate input */ 0u;" in cuda_code
+        )
+        assert (
+            "uint badMask = /* unsupported CUDA wave intrinsic "
+            "WaveMultiPrefixSum: requires uvec4 partition mask */ 0u;" in cuda_code
+        )
+        assert (
+            "float2 vectorSum = /* unsupported CUDA wave intrinsic "
+            "WaveActiveSum: requires scalar input */ make_float2(0.0f, 0.0f);"
+            in cuda_code
+        )
 
     def test_direct_wave_ir_node_lowers_to_cuda_helper(self):
         """Test direct WaveOpNode emission avoids AST repr fallbacks."""
@@ -3579,6 +3625,55 @@ class TestCudaCodeGen:
         smoke_ast = Parser(Lexer(compile_smoke_source).tokens).parse()
         compile_cuda_if_nvcc_available(CudaCodeGen().generate(smoke_ast), tmp_path)
 
+    def test_explicit_sampler_texture_calls_emit_cuda_texture_coordinates(self):
+        """Test CUDA accepts split sampler operands without using them as coords."""
+        source_code = """
+        shader ExplicitSamplerTextureCalls {
+            sampler2D colorMap;
+            sampler linearSampler;
+
+            struct VSOutput {
+                vec2 uv;
+            };
+
+            void sampleAll(
+                sampler2D tex,
+                sampler sampleState,
+                vec2 uv,
+                vec2 ddx,
+                vec2 ddy
+            ) {
+                vec4 sampled = texture(tex, sampleState, uv);
+                vec4 mip = textureLod(tex, sampleState, uv, 2.0);
+                vec4 grad = textureGrad(tex, sampleState, uv, ddx, ddy);
+            }
+
+            fragment {
+                vec4 main(VSOutput input) @ gl_FragColor {
+                    return texture(colorMap, linearSampler, input.uv);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "texture<float4, 2> colorMap;" in cuda_code
+        assert "cudaTextureObject_t linearSampler;" in cuda_code
+        assert (
+            "__device__ void sampleAll(texture<float4, 2> tex, "
+            "cudaTextureObject_t sampleState, float2 uv, float2 ddx, float2 ddy)"
+            in cuda_code
+        )
+        assert "float4 sampled = tex2D(tex, uv.x, uv.y);" in cuda_code
+        assert "float4 mip = tex2DLod(tex, uv.x, uv.y, 2.0);" in cuda_code
+        assert "float4 grad = tex2DGrad(tex, uv.x, uv.y, ddx, ddy);" in cuda_code
+        assert "return tex2D(colorMap, input.uv.x, input.uv.y);" in cuda_code
+        assert "sampleState.x" not in cuda_code
+        assert "linearSampler.x" not in cuda_code
+        assert "texture(tex, sampleState" not in cuda_code
+        assert "texture(colorMap, linearSampler" not in cuda_code
+
     def test_hlsl_style_texture_resource_types_emit_cuda_sampler_types(self):
         """Test CUDA treats HLSL-style Texture resource names like sampler types."""
         source_code = """
@@ -4586,6 +4681,59 @@ class TestCudaCodeGen:
         assert "ParticleBlock particles;" in cuda_code
         assert "return values[index];" in cuda_code
         assert "particles.positions[index] = value;" in cuda_code
+
+    def test_glsl_buffer_block_arrays_preserve_cuda_placeholder_contracts(self):
+        """Test CUDA covers fixed block arrays and access diagnostics."""
+        source_code = """
+        layout(std430, binding = 5) readonly buffer ReadBlock {
+            uint values[4];
+        } readonlyBlocks[2];
+
+        layout(std140, binding = 7) buffer WriteBlock {
+            vec4 positions[2];
+        } writableBlocks[3];
+
+        uint readBlock(uint which, uint index) {
+            return readonlyBlocks[which].values[index];
+        }
+
+        void writeBlock(uint which, vec4 value) {
+            writableBlocks[which].positions[1] = value;
+        }
+
+        void blockedBlockWrite(uint which, uint index, uint value) {
+            readonlyBlocks[which].values[index] = value;
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "struct ReadBlock" in cuda_code
+        assert "uint values[4];" in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=readonlyBlocks "
+            "kind=glsl_buffer_block layout=std430 access=readonly set=0 "
+            "binding=5 binding_source=explicit count=2"
+        ) in cuda_code
+        assert "const ReadBlock readonlyBlocks[2];" in cuda_code
+        assert "struct WriteBlock" in cuda_code
+        assert "float4 positions[2];" in cuda_code
+        assert (
+            "// CrossGL resource metadata: name=writableBlocks "
+            "kind=glsl_buffer_block layout=std140 set=0 binding=7 "
+            "binding_source=explicit count=3"
+        ) in cuda_code
+        assert "WriteBlock writableBlocks[3];" in cuda_code
+        assert "return readonlyBlocks[which].values[index];" in cuda_code
+        assert "writableBlocks[which].positions[1] = value;" in cuda_code
+        assert (
+            "/* unsupported CUDA GLSL buffer block assignment: resource "
+            "'readonlyBlocks' is readonly */ ((void)0);"
+        ) in cuda_code
 
     def test_glsl_buffer_block_runtime_arrays_and_atomics_emit_cuda(self):
         """Test CUDA lowers GLSL buffer-block runtime-array atomics."""
@@ -6658,8 +6806,8 @@ class TestCudaCodeGen:
         assert " = tex2D(cubeShadow" not in cuda_code
         assert " = tex2D(cubeArrayShadow" not in cuda_code
 
-    def test_texture_gather_calls_emit_cuda_diagnostics(self):
-        """Test CUDA makes unsupported gather sampled-resource calls explicit."""
+    def test_texture_gather_calls_emit_cuda_helpers_and_diagnostics(self):
+        """Test CUDA lowers supported advanced texture calls and diagnoses the rest."""
         source_code = """
         shader Resources {
             sampler2d colorMap;
@@ -6759,9 +6907,8 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 gatheredOffset = /* unsupported CUDA sampled resource call: "
-            "textureGatherOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gatheredOffset = tex2Dgather<float4>"
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1);" in cuda_code
         )
         assert (
             "float4 gatheredOffsets = /* unsupported CUDA sampled resource call: "
@@ -6774,54 +6921,47 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 offsetSample = /* unsupported CUDA sampled resource call: "
-            "textureOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 offsetSample = tex2D"
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y));" in cuda_code
         )
         assert (
-            "float4 lodOffsetSample = /* unsupported CUDA sampled resource call: "
-            "textureLodOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 lodOffsetSample = tex2DLod"
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 gradOffsetSample = /* unsupported CUDA sampled resource call: "
-            "textureGradOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gradOffsetSample = tex2DGrad"
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projected = /* unsupported CUDA sampled resource call: "
-            "textureProj on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projected = tex2D"
+            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z));" in cuda_code
         )
         assert (
-            "float4 projectedOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedOffset = tex2D"
+            "(colorMap, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y));" in cuda_code
         )
         assert (
-            "float4 projectedLod = /* unsupported CUDA sampled resource call: "
-            "textureProjLod on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedLod = tex2DLod"
+            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedLodOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjLodOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedLodOffset = tex2DLod"
+            "(colorMap, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedGrad = /* unsupported CUDA sampled resource call: "
-            "textureProjGrad on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedGrad = tex2DGrad"
+            "(colorMap, (uvw.x / uvw.z), (uvw.y / uvw.z), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projectedGradOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjGradOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedGradOffset = tex2DGrad"
+            "(colorMap, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 fetchedOffset = /* unsupported CUDA sampled resource call: "
-            "texelFetchOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 fetchedOffset = tex2D"
+            "(colorMap, (offset.x + offset.x), (offset.y + offset.y));" in cuda_code
         )
         assert "__device__ inline float4 cgl_float4_add" in cuda_code
         assert "float4 projectedSum = cgl_float4_add(" in cuda_code
@@ -6930,8 +7070,8 @@ class TestCudaCodeGen:
         assert "tex2Dgather<float4>(colorMap, uv.x, uv.y, 7)" not in cuda_code
         assert "textureGather(" not in cuda_code
 
-    def test_texture_offset_argument_shapes_emit_cuda_diagnostics(self):
-        """Test CUDA texture offset diagnostics distinguish bad offset ranks."""
+    def test_texture_offset_argument_shapes_emit_cuda_helpers_or_diagnostics(self):
+        """Test CUDA texture offsets lower valid ranks and diagnose bad ranks."""
         source_code = """
         shader OffsetCoordinateShapes {
             sampler1d lineTex;
@@ -7010,9 +7150,8 @@ class TestCudaCodeGen:
                 "make_float4(0.0f, 0.0f, 0.0f, 0.0f);"
             ) in cuda_code
         assert (
-            "float4 validButUnsupported = /* unsupported CUDA sampled resource call: "
-            "textureOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 validButUnsupported = tex2D"
+            "(colorMap, (uv.x + offset2.x), (uv.y + offset2.y));" in cuda_code
         )
         assert (
             "float4 imageOffset = /* unsupported CUDA sampled resource call: "
@@ -7034,8 +7173,117 @@ class TestCudaCodeGen:
         assert "textureProjOffset(" not in cuda_code
         assert "texelFetchOffset(" not in cuda_code
 
-    def test_typed_hlsl_unsupported_sampled_calls_emit_cuda_diagnostics(self, tmp_path):
-        """Test CUDA diagnostics normalize typed HLSL sampled Texture aliases."""
+    def test_texture_projected_shapes_emit_cuda_helpers_or_diagnostics(self):
+        """Test CUDA projected texture calls lower supported coordinate shapes."""
+        source_code = """
+        shader ProjectedTextureShapes {
+            sampler1d lineTex;
+            sampler2d colorMap;
+            sampler2darray layers;
+            sampler3d volumeMap;
+            samplercube cubeMap;
+            samplercubearray cubeLayers;
+
+            void projectedShapes(
+                vec2 uq,
+                vec3 uvq,
+                vec4 uvLayerQ,
+                vec4 xyzq,
+                vec4 dirQ,
+                vec4 cubeLayerQ,
+                vec3 ddx3,
+                vec3 ddy3,
+                ivec2 offset2,
+                ivec3 offset3
+            ) {
+                vec4 line = textureProj(lineTex, uq);
+                vec4 color = textureProj(colorMap, uvq);
+                vec4 layer = textureProj(layers, uvLayerQ);
+                vec4 volume = textureProj(volumeMap, xyzq);
+                vec4 cube = textureProj(cubeMap, dirQ);
+                vec4 colorOffset = textureProjOffset(colorMap, uvq, offset2);
+                vec4 volumeGradOffset = textureProjGradOffset(
+                    volumeMap,
+                    xyzq,
+                    ddx3,
+                    ddy3,
+                    offset3
+                );
+                vec4 cubeOffset = textureProjOffset(cubeMap, dirQ, offset2);
+                vec4 cubeArray = textureProj(cubeLayers, cubeLayerQ);
+                vec4 badColor = textureProj(colorMap, uq);
+                vec4 colorBias = textureProj(colorMap, uvq, 0.5);
+            }
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float4 line = tex1D(lineTex, (uq.x / uq.y));" in cuda_code
+        assert (
+            "float4 color = tex2D(colorMap, (uvq.x / uvq.z), (uvq.y / uvq.z));"
+            in cuda_code
+        )
+        assert (
+            "float4 layer = tex2DLayered<float4>"
+            "(layers, (uvLayerQ.x / uvLayerQ.w), "
+            "(uvLayerQ.y / uvLayerQ.w), uvLayerQ.z);" in cuda_code
+        )
+        assert (
+            "float4 volume = tex3D"
+            "(volumeMap, (xyzq.x / xyzq.w), "
+            "(xyzq.y / xyzq.w), (xyzq.z / xyzq.w));" in cuda_code
+        )
+        assert (
+            "float4 cube = texCubemap"
+            "(cubeMap, (dirQ.x / dirQ.w), "
+            "(dirQ.y / dirQ.w), (dirQ.z / dirQ.w));" in cuda_code
+        )
+        assert (
+            "float4 colorOffset = tex2D"
+            "(colorMap, ((uvq.x / uvq.z) + offset2.x), "
+            "((uvq.y / uvq.z) + offset2.y));" in cuda_code
+        )
+        assert (
+            "float4 volumeGradOffset = tex3DGrad"
+            "(volumeMap, ((xyzq.x / xyzq.w) + offset3.x), "
+            "((xyzq.y / xyzq.w) + offset3.y), "
+            "((xyzq.z / xyzq.w) + offset3.z), "
+            "make_float4(ddx3.x, ddx3.y, ddx3.z, 0.0f), "
+            "make_float4(ddy3.x, ddy3.y, ddy3.z, 0.0f));" in cuda_code
+        )
+        assert (
+            "float4 cubeOffset = /* unsupported CUDA sampled resource call: "
+            "textureProjOffset on samplerCube */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 cubeArray = /* unsupported CUDA sampled resource call: "
+            "textureProj on samplerCubeArray */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 badColor = /* unsupported CUDA sampled resource call: "
+            "textureProj coordinate rank on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert (
+            "float4 colorBias = /* unsupported CUDA sampled resource call: "
+            "textureProj bias on sampler2D */ "
+            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+        )
+        assert "textureProj(" not in cuda_code
+        assert "textureProjOffset(" not in cuda_code
+        assert "textureProjGradOffset(" not in cuda_code
+
+    def test_typed_hlsl_advanced_sampled_calls_emit_cuda_helpers_and_diagnostics(
+        self, tmp_path
+    ):
+        """Test CUDA lowers typed HLSL advanced Texture calls where representable."""
         source_code = """
         shader TypedUnsupportedCUDA {
             Texture2D<float4> colorMap;
@@ -7150,9 +7398,8 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 gatheredOffset = /* unsupported CUDA sampled resource call: "
-            "textureGatherOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gatheredOffset = tex2Dgather<float4>"
+            "(colorMap, (uv.x + offset.x), (uv.y + offset.y), 1);" in cuda_code
         )
         assert (
             "float4 gatheredOffsets = /* unsupported CUDA sampled resource call: "
@@ -7160,59 +7407,52 @@ class TestCudaCodeGen:
             "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
         )
         assert (
-            "float4 offsetSample = /* unsupported CUDA sampled resource call: "
-            "textureOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 offsetSample = tex2D"
+            "(paramTex, (uv.x + offset.x), (uv.y + offset.y));" in cuda_code
         )
         assert (
-            "float4 layerOffset = /* unsupported CUDA sampled resource call: "
-            "textureOffset on sampler2DArray */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 layerOffset = tex2DLayered<float4>"
+            "(paramLayers, (uvLayer.x + offset.x), "
+            "(uvLayer.y + offset.y), uvLayer.z);" in cuda_code
         )
         assert (
-            "float4 lodOffsetSample = /* unsupported CUDA sampled resource call: "
-            "textureLodOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 lodOffsetSample = tex2DLod"
+            "(paramTex, (uv.x + offset.x), (uv.y + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 gradOffsetSample = /* unsupported CUDA sampled resource call: "
-            "textureGradOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 gradOffsetSample = tex2DGrad"
+            "(paramTex, (uv.x + offset.x), (uv.y + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projected = /* unsupported CUDA sampled resource call: "
-            "textureProj on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projected = tex2D"
+            "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z));" in cuda_code
         )
         assert (
-            "float4 projectedOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedOffset = tex2D"
+            "(paramTex, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y));" in cuda_code
         )
         assert (
-            "float4 projectedLod = /* unsupported CUDA sampled resource call: "
-            "textureProjLod on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedLod = tex2DLod"
+            "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedLodOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjLodOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedLodOffset = tex2DLod"
+            "(paramTex, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y), 1.0);" in cuda_code
         )
         assert (
-            "float4 projectedGrad = /* unsupported CUDA sampled resource call: "
-            "textureProjGrad on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedGrad = tex2DGrad"
+            "(paramTex, (uvw.x / uvw.z), (uvw.y / uvw.z), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 projectedGradOffset = /* unsupported CUDA sampled resource call: "
-            "textureProjGradOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 projectedGradOffset = tex2DGrad"
+            "(paramTex, ((uvw.x / uvw.z) + offset.x), "
+            "((uvw.y / uvw.z) + offset.y), ddx, ddy);" in cuda_code
         )
         assert (
-            "float4 fetchedOffset = /* unsupported CUDA sampled resource call: "
-            "texelFetchOffset on sampler2D */ "
-            "make_float4(0.0f, 0.0f, 0.0f, 0.0f);" in cuda_code
+            "float4 fetchedOffset = tex2D"
+            "(paramTex, (pixel.x + offset.x), (pixel.y + offset.y));" in cuda_code
         )
         assert (
             "float4 msOffset = /* unsupported CUDA multisample resource call: "
@@ -7834,8 +8074,14 @@ class TestCudaCodeGen:
             StructuredBuffer<int> attrWriteValues @access(write);
             readonly RWByteAddressBuffer rawInput;
             writeonly ByteAddressBuffer rawOutput;
+            readonly RWStructuredBuffer<uint> readOnlyCounters;
+            writeonly RWStructuredBuffer<uint> writeOnlyCounters;
             readonly image2D source @rgba32f;
             writeonly image2D target @rgba32f;
+            image2D syncImage @coherent;
+            uimage2D scopeImage @r32ui @globallycoherent;
+            RWStructuredBuffer<int> orderedValues @volatile;
+            RWByteAddressBuffer linearRaw @restrict;
 
             compute {
                 void main(uint index) {
@@ -7846,6 +8092,18 @@ class TestCudaCodeGen:
                     buffer_store(readWriteValues, index, value);
                     buffer_store(attrWriteValues, index, attrValue);
                     buffer_store(rawOutput, index, raw);
+                    int blockedBufferRead = buffer_load(writeOnlyValues, index);
+                    int blockedAttrRead = buffer_load(attrWriteValues, index);
+                    uint blockedRawRead = buffer_load(rawOutput, index);
+                    buffer_store(readOnlyValues, index, blockedBufferRead);
+                    buffer_store(attrReadValues, index, blockedAttrRead);
+                    buffer_store(rawInput, index, blockedRawRead);
+                    int blockedDirectRead = writeOnlyValues[index];
+                    readOnlyValues[index] = blockedDirectRead;
+                    uint blockedReadOnlyAtomic =
+                        atomicAdd(readOnlyCounters[index], 1u);
+                    uint blockedWriteOnlyAtomic =
+                        atomicAdd(writeOnlyCounters[index], 1u);
                     vec4 color = imageLoad(source, ivec2(0));
                     vec4 blockedLoad = imageLoad(target, ivec2(0));
                     imageStore(target, ivec2(0), color);
@@ -7868,8 +8126,14 @@ class TestCudaCodeGen:
         assert "int* attrWriteValues;" in cuda_code
         assert "const unsigned char* rawInput;" in cuda_code
         assert "unsigned char* rawOutput;" in cuda_code
+        assert "const uint* readOnlyCounters;" in cuda_code
+        assert "uint* writeOnlyCounters;" in cuda_code
         assert "cudaSurfaceObject_t source;" in cuda_code
         assert "cudaSurfaceObject_t target;" in cuda_code
+        assert "cudaSurfaceObject_t syncImage;" in cuda_code
+        assert "cudaSurfaceObject_t scopeImage;" in cuda_code
+        assert "int* orderedValues;" in cuda_code
+        assert "unsigned char* linearRaw;" in cuda_code
         assert "int value = readOnlyValues[index];" in cuda_code
         assert "int attrValue = attrReadValues[index];" in cuda_code
         assert "uint raw = cgl_byte_address_load_uint(rawInput, index);" in cuda_code
@@ -7877,6 +8141,50 @@ class TestCudaCodeGen:
         assert "readWriteValues[index] = value;" in cuda_code
         assert "attrWriteValues[index] = attrValue;" in cuda_code
         assert "cgl_byte_address_store_uint(rawOutput, index, raw);" in cuda_code
+        assert (
+            "int blockedBufferRead = /* unsupported CUDA structured buffer "
+            "access: buffer_load requires readable buffer resource on "
+            "RWStructuredBuffer<int> */ 0;" in cuda_code
+        )
+        assert (
+            "int blockedAttrRead = /* unsupported CUDA structured buffer access: "
+            "buffer_load requires readable buffer resource on "
+            "RWStructuredBuffer<int> */ 0;" in cuda_code
+        )
+        assert (
+            "uint blockedRawRead = /* unsupported CUDA byte-address buffer "
+            "access: buffer_load requires readable buffer resource on "
+            "RWByteAddressBuffer */ 0u;" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA structured buffer access: buffer_store requires "
+            "writable buffer resource on StructuredBuffer<int> */ ((void)0);"
+            in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA byte-address buffer access: buffer_store requires "
+            "writable buffer resource on ByteAddressBuffer */ ((void)0);" in cuda_code
+        )
+        assert (
+            "int blockedDirectRead = /* unsupported CUDA structured buffer access: "
+            "load requires readable buffer resource on RWStructuredBuffer<int> */ 0;"
+            in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA structured buffer access: assignment requires "
+            "writable buffer resource on StructuredBuffer<int> */ ((void)0);"
+            in cuda_code
+        )
+        assert (
+            "uint blockedReadOnlyAtomic = /* unsupported CUDA structured buffer "
+            "access: atomicAdd requires readwrite buffer resource on "
+            "StructuredBuffer<uint> */ 0u;" in cuda_code
+        )
+        assert (
+            "uint blockedWriteOnlyAtomic = /* unsupported CUDA structured buffer "
+            "access: atomicAdd requires readwrite buffer resource on "
+            "RWStructuredBuffer<uint> */ 0u;" in cuda_code
+        )
         assert "float4 color = surf2Dread<float4>(source," in cuda_code
         assert (
             "float4 blockedLoad = /* unsupported CUDA image access: imageLoad "
@@ -7890,7 +8198,11 @@ class TestCudaCodeGen:
         )
         assert "readonly" not in cuda_code
         assert "writeonly" not in cuda_code
-        assert "readwrite" not in cuda_code
+        assert "readwrite StructuredBuffer" not in cuda_code
+        assert "coherent" not in cuda_code
+        assert "globallycoherent" not in cuda_code
+        assert "volatile" not in cuda_code
+        assert "restrict" not in cuda_code
         assert "access(" not in cuda_code
 
     def test_image_access_aliases_inherit_cuda_diagnostics(self):
@@ -9952,6 +10264,7 @@ class TestCudaCodeGen:
             samplercube cubeTex;
             samplercubearray cubeLayers;
             sampler2dshadow shadowTex;
+            sampler querySampler;
             image2D colorImage;
             Texture3D<float4> typedVolume;
 
@@ -9959,6 +10272,14 @@ class TestCudaCodeGen:
                 vec4 fetchedLine = texelFetch(lineTex, x, 0);
                 vec4 fetchedLineLayer = texelFetch(lineLayers, pixel, 0);
                 vec4 fetched = texelFetch(tex, pixel, 0);
+                vec4 fetchedExplicit = texelFetch(tex, querySampler, pixel, 0);
+                vec4 fetchedExplicitOffset = texelFetchOffset(
+                    tex,
+                    querySampler,
+                    pixel,
+                    0,
+                    pixel
+                );
                 vec4 fetchedLayer = texelFetch(layers, voxel, 0);
                 vec4 fetchedVolume = texelFetch(volume, voxel, 0);
                 vec4 typedFetchedVolume = texelFetch(typedVolume, voxel, 0);
@@ -9996,6 +10317,11 @@ class TestCudaCodeGen:
             "(lineLayers, pixel.x, pixel.y);" in cuda_code
         )
         assert "float4 fetched = tex2D(tex, pixel.x, pixel.y);" in cuda_code
+        assert "float4 fetchedExplicit = tex2D(tex, pixel.x, pixel.y);" in cuda_code
+        assert (
+            "float4 fetchedExplicitOffset = tex2D"
+            "(tex, (pixel.x + pixel.x), (pixel.y + pixel.y));" in cuda_code
+        )
         assert (
             "float4 fetchedLayer = tex2DLayered<float4>"
             "(layers, voxel.x, voxel.y, voxel.z);" in cuda_code
@@ -10045,6 +10371,7 @@ class TestCudaCodeGen:
         assert "tex1Dfetch(lineTex, pixel)" not in cuda_code
         assert "tex1DLayered<float4>(lineLayers, x." not in cuda_code
         assert "tex2D(tex, x." not in cuda_code
+        assert "querySampler.x" not in cuda_code
         assert "tex3D(volume, pixel.x, pixel.y, pixel.z)" not in cuda_code
         assert "texelFetch(" not in cuda_code
 
@@ -10345,6 +10672,53 @@ class TestCudaCodeGen:
             "// CrossGL resource metadata: name=Camera kind=cbuffer set=0 "
             "binding=6 binding_source=explicit" in cuda_code
         )
+
+    def test_texture_and_sampler_binding_namespaces_are_independent_for_cuda_codegen(
+        self,
+    ):
+        """Test CUDA keeps texture and sampler binding namespaces independent."""
+        source_code = """
+        shader CudaSplitSamplerBindings {
+            @binding(0) sampler2D colorMap;
+            @binding(0) sampler linearSampler;
+            @binding(1) sampler nearestSampler;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=colorMap kind=texture set=0 "
+            "binding=0 binding_source=explicit" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+            "binding=0 binding_source=explicit" in cuda_code
+        )
+        assert (
+            "// CrossGL resource metadata: name=nearestSampler kind=sampler set=0 "
+            "binding=1 binding_source=explicit" in cuda_code
+        )
+
+        duplicate_sampler_binding = """
+        shader DuplicateCudaSamplerBindings {
+            @binding(0) sampler firstSampler;
+            @binding(0) sampler secondSampler;
+
+            compute {
+                void main() {}
+            }
+        }
+        """
+
+        with pytest.raises(ValueError, match="Conflicting CUDA resource binding"):
+            CudaCodeGen().generate(
+                Parser(Lexer(duplicate_sampler_binding).tokens).parse()
+            )
 
     def test_duplicate_resource_bindings_are_rejected_for_cuda_codegen(self):
         """Test CUDA rejects duplicate explicit resource bindings."""
@@ -16665,6 +17039,96 @@ class TestCudaCodeGen:
         assert "__crossgl_match_value_0 = 10;" in cuda_code
         assert "__crossgl_match_value_0 = -1;" in cuda_code
         assert "return __crossgl_match_value_0;" in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_plain_enum_path_arms_lower_for_cuda(self):
+        """Test CUDA lowers plain enum path patterns to enumerator comparisons."""
+        source_code = """
+        shader TestShader {
+            enum Mode {
+                Off,
+                On = 2
+            }
+
+            compute {
+                int main(Mode mode) {
+                    int value = match mode {
+                        Mode::Off => 0,
+                        Mode::On => 2,
+                        _ => -1,
+                    };
+                    return value;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "enum Mode {" in cuda_code
+        assert "int value;" in cuda_code
+        assert "if ((mode == Off))" in cuda_code
+        assert "value = 0;" in cuda_code
+        assert "else if ((mode == On))" in cuda_code
+        assert "value = 2;" in cuda_code
+        assert "else {" in cuda_code
+        assert "value = -1;" in cuda_code
+        assert "Mode::Off" not in cuda_code
+        assert "Mode::On" not in cuda_code
+        assert "MatchNode" not in cuda_code
+
+    def test_match_expression_and_payload_pattern_diagnostics_are_compile_safe_for_cuda(
+        self,
+    ):
+        """Test CUDA emits deterministic comments for unsupported match gaps."""
+        source_code = """
+        shader TestShader {
+            enum Maybe {
+                Some(int),
+                None
+            }
+
+            compute {
+                int main(int mode, Maybe maybeValue) {
+                    int fallback = match mode {
+                        0 => 1,
+                    };
+
+                    int result = 0;
+                    match maybeValue {
+                        Maybe::Some(inner) => {
+                            result = inner;
+                        }
+                        _ => {
+                            result = -1;
+                        }
+                    }
+
+                    return fallback + result;
+                }
+            }
+        }
+        """
+
+        lexer = Lexer(source_code)
+        parser = Parser(lexer.tokens)
+        ast = parser.parse()
+
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert (
+            "fallback = /* unsupported CUDA match expression: "
+            "no wildcard arm handles remaining cases */ 0;" in cuda_code
+        )
+        assert (
+            "/* unsupported CUDA match statement: enum constructor patterns "
+            "are not supported */" in cuda_code
+        )
+        assert "Maybe::Some" not in cuda_code
         assert "MatchNode" not in cuda_code
 
     def test_direct_ast_expression_statements_are_emitted(self):

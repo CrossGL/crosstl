@@ -925,6 +925,12 @@ class HLSLCodeGen:
                 "type is not supported by ByteAddressBuffer lowering"
             ),
         )
+        self.record_unsupported_glsl_buffer_block_layout_failures(
+            global_vars,
+            self.lowered_glsl_buffer_blocks,
+            self.glsl_buffer_block_lowering_failures,
+            self.glsl_buffer_block_struct_lowering_failures,
+        )
         self.lowered_glsl_buffer_block_struct_names = {
             block["type_name"] for block in self.lowered_glsl_buffer_blocks.values()
         }
@@ -15026,7 +15032,7 @@ class HLSLCodeGen:
         return names
 
     def collect_lowered_glsl_buffer_block_parameters(self, parameters):
-        return collect_lowered_glsl_buffer_blocks(
+        blocks, var_failures, struct_failures = collect_lowered_glsl_buffer_blocks(
             parameters,
             structs_by_name=self.structs_by_name,
             is_glsl_buffer_block_variable=self.is_glsl_buffer_block_variable,
@@ -15042,6 +15048,32 @@ class HLSLCodeGen:
                 "type is not supported by ByteAddressBuffer lowering"
             ),
         )
+        self.record_unsupported_glsl_buffer_block_layout_failures(
+            parameters, blocks, var_failures, struct_failures
+        )
+        return blocks, var_failures, struct_failures
+
+    def record_unsupported_glsl_buffer_block_layout_failures(
+        self, nodes, lowered_blocks, var_failures, struct_failures
+    ):
+        for node in nodes or []:
+            var_name = getattr(node, "name", getattr(node, "variable_name", None))
+            if not var_name or var_name in lowered_blocks or var_name in var_failures:
+                continue
+            node_type = glsl_buffer_block_node_type(node)
+            if not self.is_glsl_buffer_block_variable(node, node_type):
+                continue
+            layout = self.glsl_buffer_block_layout(node)
+            layout_key = str(layout).lower()
+            if layout_key in {"std140", "std430"}:
+                continue
+            type_name = str(self.resource_base_type(node_type))
+            reason = (
+                f"unsupported layout {layout}: DirectX ByteAddressBuffer lowering "
+                "currently supports std140 and std430 only"
+            )
+            var_failures[var_name] = reason
+            struct_failures.setdefault(type_name, reason)
 
     def collect_unsupported_glsl_buffer_block_parameter_names(self, parameters):
         names = set()

@@ -32,6 +32,8 @@ PRIMARY_GRAPHICS_FIXED_CASES = (
     ("graphics/ComplexShader.cgl", "opengl"),
 )
 
+ADDITIONAL_FIXED_CASES = (("advanced/GenericPatternMatching.cgl", "slang"),)
+
 KNOWN_PRIMARY_GRAPHICS_DIAGNOSTICS = ()
 
 
@@ -98,6 +100,17 @@ def test_primary_graphics_examples_with_stage_local_resources_translate(
             assert marker not in generated
         assert re.search(r"\bT\b", generated) is None
         assert re.search(r"\bstr\b", generated) is None
+
+
+@pytest.mark.parametrize("relative_path,backend", ADDITIONAL_FIXED_CASES)
+def test_additional_fixed_examples_translate(relative_path, backend):
+    generated = crosstl.translate(
+        str(_example_path(relative_path)), backend=backend, format_output=False
+    )
+
+    _assert_generated_output_is_usable(generated)
+    if backend == "slang":
+        assert "unsupported Slang match" not in generated
 
 
 @pytest.mark.parametrize(

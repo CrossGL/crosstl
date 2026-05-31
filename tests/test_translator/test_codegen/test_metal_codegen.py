@@ -3081,6 +3081,78 @@ def test_metal_glsl_buffer_block_atomic_compare_helpers_cover_signed_and_paramet
     assert "atomic_compare_exchange_strong_explicit" not in generated_code
 
 
+def test_metal_glsl_buffer_block_unsupported_layout_and_member_type_emit_diagnostics():
+    scalar_layout_shader = """
+    shader ScalarGlslBufferBlockMetal {
+        struct ScalarBlock {
+            vec3 normal;
+            float weight;
+        };
+
+        ScalarBlock scalarBlock @glsl_buffer_block(scalar) @binding(11);
+
+        compute {
+            void main() {
+                float value = scalarBlock.weight;
+                scalarBlock.weight = value;
+            }
+        }
+    }
+    """
+
+    scalar_layout_code = generate_code(parse_code(tokenize_code(scalar_layout_shader)))
+
+    assert (
+        "unsupported Metal GLSL buffer block ScalarBlock scalarBlock "
+        "(scalar, binding = 11)"
+    ) in scalar_layout_code
+    assert "device uchar* scalarBlock" not in scalar_layout_code
+    assert (
+        "float value = 0 /* unsupported Metal GLSL buffer block access scalarBlock: "
+        "no target-side fallback declaration emitted */;"
+    ) in scalar_layout_code
+    assert (
+        "/* unsupported Metal GLSL buffer block assignment scalarBlock: "
+        "no target-side fallback declaration emitted */;"
+    ) in scalar_layout_code
+
+    unsupported_type_shader = """
+    shader UnsupportedGlslBufferTypeMetal {
+        struct DoubleBlock {
+            double value;
+        };
+
+        DoubleBlock doubleBlock @glsl_buffer_block(std430) @binding(12);
+
+        compute {
+            void main() {
+                double value = doubleBlock.value;
+                doubleBlock.value = value;
+            }
+        }
+    }
+    """
+
+    unsupported_type_code = generate_code(
+        parse_code(tokenize_code(unsupported_type_shader))
+    )
+
+    assert (
+        "unsupported Metal GLSL buffer block DoubleBlock doubleBlock "
+        "(std430, binding = 12); unsupported member value: type is not supported "
+        "by Metal pointer/offset lowering"
+    ) in unsupported_type_code
+    assert "device uchar* doubleBlock" not in unsupported_type_code
+    assert (
+        "double value = 0 /* unsupported Metal GLSL buffer block access doubleBlock: "
+        "no target-side fallback declaration emitted */;"
+    ) in unsupported_type_code
+    assert (
+        "/* unsupported Metal GLSL buffer block assignment doubleBlock: "
+        "no target-side fallback declaration emitted */;"
+    ) in unsupported_type_code
+
+
 def test_structured_buffer_operations_lower_to_device_buffer():
     code = """
     shader StructuredBufferMetal {

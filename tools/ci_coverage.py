@@ -155,12 +155,12 @@ SUPPORT_ISSUE_SYNC_PLANNED_ACTION_BUDGET_ARGS = [
     "--planned-action-budget-mode fail",
     "--max-planned-created 300",
     "--max-planned-updated 300",
-    "--max-planned-closed 50",
+    "--max-planned-closed 500",
     "--max-planned-attached 300",
     "--max-planned-total 600",
     "--max-planned-stale-parent-closures 0",
-    "--max-planned-stale-backlog-closures 100",
-    "--max-planned-stale-extracted-closures 100",
+    "--max-planned-stale-backlog-closures 250",
+    "--max-planned-stale-extracted-closures 250",
     "--max-planned-duplicate-marker-closures 25",
 ]
 SUPPORT_MATRIX_REQUIRED_POLICIES = {

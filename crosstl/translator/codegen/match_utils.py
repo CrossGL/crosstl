@@ -253,7 +253,9 @@ def generate_match_expression_assignment_arms(
         code += f"{indent_str}}}\n"
         emitted_arm = True
 
-    if not handled_unconditional:
+    if not handled_unconditional and not match_arms_exhaust_subject(
+        generator, arms, expression_type
+    ):
         fallback = match_expression_unmatched_assignment(
             generator,
             target_variable,
@@ -270,6 +272,97 @@ def generate_match_expression_assignment_arms(
                 code += fallback
 
     return code
+
+
+def match_arms_exhaust_subject(generator, arms, expression_type):
+    subject_type = base_type_name(type_name_string(generator, expression_type))
+    if not subject_type:
+        return False
+
+    if subject_type == "bool":
+        return match_arms_cover_bool_literals(arms)
+
+    expected_variants = enum_variants_for_subject(generator, subject_type)
+    if not expected_variants:
+        return False
+
+    covered_variants = set()
+    for arm in arms:
+        if getattr(arm, "guard", None) is not None:
+            continue
+        pattern = getattr(arm, "pattern", None)
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        variant = unconditionally_covered_enum_variant(pattern)
+        if variant is not None:
+            enum_name, variant_name = split_enum_path(variant)
+            if enum_name == subject_type:
+                covered_variants.add(variant_name)
+
+    return expected_variants <= covered_variants
+
+
+def enum_variants_for_subject(generator, subject_type):
+    constants = getattr(generator, "enum_variant_constants", {})
+    variants = set()
+    for path in constants:
+        if "::" not in path:
+            continue
+        enum_name, variant_name = split_enum_path(path)
+        if enum_name == subject_type:
+            variants.add(variant_name)
+    return variants
+
+
+def unconditionally_covered_enum_variant(pattern):
+    if isinstance(pattern, IdentifierPatternNode):
+        name = getattr(pattern, "name", "")
+        return name if "::" in name else None
+
+    if isinstance(pattern, ConstructorPatternNode):
+        pattern_type = getattr(pattern, "type_name", "")
+        if "::" not in pattern_type:
+            return None
+        if all(
+            match_field_pattern_is_unconditional(argument)
+            for argument in getattr(pattern, "arguments", []) or []
+        ):
+            return pattern_type
+        return None
+
+    if isinstance(pattern, StructPatternNode):
+        pattern_type = getattr(pattern, "type_name", "")
+        if "::" not in pattern_type:
+            return None
+        if all(
+            match_field_pattern_is_unconditional(field_pattern)
+            for field_pattern in getattr(pattern, "field_patterns", {}).values()
+        ):
+            return pattern_type
+        return None
+
+    return None
+
+
+def match_field_pattern_is_unconditional(pattern):
+    return isinstance(pattern, (IdentifierPatternNode, WildcardPatternNode))
+
+
+def match_arms_cover_bool_literals(arms):
+    covered = set()
+    for arm in arms:
+        if getattr(arm, "guard", None) is not None:
+            continue
+        pattern = getattr(arm, "pattern", None)
+        if isinstance(pattern, WildcardPatternNode):
+            return True
+        if not isinstance(pattern, LiteralPatternNode):
+            continue
+        literal = getattr(pattern, "literal", None)
+        value = getattr(literal, "value", literal)
+        if isinstance(value, bool):
+            covered.add(value)
+    return covered == {False, True}
 
 
 def match_arm_pattern_lowering(

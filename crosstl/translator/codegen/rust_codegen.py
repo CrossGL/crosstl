@@ -30,6 +30,7 @@ from ..ast import (
     LoopNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     PointerAccessNode,
     RangeNode,
     RayQueryOpNode,
@@ -40,6 +41,8 @@ from ..ast import (
     SwitchNode,
     SyncNode,
     TernaryOpNode,
+    TextureNode,
+    TextureOpNode,
     UnaryOpNode,
     VariableNode,
     WaveOpNode,
@@ -57,6 +60,7 @@ class RustCodeGen:
     def __init__(self):
         """Initialize Rust type maps and expression-generation state."""
         self.current_shader = None
+        self.current_shader_type = None
         self.type_mapping = {
             # Scalar Types
             "void": "()",
@@ -107,6 +111,15 @@ class RustCodeGen:
             "bool2": "Vec2<bool>",
             "bool3": "Vec3<bool>",
             "bool4": "Vec4<bool>",
+            "float2": "Vec2<f32>",
+            "float3": "Vec3<f32>",
+            "float4": "Vec4<f32>",
+            "int2": "Vec2<i32>",
+            "int3": "Vec3<i32>",
+            "int4": "Vec4<i32>",
+            "uint2": "Vec2<u32>",
+            "uint3": "Vec3<u32>",
+            "uint4": "Vec4<u32>",
             # Matrix Types
             "mat2": "Mat2<f32>",
             "mat3": "Mat3<f32>",
@@ -147,6 +160,21 @@ class RustCodeGen:
             "samplerCubeShadow": "DepthTextureCube<f32>",
             "samplerCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "sampler": "Sampler",
+            "SamplerState": "Sampler",
+            "SamplerComparisonState": "Sampler",
+            "Texture1D": "Texture1D<f32>",
+            "Texture1DArray": "Texture1DArray<f32>",
+            "Texture2D": "Texture2D<f32>",
+            "Texture2DArray": "Texture2DArray<f32>",
+            "Texture3D": "Texture3D<f32>",
+            "TextureCube": "TextureCube<f32>",
+            "TextureCubeArray": "TextureCubeArray<f32>",
+            "Texture2DMS": "Texture2DMS<f32>",
+            "Texture2DMSArray": "Texture2DMSArray<f32>",
+            "Texture2DShadow": "DepthTexture2D<f32>",
+            "Texture2DArrayShadow": "DepthTexture2DArray<f32>",
+            "TextureCubeShadow": "DepthTextureCube<f32>",
+            "TextureCubeArrayShadow": "DepthTextureCubeArray<f32>",
             "image1D": "Image1D<Vec4<f32>>",
             "image1DArray": "Image1DArray<Vec4<f32>>",
             "image2D": "Image2D<Vec4<f32>>",
@@ -436,6 +464,14 @@ class RustCodeGen:
             "groupMemoryBarrier": "group_memory_barrier",
             "allMemoryBarrier": "all_memory_barrier",
             "deviceMemoryBarrier": "device_memory_barrier",
+            "GroupMemoryBarrier": "group_memory_barrier",
+            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
+            "DeviceMemoryBarrier": "device_memory_barrier",
+            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
+            "AllMemoryBarrier": "all_memory_barrier",
+            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
+            "WaveShuffle": "subgroup_shuffle",
+            "WaveShuffleXor": "subgroup_shuffle_xor",
         }
         self.wave_op_map = {
             "WaveActiveSum": "subgroup_add",
@@ -469,6 +505,8 @@ class RustCodeGen:
             "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
             "QuadReadAcrossY": "subgroup_quad_swap_vertical",
             "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
+            "QuadAny": "subgroup_quad_any",
+            "QuadAll": "subgroup_quad_all",
             "WaveShuffle": "subgroup_shuffle",
             "WaveShuffleXor": "subgroup_shuffle_xor",
         }
@@ -482,6 +520,12 @@ class RustCodeGen:
             "groupMemoryBarrier": "group_memory_barrier",
             "allMemoryBarrier": "all_memory_barrier",
             "deviceMemoryBarrier": "device_memory_barrier",
+            "GroupMemoryBarrier": "group_memory_barrier",
+            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
+            "DeviceMemoryBarrier": "device_memory_barrier",
+            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
+            "AllMemoryBarrier": "all_memory_barrier",
+            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
         }
         self.variable_types = {}
         self.local_variable_names = set()
@@ -497,6 +541,7 @@ class RustCodeGen:
         self.static_symbol_names = {}
         self.runtime_type_collisions = set()
         self.current_return_type = None
+        self.current_shader_type = None
         self.do_while_contexts = []
         self.for_contexts = []
         self.loop_depth = 0
@@ -517,6 +562,7 @@ class RustCodeGen:
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
+        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -571,6 +617,7 @@ class RustCodeGen:
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
+        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -656,6 +703,15 @@ class RustCodeGen:
                         qualifier_name, func
                     ),
                 )
+            elif qualifier_name in self.rust_mesh_stage_names():
+                code += f"// {qualifier_name.title()} Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type=qualifier_name,
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
             else:
                 code += self.generate_function(func)
 
@@ -689,6 +745,7 @@ class RustCodeGen:
                         stage.entry_point,
                         shader_type=stage_name,
                         function_name=function_name,
+                        stage_node=stage,
                     )
                 if hasattr(stage, "local_functions"):
                     for func in stage.local_functions:
@@ -696,16 +753,12 @@ class RustCodeGen:
 
                 self.variable_types = saved_variable_types
 
+        code += self.generate_required_rust_mesh_helpers()
         code += self.generate_required_generic_math_traits()
         return code
 
     def unsupported_stage_types(self):
-        return {
-            "amplification",
-            "mesh",
-            "object",
-            "task",
-        }
+        return set()
 
     def has_geometry_stage(self, ast_node, target_stage=None):
         """Return whether the AST contains a geometry stage to emit."""
@@ -872,6 +925,450 @@ class RustCodeGen:
             "ray_intersection": "intersection",
             "ray_miss": "miss",
         }.get(shader_type, shader_type)
+
+    def rust_mesh_stage_names(self):
+        return {"amplification", "mesh", "object", "task"}
+
+    def rust_mesh_stage_attribute_arguments(self, func, *attribute_names):
+        for attribute_name in attribute_names:
+            arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+            if arguments:
+                return arguments
+        return []
+
+    def rust_mesh_stage_attribute_value(self, func, stage_name, *attribute_names):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_argument_text(arguments[0])
+
+    def rust_mesh_stage_positive_attribute(self, func, stage_name, *attribute_names):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, *attribute_names)
+        if not arguments:
+            return None
+        display_name = attribute_names[0]
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} requires exactly one "
+                "argument"
+            )
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Rust {stage_name} stage {display_name} ({value}) must be positive"
+            )
+        return value_text
+
+    def rust_mesh_stage_numthreads(self, func, stage_name):
+        arguments = self.rust_mesh_stage_attribute_arguments(func, "numthreads")
+        if not arguments:
+            return None
+        if len(arguments) > 3:
+            raise ValueError(
+                f"Rust {stage_name} stage numthreads requires at most three "
+                "arguments"
+            )
+        values = [self.attribute_argument_text(arg) for arg in arguments]
+        for index, argument in enumerate(arguments):
+            value = self.literal_int_value(argument)
+            if value is not None and value <= 0:
+                raise ValueError(
+                    f"Rust {stage_name} stage numthreads value {index + 1} "
+                    "must be positive"
+                )
+        while len(values) < 3:
+            values.append("1")
+        return tuple(values[:3])
+
+    def rust_mesh_stage_layout_local_size(self, stage_node, stage_name):
+        if stage_node is None:
+            return None
+        sizes = {"local_size_x": None, "local_size_y": None, "local_size_z": None}
+        for layout in getattr(stage_node, "layout_qualifiers", []) or []:
+            for entry in getattr(layout, "entries", []) or []:
+                name = getattr(entry, "name", None)
+                if name not in sizes:
+                    continue
+                arguments = (
+                    getattr(entry, "arguments", getattr(entry, "args", [])) or []
+                )
+                if len(arguments) != 1:
+                    raise ValueError(
+                        f"Rust {stage_name} stage {name} requires exactly one "
+                        "argument"
+                    )
+                value = self.literal_int_value(arguments[0])
+                if value is not None and value <= 0:
+                    raise ValueError(f"Rust {stage_name} stage {name} must be positive")
+                sizes[name] = self.attribute_argument_text(arguments[0])
+        if all(value is None for value in sizes.values()):
+            return None
+        return (
+            sizes["local_size_x"] or "1",
+            sizes["local_size_y"] or "1",
+            sizes["local_size_z"] or "1",
+        )
+
+    def canonical_rust_mesh_output_topology(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().strip("\"'").lower()
+        return {
+            "point": "point",
+            "points": "point",
+            "line": "line",
+            "lines": "line",
+            "triangle": "triangle",
+            "triangles": "triangle",
+            "triangle_cw": "triangle_cw",
+            "triangle_ccw": "triangle_ccw",
+        }.get(normalized)
+
+    def rust_mesh_output_topology(self, func, stage_name, required=False):
+        value = self.rust_mesh_stage_attribute_value(func, stage_name, "outputtopology")
+        if value is None:
+            if required:
+                raise ValueError(
+                    f"Rust {stage_name} stage requires outputtopology attribute"
+                )
+            return None
+        topology = self.canonical_rust_mesh_output_topology(value)
+        if topology is None:
+            raise ValueError(
+                f"Rust {stage_name} stage outputtopology '{value}' must be point, "
+                "line, triangle, triangle_cw, or triangle_ccw"
+            )
+        return topology
+
+    def rust_mesh_parameter_role(self, parameter):
+        role_aliases = {
+            "mesh_payload": "mesh_payload",
+            "meshpayload": "mesh_payload",
+            "payload": "mesh_payload",
+            "vertices": "vertices",
+            "vertex": "vertices",
+            "indices": "indices",
+            "index": "indices",
+            "primitives": "primitives",
+            "primitive": "primitives",
+        }
+        for attr in getattr(parameter, "attributes", []) or []:
+            name = getattr(attr, "name", None)
+            if name is None:
+                continue
+            normalized = str(name).strip().lower().replace("-", "_")
+            role = role_aliases.get(normalized)
+            if role is not None:
+                return role
+        return None
+
+    def rust_mesh_parameter_base_type(self, param_type):
+        if self.is_array_type_name(param_type):
+            base_type, _sizes = self.c_array_type_parts(param_type)
+            return base_type
+        return param_type
+
+    def rust_mesh_param_infos(self, parameters):
+        return [
+            (parameter, self.function_parameter_type(parameter))
+            for parameter in parameters
+        ]
+
+    def validate_rust_mesh_parameter_roles(self, stage_name, param_infos):
+        seen_roles = {}
+        for parameter, param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            seen_roles.setdefault(role, []).append(parameter.name)
+
+            if role == "mesh_payload" and stage_name != "mesh":
+                raise ValueError(
+                    "Rust mesh payload parameters are only valid on mesh stages"
+                )
+            if role in {"vertices", "indices", "primitives"}:
+                if stage_name != "mesh":
+                    raise ValueError(
+                        f"Rust mesh output parameter role {role} is only valid "
+                        "on mesh stages"
+                    )
+                if not self.rust_parameter_is_array(parameter):
+                    raise ValueError(
+                        f"Rust mesh {role} parameter '{parameter.name}' must be "
+                        "an array"
+                    )
+
+        if len(seen_roles.get("mesh_payload", [])) > 1:
+            raise ValueError(
+                "Rust mesh stage accepts at most one mesh_payload parameter"
+            )
+
+    def validate_rust_mesh_output_parameter_bounds(self, func, stage_name, param_infos):
+        if stage_name != "mesh":
+            return
+        max_vertices = self.literal_int_value(
+            self.rust_mesh_stage_positive_attribute(
+                func, stage_name, "maxvertices", "max_vertices"
+            )
+        )
+        max_primitives = self.literal_int_value(
+            self.rust_mesh_stage_positive_attribute(
+                func, stage_name, "maxprimitives", "max_primitives"
+            )
+        )
+        for parameter, _param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role not in {"vertices", "indices", "primitives"}:
+                continue
+            array_count = self.rust_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if (
+                role == "vertices"
+                and max_vertices is not None
+                and array_count > max_vertices
+            ):
+                raise ValueError(
+                    f"Rust mesh vertices parameter '{parameter.name}' count "
+                    f"({array_count}) exceeds maxvertices ({max_vertices})"
+                )
+            if (
+                role in {"indices", "primitives"}
+                and max_primitives is not None
+                and array_count > max_primitives
+            ):
+                raise ValueError(
+                    f"Rust mesh {role} parameter '{parameter.name}' count "
+                    f"({array_count}) exceeds maxprimitives ({max_primitives})"
+                )
+
+    def walk_rust_mesh_ops(self, node, visited=None):
+        if visited is None:
+            visited = set()
+        if node is None or isinstance(node, (str, int, float, bool)):
+            return
+        if isinstance(node, list):
+            for item in node:
+                yield from self.walk_rust_mesh_ops(item, visited)
+            return
+        node_id = id(node)
+        if node_id in visited:
+            return
+        visited.add(node_id)
+
+        if isinstance(node, MeshOpNode):
+            yield node
+            for argument in getattr(node, "arguments", []) or []:
+                yield from self.walk_rust_mesh_ops(argument, visited)
+            return
+
+        for attribute_name in (
+            "statements",
+            "body",
+            "expression",
+            "value",
+            "left",
+            "right",
+            "condition",
+            "then_branch",
+            "else_branch",
+            "if_body",
+            "args",
+            "arguments",
+        ):
+            if hasattr(node, attribute_name):
+                yield from self.walk_rust_mesh_ops(
+                    getattr(node, attribute_name), visited
+                )
+
+    def validate_rust_mesh_op_stage(self, operation, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if stage_name != "mesh":
+                raise ValueError(
+                    f"Rust {stage_name or 'function'} stage cannot call "
+                    "SetMeshOutputCounts; SetMeshOutputCounts is only valid in "
+                    "mesh stages"
+                )
+            return
+        if operation == "DispatchMesh":
+            if stage_name not in {"task", "amplification", "object"}:
+                raise ValueError(
+                    f"Rust {stage_name or 'function'} stage cannot call "
+                    "DispatchMesh; DispatchMesh is only valid in task, "
+                    "amplification, or object stages"
+                )
+            return
+        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+
+    def rust_mesh_count_argument_is_integer_scalar(self, argument):
+        if isinstance(argument, bool) or isinstance(argument, float):
+            return False
+        if isinstance(argument, int) and not isinstance(argument, bool):
+            return True
+        if self.literal_int_value(argument) is not None:
+            return True
+        argument_type = self.expression_result_type(argument)
+        if argument_type is None:
+            return True
+        return self.normalize_scalar_type(argument_type) in {
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "i64",
+            "u64",
+        }
+
+    def validate_rust_mesh_op_arguments(self, operation, arguments, stage_name):
+        if operation == "SetMeshOutputCounts":
+            if len(arguments) != 2:
+                raise ValueError(
+                    "Rust mesh SetMeshOutputCounts requires exactly two arguments"
+                )
+            labels = ("vertex count", "primitive count")
+        elif operation == "DispatchMesh":
+            if len(arguments) not in {3, 4}:
+                raise ValueError(
+                    "Rust mesh DispatchMesh requires three group counts and an "
+                    "optional payload argument"
+                )
+            labels = ("x count", "y count", "z count")
+        else:
+            return
+
+        for label, argument in zip(labels, arguments):
+            if not self.rust_mesh_count_argument_is_integer_scalar(argument):
+                raise ValueError(
+                    f"Rust {stage_name} {operation} {label} argument must be an "
+                    "integer scalar"
+                )
+            value = self.literal_int_value(argument)
+            if value is not None and value < 0:
+                raise ValueError(
+                    f"Rust {stage_name} {operation} {label} argument must be "
+                    "non-negative"
+                )
+
+    def validate_rust_mesh_stage(self, func, parameters, shader_type, stage_node=None):
+        self.rust_mesh_stage_numthreads(func, shader_type)
+        self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
+        param_infos = self.rust_mesh_param_infos(parameters)
+        if shader_type == "mesh":
+            self.rust_mesh_output_topology(func, shader_type, required=True)
+            self.rust_mesh_stage_positive_attribute(
+                func, shader_type, "maxvertices", "max_vertices"
+            )
+            self.rust_mesh_stage_positive_attribute(
+                func, shader_type, "maxprimitives", "max_primitives"
+            )
+        self.validate_rust_mesh_parameter_roles(shader_type, param_infos)
+        self.validate_rust_mesh_output_parameter_bounds(func, shader_type, param_infos)
+
+        for mesh_op in self.walk_rust_mesh_ops(getattr(func, "body", [])):
+            operation = getattr(mesh_op, "operation", None)
+            arguments = list(getattr(mesh_op, "arguments", []) or [])
+            self.validate_rust_mesh_op_stage(operation, shader_type)
+            self.validate_rust_mesh_op_arguments(operation, arguments, shader_type)
+
+    def generate_rust_mesh_parameter_role_comments(self, param_infos):
+        descriptions = []
+        for parameter, param_type in param_infos:
+            role = self.rust_mesh_parameter_role(parameter)
+            if role is None:
+                continue
+            base_type = self.rust_mesh_parameter_base_type(param_type)
+            array_count = self.rust_parameter_array_count(parameter)
+            suffix = f"[{array_count}]" if array_count is not None else ""
+            descriptions.append(f"{role}:{parameter.name}->{base_type}{suffix}")
+        if not descriptions:
+            return ""
+        return "// CrossGL mesh parameter role: " f"{', '.join(descriptions)}\n"
+
+    def generate_rust_mesh_stage_comments(
+        self, func, parameters, shader_type, stage_node=None
+    ):
+        lines = [f"// CrossGL mesh/task stage: stage={shader_type}\n"]
+        numthreads = self.rust_mesh_stage_numthreads(func, shader_type)
+        if numthreads is not None:
+            lines.append(
+                "// CrossGL mesh/task numthreads: " f"{', '.join(numthreads)}\n"
+            )
+        local_size = self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
+        if local_size is not None:
+            lines.append(
+                "// CrossGL mesh/task local size: " f"{', '.join(local_size)}\n"
+            )
+
+        if shader_type == "mesh":
+            topology = self.rust_mesh_output_topology(func, shader_type, required=True)
+            lines.append(f"// CrossGL mesh output topology: {topology}\n")
+        max_vertices = self.rust_mesh_stage_positive_attribute(
+            func, shader_type, "maxvertices", "max_vertices"
+        )
+        if max_vertices is not None:
+            lines.append(f"// CrossGL mesh max vertices: {max_vertices}\n")
+        max_primitives = self.rust_mesh_stage_positive_attribute(
+            func, shader_type, "maxprimitives", "max_primitives"
+        )
+        if max_primitives is not None:
+            lines.append(f"// CrossGL mesh max primitives: {max_primitives}\n")
+
+        role_comments = self.generate_rust_mesh_parameter_role_comments(
+            self.rust_mesh_param_infos(parameters)
+        )
+        if role_comments:
+            lines.append(role_comments)
+        return "".join(lines)
+
+    def generate_rust_mesh_op_expression(self, expr):
+        operation = getattr(expr, "operation", "mesh intrinsic")
+        arguments = list(getattr(expr, "arguments", []) or [])
+        stage_name = self.current_shader_type
+        self.validate_rust_mesh_op_stage(operation, stage_name)
+        self.validate_rust_mesh_op_arguments(operation, arguments, stage_name)
+
+        args = [self.generate_expression(argument) for argument in arguments]
+        if operation == "SetMeshOutputCounts":
+            self.required_mesh_helpers.add("set_mesh_output_counts")
+            return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
+        if operation == "DispatchMesh":
+            self.required_mesh_helpers.add("dispatch_mesh")
+            if len(args) == 3:
+                return "_crossgl_dispatch_mesh_without_payload(" f"{', '.join(args)})"
+            return f"_crossgl_dispatch_mesh({', '.join(args)})"
+
+        raise ValueError(f"Unsupported Rust mesh intrinsic {operation}")
+
+    def generate_required_rust_mesh_helpers(self):
+        if not self.required_mesh_helpers:
+            return ""
+        code = "// CrossGL mesh/task placeholders\n"
+        if "set_mesh_output_counts" in self.required_mesh_helpers:
+            code += (
+                "pub fn _crossgl_set_mesh_output_counts("
+                "vertices: u32, primitives: u32) {\n"
+                "    let _ = (vertices, primitives);\n"
+                "}\n\n"
+            )
+        if "dispatch_mesh" in self.required_mesh_helpers:
+            code += (
+                "pub fn _crossgl_dispatch_mesh<T>("
+                "x: u32, y: u32, z: u32, payload: T) {\n"
+                "    let _ = (x, y, z, payload);\n"
+                "}\n\n"
+                "pub fn _crossgl_dispatch_mesh_without_payload("
+                "x: u32, y: u32, z: u32) {\n"
+                "    let _ = (x, y, z);\n"
+                "}\n\n"
+            )
+        return code
 
     def rust_stage_attribute_arguments(self, func, attribute_name):
         """Return arguments for a Rust-relevant stage control attribute."""
@@ -1100,7 +1597,14 @@ class RustCodeGen:
         name = getattr(func, "name", None)
         if (
             normalize_stage_name(stage_name)
-            in {"tessellation_control", "tessellation_evaluation"}
+            in {
+                "amplification",
+                "mesh",
+                "object",
+                "task",
+                "tessellation_control",
+                "tessellation_evaluation",
+            }
             and name == "main"
         ):
             return f"{normalize_stage_name(stage_name)}_{name}"
@@ -1446,7 +1950,14 @@ class RustCodeGen:
             return name
         if (
             normalize_stage_name(stage_name)
-            in {"tessellation_control", "tessellation_evaluation"}
+            in {
+                "amplification",
+                "mesh",
+                "object",
+                "task",
+                "tessellation_control",
+                "tessellation_evaluation",
+            }
             and name == "main"
         ):
             return f"{normalize_stage_name(stage_name)}_{name}"
@@ -3121,7 +3632,9 @@ class RustCodeGen:
             )
         ) and str(rust_type).endswith(">")
 
-    def generate_function(self, func, indent=0, shader_type=None, function_name=None):
+    def generate_function(
+        self, func, indent=0, shader_type=None, function_name=None, stage_node=None
+    ):
         """Render one CrossGL function or shader entry point as Rust code."""
         code = ""
         code += "  " * indent
@@ -3131,10 +3644,12 @@ class RustCodeGen:
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         self.local_variable_names = set()
         saved_return_type = self.current_return_type
+        saved_shader_type = self.current_shader_type
         saved_generic_param_names = self.current_generic_param_names
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         self.current_generic_param_names = set(self.generic_param_names(func))
+        self.current_shader_type = shader_type
         param_list = getattr(func, "parameters", getattr(func, "params", []))
         for p in param_list:
             self.register_glsl_buffer_block_metadata(p)
@@ -3160,6 +3675,8 @@ class RustCodeGen:
             self.validate_rust_geometry_stage(func, param_list)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
             self.validate_rust_tessellation_stage(func, param_list, shader_type)
+        if shader_type in self.rust_mesh_stage_names():
+            self.validate_rust_mesh_stage(func, param_list, shader_type, stage_node)
         self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
         self.validate_rust_struct_return_semantics(shader_type, return_type)
         self.validate_rust_stage_parameter_semantics(shader_type, param_list)
@@ -3204,6 +3721,11 @@ class RustCodeGen:
                 param_list,
                 shader_type,
             )
+        elif shader_type in self.rust_mesh_stage_names():
+            code += "// CrossGL shader stage: " f"{shader_type}\n"
+            code += self.generate_rust_mesh_stage_comments(
+                func, param_list, shader_type, stage_node
+            )
         elif shader_type in self.rust_ray_stage_names():
             code += (
                 "// CrossGL ray stage: "
@@ -3247,6 +3769,7 @@ class RustCodeGen:
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.current_return_type = saved_return_type
+        self.current_shader_type = saved_shader_type
         self.current_generic_param_names = saved_generic_param_names
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
@@ -4166,6 +4689,60 @@ class RustCodeGen:
             return f"/* unsupported wave op: {operation} */"
         args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
         return f"{rust_name}({args})"
+
+    def wave_op_result_type(self, operation, arguments):
+        """Infer the CrossGL result type for a Rust subgroup helper."""
+        helper_name = self.wave_op_map.get(operation, operation)
+        arg_types = [self.expression_result_type(arg) for arg in arguments or []]
+        return self.wave_helper_result_type(helper_name, arg_types)
+
+    def wave_helper_result_type(self, helper_name, arg_types):
+        helper_name = str(helper_name or "")
+        if helper_name in {
+            "subgroup_size",
+            "subgroup_invocation_id",
+            "subgroup_ballot_bit_count",
+            "subgroup_exclusive_ballot_bit_count",
+            "subgroup_partitioned_ballot_bit_count",
+        }:
+            return "uint"
+        if helper_name in {
+            "subgroup_elect",
+            "subgroup_any",
+            "subgroup_all",
+            "subgroup_all_equal",
+            "subgroup_quad_any",
+            "subgroup_quad_all",
+        }:
+            return "bool"
+        if helper_name in {"subgroup_ballot", "subgroup_match"}:
+            return "uvec4"
+        if helper_name in {
+            "subgroup_add",
+            "subgroup_mul",
+            "subgroup_min",
+            "subgroup_max",
+            "subgroup_and",
+            "subgroup_or",
+            "subgroup_xor",
+            "subgroup_broadcast_first",
+            "subgroup_broadcast",
+            "subgroup_exclusive_add",
+            "subgroup_exclusive_mul",
+            "subgroup_partitioned_add",
+            "subgroup_partitioned_mul",
+            "subgroup_partitioned_and",
+            "subgroup_partitioned_or",
+            "subgroup_partitioned_xor",
+            "subgroup_quad_broadcast",
+            "subgroup_quad_swap_horizontal",
+            "subgroup_quad_swap_vertical",
+            "subgroup_quad_swap_diagonal",
+            "subgroup_shuffle",
+            "subgroup_shuffle_xor",
+        }:
+            return arg_types[0] if arg_types else None
+        return None
 
     def local_let_keyword(self, stmt):
         """Return `let` or `let mut` for a generated local binding."""
@@ -7110,12 +7687,18 @@ class RustCodeGen:
             return self.generate_array_literal_expression(expr)
         elif isinstance(expr, ConstructorNode):
             return self.generate_constructor_expression(expr)
+        elif isinstance(expr, TextureNode):
+            return self.generate_texture_node_expression(expr)
+        elif isinstance(expr, TextureOpNode):
+            return self.generate_texture_op_node_expression(expr)
         elif isinstance(expr, BlockNode):
             return self.generate_block_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             return self.generate_ray_tracing_op_expression(expr)
         elif isinstance(expr, RayQueryOpNode):
             return self.generate_ray_query_op_expression(expr)
+        elif isinstance(expr, MeshOpNode):
+            return self.generate_rust_mesh_op_expression(expr)
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
@@ -7160,6 +7743,14 @@ class RustCodeGen:
                 callee = self.generate_expression(func_expr)
             args = getattr(expr, "arguments", getattr(expr, "args", []))
 
+            if isinstance(func_expr, MemberAccessNode):
+                texture_call = self.generate_texture_member_function_call(
+                    func_expr,
+                    args,
+                )
+                if texture_call is not None:
+                    return texture_call
+
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,
                 args,
@@ -7196,6 +7787,7 @@ class RustCodeGen:
                     return bool_mix
 
             func_name = self.mapped_function_name(func_name, len(args), args)
+            self.validate_rust_texture_helper_call(func_name, args)
             if func_name == "saturate" and len(args) == 1:
                 arg = self.generate_expression(args[0])
                 return f"clamp({arg}, 0.0, 1.0)"
@@ -7319,6 +7911,349 @@ class RustCodeGen:
         func_name = f"ray_query_{self.rust_snake_case_name(operation)}"
         return f"{func_name}({', '.join(args)})"
 
+    def generate_texture_node_expression(self, expr):
+        args = [expr.texture_expr]
+        if getattr(expr, "sampler_expr", None) is not None:
+            args.append(expr.sampler_expr)
+        args.append(expr.coordinates)
+        operation = "texture"
+        if getattr(expr, "level", None) is not None:
+            args.append(expr.level)
+            operation = "textureLod"
+        if getattr(expr, "offset", None) is not None:
+            args.append(expr.offset)
+            operation = (
+                "textureLodOffset" if operation == "textureLod" else "textureOffset"
+            )
+        return self.generate_texture_operation_call(operation, args)
+
+    def generate_texture_op_node_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        sampler_expr = getattr(expr, "sampler_expr", None)
+        arguments = getattr(expr, "arguments", []) or []
+        if operation in self.rust_hlsl_texture_member_operations():
+            member_args = []
+            if sampler_expr is not None:
+                member_args.append(sampler_expr)
+            member_args.extend(arguments)
+            call = self.generate_hlsl_texture_member_call(
+                operation,
+                expr.texture_expr,
+                member_args,
+            )
+            if call is not None:
+                return call
+
+        args = [expr.texture_expr]
+        if sampler_expr is not None:
+            args.append(sampler_expr)
+        args.extend(arguments)
+        call = self.generate_texture_operation_call(operation, args)
+        if call is not None:
+            return call
+        raise ValueError(f"Unsupported Rust texture operation {operation}")
+
+    def generate_texture_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        if not self.is_texture_resource_type(self.expression_result_type(obj_expr)):
+            return None
+        call = self.generate_hlsl_texture_member_call(member, obj_expr, args or [])
+        if call is not None:
+            return call
+        raise ValueError(f"Unsupported Rust texture member operation {member}")
+
+    def generate_texture_operation_call(self, operation, args):
+        if operation in self.rust_hlsl_texture_member_operations():
+            if not args:
+                raise ValueError(f"Unsupported Rust texture operation {operation}")
+            call = self.generate_hlsl_texture_member_call(
+                operation,
+                args[0],
+                list(args[1:]),
+            )
+            if call is not None:
+                return call
+        if operation in {"Sample", "sample", "texture"}:
+            helper_name = self.texture_sample_helper_name(args)
+            return self.generate_texture_helper_call(helper_name, args)
+        if operation == "SampleCmp":
+            helper_name = (
+                "texture_compare_sampler"
+                if self.call_has_explicit_sampler_argument(args)
+                else "texture_compare"
+            )
+            return self.generate_texture_helper_call(helper_name, args)
+        if operation in self.function_map or str(operation).startswith("texture"):
+            helper_name = self.mapped_function_name(operation, len(args or []), args)
+            if helper_name != operation:
+                return self.generate_texture_helper_call(helper_name, args)
+        return None
+
+    def texture_sample_helper_name(self, args):
+        has_sampler = self.call_has_explicit_sampler_argument(args)
+        shadow = self.call_uses_shadow_texture(args)
+        if shadow:
+            return "sample_shadow_sampler" if has_sampler else "sample_shadow"
+        return "sample_sampler" if has_sampler else "sample"
+
+    def texture_member_function_result_type(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        texture_type = self.expression_result_type(obj_expr)
+        if not self.is_texture_resource_type(texture_type):
+            return None
+        if member == "SampleCmp":
+            return "float"
+        if member in {
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+            "CalculateLevelOfDetail",
+            "CalculateLevelOfDetailUnclamped",
+        }:
+            return "float"
+        if member == "GetDimensions":
+            return "void"
+        if member in {"Sample", "sample", "texture"}:
+            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+        if member in self.rust_hlsl_texture_member_operations():
+            return "vec4"
+        return None
+
+    def generate_texture_helper_call(self, helper_name, args):
+        self.validate_rust_texture_helper_call(helper_name, args)
+        generated_args = ", ".join(self.generate_expression(arg) for arg in args or [])
+        return f"{helper_name}({generated_args})"
+
+    def rust_hlsl_texture_member_operations(self):
+        return {
+            "Sample",
+            "SampleLevel",
+            "SampleLOD",
+            "SampleGrad",
+            "SampleBias",
+            "SampleCmp",
+            "SampleCmpLevel",
+            "SampleCmpLevelZero",
+            "SampleCmpGrad",
+            "Gather",
+            "GatherRed",
+            "GatherGreen",
+            "GatherBlue",
+            "GatherAlpha",
+            "GatherCmp",
+            "GatherCmpRed",
+            "GatherCmpGreen",
+            "GatherCmpBlue",
+            "GatherCmpAlpha",
+            "Load",
+            "GetDimensions",
+            "CalculateLevelOfDetail",
+            "CalculateLevelOfDetailUnclamped",
+        }
+
+    def generate_hlsl_texture_member_call(self, operation, texture_expr, member_args):
+        member_args = list(member_args or [])
+        texture_type = self.expression_result_type(texture_expr)
+
+        def helper(helper_name, args):
+            return self.generate_texture_helper_call(helper_name, args)
+
+        if operation == "Sample":
+            self.require_rust_texture_member_arg_count(operation, member_args, {2, 3})
+            helper_name = (
+                "sample_shadow_sampler"
+                if self.is_shadow_texture_type(texture_type)
+                else "sample_sampler"
+            )
+            if len(member_args) == 3:
+                helper_name = "sample_offset_sampler"
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation in {"SampleLevel", "SampleLOD"}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "sample_lod_offset_sampler"
+                if len(member_args) == 4
+                else "sample_lod_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleGrad":
+            self.require_rust_texture_member_arg_count(operation, member_args, {4, 5})
+            helper_name = (
+                "sample_grad_offset_sampler"
+                if len(member_args) == 5
+                else "sample_grad_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleBias":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            sampler, coord, bias = member_args[:3]
+            if len(member_args) == 4:
+                offset = member_args[3]
+                return helper(
+                    "sample_offset_bias_sampler",
+                    [texture_expr, sampler, coord, offset, bias],
+                )
+            return helper("sample_bias_sampler", [texture_expr, sampler, coord, bias])
+
+        if operation == "SampleCmp":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpLevel":
+            self.require_rust_texture_member_arg_count(operation, member_args, {4, 5})
+            helper_name = (
+                "texture_compare_lod_offset_sampler"
+                if len(member_args) == 5
+                else "texture_compare_lod_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpLevelZero":
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "SampleCmpGrad":
+            self.require_rust_texture_member_arg_count(operation, member_args, {5, 6})
+            helper_name = (
+                "texture_compare_grad_offset_sampler"
+                if len(member_args) == 6
+                else "texture_compare_grad_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        gather_components = {
+            "GatherRed": "0",
+            "GatherGreen": "1",
+            "GatherBlue": "2",
+            "GatherAlpha": "3",
+        }
+        if operation in {"Gather", *gather_components}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {2, 3})
+            if operation == "Gather":
+                helper_name = (
+                    "texture_gather_offset_sampler"
+                    if len(member_args) == 3
+                    else "texture_gather_sampler"
+                )
+                return helper(helper_name, [texture_expr, *member_args])
+
+            component = gather_components[operation]
+            sampler, coord = member_args[:2]
+            if len(member_args) == 3:
+                offset = member_args[2]
+                return helper(
+                    "texture_gather_offset_component_sampler",
+                    [texture_expr, sampler, coord, offset, component],
+                )
+            return helper(
+                "texture_gather_component_sampler",
+                [texture_expr, sampler, coord, component],
+            )
+
+        if operation in {
+            "GatherCmp",
+            "GatherCmpRed",
+            "GatherCmpGreen",
+            "GatherCmpBlue",
+            "GatherCmpAlpha",
+        }:
+            self.require_rust_texture_member_arg_count(operation, member_args, {3, 4})
+            helper_name = (
+                "texture_gather_compare_offset_sampler"
+                if len(member_args) == 4
+                else "texture_gather_compare_sampler"
+            )
+            return helper(helper_name, [texture_expr, *member_args])
+
+        if operation == "Load":
+            self.require_rust_texture_member_arg_count(operation, member_args, {1, 2})
+            if len(member_args) == 2 and not self.is_multisample_texture_type(
+                texture_type
+            ):
+                return helper(
+                    "texel_fetch_offset",
+                    [texture_expr, member_args[0], "0", member_args[1]],
+                )
+            lod_or_sample = member_args[1] if len(member_args) == 2 else "0"
+            return helper("texel_fetch", [texture_expr, member_args[0], lod_or_sample])
+
+        if operation == "GetDimensions":
+            generated_args = ", ".join(
+                self.generate_expression(arg) for arg in member_args
+            )
+            if len(member_args) == 1:
+                generated_args += ","
+            return (
+                f"texture_dimensions({self.generate_expression(texture_expr)}, "
+                f"({generated_args}))"
+            )
+
+        if operation in {"CalculateLevelOfDetail", "CalculateLevelOfDetailUnclamped"}:
+            self.require_rust_texture_member_arg_count(operation, member_args, {2})
+            return helper("texture_calculate_lod", [texture_expr, *member_args])
+
+        return None
+
+    def require_rust_texture_member_arg_count(self, operation, args, expected_counts):
+        if len(args) not in expected_counts:
+            expected = ", ".join(str(count) for count in sorted(expected_counts))
+            raise ValueError(
+                f"Unsupported Rust texture member operation {operation}; "
+                f"expected {expected} argument(s), got {len(args)}"
+            )
+
+    def validate_rust_texture_helper_call(self, helper_name, args):
+        if not args:
+            return
+        if not self.is_rust_texture_helper_name(helper_name):
+            return
+
+        texture_type = self.expression_result_type(args[0])
+        if texture_type is not None and not self.is_texture_resource_type(texture_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Rust codegen; texture resource "
+                f"required: {self.map_type(texture_type)}"
+            )
+
+        if helper_name.startswith(
+            ("texture_compare", "texture_gather_compare")
+        ) and not self.is_shadow_texture_type(texture_type):
+            raise ValueError(
+                f"Unsupported {helper_name} for Rust codegen; shadow texture "
+                f"required: {self.map_type(texture_type)}"
+            )
+
+    def is_rust_texture_helper_name(self, helper_name):
+        helper_name = str(helper_name)
+        return helper_name.startswith(
+            (
+                "sample",
+                "texel_fetch",
+                "texture_size",
+                "texture_query",
+                "texture_samples",
+                "texture_gather",
+                "texture_compare",
+                "texture_dimensions",
+                "texture_calculate_lod",
+            )
+        )
+
     def rust_snake_case_name(self, name):
         name = str(name)
         name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
@@ -7334,6 +8269,18 @@ class RustCodeGen:
         if func_name == "textureSize":
             return "texture_size" if arg_count == 1 else "texture_size_lod"
         if func_name == "texture":
+            if self.call_uses_shadow_texture(arguments):
+                if has_sampler:
+                    return (
+                        "sample_shadow_bias_sampler"
+                        if arg_count and arg_count >= 4
+                        else "sample_shadow_sampler"
+                    )
+                return (
+                    "sample_shadow_bias"
+                    if arg_count and arg_count >= 3
+                    else "sample_shadow"
+                )
             if has_sampler:
                 return (
                     "sample_bias_sampler"
@@ -7479,6 +8426,11 @@ class RustCodeGen:
             return False
         return self.is_sampler_type(self.expression_result_type(arguments[1]))
 
+    def call_uses_shadow_texture(self, arguments):
+        if not arguments:
+            return False
+        return self.is_shadow_texture_type(self.expression_result_type(arguments[0]))
+
     def is_sampler_type(self, type_name):
         if type_name is None:
             return False
@@ -7486,6 +8438,30 @@ class RustCodeGen:
         return (
             type_name in {"sampler", "Sampler"} or self.map_type(type_name) == "Sampler"
         )
+
+    def is_texture_resource_type(self, type_name):
+        if type_name is None:
+            return False
+        mapped_type = self.map_type(type_name)
+        base_type, _generic_args = self.generic_type_parts(mapped_type)
+        base_name = base_type.rsplit("::", 1)[-1]
+        return base_name.startswith(("Texture", "DepthTexture"))
+
+    def is_shadow_texture_type(self, type_name):
+        if type_name is None:
+            return False
+        source_type = str(type_name)
+        mapped_type = self.map_type(source_type)
+        names = {source_type, mapped_type}
+        return any("Shadow" in name or "DepthTexture" in name for name in names)
+
+    def is_multisample_texture_type(self, type_name):
+        if type_name is None:
+            return False
+        source_type = str(type_name)
+        mapped_type = self.map_type(source_type)
+        names = {source_type, mapped_type}
+        return any("MS" in name for name in names)
 
     def generate_qualified_generic_trait_method_call(self, func_expr, args):
         if not isinstance(func_expr, MemberAccessNode):
@@ -8317,6 +9293,7 @@ class RustCodeGen:
             object_value = self.generate_vector_lane_source(
                 object_expr, self.generate_expression(object_expr), temp_bindings
             )
+            object_value = self.rust_member_base_expression(object_value)
             return [
                 self.normalize_constructor_scalar_lane(
                     None,
@@ -8329,6 +9306,7 @@ class RustCodeGen:
 
         arg_expr = self.generate_expression(arg)
         arg_expr = self.generate_vector_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
         components = ("x", "y", "z", "w")[: arg_info["size"]]
         return [
             self.normalize_constructor_scalar_lane(
@@ -8361,6 +9339,7 @@ class RustCodeGen:
     ):
         arg_expr = self.generate_expression(arg)
         arg_expr = self.generate_matrix_lane_source(arg, arg_expr, temp_bindings)
+        arg_expr = self.rust_member_base_expression(arg_expr)
         target_component_type = target_component_type or matrix_info["component_type"]
         components = ("x", "y", "z", "w")[: matrix_info["rows"]]
         lanes = []
@@ -8389,6 +9368,12 @@ class RustCodeGen:
         temp_name = self.next_vector_arg_temp_name()
         temp_bindings.append((temp_name, generated_expr))
         return temp_name
+
+    def rust_member_base_expression(self, generated_expr):
+        generated_expr = str(generated_expr)
+        if generated_expr.startswith("*") and not generated_expr.startswith("(*"):
+            return f"({generated_expr})"
+        return generated_expr
 
     def generate_member_access_expression(self, expr):
         access = self.glsl_buffer_block_access(expr)
@@ -9169,11 +10154,64 @@ class RustCodeGen:
             return self.block_expression_result_type(expr)
         if isinstance(expr, ConstructorNode):
             return self.constructor_result_type(expr)
+        if isinstance(expr, TextureNode):
+            texture_type = self.expression_result_type(expr.texture_expr)
+            return "float" if self.is_shadow_texture_type(texture_type) else "vec4"
+        if isinstance(expr, TextureOpNode):
+            operation = getattr(expr, "operation", "")
+            if operation in {
+                "SampleCmp",
+                "SampleCmpLevel",
+                "SampleCmpLevelZero",
+                "SampleCmpGrad",
+                "CalculateLevelOfDetail",
+                "CalculateLevelOfDetailUnclamped",
+                "textureCompare",
+                "textureCompareOffset",
+                "textureCompareLod",
+                "textureCompareLodOffset",
+                "textureCompareGrad",
+                "textureCompareGradOffset",
+                "textureCompareProj",
+                "textureCompareProjOffset",
+                "textureCompareProjLod",
+                "textureCompareProjLodOffset",
+                "textureCompareProjGrad",
+                "textureCompareProjGradOffset",
+            }:
+                return "float"
+            if operation in {"textureQueryLod"}:
+                return "vec2"
+            if operation in {"textureQueryLevels", "textureSamples"}:
+                return "int"
+            if operation in {"GetDimensions"}:
+                return "void"
+            if operation in {"textureSize"}:
+                texture_type = self.expression_result_type(expr.texture_expr)
+                return self.texture_size_result_type(texture_type)
+            texture_type = self.expression_result_type(expr.texture_expr)
+            if operation in {"Sample", "sample", "texture"} and (
+                self.is_shadow_texture_type(texture_type)
+            ):
+                return "float"
+            return "vec4"
+        if isinstance(expr, WaveOpNode):
+            return self.wave_op_result_type(
+                getattr(expr, "operation", ""),
+                getattr(expr, "arguments", []),
+            )
         if isinstance(expr, MatchNode):
             return self.match_expression_result_type(expr)
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", getattr(expr, "name", None))
+            arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
             if isinstance(func_expr, MemberAccessNode):
+                texture_member_type = self.texture_member_function_result_type(
+                    func_expr,
+                    arguments,
+                )
+                if texture_member_type is not None:
+                    return texture_member_type
                 receiver_type = self.expression_result_type(
                     getattr(
                         func_expr, "object_expr", getattr(func_expr, "object", None)
@@ -9188,7 +10226,6 @@ class RustCodeGen:
                 }:
                     return receiver_type
             func_name = getattr(func_expr, "name", func_expr)
-            arguments = getattr(expr, "arguments", getattr(expr, "args", [])) or []
             if isinstance(func_name, str) and self.vector_type_info(func_name):
                 return func_name
             if isinstance(func_name, str) and self.matrix_type_info(func_name):
@@ -9315,6 +10352,10 @@ class RustCodeGen:
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
 
+        wave_type = self.wave_helper_result_type(mapped_name, arg_types)
+        if wave_type is not None:
+            return wave_type
+
         if mapped_name in {
             "sample",
             "sample_bias",
@@ -9364,6 +10405,9 @@ class RustCodeGen:
             "texture_gather_offsets_component_sampler",
         }:
             return "vec4"
+
+        if mapped_name.startswith("sample_shadow"):
+            return "float"
 
         if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
             return self.texture_size_result_type(arg_types[0])
@@ -10851,6 +11895,8 @@ class RustCodeGen:
             return None
 
         mapped_base = self.type_mapping.get(base_type, base_type)
+        if "<" in mapped_base:
+            mapped_base = mapped_base.split("<", 1)[0]
         return f"{mapped_base}<{', '.join(mapped_args)}>"
 
     def split_top_level_generic_args(self, args_text):

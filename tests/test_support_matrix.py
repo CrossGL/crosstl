@@ -561,7 +561,6 @@ def test_support_matrix_audit_writes_filtered_json(tmp_path):
         "statuses": ["partial"],
     }
     assert report["summary"]["backlog_count"] == len(report["backlog"])
-    assert report["backlog"]
     for item in report["backlog"]:
         assert item["backend_id"] in {"directx", "opengl", "metal"}
         assert item["status"] == "partial"

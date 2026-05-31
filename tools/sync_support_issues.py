@@ -1216,6 +1216,32 @@ def stale_extracted_preserve_reason(
     return None
 
 
+def preserved_stale_issue_count(
+    desired: dict[str, DesiredIssue],
+    existing_issues: list[dict[str, Any]],
+    *,
+    close_extracted_issues: bool,
+    close_pytest_failure_issues: bool,
+    preserve_reason: str | None = None,
+) -> int:
+    existing_by_key, _duplicates, _unmarked = split_existing_issues(existing_issues)
+    count = 0
+    for key, issue in existing_by_key.items():
+        if key in desired or issue.get("state") == "closed":
+            continue
+        reason = stale_extracted_preserve_reason(
+            key,
+            close_extracted_issues=close_extracted_issues,
+            close_pytest_failure_issues=close_pytest_failure_issues,
+        )
+        if reason is None:
+            continue
+        if preserve_reason is not None and reason != preserve_reason:
+            continue
+        count += 1
+    return count
+
+
 class GitHubClient:
     def __init__(
         self,
@@ -2504,6 +2530,16 @@ def raise_sync_preflight_error(
     raise SupportIssueSyncPreflightError(phase, operation, cause) from cause
 
 
+def print_dry_run_overview(desired: dict[str, DesiredIssue]) -> None:
+    print(f"Dry run: would manage {len(desired)} desired issues")
+    parent_count = sum(1 for key in desired if key.startswith("parent:"))
+    child_count = sum(1 for key in desired if key.startswith("backlog:"))
+    extracted_count = sum(1 for key in desired if key.startswith("extracted:"))
+    print(f"Parents: {parent_count}")
+    print(f"Backlog sub-issues: {child_count}")
+    print(f"Extracted signal sub-issues: {extracted_count}")
+
+
 def sync_issues(
     client: GitHubClient,
     desired: dict[str, DesiredIssue],
@@ -2528,13 +2564,7 @@ def sync_issues(
     )
 
     if dry_run:
-        print(f"Dry run: would manage {len(desired)} desired issues")
-        parent_count = sum(1 for key in desired if key.startswith("parent:"))
-        child_count = sum(1 for key in desired if key.startswith("backlog:"))
-        extracted_count = sum(1 for key in desired if key.startswith("extracted:"))
-        print(f"Parents: {parent_count}")
-        print(f"Backlog sub-issues: {child_count}")
-        print(f"Extracted signal sub-issues: {extracted_count}")
+        print_dry_run_overview(desired)
         return summary
 
     for label, (color, description) in desired_label_catalog(desired).items():
@@ -2977,15 +3007,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     close_extracted_issues = signals_allow_extracted_closure(signals)
-    if not close_extracted_issues:
-        print(
-            "Preserving existing extracted support issues because support signals are missing or documentation probes had failures."
-        )
     close_pytest_failure_issues = signals_allow_pytest_failure_closure(signals)
-    if not close_pytest_failure_issues:
-        print(
-            "Preserving existing pytest-failure support issues because pytest failure summaries were not provided or could not be loaded."
-        )
     existing_issues = None
     existing_sub_issue_ids_by_parent = None
     if args.inspect_existing:
@@ -3023,6 +3045,46 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                 )
             return 1
+    if not close_extracted_issues:
+        preserved_extracted_count = (
+            None
+            if existing_issues is None
+            else preserved_stale_issue_count(
+                desired,
+                existing_issues,
+                close_extracted_issues=close_extracted_issues,
+                close_pytest_failure_issues=close_pytest_failure_issues,
+                preserve_reason="stale_extracted_preserved",
+            )
+        )
+        if preserved_extracted_count is None:
+            print(
+                "Stale extracted support issue closure is disabled because support signals are missing or documentation probes had failures."
+            )
+        elif preserved_extracted_count > 0:
+            print(
+                "Preserving existing extracted support issues because support signals are missing or documentation probes had failures."
+            )
+    if not close_pytest_failure_issues:
+        preserved_pytest_count = (
+            None
+            if existing_issues is None
+            else preserved_stale_issue_count(
+                desired,
+                existing_issues,
+                close_extracted_issues=close_extracted_issues,
+                close_pytest_failure_issues=close_pytest_failure_issues,
+                preserve_reason="stale_pytest_failure_preserved",
+            )
+        )
+        if preserved_pytest_count is None:
+            print(
+                "Stale pytest-failure support issue closure is disabled because pytest failure summaries were not provided or could not be loaded."
+            )
+        elif preserved_pytest_count > 0:
+            print(
+                "Preserving existing pytest-failure support issues because pytest failure summaries were not provided or could not be loaded."
+            )
     planned_action_budget = planned_action_budget_report(
         (
             planned_issue_actions(
@@ -3086,47 +3148,58 @@ def main(argv: list[str] | None = None) -> int:
         if args.planned_action_budget_mode == "fail":
             return 1
     operation_ledger: list[dict[str, Any]] = []
-    try:
-        summary = sync_issues(
-            client,
+    if args.dry_run and existing_issues is not None:
+        print_dry_run_overview(desired)
+        summary = planned_issue_actions(
             desired,
-            dry_run=args.dry_run,
+            existing_issues,
             manage_sub_issues=manage_sub_issues,
             close_extracted_issues=close_extracted_issues,
             close_pytest_failure_issues=close_pytest_failure_issues,
-            throttle_seconds=args.throttle_seconds,
-            operation_ledger=operation_ledger,
+            existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
         )
-    except SupportIssueSyncMutationError as exc:
-        print(str(exc), file=sys.stderr)
-        if args.sync_summary_output is not None:
-            output = (
-                args.sync_summary_output
-                if args.sync_summary_output.is_absolute()
-                else ROOT / args.sync_summary_output
+    else:
+        try:
+            summary = sync_issues(
+                client,
+                desired,
+                dry_run=args.dry_run,
+                manage_sub_issues=manage_sub_issues,
+                close_extracted_issues=close_extracted_issues,
+                close_pytest_failure_issues=close_pytest_failure_issues,
+                throttle_seconds=args.throttle_seconds,
+                operation_ledger=operation_ledger,
             )
-            write_json_report(
-                output,
-                issue_sync_report(
-                    desired,
-                    mode="dry-run" if args.dry_run else "sync",
-                    close_extracted_issues=close_extracted_issues,
-                    close_pytest_failure_issues=close_pytest_failure_issues,
-                    manage_sub_issues=manage_sub_issues,
-                    matrix_check_report=matrix_check_report,
-                    matrix_check_report_path=matrix_check_report_path,
-                    planned_action_budget_limits=planned_action_budget_limits,
-                    planned_action_budget_mode=args.planned_action_budget_mode,
-                    planned_closure_budget_limits=planned_closure_budget_limits,
-                    existing_issues=existing_issues,
-                    existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
-                    sync_summary=exc.summary,
-                    sync_failure=sync_failure_summary(exc),
-                    input_failures=input_failures,
-                    operation_ledger=exc.operation_ledger,
-                ),
-            )
-        return 1
+        except SupportIssueSyncMutationError as exc:
+            print(str(exc), file=sys.stderr)
+            if args.sync_summary_output is not None:
+                output = (
+                    args.sync_summary_output
+                    if args.sync_summary_output.is_absolute()
+                    else ROOT / args.sync_summary_output
+                )
+                write_json_report(
+                    output,
+                    issue_sync_report(
+                        desired,
+                        mode="dry-run" if args.dry_run else "sync",
+                        close_extracted_issues=close_extracted_issues,
+                        close_pytest_failure_issues=close_pytest_failure_issues,
+                        manage_sub_issues=manage_sub_issues,
+                        matrix_check_report=matrix_check_report,
+                        matrix_check_report_path=matrix_check_report_path,
+                        planned_action_budget_limits=planned_action_budget_limits,
+                        planned_action_budget_mode=args.planned_action_budget_mode,
+                        planned_closure_budget_limits=planned_closure_budget_limits,
+                        existing_issues=existing_issues,
+                        existing_sub_issue_ids_by_parent=existing_sub_issue_ids_by_parent,
+                        sync_summary=exc.summary,
+                        sync_failure=sync_failure_summary(exc),
+                        input_failures=input_failures,
+                        operation_ledger=exc.operation_ledger,
+                    ),
+                )
+            return 1
     print(
         "Support issue sync: created={created}, updated={updated}, closed={closed}, attached={attached}, unchanged={unchanged}".format(
             **summary

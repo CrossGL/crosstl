@@ -6,6 +6,7 @@ from ..ast import (
     BinaryOpNode,
     BreakNode,
     ContinueNode,
+    EnumNode,
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
@@ -146,8 +147,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
+        self.enum_variant_constants = {}
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
@@ -197,8 +200,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
         self.image_resource_accesses = {}
+        self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
+        self.enum_variant_constants = self.collect_cuda_enum_variant_constants(ast_node)
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         (
@@ -307,6 +312,49 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return True
 
         return False
+
+    def collect_cuda_enum_variant_constants(self, root):
+        """Collect plain enum path names that CUDA can lower to C++ enumerators."""
+        constants = {}
+        visited = set()
+
+        def visit(value):
+            if value is None or isinstance(value, (str, int, float, bool)):
+                return
+            if isinstance(value, (list, tuple, set)):
+                for item in value:
+                    visit(item)
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    visit(item)
+                return
+
+            value_id = id(value)
+            if value_id in visited:
+                return
+            visited.add(value_id)
+
+            if isinstance(value, EnumNode):
+                if any(
+                    self.cuda_enum_variant_has_payload(variant)
+                    for variant in getattr(value, "variants", []) or []
+                ):
+                    return
+                for variant in getattr(value, "variants", []) or []:
+                    constants[f"{value.name}::{variant.name}"] = variant.name
+                return
+
+            if not hasattr(value, "__dict__"):
+                return
+            for child in vars(value).values():
+                visit(child)
+
+        visit(root)
+        return constants
+
+    def cuda_enum_variant_has_payload(self, variant):
+        return bool(getattr(variant, "data", None) or getattr(variant, "fields", None))
 
     def generate_cuda_geometry_stream_helpers(self):
         return (
@@ -484,8 +532,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 member_type = self.resource_type_with_access(member_type, member)
                 member_types[member_name] = member_type
                 member_access = self.explicit_resource_access(member)
-                if member_access is not None and self.is_storage_image_type(
-                    member_type
+                if member_access is not None and (
+                    self.is_storage_image_type(member_type)
+                    or self.is_buffer_resource_type(member_type)
                 ):
                     member_accesses[member_name] = member_access
             member_types_by_struct[struct_name] = member_types
@@ -629,6 +678,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Render a CrossGL function or compute entry point as CUDA code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
         saved_query_metadata_aliases = self.query_metadata_aliases
@@ -774,6 +824,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.emit("}")
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.buffer_resource_accesses = saved_buffer_resource_accesses
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
         self.query_metadata_aliases = saved_query_metadata_aliases
@@ -805,7 +856,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             member_type = self.resource_type_with_access(member_type, member)
             member_types[member.name] = member_type
             member_access = self.explicit_resource_access(member)
-            if member_access is not None and self.is_storage_image_type(member_type):
+            if member_access is not None and (
+                self.is_storage_image_type(member_type)
+                or self.is_buffer_resource_type(member_type)
+            ):
                 member_image_accesses[member.name] = member_access
             semantic = self.semantic_from_node(member)
             if semantic:
@@ -1793,13 +1847,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def emit_match_expression_variable(self, node, match_node, var_type):
         if var_type is None:
-            var_type = infer_match_expression_result_type(self, match_node)
+            try:
+                var_type = infer_match_expression_result_type(self, match_node)
+            except ValueError:
+                var_type = "int"
         var_type = var_type or "auto"
         self.register_variable_type(node.name, var_type, node)
 
         self.emit(f"{self.format_typed_declarator(var_type, node.name)};")
-        self.emit_generated_code(
-            generate_match_expression_assignment(
+        try:
+            assignment = generate_match_expression_assignment(
                 self,
                 match_node,
                 node.name,
@@ -1807,7 +1864,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
-        )
+        except ValueError as error:
+            assignment = self.generate_match_expression_diagnostic_assignment(
+                node.name,
+                var_type,
+                self.cuda_match_error_reason(error),
+                self.indent_level,
+                "CUDA",
+            )
+        self.emit_generated_code(assignment)
 
     def visit_ExpressionStatementNode(self, node):
         if isinstance(node.expression, AssignmentNode):
@@ -1852,6 +1917,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         ray_builtin = self.cuda_ray_builtin_expression(name)
         if ray_builtin is not None and name not in self.variable_types:
             return ray_builtin
+        enum_constant = self.enum_variant_constants.get(name)
+        if enum_constant is not None:
+            return enum_constant
         return self.builtin_map.get(name, name)
 
     def cuda_ray_builtin_expression(self, name):
@@ -1919,7 +1987,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return self.format_assignment_expression(node)
 
     def format_assignment_expression(self, node):
+        operator = getattr(node, "operator", "=")
         diagnostic = self.glsl_buffer_block_write_diagnostic(node.target, "assignment")
+        if diagnostic is not None:
+            return diagnostic
+        diagnostic = self.structured_buffer_element_write_diagnostic(
+            node.target, "assignment", operator
+        )
         if diagnostic is not None:
             return diagnostic
         self.assignment_lhs_depth += 1
@@ -1928,7 +2002,6 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         finally:
             self.assignment_lhs_depth -= 1
         value = self.visit(node.value)
-        operator = getattr(node, "operator", "=")
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",
@@ -2282,6 +2355,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if operation == "WaveIsFirstLane":
             return "((threadIdx.x & (warpSize - 1)) == 0)"
 
+        diagnostic = self.cuda_wave_operation_diagnostic(operation, raw_args)
+        if diagnostic is not None:
+            return diagnostic
+
         helper_name = self.require_wave_helper(operation, raw_args)
         return f"{helper_name}({', '.join(args)})"
 
@@ -2300,14 +2377,157 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             f"{arg_type} {parameter_name}"
             for parameter_name, arg_type in zip(parameter_names, arg_types)
         ]
+        body = self.wave_helper_body(operation, result_type)
         helper = (
             f"__device__ inline {result_type} {helper_name}({', '.join(params)})\n"
             "{\n"
-            f"    return {self.wave_helper_return_expression(operation, result_type)};\n"
+            f"{body}"
             "}"
         )
         self.helper_functions[helper_name] = helper
         return helper_name
+
+    def cuda_wave_operation_diagnostic(self, operation, raw_args):
+        if operation in {
+            "WaveActiveAllTrue",
+            "WaveActiveAnyTrue",
+            "WaveActiveBallot",
+            "WaveActiveCountBits",
+            "WavePrefixCountBits",
+            "WaveMultiPrefixCountBits",
+        }:
+            arg_type = self.type_name_string(self.expression_result_type(raw_args[0]))
+            if arg_type is not None and self.map_type(arg_type) != "bool":
+                return self.unsupported_cuda_wave_operation(
+                    operation, raw_args, "requires bool predicate input"
+                )
+            if (
+                operation.startswith("WaveMultiPrefix")
+                and len(raw_args) > 1
+                and self.map_type(self.expression_result_type(raw_args[1])) != "uint4"
+            ):
+                return self.unsupported_cuda_wave_operation(
+                    operation, raw_args, "requires uvec4 partition mask"
+                )
+            return None
+
+        scalar_ops = {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveActiveMin",
+            "WaveActiveMax",
+            "WaveActiveAllEqual",
+            "WaveReadLaneAt",
+            "WaveReadLaneFirst",
+            "WavePrefixSum",
+            "WavePrefixProduct",
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+            "QuadReadLaneAt",
+            "WaveMatch",
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }
+        if operation not in scalar_ops or not raw_args:
+            return None
+
+        value_type = self.wave_argument_type(operation, 0, raw_args[0])
+        if self.vector_type_info(value_type) is not None:
+            return self.unsupported_cuda_wave_operation(
+                operation, raw_args, "requires scalar input"
+            )
+
+        kind = self.cuda_wave_scalar_kind(value_type)
+        if kind is None:
+            return self.unsupported_cuda_wave_operation(
+                operation, raw_args, f"does not support {value_type or 'unknown'} input"
+            )
+
+        if operation in {
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        } and kind not in {"signed", "unsigned"}:
+            return self.unsupported_cuda_wave_operation(
+                operation, raw_args, "requires integer scalar input"
+            )
+
+        if (
+            operation
+            in {
+                "WaveActiveSum",
+                "WaveActiveProduct",
+                "WaveActiveMin",
+                "WaveActiveMax",
+                "WavePrefixSum",
+                "WavePrefixProduct",
+                "WaveMultiPrefixSum",
+                "WaveMultiPrefixProduct",
+            }
+            and kind == "bool"
+        ):
+            return self.unsupported_cuda_wave_operation(
+                operation, raw_args, "requires numeric scalar input"
+            )
+
+        if (
+            operation.startswith("WaveMultiPrefix")
+            and len(raw_args) > 1
+            and self.map_type(self.expression_result_type(raw_args[1])) != "uint4"
+        ):
+            return self.unsupported_cuda_wave_operation(
+                operation, raw_args, "requires uvec4 partition mask"
+            )
+
+        return None
+
+    def unsupported_cuda_wave_operation(self, operation, raw_args, reason):
+        result_type = self.wave_result_type(operation, raw_args)
+        fallback = self.diagnostic_zero_value_for_type(result_type)
+        return f"/* unsupported CUDA wave intrinsic {operation}: {reason} */ {fallback}"
+
+    def cuda_wave_scalar_kind(self, type_name):
+        mapped_type = self.map_type(type_name)
+        if mapped_type in {"bool"}:
+            return "bool"
+        if mapped_type in {
+            "char",
+            "short",
+            "int",
+            "long",
+            "long long",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+        }:
+            return "signed"
+        if mapped_type in {
+            "unsigned char",
+            "unsigned short",
+            "unsigned int",
+            "unsigned long",
+            "unsigned long long",
+            "uint",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+        }:
+            return "unsigned"
+        if mapped_type in {"float", "double", "half"}:
+            return "float"
+        return None
 
     def wave_result_type(self, operation, raw_args):
         if operation in CUDA_WAVE_UINT_RESULT_OPS:
@@ -2364,24 +2584,215 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return ["predicate", "mask"]
         return ["value", "mask"]
 
-    def wave_helper_return_expression(self, operation, result_type):
+    def wave_helper_body(self, operation, result_type):
         if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
-            return "predicate"
+            vote = "__all_sync" if operation == "WaveActiveAllTrue" else "__any_sync"
+            return (
+                "    unsigned int mask = __activemask();\n"
+                f"    return ({vote}(mask, predicate) != 0);\n"
+            )
+
         if operation == "WaveActiveAllEqual":
-            return "true"
-        if operation in {
-            "WaveActiveCountBits",
-            "WavePrefixCountBits",
-            "WaveMultiPrefixCountBits",
-        }:
-            return "(predicate ? 1u : 0u)"
+            return (
+                "    unsigned int mask = __activemask();\n"
+                f"    {result_type} first = __shfl_sync(mask, value, 0);\n"
+                "    return (__all_sync(mask, value == first) != 0);\n"
+            )
+
         if operation == "WaveActiveBallot":
-            return "make_uint4((predicate ? 1u : 0u), 0u, 0u, 0u)"
+            return (
+                "    unsigned int bits = __ballot_sync(__activemask(), predicate);\n"
+                "    return make_uint4(bits, 0u, 0u, 0u);\n"
+            )
+
+        if operation == "WaveActiveCountBits":
+            return (
+                "    unsigned int bits = __ballot_sync(__activemask(), predicate);\n"
+                "    return static_cast<uint>(__popc(bits));\n"
+            )
+
+        if operation in {
+            "WaveActiveSum",
+            "WaveActiveProduct",
+            "WaveActiveBitAnd",
+            "WaveActiveBitOr",
+            "WaveActiveBitXor",
+            "WaveActiveMin",
+            "WaveActiveMax",
+        }:
+            return self.wave_active_reduction_helper_body(operation, result_type)
+
+        if operation in {"WavePrefixSum", "WavePrefixProduct"}:
+            return self.wave_prefix_reduction_helper_body(operation, result_type)
+
+        if operation == "WavePrefixCountBits":
+            return self.wave_prefix_count_bits_helper_body()
+
+        if operation == "WaveReadLaneAt":
+            return "    return __shfl_sync(__activemask(), value, static_cast<int>(lane));\n"
+
+        if operation == "WaveReadLaneFirst":
+            return (
+                "    unsigned int mask = __activemask();\n"
+                "    int first_lane = __ffs(mask) - 1;\n"
+                "    return __shfl_sync(mask, value, first_lane);\n"
+            )
+
+        if operation in {
+            "QuadReadAcrossX",
+            "QuadReadAcrossY",
+            "QuadReadAcrossDiagonal",
+        }:
+            lane_mask = {
+                "QuadReadAcrossX": "1",
+                "QuadReadAcrossY": "2",
+                "QuadReadAcrossDiagonal": "3",
+            }[operation]
+            return f"    return __shfl_xor_sync(__activemask(), value, {lane_mask});\n"
+
+        if operation == "QuadReadLaneAt":
+            return (
+                "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+                "    uint source_lane = (lane_index & ~3u) | (lane & 3u);\n"
+                "    return __shfl_sync(\n"
+                "        __activemask(), value, static_cast<int>(source_lane));\n"
+            )
+
         if operation == "WaveMatch":
-            return "make_uint4(0u, 0u, 0u, 0u)"
+            return self.wave_match_helper_body(result_type)
+
+        if operation in {
+            "WaveMultiPrefixSum",
+            "WaveMultiPrefixProduct",
+            "WaveMultiPrefixBitAnd",
+            "WaveMultiPrefixBitOr",
+            "WaveMultiPrefixBitXor",
+        }:
+            return self.wave_multi_prefix_helper_body(operation, result_type)
+
+        if operation == "WaveMultiPrefixCountBits":
+            return self.wave_multi_prefix_count_bits_helper_body()
+
+        if operation in {"WaveActiveAllTrue", "WaveActiveAnyTrue"}:
+            return "    return predicate;\n"
         if result_type == "bool":
-            return "false"
-        return "value"
+            return "    return false;\n"
+        return "    return value;\n"
+
+    def wave_active_reduction_helper_body(self, operation, result_type):
+        combine = self.wave_combine_expression(operation, "result", "other")
+        return (
+            "    unsigned int mask = __activemask();\n"
+            f"    {result_type} result = value;\n"
+            "    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {\n"
+            f"        {result_type} other = __shfl_down_sync(mask, result, offset);\n"
+            f"        result = {combine};\n"
+            "    }\n"
+            "    return result;\n"
+        )
+
+    def wave_prefix_reduction_helper_body(self, operation, result_type):
+        identity = self.wave_identity_expression(operation, result_type)
+        combine_running = self.wave_combine_expression(operation, "running", "other")
+        combine_result = self.wave_combine_expression(operation, "result", "other")
+        return (
+            "    unsigned int mask = __activemask();\n"
+            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    {result_type} running = value;\n"
+            f"    {result_type} result = {identity};\n"
+            "    for (int offset = 1; offset < warpSize; offset <<= 1) {\n"
+            f"        {result_type} other = __shfl_up_sync(mask, running, offset);\n"
+            "        if (lane_index >= static_cast<uint>(offset)) {\n"
+            f"            result = {combine_result};\n"
+            f"            running = {combine_running};\n"
+            "        }\n"
+            "    }\n"
+            "    return result;\n"
+        )
+
+    def wave_prefix_count_bits_helper_body(self):
+        return (
+            "    unsigned int mask = __activemask();\n"
+            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            "    unsigned int bits = __ballot_sync(mask, predicate);\n"
+            "    unsigned int lower_mask =\n"
+            "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"
+            "    return static_cast<uint>(__popc(bits & lower_mask));\n"
+        )
+
+    def wave_match_helper_body(self, _result_type):
+        return (
+            "    unsigned int active = __activemask();\n"
+            "    unsigned int matching = 0u;\n"
+            "    for (int candidate = 0; candidate < warpSize; ++candidate) {\n"
+            "        auto other = __shfl_sync(active, value, candidate);\n"
+            "        if (value == other) {\n"
+            "            matching |= (1u << candidate);\n"
+            "        }\n"
+            "    }\n"
+            "    return make_uint4(matching, 0u, 0u, 0u);\n"
+        )
+
+    def wave_multi_prefix_helper_body(self, operation, result_type):
+        identity = self.wave_identity_expression(operation, result_type)
+        combine = self.wave_combine_expression(operation, "result", "other")
+        return (
+            "    unsigned int active = __activemask();\n"
+            "    unsigned int partition = mask.x & active;\n"
+            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            f"    {result_type} result = {identity};\n"
+            "    for (int candidate = 0; candidate < warpSize; ++candidate) {\n"
+            "        auto other = __shfl_sync(active, value, candidate);\n"
+            "        if (candidate < static_cast<int>(lane_index) &&\n"
+            "            (partition & (1u << candidate)) != 0u) {\n"
+            f"            result = {combine};\n"
+            "        }\n"
+            "    }\n"
+            "    return result;\n"
+        )
+
+    def wave_multi_prefix_count_bits_helper_body(self):
+        return (
+            "    unsigned int active = __activemask();\n"
+            "    unsigned int partition = mask.x & active;\n"
+            "    uint lane_index = (threadIdx.x & (warpSize - 1));\n"
+            "    unsigned int bits = __ballot_sync(active, predicate);\n"
+            "    unsigned int lower_mask =\n"
+            "        lane_index == 0u ? 0u : ((1u << lane_index) - 1u);\n"
+            "    return static_cast<uint>(__popc(bits & partition & lower_mask));\n"
+        )
+
+    def wave_identity_expression(self, operation, result_type):
+        if operation in {"WaveActiveBitAnd", "WaveMultiPrefixBitAnd"}:
+            return f"static_cast<{result_type}>(~0ull)"
+        if operation in {
+            "WaveActiveProduct",
+            "WavePrefixProduct",
+            "WaveMultiPrefixProduct",
+        }:
+            return f"static_cast<{result_type}>(1)"
+        return f"static_cast<{result_type}>(0)"
+
+    def wave_combine_expression(self, operation, left, right):
+        if operation in {"WaveActiveSum", "WavePrefixSum", "WaveMultiPrefixSum"}:
+            return f"({left} + {right})"
+        if operation in {
+            "WaveActiveProduct",
+            "WavePrefixProduct",
+            "WaveMultiPrefixProduct",
+        }:
+            return f"({left} * {right})"
+        if operation in {"WaveActiveBitAnd", "WaveMultiPrefixBitAnd"}:
+            return f"({left} & {right})"
+        if operation in {"WaveActiveBitOr", "WaveMultiPrefixBitOr"}:
+            return f"({left} | {right})"
+        if operation in {"WaveActiveBitXor", "WaveMultiPrefixBitXor"}:
+            return f"({left} ^ {right})"
+        if operation == "WaveActiveMin":
+            return f"(({right}) < ({left}) ? ({right}) : ({left}))"
+        if operation == "WaveActiveMax":
+            return f"(({right}) > ({left}) ? ({right}) : ({left}))"
+        return left
 
     def struct_constructor_arguments(self, struct_name, raw_args, args):
         """Expand struct constructors with resource-member metadata sidecars."""
@@ -2434,8 +2845,28 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             if access is None:
                 return None
             if operation == "Load":
+                diagnostic = self.structured_buffer_access_diagnostic(
+                    operation,
+                    buffer_type,
+                    buffer_expr,
+                    "read",
+                    self.diagnostic_zero_value_for_type(
+                        self.array_access_element_type(buffer_type)
+                    ),
+                )
+                if diagnostic is not None:
+                    return diagnostic
                 return access
             if operation == "Store":
+                diagnostic = self.structured_buffer_access_diagnostic(
+                    operation,
+                    buffer_type,
+                    buffer_expr,
+                    "write",
+                    "((void)0)",
+                )
+                if diagnostic is not None:
+                    return diagnostic
                 if self.structured_buffer_is_writable(buffer_type) and len(args) >= 2:
                     return f"{access} = {args[1]}"
                 return self.unsupported_structured_buffer_call(
@@ -2447,6 +2878,17 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             buffer_type = self.expression_result_type(raw_args[0])
             if self.structured_buffer_type_parts(buffer_type) is None:
                 return None
+            diagnostic = self.structured_buffer_access_diagnostic(
+                func_name,
+                buffer_type,
+                raw_args[0],
+                "read",
+                self.diagnostic_zero_value_for_type(
+                    self.array_access_element_type(buffer_type)
+                ),
+            )
+            if diagnostic is not None:
+                return diagnostic
             return f"{args[0]}[{args[1]}]"
 
         if func_name == "buffer_append" and len(args) >= 2:
@@ -2477,6 +2919,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             buffer_type = self.expression_result_type(raw_args[0])
             if self.structured_buffer_type_parts(buffer_type) is None:
                 return None
+            diagnostic = self.structured_buffer_access_diagnostic(
+                func_name,
+                buffer_type,
+                raw_args[0],
+                "write",
+                "((void)0)",
+            )
+            if diagnostic is not None:
+                return diagnostic
             if self.structured_buffer_is_writable(buffer_type):
                 return f"{args[0]}[{args[1]}] = {args[2]}"
             return self.unsupported_structured_buffer_call(
@@ -2508,6 +2959,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     ):
         """Lower AppendStructuredBuffer writes through an explicit counter."""
         parts = self.structured_buffer_type_parts(buffer_type)
+        diagnostic = self.structured_buffer_access_diagnostic(
+            operation,
+            buffer_type,
+            buffer_expr,
+            "write",
+            "((void)0)",
+        )
+        if diagnostic is not None:
+            return diagnostic
         if parts is None or parts[0] != "AppendStructuredBuffer":
             return self.unsupported_structured_buffer_call(
                 operation, buffer_type, "((void)0)"
@@ -2526,10 +2986,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
     def generate_structured_buffer_consume(self, buffer_expr, buffer_type, operation):
         """Lower ConsumeStructuredBuffer reads through an explicit counter."""
         parts = self.structured_buffer_type_parts(buffer_type)
+        fallback = self.diagnostic_zero_value_for_type(
+            parts[1] if parts is not None else None
+        )
+        diagnostic = self.structured_buffer_access_diagnostic(
+            operation,
+            buffer_type,
+            buffer_expr,
+            "readwrite",
+            fallback,
+        )
+        if diagnostic is not None:
+            return diagnostic
         if parts is None or parts[0] != "ConsumeStructuredBuffer":
-            fallback = self.diagnostic_zero_value_for_type(
-                parts[1] if parts is not None else None
-            )
             return self.unsupported_structured_buffer_call(
                 operation, buffer_type, fallback
             )
@@ -2624,6 +3093,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 f"requires {required_arg_count} argument(s)",
                 fallback,
             )
+
+        access_diagnostic = self.structured_buffer_access_diagnostic(
+            func_name,
+            target["buffer_type"],
+            target["target_expr"],
+            "readwrite",
+            fallback,
+        )
+        if access_diagnostic is not None:
+            return access_diagnostic
 
         buffer_base_type, _ = self.structured_buffer_type_parts(target["buffer_type"])
         if buffer_base_type != "RWStructuredBuffer":
@@ -2921,10 +3400,30 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
             buffer_name = self.visit(buffer_expr)
             if operation.startswith("Load") and len(args) >= 1:
+                diagnostic = self.byte_address_buffer_access_diagnostic(
+                    operation,
+                    buffer_type,
+                    buffer_expr,
+                    "read",
+                    self.diagnostic_zero_value_for_type(
+                        self.byte_address_buffer_value_type(component_count)
+                    ),
+                )
+                if diagnostic is not None:
+                    return diagnostic
                 helper_name = self.require_byte_address_load_helper(component_count)
                 return f"{helper_name}({buffer_name}, {args[0]})"
 
             if operation.startswith("Store") and len(args) >= 2:
+                diagnostic = self.byte_address_buffer_access_diagnostic(
+                    operation,
+                    buffer_type,
+                    buffer_expr,
+                    "write",
+                    "((void)0)",
+                )
+                if diagnostic is not None:
+                    return diagnostic
                 if self.byte_address_buffer_is_writable(buffer_type):
                     helper_name = self.require_byte_address_store_helper(
                         component_count
@@ -2939,6 +3438,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             buffer_type = self.expression_result_type(raw_args[0])
             if self.byte_address_buffer_base_type(buffer_type) is None:
                 return None
+            diagnostic = self.byte_address_buffer_access_diagnostic(
+                func_name,
+                buffer_type,
+                raw_args[0],
+                "read",
+                "0u",
+            )
+            if diagnostic is not None:
+                return diagnostic
             helper_name = self.require_byte_address_load_helper(1)
             return f"{helper_name}({args[0]}, {args[1]})"
 
@@ -2954,6 +3462,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             buffer_type = self.expression_result_type(raw_args[0])
             if self.byte_address_buffer_base_type(buffer_type) is None:
                 return None
+            diagnostic = self.byte_address_buffer_access_diagnostic(
+                func_name,
+                buffer_type,
+                raw_args[0],
+                "write",
+                "((void)0)",
+            )
+            if diagnostic is not None:
+                return diagnostic
             if self.byte_address_buffer_is_writable(buffer_type):
                 helper_name = self.require_byte_address_store_helper(1)
                 return f"{helper_name}({args[0]}, {args[1]}, {args[2]})"
@@ -3009,6 +3526,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return self.unsupported_byte_address_buffer_call(
                 operation, buffer_type, fallback
             )
+        access_diagnostic = self.byte_address_buffer_access_diagnostic(
+            operation,
+            buffer_type,
+            buffer_expr,
+            "readwrite",
+            fallback,
+        )
+        if access_diagnostic is not None:
+            return access_diagnostic
         if not self.byte_address_buffer_is_writable(buffer_type):
             return self.unsupported_byte_address_buffer_call(
                 operation, buffer_type, fallback
@@ -3673,6 +4199,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
+            diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
         if hasattr(node, "object_expr"):
             obj = self.visit(node.object_expr)
         else:
@@ -3729,6 +4258,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         """Visit array access"""
         if self.assignment_lhs_depth == 0:
             diagnostic = self.glsl_buffer_block_read_diagnostic(node, "load")
+            if diagnostic is not None:
+                return diagnostic
+            diagnostic = self.structured_buffer_element_read_diagnostic(node, "load")
             if diagnostic is not None:
                 return diagnostic
         if hasattr(node, "array_expr"):
@@ -3864,13 +4396,41 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
     def visit_MatchNode(self, node):
         """Lower CrossGL match statements to CUDA switch or if/else code."""
-        if is_switch_lowerable_match(node):
-            code = generate_switch_match(self, node, self.indent_level)
-        else:
-            code = generate_ordered_conditional_match(
-                self, node, self.indent_level, "CUDA"
+        try:
+            if is_switch_lowerable_match(node):
+                code = generate_switch_match(self, node, self.indent_level)
+            else:
+                code = generate_ordered_conditional_match(
+                    self, node, self.indent_level, "CUDA"
+                )
+        except ValueError as error:
+            reason = self.cuda_match_error_reason(error)
+            code = (
+                f"{'    ' * self.indent_level}"
+                f"/* unsupported CUDA match statement: {reason} */\n"
             )
         self.emit_generated_code(code)
+
+    def cuda_match_error_reason(self, error):
+        reason = str(error)
+        prefixes = (
+            "Unsupported match expression for CUDA codegen; ",
+            "Unsupported match arm for CUDA codegen; ",
+        )
+        for prefix in prefixes:
+            if reason.startswith(prefix):
+                return reason[len(prefix) :]
+        return reason
+
+    def generate_match_expression_diagnostic_assignment(
+        self, target_variable, target_type, reason, indent, _target_name
+    ):
+        indent_str = "    " * indent
+        fallback = self.diagnostic_zero_value_for_type(target_type)
+        return (
+            f"{indent_str}{target_variable} = /* unsupported CUDA match "
+            f"expression: {reason} */ {fallback};\n"
+        )
 
     def generate_switch_case(self, label, body, indent, auto_break=False):
         indent_str = "    " * indent
@@ -3942,8 +4502,8 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         result_name = self.next_cuda_temp_variable("match_value")
         self.emit(f"{self.format_typed_declarator(return_type, result_name)};")
-        self.emit_generated_code(
-            generate_match_expression_assignment(
+        try:
+            assignment = generate_match_expression_assignment(
                 self,
                 match_node,
                 result_name,
@@ -3951,7 +4511,15 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.indent_level,
                 "CUDA",
             )
-        )
+        except ValueError as error:
+            assignment = self.generate_match_expression_diagnostic_assignment(
+                result_name,
+                return_type,
+                self.cuda_match_error_reason(error),
+                self.indent_level,
+                "CUDA",
+            )
+        self.emit_generated_code(assignment)
         self.emit(f"return {result_name};")
 
     def visit_BreakNode(self, node):
@@ -7524,16 +8092,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         type_name = self.type_name_string(type_name)
         if not self.is_glsl_buffer_block_node(node):
             return type_name
-        if not type_name or "[" not in type_name or "]" not in type_name:
+        if not type_name or self.explicit_resource_access(node) != "readonly":
             return type_name
+        if type_name.startswith("const "):
+            return type_name
+        if "[" not in type_name or "]" not in type_name:
+            return f"const {type_name}"
         open_bracket = type_name.find("[")
         base_type = type_name[:open_bracket].strip()
         array_suffix = type_name[open_bracket:]
-        if array_suffix != "[]":
-            return type_name
-        if self.explicit_resource_access(node) == "readonly":
-            return f"const {base_type}{array_suffix}"
-        return type_name
+        return f"const {base_type}{array_suffix}"
 
     def glsl_buffer_block_metadata_comment(self, node, type_name):
         name = getattr(node, "name", None)
@@ -7615,6 +8183,214 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 operation, expr, "is writeonly", fallback
             )
         return None
+
+    def buffer_resource_access(self, buffer_arg):
+        """Return explicit readonly/writeonly access tracked for buffer resources."""
+        if isinstance(buffer_arg, FunctionCallNode):
+            callee_name = self.raw_function_call_name(buffer_arg)
+            return_source = self.query_return_sources.get(callee_name)
+            if return_source is None:
+                return None
+            raw_args = getattr(
+                buffer_arg,
+                "arguments",
+                getattr(buffer_arg, "args", []),
+            )
+            return self.query_return_source_buffer_access(return_source, raw_args)
+
+        if isinstance(buffer_arg, ArrayAccessNode):
+            array_node = getattr(
+                buffer_arg, "array", getattr(buffer_arg, "array_expr", None)
+            )
+            return self.buffer_resource_access(array_node)
+
+        if isinstance(buffer_arg, MemberAccessNode):
+            object_node = getattr(
+                buffer_arg,
+                "object_expr",
+                getattr(buffer_arg, "object", None),
+            )
+            object_type = self.struct_member_lookup_type(
+                self.expression_result_type(object_node)
+            )
+            member = getattr(buffer_arg, "member", None)
+            access = self.struct_member_image_accesses.get(object_type, {}).get(member)
+            if access is not None:
+                return access
+            return self.buffer_resource_access(object_node)
+
+        if isinstance(buffer_arg, PointerAccessNode):
+            pointer_expr = getattr(buffer_arg, "pointer_expr", None)
+            pointer_type = self.expression_result_type(pointer_expr)
+            pointer_info = self.cuda_indirect_type_info(pointer_type)
+            if pointer_info is not None:
+                object_type = self.struct_member_lookup_type(
+                    pointer_info["pointee_type"]
+                )
+                member = getattr(buffer_arg, "member", None)
+                access = self.struct_member_image_accesses.get(object_type, {}).get(
+                    member
+                )
+                if access is not None:
+                    return access
+            return self.buffer_resource_access(pointer_expr)
+
+        buffer_name = self.get_expression_name(buffer_arg)
+        if not buffer_name:
+            return None
+        return self.buffer_resource_accesses.get(buffer_name)
+
+    def query_return_source_buffer_access(self, return_source, raw_args):
+        """Return buffer access for a traceable returned resource."""
+        kind = return_source.get("kind")
+        if kind == "ternary":
+            true_access = self.query_return_source_buffer_access(
+                return_source["true_source"],
+                raw_args,
+            )
+            false_access = self.query_return_source_buffer_access(
+                return_source["false_source"],
+                raw_args,
+            )
+            if true_access is None or true_access != false_access:
+                return None
+            return true_access
+
+        if kind == "global":
+            return self.buffer_resource_access(return_source.get("name"))
+
+        if kind == "parameter":
+            index = return_source.get("index")
+            if index is None or index >= len(raw_args):
+                return None
+            return self.buffer_resource_access(raw_args[index])
+
+        if kind == "member":
+            object_type = return_source.get("object_type")
+            member = return_source.get("member")
+            return self.struct_member_image_accesses.get(object_type, {}).get(member)
+
+        return None
+
+    def unsupported_buffer_access_call(
+        self, resource_label, operation, buffer_type, reason, fallback
+    ):
+        buffer_type = self.type_name_string(buffer_type) or "unknown buffer"
+        return (
+            f"/* unsupported {self.resource_backend_name()} {resource_label} "
+            f"access: {operation} {reason} on {buffer_type} */ {fallback}"
+        )
+
+    def structured_buffer_access_diagnostic(
+        self, operation, buffer_type, buffer_expr, requirement, fallback
+    ):
+        access = self.buffer_resource_access(buffer_expr)
+        if requirement == "read" and access == "writeonly":
+            return self.unsupported_buffer_access_call(
+                "structured buffer",
+                operation,
+                buffer_type,
+                "requires readable buffer resource",
+                fallback,
+            )
+        if requirement == "write" and access == "readonly":
+            return self.unsupported_buffer_access_call(
+                "structured buffer",
+                operation,
+                buffer_type,
+                "requires writable buffer resource",
+                fallback,
+            )
+        if requirement == "readwrite" and access in {"readonly", "writeonly"}:
+            return self.unsupported_buffer_access_call(
+                "structured buffer",
+                operation,
+                buffer_type,
+                "requires readwrite buffer resource",
+                fallback,
+            )
+        return None
+
+    def byte_address_buffer_access_diagnostic(
+        self, operation, buffer_type, buffer_expr, requirement, fallback
+    ):
+        access = self.buffer_resource_access(buffer_expr)
+        if requirement == "read" and access == "writeonly":
+            return self.unsupported_buffer_access_call(
+                "byte-address buffer",
+                operation,
+                buffer_type,
+                "requires readable buffer resource",
+                fallback,
+            )
+        if requirement == "write" and access == "readonly":
+            return self.unsupported_buffer_access_call(
+                "byte-address buffer",
+                operation,
+                buffer_type,
+                "requires writable buffer resource",
+                fallback,
+            )
+        if requirement == "readwrite" and access in {"readonly", "writeonly"}:
+            return self.unsupported_buffer_access_call(
+                "byte-address buffer",
+                operation,
+                buffer_type,
+                "requires readwrite buffer resource",
+                fallback,
+            )
+        return None
+
+    def structured_buffer_element_resource_type(self, expr):
+        """Return the owning structured-buffer type for an element expression."""
+        if isinstance(expr, ArrayAccessNode):
+            array_expr = getattr(expr, "array_expr", getattr(expr, "array", None))
+            array_type = self.expression_result_type(array_expr)
+            array_type_string = self.type_name_string(array_type) or ""
+            if (
+                self.structured_buffer_type_parts(array_type) is not None
+                and "[" not in array_type_string
+            ):
+                return array_type
+            return None
+
+        if isinstance(expr, (MemberAccessNode, PointerAccessNode)):
+            object_expr = getattr(
+                expr,
+                "object_expr",
+                getattr(expr, "object", getattr(expr, "pointer_expr", None)),
+            )
+            return self.structured_buffer_element_resource_type(object_expr)
+
+        return None
+
+    def structured_buffer_element_read_diagnostic(self, expr, operation):
+        buffer_type = self.structured_buffer_element_resource_type(expr)
+        if buffer_type is None:
+            return None
+        fallback = self.diagnostic_zero_value_for_type(
+            self.expression_result_type(expr)
+        )
+        return self.structured_buffer_access_diagnostic(
+            operation,
+            buffer_type,
+            expr,
+            "read",
+            fallback,
+        )
+
+    def structured_buffer_element_write_diagnostic(self, expr, operation, operator):
+        buffer_type = self.structured_buffer_element_resource_type(expr)
+        if buffer_type is None:
+            return None
+        requirement = "readwrite" if operator != "=" else "write"
+        return self.structured_buffer_access_diagnostic(
+            operation,
+            buffer_type,
+            expr,
+            requirement,
+            "((void)0)",
+        )
 
     def declaration_qualifier_names(self, node):
         """Return normalized qualifier and attribute names on declarations."""
@@ -7705,6 +8481,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             for shape in image_shapes
         )
 
+    def is_buffer_resource_type(self, type_name):
+        """Return whether a type names a CUDA-lowered buffer resource."""
+        return (
+            self.structured_buffer_type_parts(type_name) is not None
+            or self.byte_address_buffer_base_type(type_name) is not None
+        )
+
     def register_variable_type(self, name, type_name, node=None, source_node=None):
         if not name or type_name is None:
             return
@@ -7719,6 +8502,18 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         else:
             self.glsl_buffer_block_accesses.pop(name, None)
             self.glsl_buffer_block_layouts.pop(name, None)
+
+        if self.is_buffer_resource_type(type_name):
+            access = self.explicit_resource_access(node)
+            if access is None and source_node is not None:
+                access = self.buffer_resource_access(source_node)
+            if access is None:
+                self.buffer_resource_accesses.pop(name, None)
+            else:
+                self.buffer_resource_accesses[name] = access
+        else:
+            self.buffer_resource_accesses.pop(name, None)
+
         if not self.is_storage_image_type(type_name):
             self.image_resource_accesses.pop(name, None)
             return
@@ -8274,6 +9069,11 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
         return None
 
+    def sampled_texture_sampler_argument_offset(self, raw_args):
+        if len(raw_args) > 2 and self.is_sampler_state_argument(raw_args[1]):
+            return 1
+        return 0
+
     def cuda_texture_gradient_argument(self, texture_type, raw_gradient, gradient):
         if texture_type not in {"sampler3D", "samplerCube", "samplerCubeArray"}:
             return gradient
@@ -8286,6 +9086,535 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 f"{self.coord_component(gradient, 'z')}, 0.0f)"
             )
         return gradient
+
+    def cuda_texture_coord_components(self, texture_type, coord):
+        """Return CUDA texture coordinate components for a sampled resource."""
+        if texture_type == "sampler1D":
+            return [coord]
+        if texture_type == "sampler1DArray":
+            return [self.coord_component(coord, "x"), self.coord_component(coord, "y")]
+        if texture_type == "sampler2D":
+            return [self.coord_component(coord, "x"), self.coord_component(coord, "y")]
+        if texture_type == "sampler2DArray":
+            return [
+                self.coord_component(coord, "x"),
+                self.coord_component(coord, "y"),
+                self.coord_component(coord, "z"),
+            ]
+        if texture_type in {"sampler3D", "samplerCube"}:
+            return [
+                self.coord_component(coord, "x"),
+                self.coord_component(coord, "y"),
+                self.coord_component(coord, "z"),
+            ]
+        if texture_type == "samplerCubeArray":
+            return [
+                self.coord_component(coord, "x"),
+                self.coord_component(coord, "y"),
+                self.coord_component(coord, "z"),
+                self.coord_component(coord, "w"),
+            ]
+        return None
+
+    def cuda_texture_offset_components(self, texture_type, coord, offset):
+        """Return texture coordinate components with a GLSL-style texel offset."""
+        components = self.cuda_texture_coord_components(texture_type, coord)
+        if components is None:
+            return None
+
+        offset_component_count = self.expected_texture_offset_coordinate_count(
+            texture_type
+        )
+        if offset_component_count is None:
+            return None
+
+        if offset_component_count == 1:
+            components[0] = f"({components[0]} + {offset})"
+            return components
+
+        for index, component in enumerate(("x", "y", "z")[:offset_component_count]):
+            components[index] = (
+                f"({components[index]} + {self.coord_component(offset, component)})"
+            )
+        return components
+
+    def cuda_projected_texture_coord_components(self, texture_type, raw_coord, coord):
+        """Return projected CUDA texture coordinate components."""
+        coord_count = self.texel_fetch_coordinate_count(raw_coord)
+
+        if texture_type == "sampler1D" and coord_count in {2, 4}:
+            divisor = "y" if coord_count == 2 else "w"
+            return [
+                f"({self.coord_component(coord, 'x')} / "
+                f"{self.coord_component(coord, divisor)})"
+            ]
+
+        if texture_type == "sampler2D" and coord_count in {3, 4}:
+            divisor = "z" if coord_count == 3 else "w"
+            return [
+                f"({self.coord_component(coord, 'x')} / "
+                f"{self.coord_component(coord, divisor)})",
+                f"({self.coord_component(coord, 'y')} / "
+                f"{self.coord_component(coord, divisor)})",
+            ]
+
+        if texture_type == "sampler2DArray" and coord_count == 4:
+            return [
+                f"({self.coord_component(coord, 'x')} / "
+                f"{self.coord_component(coord, 'w')})",
+                f"({self.coord_component(coord, 'y')} / "
+                f"{self.coord_component(coord, 'w')})",
+                self.coord_component(coord, "z"),
+            ]
+
+        if texture_type in {"sampler3D", "samplerCube"} and coord_count == 4:
+            return [
+                f"({self.coord_component(coord, 'x')} / "
+                f"{self.coord_component(coord, 'w')})",
+                f"({self.coord_component(coord, 'y')} / "
+                f"{self.coord_component(coord, 'w')})",
+                f"({self.coord_component(coord, 'z')} / "
+                f"{self.coord_component(coord, 'w')})",
+            ]
+
+        return None
+
+    def cuda_apply_texture_offset_components(self, texture_type, components, offset):
+        """Apply a texture offset to existing coordinate components."""
+        offset_component_count = self.expected_texture_offset_coordinate_count(
+            texture_type
+        )
+        if offset_component_count is None:
+            return None
+
+        components = list(components)
+        if offset_component_count == 1:
+            components[0] = f"({components[0]} + {offset})"
+            return components
+
+        for index, component in enumerate(("x", "y", "z")[:offset_component_count]):
+            components[index] = (
+                f"({components[index]} + {self.coord_component(offset, component)})"
+            )
+        return components
+
+    def cuda_texture_sample_call_from_components(
+        self,
+        func_name,
+        texture_type,
+        texture_name,
+        components,
+        lod=None,
+        grad_x=None,
+        grad_y=None,
+    ):
+        """Return a CUDA texture sample call from precomputed components."""
+        if texture_type == "sampler1D" and len(components) >= 1:
+            coord_args = f"{texture_name}, {components[0]}"
+            if func_name == "texture":
+                return f"tex1D({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"tex1DLod({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"tex1DGrad({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "sampler1DArray" and len(components) >= 2:
+            coord_args = f"{texture_name}, {components[0]}, {components[1]}"
+            if func_name == "texture":
+                return f"tex1DLayered<float4>({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"tex1DLayeredLod<float4>({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"tex1DLayeredGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "sampler2D" and len(components) >= 2:
+            coord_args = f"{texture_name}, {components[0]}, {components[1]}"
+            if func_name == "texture":
+                return f"tex2D({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"tex2DLod({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"tex2DGrad({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "sampler2DArray" and len(components) >= 3:
+            coord_args = (
+                f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
+            )
+            if func_name == "texture":
+                return f"tex2DLayered<float4>({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"tex2DLayeredLod<float4>({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"tex2DLayeredGrad<float4>({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "sampler3D" and len(components) >= 3:
+            coord_args = (
+                f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
+            )
+            if func_name == "texture":
+                return f"tex3D({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"tex3DLod({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"tex3DGrad({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "samplerCube" and len(components) >= 3:
+            coord_args = (
+                f"{texture_name}, {components[0]}, {components[1]}, {components[2]}"
+            )
+            if func_name == "texture":
+                return f"texCubemap({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"texCubemapLod({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return f"texCubemapGrad({coord_args}, {grad_x}, {grad_y})"
+
+        if texture_type == "samplerCubeArray" and len(components) >= 4:
+            coord_args = (
+                f"{texture_name}, {components[0]}, {components[1]}, "
+                f"{components[2]}, {components[3]}"
+            )
+            if func_name == "texture":
+                return f"texCubemapLayered<float4>({coord_args})"
+            if func_name == "textureLod" and lod is not None:
+                return f"texCubemapLayeredLod<float4>({coord_args}, {lod})"
+            if func_name == "textureGrad" and grad_x is not None:
+                return (
+                    f"texCubemapLayeredGrad<float4>"
+                    f"({coord_args}, {grad_x}, {grad_y})"
+                )
+
+        return None
+
+    def cuda_texel_fetch_call_from_components(
+        self, texture_type, texture_name, components
+    ):
+        """Return a CUDA texel-fetch expression from precomputed components."""
+        if texture_type == "sampler1D" and len(components) >= 1:
+            return f"tex1Dfetch({texture_name}, {components[0]})"
+        if texture_type == "sampler1DArray" and len(components) >= 2:
+            return (
+                f"tex1DLayered<float4>"
+                f"({texture_name}, {components[0]}, {components[1]})"
+            )
+        if texture_type == "sampler2D" and len(components) >= 2:
+            return f"tex2D({texture_name}, {components[0]}, {components[1]})"
+        if texture_type == "sampler2DArray" and len(components) >= 3:
+            return (
+                f"tex2DLayered<float4>"
+                f"({texture_name}, {components[0]}, {components[1]}, {components[2]})"
+            )
+        if texture_type == "sampler3D" and len(components) >= 3:
+            return f"tex3D({texture_name}, {components[0]}, {components[1]}, {components[2]})"
+        return None
+
+    def generate_texture_offset_call(self, func_name, raw_args, args):
+        """Lower textureOffset/textureLodOffset/textureGradOffset to CUDA calls."""
+        texture_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        if texture_type is None:
+            return None
+        if self.is_shadow_resource_type(texture_type):
+            return self.unsupported_shadow_resource_call(func_name, texture_type, args)
+        if self.is_multisample_resource_type(texture_type):
+            return self.unsupported_multisample_resource_call(
+                func_name, texture_type, args
+            )
+        if texture_type not in {
+            "sampler1D",
+            "sampler1DArray",
+            "sampler2D",
+            "sampler2DArray",
+            "sampler3D",
+        }:
+            return self.unsupported_sampled_resource_call(func_name, texture_type, args)
+
+        sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+        coord_index = 1 + sampler_arg_offset
+        if len(args) <= coord_index:
+            return None
+
+        coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
+            func_name, texture_type, raw_args[coord_index]
+        )
+        if coordinate_diagnostic is not None:
+            return coordinate_diagnostic
+
+        texture_name = args[0]
+        coord = args[coord_index]
+        lod = None
+        grad_x = None
+        grad_y = None
+        offset_index = None
+        sample_func = "texture"
+
+        if func_name == "textureOffset":
+            offset_index = coord_index + 1
+            if len(args) > offset_index + 1:
+                return self.unsupported_sampled_resource_call(
+                    "textureOffset bias", texture_type, args
+                )
+        elif func_name == "textureLodOffset":
+            sample_func = "textureLod"
+            lod_index = coord_index + 1
+            offset_index = coord_index + 2
+            if len(args) <= lod_index:
+                return None
+            lod = args[lod_index]
+        elif func_name == "textureGradOffset":
+            sample_func = "textureGrad"
+            grad_x_index = coord_index + 1
+            grad_y_index = coord_index + 2
+            offset_index = coord_index + 3
+            if len(args) <= grad_y_index:
+                return None
+            gradient_diagnostic = self.texture_gradient_rank_diagnostic(
+                texture_type,
+                raw_args[grad_x_index],
+                raw_args[grad_y_index],
+            )
+            if gradient_diagnostic is not None:
+                return gradient_diagnostic
+            grad_x = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_x_index],
+                args[grad_x_index],
+            )
+            grad_y = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_y_index],
+                args[grad_y_index],
+            )
+
+        if offset_index is None or len(args) <= offset_index:
+            return None
+
+        offset_diagnostic = self.texture_offset_rank_diagnostic(
+            func_name, texture_type, raw_args[offset_index]
+        )
+        if offset_diagnostic is not None:
+            return offset_diagnostic
+
+        components = self.cuda_texture_offset_components(
+            texture_type, coord, args[offset_index]
+        )
+        if components is None:
+            return self.unsupported_sampled_resource_call(func_name, texture_type, args)
+
+        return self.cuda_texture_sample_call_from_components(
+            sample_func,
+            texture_type,
+            texture_name,
+            components,
+            lod=lod,
+            grad_x=grad_x,
+            grad_y=grad_y,
+        )
+
+    def generate_texture_projected_call(self, func_name, raw_args, args):
+        """Lower supported projected texture operations to CUDA texture calls."""
+        texture_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        if texture_type is None:
+            return None
+        if self.is_shadow_resource_type(texture_type):
+            return self.unsupported_shadow_resource_call(func_name, texture_type, args)
+        if self.is_multisample_resource_type(texture_type):
+            return self.unsupported_multisample_resource_call(
+                func_name, texture_type, args
+            )
+        if texture_type not in {
+            "sampler1D",
+            "sampler2D",
+            "sampler2DArray",
+            "sampler3D",
+            "samplerCube",
+        }:
+            return self.unsupported_sampled_resource_call(func_name, texture_type, args)
+
+        sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+        coord_index = 1 + sampler_arg_offset
+        if len(args) <= coord_index:
+            return None
+
+        components = self.cuda_projected_texture_coord_components(
+            texture_type, raw_args[coord_index], args[coord_index]
+        )
+        if components is None:
+            return self.unsupported_sampled_resource_call(
+                f"{func_name} coordinate rank", texture_type, args
+            )
+
+        texture_name = args[0]
+        sample_func = "texture"
+        lod = None
+        grad_x = None
+        grad_y = None
+        offset_index = None
+
+        if func_name == "textureProj":
+            if len(args) > coord_index + 1:
+                return self.unsupported_sampled_resource_call(
+                    "textureProj bias", texture_type, args
+                )
+        elif func_name == "textureProjOffset":
+            offset_index = coord_index + 1
+            if len(args) > offset_index + 1:
+                return self.unsupported_sampled_resource_call(
+                    "textureProjOffset bias", texture_type, args
+                )
+        elif func_name == "textureProjLod":
+            sample_func = "textureLod"
+            lod_index = coord_index + 1
+            if len(args) <= lod_index:
+                return None
+            lod = args[lod_index]
+        elif func_name == "textureProjLodOffset":
+            sample_func = "textureLod"
+            lod_index = coord_index + 1
+            offset_index = coord_index + 2
+            if len(args) <= lod_index:
+                return None
+            lod = args[lod_index]
+        elif func_name == "textureProjGrad":
+            sample_func = "textureGrad"
+            grad_x_index = coord_index + 1
+            grad_y_index = coord_index + 2
+            if len(args) <= grad_y_index:
+                return None
+            gradient_diagnostic = self.texture_gradient_rank_diagnostic(
+                texture_type,
+                raw_args[grad_x_index],
+                raw_args[grad_y_index],
+            )
+            if gradient_diagnostic is not None:
+                return gradient_diagnostic
+            grad_x = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_x_index],
+                args[grad_x_index],
+            )
+            grad_y = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_y_index],
+                args[grad_y_index],
+            )
+        elif func_name == "textureProjGradOffset":
+            sample_func = "textureGrad"
+            grad_x_index = coord_index + 1
+            grad_y_index = coord_index + 2
+            offset_index = coord_index + 3
+            if len(args) <= grad_y_index:
+                return None
+            gradient_diagnostic = self.texture_gradient_rank_diagnostic(
+                texture_type,
+                raw_args[grad_x_index],
+                raw_args[grad_y_index],
+            )
+            if gradient_diagnostic is not None:
+                return gradient_diagnostic
+            grad_x = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_x_index],
+                args[grad_x_index],
+            )
+            grad_y = self.cuda_texture_gradient_argument(
+                texture_type,
+                raw_args[grad_y_index],
+                args[grad_y_index],
+            )
+
+        if offset_index is not None:
+            if len(args) <= offset_index:
+                return None
+            if texture_type == "samplerCube":
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+            offset_diagnostic = self.texture_offset_rank_diagnostic(
+                func_name, texture_type, raw_args[offset_index]
+            )
+            if offset_diagnostic is not None:
+                return offset_diagnostic
+            components = self.cuda_apply_texture_offset_components(
+                texture_type, components, args[offset_index]
+            )
+            if components is None:
+                return self.unsupported_sampled_resource_call(
+                    func_name, texture_type, args
+                )
+
+        return self.cuda_texture_sample_call_from_components(
+            sample_func,
+            texture_type,
+            texture_name,
+            components,
+            lod=lod,
+            grad_x=grad_x,
+            grad_y=grad_y,
+        )
+
+    def generate_texel_fetch_offset_call(self, raw_args, args):
+        """Lower texelFetchOffset by applying the offset before CUDA fetch."""
+        texture_type = self.resource_base_type(
+            self.resource_expression_type(raw_args[0])
+        )
+        if texture_type is None:
+            return None
+        if texture_type is not None and not self.is_sampled_resource_type(texture_type):
+            return self.unsupported_sampled_resource_call(
+                "texelFetchOffset", texture_type, args
+            )
+        if self.is_shadow_resource_type(texture_type):
+            return self.unsupported_shadow_resource_call(
+                "texelFetchOffset", texture_type, args
+            )
+        if self.is_multisample_resource_type(texture_type):
+            return self.unsupported_multisample_resource_call(
+                "texelFetchOffset", texture_type, args
+            )
+        if texture_type in {"samplerCube", "samplerCubeArray"}:
+            return self.unsupported_sampled_resource_call(
+                "texelFetchOffset", texture_type, args
+            )
+
+        sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+        coord_index = 1 + sampler_arg_offset
+        offset_index = coord_index + 2
+        if len(args) <= offset_index:
+            return None
+
+        expected_coord_count = self.expected_texel_fetch_coordinate_count(texture_type)
+        actual_coord_count = self.texel_fetch_coordinate_count(raw_args[coord_index])
+        if (
+            expected_coord_count is not None
+            and actual_coord_count is not None
+            and actual_coord_count != expected_coord_count
+        ):
+            return self.unsupported_sampled_resource_call(
+                "texelFetchOffset coordinate rank",
+                texture_type,
+                args,
+            )
+
+        offset_diagnostic = self.texture_offset_rank_diagnostic(
+            "texelFetchOffset", texture_type, raw_args[offset_index]
+        )
+        if offset_diagnostic is not None:
+            return offset_diagnostic
+
+        components = self.cuda_texture_offset_components(
+            texture_type, args[coord_index], args[offset_index]
+        )
+        if components is None:
+            return self.unsupported_sampled_resource_call(
+                "texelFetchOffset", texture_type, args
+            )
+        return self.cuda_texel_fetch_call_from_components(
+            texture_type, args[0], components
+        )
 
     def expected_image_coordinate_count(self, image_type):
         image_type = self.resource_base_type(image_type)
@@ -8541,8 +9870,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     func_name, texture_type, args
                 )
 
-        if func_name == "textureGather" and len(args) >= 2:
-            texture_gather = self.generate_texture_gather_call(raw_args, args)
+        if func_name in {"textureGather", "textureGatherOffset"} and len(args) >= 2:
+            texture_gather = self.generate_texture_gather_call(
+                func_name, raw_args, args
+            )
             if texture_gather is not None:
                 return texture_gather
 
@@ -8562,6 +9893,34 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_sampled_resource_call(
                     func_name, texture_type, args
                 )
+
+        if (
+            func_name
+            in {
+                "textureOffset",
+                "textureLodOffset",
+                "textureGradOffset",
+            }
+            and raw_args
+        ):
+            return self.generate_texture_offset_call(func_name, raw_args, args)
+
+        if (
+            func_name
+            in {
+                "textureProj",
+                "textureProjOffset",
+                "textureProjLod",
+                "textureProjLodOffset",
+                "textureProjGrad",
+                "textureProjGradOffset",
+            }
+            and raw_args
+        ):
+            return self.generate_texture_projected_call(func_name, raw_args, args)
+
+        if func_name == "texelFetchOffset" and raw_args:
+            return self.generate_texel_fetch_offset_call(raw_args, args)
 
         if (
             func_name
@@ -8592,6 +9951,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         func_name, texture_type, args
                     )
                 offset_arg_index = self.texture_offset_argument_index(func_name)
+                if offset_arg_index is not None:
+                    offset_arg_index += self.sampled_texture_sampler_argument_offset(
+                        raw_args
+                    )
                 if offset_arg_index is not None and len(raw_args) > offset_arg_index:
                     offset_diagnostic = self.texture_offset_rank_diagnostic(
                         func_name,
@@ -8642,40 +10005,45 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 return self.unsupported_multisample_resource_call(
                     func_name, texture_type, args
                 )
+            sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+            coord_index = 1 + sampler_arg_offset
+            if len(args) <= coord_index:
+                return None
             coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
-                func_name, texture_type, raw_args[1]
+                func_name, texture_type, raw_args[coord_index]
             )
             if coordinate_diagnostic is not None:
                 return coordinate_diagnostic
             grad_x = None
             grad_y = None
-            if func_name == "textureGrad" and len(args) >= 4:
+            if func_name == "textureGrad" and len(args) > coord_index + 2:
                 gradient_diagnostic = self.texture_gradient_rank_diagnostic(
                     texture_type,
-                    raw_args[2],
-                    raw_args[3],
+                    raw_args[coord_index + 1],
+                    raw_args[coord_index + 2],
                 )
                 if gradient_diagnostic is not None:
                     return gradient_diagnostic
                 grad_x = self.cuda_texture_gradient_argument(
                     texture_type,
-                    raw_args[2],
-                    args[2],
+                    raw_args[coord_index + 1],
+                    args[coord_index + 1],
                 )
                 grad_y = self.cuda_texture_gradient_argument(
                     texture_type,
-                    raw_args[3],
-                    args[3],
+                    raw_args[coord_index + 2],
+                    args[coord_index + 2],
                 )
 
             texture_name = args[0]
-            coord = args[1]
+            coord = args[coord_index]
+            lod_index = coord_index + 1
             if texture_type == "sampler1D":
                 if func_name == "texture":
                     return f"tex1D({texture_name}, {coord})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex1DLod({texture_name}, {coord}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"tex1DLod({texture_name}, {coord}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return f"tex1DGrad({texture_name}, {coord}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler1DArray":
@@ -8686,9 +10054,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"tex1DLayered<float4>({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex1DLayeredLod<float4>({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"tex1DLayeredLod<float4>({coord_args}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return (
                         f"tex1DLayeredGrad<float4>"
                         f"({coord_args}, {grad_x}, {grad_y})"
@@ -8702,9 +10070,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"tex2D({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex2DLod({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"tex2DLod({coord_args}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return f"tex2DGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "sampler2DArray":
@@ -8716,9 +10084,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"tex2DLayered<float4>({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex2DLayeredLod<float4>({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"tex2DLayeredLod<float4>({coord_args}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return (
                         f"tex2DLayeredGrad<float4>"
                         f"({coord_args}, {grad_x}, {grad_y})"
@@ -8733,9 +10101,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"tex3D({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"tex3DLod({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"tex3DLod({coord_args}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return f"tex3DGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCube":
@@ -8747,9 +10115,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"texCubemap({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"texCubemapLod({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return f"texCubemapLod({coord_args}, {args[lod_index]})"
+                if func_name == "textureGrad" and grad_x is not None:
                     return f"texCubemapGrad({coord_args}, {grad_x}, {grad_y})"
 
             if texture_type == "samplerCubeArray":
@@ -8762,9 +10130,12 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 )
                 if func_name == "texture":
                     return f"texCubemapLayered<float4>({coord_args})"
-                if func_name == "textureLod" and len(args) >= 3:
-                    return f"texCubemapLayeredLod<float4>({coord_args}, {args[2]})"
-                if func_name == "textureGrad" and len(args) >= 4:
+                if func_name == "textureLod" and len(args) > lod_index:
+                    return (
+                        f"texCubemapLayeredLod<float4>"
+                        f"({coord_args}, {args[lod_index]})"
+                    )
+                if func_name == "textureGrad" and grad_x is not None:
                     return (
                         f"texCubemapLayeredGrad<float4>"
                         f"({coord_args}, {grad_x}, {grad_y})"
@@ -8793,12 +10164,19 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     func_name, texture_type, args
                 )
 
+            sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+            coord_index = 1 + sampler_arg_offset
+            lod_index = coord_index + 1
+            if len(args) <= lod_index:
+                return None
             texture_name = args[0]
-            coord = args[1]
+            coord = args[coord_index]
             expected_coord_count = self.expected_texel_fetch_coordinate_count(
                 texture_type
             )
-            actual_coord_count = self.texel_fetch_coordinate_count(raw_args[1])
+            actual_coord_count = self.texel_fetch_coordinate_count(
+                raw_args[coord_index]
+            )
             if (
                 expected_coord_count is not None
                 and actual_coord_count is not None
@@ -8809,33 +10187,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                     texture_type,
                     args,
                 )
-            if texture_type == "sampler1D":
-                return f"tex1Dfetch({texture_name}, {coord})"
-            if texture_type == "sampler1DArray":
-                return (
-                    f"tex1DLayered<float4>({texture_name}, "
-                    f"{self.coord_component(coord, 'x')}, "
-                    f"{self.coord_component(coord, 'y')})"
-                )
-            if texture_type == "sampler2D":
-                return (
-                    f"tex2D({texture_name}, "
-                    f"{self.coord_component(coord, 'x')}, "
-                    f"{self.coord_component(coord, 'y')})"
-                )
-            if texture_type == "sampler2DArray":
-                return (
-                    f"tex2DLayered<float4>({texture_name}, "
-                    f"{self.coord_component(coord, 'x')}, "
-                    f"{self.coord_component(coord, 'y')}, "
-                    f"{self.coord_component(coord, 'z')})"
-                )
-            if texture_type == "sampler3D":
-                return (
-                    f"tex3D({texture_name}, "
-                    f"{self.coord_component(coord, 'x')}, "
-                    f"{self.coord_component(coord, 'y')}, "
-                    f"{self.coord_component(coord, 'z')})"
+            components = self.cuda_texture_coord_components(texture_type, coord)
+            if components is not None:
+                return self.cuda_texel_fetch_call_from_components(
+                    texture_type, texture_name, components
                 )
 
         if func_name == "imageLoad" and len(args) >= 2:
@@ -8946,7 +10301,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         return None
 
-    def generate_texture_gather_call(self, raw_args, args):
+    def generate_texture_gather_call(self, func_name, raw_args, args):
         texture_type = self.resource_base_type(
             self.resource_expression_type(raw_args[0])
         )
@@ -8954,30 +10309,52 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             return None
 
         coordinate_index = 1
+        offset_index = None
         component = None
         component_arg = None
-        if len(args) == 2:
-            pass
-        elif len(args) == 3:
-            if self.is_sampler_state_argument(raw_args[1]):
+        if func_name == "textureGather":
+            if len(args) == 2:
+                pass
+            elif len(args) == 3:
+                if self.is_sampler_state_argument(raw_args[1]):
+                    coordinate_index = 2
+                else:
+                    component = args[2]
+                    component_arg = raw_args[2]
+            elif len(args) == 4 and self.is_sampler_state_argument(raw_args[1]):
                 coordinate_index = 2
+                component = args[3]
+                component_arg = raw_args[3]
             else:
-                component = args[2]
-                component_arg = raw_args[2]
-        elif len(args) == 4 and self.is_sampler_state_argument(raw_args[1]):
-            coordinate_index = 2
-            component = args[3]
-            component_arg = raw_args[3]
+                return None
+        elif func_name == "textureGatherOffset":
+            sampler_arg_offset = self.sampled_texture_sampler_argument_offset(raw_args)
+            coordinate_index = 1 + sampler_arg_offset
+            offset_index = coordinate_index + 1
+            if len(args) <= offset_index:
+                return None
+            if len(args) > offset_index + 1:
+                component = args[offset_index + 1]
+                component_arg = raw_args[offset_index + 1]
         else:
             return None
 
         coordinate_diagnostic = self.texture_coordinate_rank_diagnostic(
-            "textureGather",
+            func_name,
             texture_type,
             raw_args[coordinate_index],
         )
         if coordinate_diagnostic is not None:
             return coordinate_diagnostic
+
+        if offset_index is not None:
+            offset_diagnostic = self.texture_offset_rank_diagnostic(
+                func_name,
+                texture_type,
+                raw_args[offset_index],
+            )
+            if offset_diagnostic is not None:
+                return offset_diagnostic
 
         component_diagnostic = self.texture_gather_component_diagnostic(
             texture_type, component_arg
@@ -8987,11 +10364,13 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         texture_name = args[0]
         coord = args[coordinate_index]
-        gather_args = (
-            f"{texture_name}, "
-            f"{self.coord_component(coord, 'x')}, "
-            f"{self.coord_component(coord, 'y')}"
-        )
+        x = self.coord_component(coord, "x")
+        y = self.coord_component(coord, "y")
+        if offset_index is not None:
+            offset = args[offset_index]
+            x = f"({x} + {self.coord_component(offset, 'x')})"
+            y = f"({y} + {self.coord_component(offset, 'y')})"
+        gather_args = f"{texture_name}, " f"{x}, " f"{y}"
         if component is not None:
             return f"tex2Dgather<float4>({gather_args}, {component})"
         return f"tex2Dgather<float4>({gather_args})"
@@ -9050,7 +10429,9 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         return None
 
     def is_sampler_state_argument(self, raw_arg):
-        return self.resource_base_type(self.get_expression_type(raw_arg)) == "sampler"
+        return (
+            self.resource_base_type(self.resource_expression_type(raw_arg)) == "sampler"
+        )
 
     def visit_cbuffer(self, cbuffer):
         """Visit constant buffer (convert to CUDA constant memory)"""

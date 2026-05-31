@@ -361,6 +361,12 @@ MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
     "RWTexture1DArray": ("Image1DArray", "IImage1DArray", "UImage1DArray"),
     "RWTexture2D": ("Image2D", "IImage2D", "UImage2D"),
     "RWTexture2DArray": ("Image2DArray", "IImage2DArray", "UImage2DArray"),
+    "RWTexture2DMS": ("Image2DMS", "IImage2DMS", "UImage2DMS"),
+    "RWTexture2DMSArray": (
+        "Image2DMSArray",
+        "IImage2DMSArray",
+        "UImage2DMSArray",
+    ),
     "RWTexture3D": ("Image3D", "IImage3D", "UImage3D"),
     "RasterizerOrderedTexture1D": ("Image1D", "IImage1D", "UImage1D"),
     "RasterizerOrderedTexture1DArray": (
@@ -374,15 +380,16 @@ MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
         "IImage2DArray",
         "UImage2DArray",
     ),
+    "RasterizerOrderedTexture2DMS": ("Image2DMS", "IImage2DMS", "UImage2DMS"),
+    "RasterizerOrderedTexture2DMSArray": (
+        "Image2DMSArray",
+        "IImage2DMSArray",
+        "UImage2DMSArray",
+    ),
     "RasterizerOrderedTexture3D": ("Image3D", "IImage3D", "UImage3D"),
 }
 
-MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = {
-    "RWTexture2DMS",
-    "RWTexture2DMSArray",
-    "RasterizerOrderedTexture2DMS",
-    "RasterizerOrderedTexture2DMSArray",
-}
+MOJO_HLSL_UNSUPPORTED_WRITABLE_TEXTURE_TYPES = set()
 
 MOJO_TYPED_IMAGE_DTYPE_SUFFIX = {
     "DType.float16": "Half",
@@ -1451,7 +1458,7 @@ class MojoCodeGen:
                 else:
                     code += f"var {node.name}: {self.map_type(vtype)}\n"
 
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.get_cbuffer_nodes(ast)
         if cbuffers:
             code += "# Constant Buffers\n"
             code += self.generate_cbuffers(ast)
@@ -5271,9 +5278,23 @@ class MojoCodeGen:
         code += "\n"
         return code
 
+    def get_cbuffer_nodes(self, ast):
+        nodes = []
+        seen = set()
+        for attr in ("cbuffers", "constants"):
+            for node in getattr(ast, attr, None) or []:
+                if attr == "constants" and not getattr(node, "is_cbuffer", False):
+                    continue
+                node_id = id(node)
+                if node_id in seen:
+                    continue
+                nodes.append(node)
+                seen.add(node_id)
+        return nodes
+
     def generate_cbuffers(self, ast):
         code = ""
-        cbuffers = getattr(ast, "cbuffers", [])
+        cbuffers = self.get_cbuffer_nodes(ast)
         for node in cbuffers:
             code += self.generate_resource_metadata_comment(
                 node, getattr(node, "name", None), kind="cbuffer"

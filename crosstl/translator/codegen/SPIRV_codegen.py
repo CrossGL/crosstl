@@ -2027,6 +2027,7 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_dimensions",
             "buffer_append",
             "buffer_consume",
             "buffer_increment_counter",
@@ -2106,6 +2107,7 @@ class VulkanSPIRVCodeGen:
             "buffer_store2",
             "buffer_store3",
             "buffer_store4",
+            "buffer_dimensions",
             "buffer_append",
             "buffer_consume",
             "buffer_increment_counter",
@@ -3317,6 +3319,28 @@ class VulkanSPIRVCodeGen:
                 function_name,
                 function_name == "buffer_increment_counter",
             )[1]
+
+        if function_name == "buffer_dimensions":
+            if not args:
+                self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+                return self.structured_buffer_dimensions_default_value()
+            if len(args) > 1:
+                self.emit(
+                    "; WARNING: buffer_dimensions expression form accepts only a "
+                    "buffer operand"
+                )
+                return self.structured_buffer_dimensions_default_value()
+
+            metadata = self.structured_buffer_metadata_for_pointer(args[0])
+            if metadata is None:
+                self.emit(
+                    "; WARNING: buffer_dimensions requires a structured or "
+                    "byte-address buffer operand"
+                )
+                return self.structured_buffer_dimensions_default_value()
+            return self.emit_structured_buffer_dimensions(
+                args[0], metadata, "buffer_dimensions"
+            )
 
         if function_name == "buffer_load":
             if len(args) < 2:
@@ -14315,6 +14339,129 @@ class VulkanSPIRVCodeGen:
     def structured_buffer_counter_default_value(self) -> SpirvId:
         return self.register_constant(0, self.register_primitive_type("uint"))
 
+    def structured_buffer_dimensions_default_value(self) -> SpirvId:
+        return self.register_constant(0, self.register_primitive_type("uint"))
+
+    def emit_structured_buffer_dimensions(
+        self, buffer_pointer: SpirvId, metadata, diagnostic_name: str
+    ) -> SpirvId:
+        block_type = metadata.get("block_type") if metadata is not None else None
+        if block_type is None:
+            self.emit(f"; WARNING: {diagnostic_name} requires a buffer block operand")
+            return self.structured_buffer_dimensions_default_value()
+
+        uint_type = self.register_primitive_type("uint")
+        id_value = self.get_id()
+        self.emit(
+            f"%{id_value} = OpArrayLength %{uint_type.id} %{buffer_pointer.id} "
+            f"{metadata.get('member_index', 0)}"
+        )
+        self.value_types[id_value] = uint_type
+        length = SpirvId(id_value, uint_type.type)
+        if not metadata.get("byte_address"):
+            return length
+
+        byte_stride = self.register_constant(4, uint_type)
+        return self.binary_operation("*", uint_type, length, byte_stride)
+
+    def store_structured_buffer_dimensions_result(
+        self,
+        target_expr,
+        value: SpirvId,
+        diagnostic_name: str,
+    ) -> bool:
+        target_pointer = self.assignable_pointer_from_expression(target_expr)
+        if target_pointer is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand must be an assignable "
+                "integer target"
+            )
+            return False
+
+        target_type = self.pointer_pointee_type(target_pointer)
+        if target_type is None:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand type could not be "
+                "determined"
+            )
+            return False
+
+        target_type_name = self.normalize_primitive_name(target_type.type.base_type)
+        if target_type_name not in {"int", "uint"}:
+            self.emit(
+                f"; WARNING: {diagnostic_name} output operand must be an integer "
+                "target"
+            )
+            return False
+
+        self.store_to_variable(
+            target_pointer, self.convert_value_to_type(value, target_type)
+        )
+        return True
+
+    def process_buffer_dimensions_function_call(
+        self, expr: FunctionCallNode
+    ) -> SpirvId:
+        diagnostic_name = "buffer_dimensions"
+        args = list(getattr(expr, "args", []) or [])
+        if not args:
+            self.emit("; WARNING: buffer_dimensions requires a buffer operand")
+            return self.structured_buffer_dimensions_default_value()
+        if len(args) > 2:
+            self.emit(
+                "; WARNING: buffer_dimensions accepts only buffer and optional "
+                "output operands"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        buffer_pointer = self.variable_pointer_from_expression(args[0])
+        if buffer_pointer is None:
+            self.emit(
+                "; WARNING: buffer_dimensions requires a structured or byte-address "
+                "buffer operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        metadata = self.structured_buffer_metadata_for_pointer(buffer_pointer)
+        if metadata is None:
+            self.emit(
+                "; WARNING: buffer_dimensions requires a structured or byte-address "
+                "buffer operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        length = self.emit_structured_buffer_dimensions(
+            buffer_pointer, metadata, diagnostic_name
+        )
+        if len(args) == 2:
+            self.store_structured_buffer_dimensions_result(
+                args[1], length, diagnostic_name
+            )
+        return length
+
+    def process_structured_buffer_dimensions_method_call(
+        self,
+        buffer_pointer: SpirvId,
+        metadata,
+        args,
+        diagnostic_name: str,
+    ) -> SpirvId:
+        if len(args) > 1:
+            self.emit(
+                f"; WARNING: {diagnostic_name} accepts only an optional output "
+                "operand"
+            )
+            return self.structured_buffer_dimensions_default_value()
+
+        length = self.emit_structured_buffer_dimensions(
+            buffer_pointer, metadata, diagnostic_name
+        )
+        if args:
+            self.store_structured_buffer_dimensions_result(
+                args[0], length, diagnostic_name
+            )
+        return length
+
     def ensure_structured_buffer_counter_metadata(self, metadata) -> bool:
         if metadata.get("counter_variable") is not None:
             return True
@@ -14553,6 +14700,7 @@ class VulkanSPIRVCodeGen:
         if method_name not in {
             "Load",
             "Store",
+            "GetDimensions",
             "Append",
             "Consume",
             "IncrementCounter",
@@ -14569,6 +14717,13 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if method_name == "GetDimensions":
+            return True, self.process_structured_buffer_dimensions_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "StructuredBuffer.GetDimensions",
+            )
         if method_name == "Append":
             return self.process_structured_buffer_append_call(
                 buffer_pointer,
@@ -15149,7 +15304,12 @@ class VulkanSPIRVCodeGen:
         load_width = self.byte_address_method_load_width(method_name)
         store_width = self.byte_address_method_store_width(method_name)
         interlocked_info = self.byte_address_method_interlocked_info(method_name)
-        if load_width is None and store_width is None and interlocked_info is None:
+        if (
+            load_width is None
+            and store_width is None
+            and interlocked_info is None
+            and method_name != "GetDimensions"
+        ):
             return False, None
 
         buffer_pointer = self.variable_pointer_from_expression(callee_expr.object)
@@ -15161,6 +15321,14 @@ class VulkanSPIRVCodeGen:
             return False, None
 
         args = list(getattr(expr, "args", []) or [])
+        if method_name == "GetDimensions":
+            return True, self.process_structured_buffer_dimensions_method_call(
+                buffer_pointer,
+                metadata,
+                args,
+                "ByteAddressBuffer.GetDimensions",
+            )
+
         if interlocked_info is not None:
             return True, self.process_byte_address_buffer_interlocked_call(
                 buffer_pointer, metadata, method_name, args
@@ -17349,6 +17517,9 @@ class VulkanSPIRVCodeGen:
 
             if callee_name == "lambda":
                 return self.unsupported_lambda_default_value("lambda expression")
+
+            if callee_name == "buffer_dimensions":
+                return self.process_buffer_dimensions_function_call(expr)
 
             if any(self.contains_lambda_expression(arg) for arg in expr.args):
                 result_type = None

@@ -17,6 +17,7 @@ from crosstl.translator.ast import (
     BuiltinVariableNode,
     CastNode,
     ConstructorNode,
+    ExecutionModel,
     ExpressionStatementNode,
     FunctionCallNode,
     IdentifierNode,
@@ -33,6 +34,8 @@ from crosstl.translator.ast import (
     RayQueryOpNode,
     RayTracingOpNode,
     ReturnNode,
+    ShaderNode,
+    StructNode,
     StructPatternNode,
     SwizzleNode,
     SyncNode,
@@ -240,6 +243,53 @@ fn main():
     assert result.returncode == 0, result.stderr
     assert "[1.0, 1.0, 1.0, 1.0]" in result.stdout
     assert "2.0" in result.stdout
+
+
+def test_uniform_block_parses_as_mojo_cbuffer():
+    code = """
+    uniform Material @binding(4) {
+        vec4 tint;
+        float roughness;
+    };
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "@value\nstruct Material:" in generated_code
+    assert "var tint: SIMD[DType.float32, 4]" in generated_code
+    assert "var roughness: Float32" in generated_code
+    assert (
+        "# CrossGL resource metadata: name=Material kind=cbuffer set=0 "
+        "binding=4 binding_source=explicit"
+    ) in generated_code
+
+
+def test_legacy_constants_cbuffer_nodes_emit_mojo_structs():
+    constants = StructNode(
+        "LegacyConstants",
+        [
+            VariableNode("scale", PrimitiveType("float")),
+            VariableNode("offset", VectorType(PrimitiveType("float"), 4)),
+        ],
+    )
+    constants.is_cbuffer = True
+    ast = ShaderNode(
+        "LegacyConstantBuffers",
+        ExecutionModel.GRAPHICS_PIPELINE,
+        cbuffers=[],
+        constants=[constants],
+    )
+
+    generated_code = generate_code(ast)
+
+    assert generated_code.count("@value\nstruct LegacyConstants:") == 1
+    assert "var scale: Float32" in generated_code
+    assert "var offset: SIMD[DType.float32, 4]" in generated_code
+    assert (
+        generated_code.count(
+            "# CrossGL resource metadata: name=LegacyConstants kind=cbuffer"
+        )
+        == 1
+    )
 
 
 def test_braced_struct_constructors_emit_mojo_initializers():
@@ -3957,37 +4007,70 @@ def test_image_atomic_explicit_scalar_cast_remains_allowed_for_mojo_codegen():
 
 
 @pytest.mark.parametrize(
-    ("resource_type", "value_type"),
+    ("resource_type", "value_type", "coord_type", "image_type", "coord_mojo_type"),
     [
-        ("RWTexture2DMS<float4>", "float4"),
-        ("RWTexture2DMSArray<uint>", "uint"),
-        ("RasterizerOrderedTexture2DMS<float4>", "float4"),
-        ("RasterizerOrderedTexture2DMSArray<int>", "int"),
+        (
+            "RWTexture2DMS<float4>",
+            "float4",
+            "int2",
+            "Image2DMSFloat4",
+            "SIMD[DType.int32, 2]",
+        ),
+        (
+            "RWTexture2DMSArray<uint>",
+            "uint",
+            "int3",
+            "UImage2DMSArray",
+            "SIMD[DType.int32, 4]",
+        ),
+        (
+            "RasterizerOrderedTexture2DMS<float4>",
+            "float4",
+            "int2",
+            "Image2DMSFloat4",
+            "SIMD[DType.int32, 2]",
+        ),
+        (
+            "RasterizerOrderedTexture2DMSArray<int>",
+            "int",
+            "int3",
+            "IImage2DMSArray",
+            "SIMD[DType.int32, 4]",
+        ),
     ],
 )
-def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
-    resource_type, value_type
+def test_hlsl_multisample_writable_texture_aliases_emit_mojo_image_helpers(
+    resource_type, value_type, coord_type, image_type, coord_mojo_type
 ):
     code = f"""
     {resource_type} msImage;
 
-    {value_type} invalidRead(int2 pixel, int sampleIndex) {{
+    {value_type} readMS({coord_type} pixel, int sampleIndex) {{
         return msImage.Load(pixel, sampleIndex);
     }}
+    void writeMS({coord_type} pixel, int sampleIndex, {value_type} value) {{
+        msImage.Store(pixel, sampleIndex, value);
+    }}
     """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Unsupported writable texture resource for Mojo codegen; "
-            "multisample writable texture alias is not supported"
-        ),
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    assert f"struct {image_type}:" in generated_code
+    assert f"var msImage: {image_type} = {image_type}()" in generated_code
+    assert "return image_load(msImage, pixel, sampleIndex)" in generated_code
+    assert "image_store(msImage, pixel, sampleIndex, value)" in generated_code
+    assert f"fn image_load(image: {image_type}, coord: {coord_mojo_type}" in (
+        generated_code
+    )
+    assert f"fn image_store(image: {image_type}, coord: {coord_mojo_type}" in (
+        generated_code
+    )
+    assert resource_type not in generated_code
+    assert ".Load(" not in generated_code
+    assert ".Store(" not in generated_code
 
 
 @pytest.mark.parametrize(
-    ("source", "alias_name"),
+    ("source", "expected_snippet", "unexpected_alias"),
     [
         (
             """
@@ -4000,6 +4083,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(msImage);
             }
             """,
+            "var Ok_0: Image2DMSFloat4",
             "RWTexture2DMS",
         ),
         (
@@ -4014,6 +4098,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(image);
             }
             """,
+            "var Ok_0: Image2DMSFloat4",
             "RasterizerOrderedTexture2DMS",
         ),
         (
@@ -4027,6 +4112,7 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(msImages);
             }
             """,
+            "var Ok_0: InlineArray[UImage2DMSArray, 2]",
             "RWTexture2DMSArray",
         ),
         (
@@ -4043,21 +4129,61 @@ def test_hlsl_multisample_writable_texture_aliases_emit_unsupported_diagnostic(
                 return Result::Ok(payload);
             }
             """,
+            "var image: Image2DMSFloat4",
             "RWTexture2DMS",
         ),
     ],
 )
-def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_diagnostic(
-    source, alias_name
+def test_hlsl_multisample_writable_texture_aliases_in_generic_payloads_map_to_images(
+    source, expected_snippet, unexpected_alias
 ):
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Unsupported writable texture resource for Mojo codegen; "
-            rf"multisample writable texture alias is not supported: {alias_name}"
-        ),
-    ):
-        generate_code(parse_code(tokenize_code(source)))
+    generated_code = generate_code(parse_code(tokenize_code(source)))
+
+    assert expected_snippet in generated_code
+    assert f"{unexpected_alias}<" not in generated_code
+
+
+def test_hlsl_multisample_writable_texture_aliases_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    RWTexture2DMS<float4> colorSamples;
+    RWTexture2DMSArray<uint> counterLayers;
+    RasterizerOrderedTexture2DMS<float4> orderedSamples;
+    RasterizerOrderedTexture2DMSArray<int> signedLayers;
+
+    float4 readColor(int2 pixel, int sampleIndex) {
+        return colorSamples.Load(pixel, sampleIndex);
+    }
+    void writeColor(int2 pixel, int sampleIndex, float4 value) {
+        colorSamples.Store(pixel, sampleIndex, value);
+    }
+    uint readCounter(int3 pixelLayer, int sampleIndex) {
+        return counterLayers.Load(pixelLayer, sampleIndex);
+    }
+    void writeCounter(int3 pixelLayer, int sampleIndex, uint value) {
+        counterLayers.Store(pixelLayer, sampleIndex, value);
+    }
+    float4 readOrdered(int2 pixel, int sampleIndex) {
+        return orderedSamples.Load(pixel, sampleIndex);
+    }
+    int readSigned(int3 pixelLayer, int sampleIndex) {
+        return signedLayers.Load(pixelLayer, sampleIndex);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    generated_code += "\nfn main():\n    pass\n"
+
+    source_path = tmp_path / "hlsl_multisample_writable_texture_aliases.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
@@ -9138,6 +9264,51 @@ def test_resource_binding_metadata_comments_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_texture_and_sampler_binding_namespaces_are_independent_for_mojo_codegen(
+    tmp_path,
+):
+    mojo = find_mojo_compiler()
+
+    code = """
+    @set(4) @binding(1) sampler2D colorMap;
+    @set(4) @binding(1) sampler linearSampler;
+    @set(4) @binding(2) sampler pointSampler;
+
+    vec4 sampleColor(vec2 uv) {
+        return texture(colorMap, linearSampler, uv) +
+            texture(colorMap, pointSampler, uv);
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=colorMap kind=texture set=4 "
+        "binding=1 binding_source=explicit"
+    ) in generated_code
+    assert (
+        "# CrossGL resource metadata: name=linearSampler kind=sampler set=4 "
+        "binding=1 binding_source=explicit"
+    ) in generated_code
+    assert (
+        "# CrossGL resource metadata: name=pointSampler kind=sampler set=4 "
+        "binding=2 binding_source=explicit"
+    ) in generated_code
+    assert "sample_sampler(colorMap, linearSampler, uv)" in generated_code
+    assert "sample_sampler(colorMap, pointSampler, uv)" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "texture_sampler_binding_namespaces.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
     duplicate_texture_binding = """
     @binding(2) sampler2D firstTexture;
@@ -9146,6 +9317,14 @@ def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
 
     with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
         generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    duplicate_sampler_binding = """
+    @binding(2) sampler firstSampler;
+    @binding(2) sampler secondSampler;
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_sampler_binding)))
 
     overlapping_buffer_range = """
     @binding(3) RWStructuredBuffer<int> counters[2];
@@ -9184,6 +9363,21 @@ def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codeg
     )
     assert "return image_load(counters, pixel)" in generated_code
     assert "image_store(outImage, pixel, value)" in generated_code
+
+    metadata_only_source = """
+    RWStructuredBuffer<int> values @globallycoherent @restrict;
+
+    int readValue(uint index) {
+        return values.Load(index);
+    }
+    """
+    metadata_only_code = generate_code(parse_code(tokenize_code(metadata_only_source)))
+    assert (
+        "# CrossGL resource metadata: name=values kind=buffer set=0 binding=0 "
+        "binding_source=automatic memory=globallycoherent,restrict"
+        in metadata_only_code
+    )
+    assert "return buffer_load(values, index)" in metadata_only_code
 
     invalid_read = """
     writeonly uniform image2D outImage;
@@ -14537,6 +14731,57 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
     """
     with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
         generate_code(parse_code(tokenize_code(overlapping_binding)))
+
+
+def test_explicit_glsl_buffer_block_and_direct_arrays_compile_with_mojo(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    struct ExplicitBlock {
+        vec4 positions[2];
+        uint counters[];
+    };
+
+    readonly ExplicitBlock explicitBlock
+        @glsl_buffer_block(std430) @set(3) @binding(6);
+    layout(std430, binding = 9) readonly buffer float values[];
+
+    vec4 readExplicit(uint index) {
+        return explicitBlock.positions[index];
+    }
+
+    float readDirect(uint index) {
+        return values[index];
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=explicitBlock kind=glsl_buffer_block "
+        "set=3 binding=6 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert (
+        "# CrossGL resource metadata: name=values kind=glsl_buffer_block "
+        "set=0 binding=9 binding_source=explicit layout=std430 access=readonly"
+        in generated_code
+    )
+    assert "var counters: List[UInt32]" in generated_code
+    assert "var values = List[Float32]()" in generated_code
+    assert "return explicitBlock.positions[int(index)]" in generated_code
+    assert "return values[int(index)]" in generated_code
+
+    generated_code += "\nfn main():\n    pass\n"
+    source_path = tmp_path / "explicit_glsl_buffer_block_and_direct_arrays.mojo"
+    source_path.write_text(generated_code)
+    result = subprocess.run(
+        [mojo, "run", str(source_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_glsl_buffer_block_runtime_arrays_and_atomics_compile_with_mojo(tmp_path):

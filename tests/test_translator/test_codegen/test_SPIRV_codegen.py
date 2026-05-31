@@ -11090,6 +11090,92 @@ class TestVulkanSPIRVCodeGen:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_structured_buffer_dimensions_emit_spirv_array_length(self, tmp_path):
+        source_code = """
+        shader StructuredBufferDimensions {
+            RWStructuredBuffer<float> values @set(4) @binding(0);
+            StructuredBuffer<uint> counters[2] @set(4) @binding(1);
+            ByteAddressBuffer rawInput @set(4) @binding(3);
+            RWByteAddressBuffer rawOutput @set(4) @binding(4);
+
+            compute {
+                void main() {
+                    uint valuesLen = buffer_dimensions(values);
+                    uint counterLen;
+                    buffer_dimensions(counters[1], counterLen);
+                    uint memberLen;
+                    values.GetDimensions(memberLen);
+                    uint rawBytes = rawInput.GetDimensions();
+                    uint rawOutBytes;
+                    rawOutput.GetDimensions(rawOutBytes);
+                    buffer_store(values, 0u, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert spv_code.count("OpArrayLength") == 5
+        assert "OpIMul" in spv_code
+        assert "buffer_dimensions" not in spv_code
+        assert "GetDimensions" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_structured_buffer_dimensions_emit_invalid_diagnostics(self, tmp_path):
+        source_code = """
+        shader InvalidStructuredBufferDimensions {
+            RWStructuredBuffer<float> values;
+            ByteAddressBuffer rawInput;
+            uint notBuffer;
+            float floatTarget;
+
+            compute {
+                void main() {
+                    uint len;
+                    uint missing = buffer_dimensions();
+                    uint excess = buffer_dimensions(values, len, len);
+                    uint invalid = buffer_dimensions(notBuffer);
+                    values.GetDimensions(len, len);
+                    values.GetDimensions(floatTarget);
+                    rawInput.GetDimensions(1u);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        assert "WARNING: buffer_dimensions requires a buffer operand" in spv_code
+        assert (
+            "WARNING: buffer_dimensions accepts only buffer and optional output operands"
+            in spv_code
+        )
+        assert (
+            "WARNING: buffer_dimensions requires a structured or byte-address "
+            "buffer operand"
+        ) in spv_code
+        assert (
+            "WARNING: StructuredBuffer.GetDimensions accepts only an optional output "
+            "operand"
+        ) in spv_code
+        assert (
+            "WARNING: StructuredBuffer.GetDimensions output operand must be an "
+            "integer target"
+        ) in spv_code
+        assert (
+            "WARNING: ByteAddressBuffer.GetDimensions output operand must be an "
+            "assignable integer target"
+        ) in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
     def test_append_consume_structured_buffers_emit_counter_sidecars(self, tmp_path):
         source_code = """
         shader AppendConsumeStorageBuffers {
@@ -14353,6 +14439,103 @@ class TestVulkanSPIRVCodeGen:
         assert "imageLoad" not in spv_code
         assert "imageStore" not in spv_code
         assert "WARNING" not in spv_code
+
+    def test_spirv_texture_sampling_supports_regular_and_shadow_samplers(
+        self, tmp_path
+    ):
+        source_code = """
+        shader BasicTextureSampling {
+            sampler2d colorMap;
+            sampler2darray layerMap;
+            sampler3D volumeMap;
+            samplerCube envMap;
+            samplerCubeArray cubeArrayMap;
+            sampler2dshadow shadowMap;
+            sampler2darrayshadow shadowArray;
+            samplerCubeShadow shadowCube;
+            samplerCubeArrayShadow shadowCubeArray;
+            sampler linearSampler;
+            sampler compareSampler;
+
+            fragment {
+                output vec4 fragColor;
+
+                void main() {
+                    vec2 uv = vec2(0.25, 0.75);
+                    vec3 uvLayer = vec3(uv, 1.0);
+                    vec3 volumeUv = vec3(uv, 0.5);
+                    vec3 cubeCoord = vec3(1.0, 0.0, 0.0);
+                    vec4 cubeLayer = vec4(cubeCoord, 1.0);
+                    float depth = 0.5;
+                    vec4 color = texture(colorMap, uv);
+                    vec4 layer = texture(layerMap, linearSampler, uvLayer);
+                    vec4 volume = texture(volumeMap, volumeUv);
+                    vec4 cube = texture(envMap, linearSampler, cubeCoord);
+                    vec4 cubeArray = texture(cubeArrayMap, cubeLayer);
+                    float shadow = textureCompare(shadowMap, uv, depth);
+                    float shadowLayer = textureCompare(
+                        shadowArray,
+                        compareSampler,
+                        uvLayer,
+                        depth
+                    );
+                    float shadowCubeValue = textureCompare(
+                        shadowCube,
+                        compareSampler,
+                        cubeCoord,
+                        depth
+                    );
+                    float shadowCubeArrayValue = textureCompare(
+                        shadowCubeArray,
+                        compareSampler,
+                        cubeLayer,
+                        depth
+                    );
+                    fragColor = color + layer + volume + cube + cubeArray
+                        + vec4(
+                            shadow
+                            + shadowLayer
+                            + shadowCubeValue
+                            + shadowCubeArrayValue
+                        );
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        vec4_type = re.search(r"(%\d+) = OpTypeVector %\d+ 4", spv_code)
+        float_type = re.search(r"(%\d+) = OpTypeFloat 32", spv_code)
+        sampler_type = re.search(r"(%\d+) = OpTypeSampler", spv_code)
+        assert vec4_type is not None
+        assert float_type is not None
+        assert sampler_type is not None
+
+        for image_signature in [
+            "2D 0 0 0 1 Unknown",
+            "2D 0 1 0 1 Unknown",
+            "3D 0 0 0 1 Unknown",
+            "Cube 0 0 0 1 Unknown",
+            "Cube 0 1 0 1 Unknown",
+            "2D 1 0 0 1 Unknown",
+            "2D 1 1 0 1 Unknown",
+            "Cube 1 0 0 1 Unknown",
+            "Cube 1 1 0 1 Unknown",
+        ]:
+            assert image_signature in spv_code
+
+        assert spv_code.count("OpImageSampleImplicitLod") == 5
+        assert spv_code.count("OpImageSampleDrefImplicitLod") == 4
+        assert "OpImageSampleExplicitLod" not in spv_code
+        assert "OpImageSampleDrefExplicitLod" not in spv_code
+        assert f"OpImageSampleImplicitLod {vec4_type.group(1)}" in spv_code
+        assert f"OpImageSampleDrefImplicitLod {float_type.group(1)}" in spv_code
+        assert "textureCompare" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_module_validates(spv_code, tmp_path)
 
     def test_texture_lod_and_grad_emit_explicit_lod_sampling(self, tmp_path):
         source_code = """

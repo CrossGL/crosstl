@@ -13,6 +13,7 @@ from crosstl.translator.ast import (
     ArrayNode,
     ArrayType,
     AssignmentNode,
+    AttributeNode,
     BinaryOpNode,
     BlockNode,
     BreakNode,
@@ -37,6 +38,7 @@ from crosstl.translator.ast import (
     MatchArmNode,
     MatchNode,
     MemberAccessNode,
+    MeshOpNode,
     NamedType,
     ParameterNode,
     PointerType,
@@ -2540,6 +2542,51 @@ mod gpu {
         Vec4::default()
     }
 
+    pub fn sample_shadow<Texture, Coord>(_texture: Texture, _coord: Coord) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn sample_shadow_bias<Texture, Coord, Bias>(
+        _texture: Texture,
+        _coord: Coord,
+        _bias: Bias,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn sample_shadow_sampler<Texture, SamplerState, Coord>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
+    pub fn sample_shadow_bias_sampler<Texture, SamplerState, Coord, Bias>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+        _bias: Bias,
+    ) -> f32
+    where
+        Texture: ShadowTextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
+    }
+
     pub fn sample_lod<Texture, Coord, Lod>(
         _texture: Texture,
         _coord: Coord,
@@ -2950,6 +2997,15 @@ mod gpu {
         Result::default()
     }
 
+    pub fn texture_dimensions<Texture, Dimensions>(
+        _texture: Texture,
+        _dimensions: Dimensions,
+    )
+    where
+        Texture: TextureLike,
+    {
+    }
+
     pub fn texture_query_levels<Texture>(_texture: Texture) -> i32
     where
         Texture: TextureLike,
@@ -2978,6 +3034,18 @@ mod gpu {
         Coord: SampleCoord,
     {
         Vec2::default()
+    }
+
+    pub fn texture_calculate_lod<Texture, SamplerState, Coord>(
+        _texture: Texture,
+        _sampler: SamplerState,
+        _coord: Coord,
+    ) -> f32
+    where
+        Texture: TextureLike,
+        Coord: SampleCoord,
+    {
+        0.0
     }
 
     pub fn texture_samples<Texture>(_texture: Texture) -> i32
@@ -3801,6 +3869,165 @@ mod gpu {
     }
 
     pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
+
+    // Rust codegen emits sync and subgroup operations as helper calls.
+    // These stubs pin the placeholder prelude contract used by compile tests.
+    pub fn workgroup_barrier() {}
+    pub fn memory_barrier() {}
+    pub fn memory_barrier_shared() {}
+    pub fn memory_barrier_buffer() {}
+    pub fn memory_barrier_image() {}
+    pub fn group_memory_barrier() {}
+    pub fn all_memory_barrier() {}
+    pub fn device_memory_barrier() {}
+    pub fn group_memory_barrier_with_group_sync() {}
+    pub fn all_memory_barrier_with_group_sync() {}
+    pub fn device_memory_barrier_with_group_sync() {}
+
+    pub fn subgroup_size() -> u32 {
+        0
+    }
+
+    pub fn subgroup_invocation_id() -> u32 {
+        0
+    }
+
+    pub fn subgroup_elect() -> bool {
+        false
+    }
+
+    pub fn subgroup_add<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_mul<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_min<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_max<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_any<Predicate>(_predicate: Predicate) -> bool {
+        false
+    }
+
+    pub fn subgroup_all<Predicate>(_predicate: Predicate) -> bool {
+        true
+    }
+
+    pub fn subgroup_all_equal<T>(_value: T) -> bool {
+        true
+    }
+
+    pub fn subgroup_ballot<Predicate>(_predicate: Predicate) -> Vec4<u32> {
+        Vec4::default()
+    }
+
+    pub fn subgroup_ballot_bit_count<Predicate>(_predicate: Predicate) -> u32 {
+        0
+    }
+
+    pub fn subgroup_and<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_or<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_xor<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_broadcast_first<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_broadcast<T, Lane>(_value: T, _lane: Lane) -> T {
+        _value
+    }
+
+    pub fn subgroup_exclusive_add<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_exclusive_mul<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_exclusive_ballot_bit_count<Predicate>(
+        _predicate: Predicate,
+    ) -> u32 {
+        0
+    }
+
+    pub fn subgroup_match<T>(_value: T) -> Vec4<u32> {
+        Vec4::default()
+    }
+
+    pub fn subgroup_partitioned_add<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
+
+    pub fn subgroup_partitioned_mul<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
+
+    pub fn subgroup_partitioned_ballot_bit_count<Predicate, Mask>(
+        _predicate: Predicate,
+        _mask: Mask,
+    ) -> u32 {
+        0
+    }
+
+    pub fn subgroup_partitioned_and<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
+
+    pub fn subgroup_partitioned_or<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
+
+    pub fn subgroup_partitioned_xor<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
+
+    pub fn subgroup_quad_broadcast<T, Lane>(_value: T, _lane: Lane) -> T {
+        _value
+    }
+
+    pub fn subgroup_quad_swap_horizontal<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_quad_swap_vertical<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_quad_swap_diagonal<T>(_value: T) -> T {
+        _value
+    }
+
+    pub fn subgroup_quad_any<Predicate>(_predicate: Predicate) -> bool {
+        false
+    }
+
+    pub fn subgroup_quad_all<Predicate>(_predicate: Predicate) -> bool {
+        true
+    }
+
+    pub fn subgroup_shuffle<T, Lane>(_value: T, _lane: Lane) -> T {
+        _value
+    }
+
+    pub fn subgroup_shuffle_xor<T, Mask>(_value: T, _mask: Mask) -> T {
+        _value
+    }
 
     pub fn ray_launch_id() -> Vec3<u32> {
         Vec3::default()
@@ -16497,6 +16724,242 @@ def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_pa
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_basic_sampled_texture_calls_map_to_rust_helpers_and_compile(tmp_path):
+    code = """
+    Texture2D<float4> colorMap : register(t0, space1);
+    SamplerState linearSampler : register(s0);
+
+    shader BasicSampledTextureProbe {
+        sampler2D diffuseMap;
+        sampler pointSampler;
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                let combined = texture(diffuseMap, uv);
+                let split = texture(diffuseMap, pointSampler, uv);
+                let hlslSplit = colorMap.Sample(linearSampler, uv);
+                return combined + split + hlslSplit;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "static COLOR_MAP: std::sync::LazyLock<Texture2D<Vec4<f32>>>" in generated_code
+    )
+    assert "static LINEAR_SAMPLER: std::sync::LazyLock<Sampler>" in generated_code
+    assert "let combined: Vec4<f32> = sample(*DIFFUSE_MAP, uv);" in generated_code
+    assert (
+        "let split: Vec4<f32> = sample_sampler(*DIFFUSE_MAP, *POINT_SAMPLER, uv);"
+        in generated_code
+    )
+    assert (
+        "let hlslSplit: Vec4<f32> = sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+        in generated_code
+    )
+    assert "Texture2D<float4>" not in generated_code
+    assert "SamplerState" not in generated_code
+    assert ".Sample(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_shadow_sampler_texture_calls_return_float_and_compile(tmp_path):
+    code = """
+    shader ShadowSamplerTextureProbe {
+        sampler2DShadow shadowMap;
+        sampler compareSampler;
+
+        fragment {
+            float main(vec3 uvDepth, vec2 uv, float depth) @ gl_FragDepth {
+                let implicitShadow = texture(shadowMap, uvDepth);
+                let splitShadow = texture(shadowMap, compareSampler, uvDepth);
+                let cmpMember = shadowMap.SampleCmp(compareSampler, uv, depth);
+                return implicitShadow + splitShadow + cmpMember;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let implicitShadow: f32 = sample_shadow(*SHADOW_MAP, uvDepth);"
+        in generated_code
+    )
+    assert (
+        "let splitShadow: f32 = sample_shadow_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uvDepth);"
+        in generated_code
+    )
+    assert (
+        "let cmpMember: f32 = texture_compare_sampler(*SHADOW_MAP, *COMPARE_SAMPLER, uv, depth);"
+        in generated_code
+    )
+    assert "texture(shadowMap" not in generated_code
+    assert ".SampleCmp(" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_hlsl_texture_member_helpers_map_to_rust_placeholders_and_compile(tmp_path):
+    code = """
+    Texture2D<float4> colorMap : register(t0);
+    SamplerState linearSampler : register(s0);
+
+    shader HlslTextureMemberProbe {
+        sampler2DMS msMap;
+        sampler2DShadow shadowMap;
+
+        fragment {
+            vec4 main(
+                vec2 uv,
+                float lod,
+                vec2 ddx,
+                vec2 ddy,
+                ivec2 offset,
+                ivec3 pixel,
+                int sampleIndex,
+                float depth
+            ) @ gl_FragColor {
+                int width = 0;
+                int height = 0;
+                colorMap.GetDimensions(width, height);
+
+                let baseOffset = colorMap.Sample(linearSampler, uv, offset);
+                let biased = colorMap.SampleBias(linearSampler, uv, 0.25);
+                let biasedOffset = colorMap.SampleBias(linearSampler, uv, 0.5, offset);
+                let lodColor = colorMap.SampleLevel(linearSampler, uv, lod);
+                let lodOffset = colorMap.SampleLevel(linearSampler, uv, lod, offset);
+                let gradColor = colorMap.SampleGrad(linearSampler, uv, ddx, ddy);
+                let gradOffset = colorMap.SampleGrad(linearSampler, uv, ddx, ddy, offset);
+                let gathered = colorMap.Gather(linearSampler, uv);
+                let gatheredRedOffset = colorMap.GatherRed(linearSampler, uv, offset);
+                let loaded = colorMap.Load(pixel);
+                let loadedOffset = colorMap.Load(pixel, offset);
+                let msLoaded = msMap.Load(ivec2(pixel.x, pixel.y), sampleIndex);
+                let detail = colorMap.CalculateLevelOfDetail(linearSampler, uv);
+
+                let cmp = shadowMap.SampleCmp(linearSampler, uv, depth);
+                let cmpOffset = shadowMap.SampleCmp(linearSampler, uv, depth, offset);
+                let cmpLevel = shadowMap.SampleCmpLevel(linearSampler, uv, depth, lod);
+                let cmpGradOffset = shadowMap.SampleCmpGrad(linearSampler, uv, depth, ddx, ddy, offset);
+                let gatherCmp = shadowMap.GatherCmp(linearSampler, uv, depth);
+                let gatherCmpOffset = shadowMap.GatherCmp(linearSampler, uv, depth, offset);
+
+                return baseOffset + biased + biasedOffset + lodColor + lodOffset
+                    + gradColor + gradOffset + gathered + gatheredRedOffset
+                    + loaded + loadedOffset + msLoaded + gatherCmp + gatherCmpOffset
+                    + vec4(cmp + cmpOffset + cmpLevel + cmpGradOffset + detail);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "let baseOffset: Vec4<f32> = sample_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset);"
+        in generated_code
+    )
+    assert (
+        "let biased: Vec4<f32> = sample_bias_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, 0.25);"
+        in generated_code
+    )
+    assert (
+        "let biasedOffset: Vec4<f32> = sample_offset_bias_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset, 0.5);"
+        in generated_code
+    )
+    assert (
+        "let lodOffset: Vec4<f32> = sample_lod_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, lod, offset);"
+        in generated_code
+    )
+    assert (
+        "let gradOffset: Vec4<f32> = sample_grad_offset_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert "texture_dimensions(*COLOR_MAP, (width, height));" in generated_code
+    assert (
+        "let gatheredRedOffset: Vec4<f32> = texture_gather_offset_component_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv, offset, 0);"
+        in generated_code
+    )
+    assert "let loaded: Vec4<f32> = texel_fetch(*COLOR_MAP, pixel, 0);" in (
+        generated_code
+    )
+    assert (
+        "let loadedOffset: Vec4<f32> = texel_fetch_offset(*COLOR_MAP, pixel, 0, offset);"
+        in generated_code
+    )
+    assert (
+        "let msLoaded: Vec4<f32> = texel_fetch(*MS_MAP, Vec2::<i32>::new(pixel.x, pixel.y), sampleIndex);"
+        in generated_code
+    )
+    assert (
+        "let detail: f32 = texture_calculate_lod(*COLOR_MAP, *LINEAR_SAMPLER, uv);"
+        in generated_code
+    )
+    assert (
+        "let cmpGradOffset: f32 = texture_compare_grad_offset_sampler(*SHADOW_MAP, *LINEAR_SAMPLER, uv, depth, ddx, ddy, offset);"
+        in generated_code
+    )
+    assert (
+        "let gatherCmpOffset: Vec4<f32> = texture_gather_compare_offset_sampler(*SHADOW_MAP, *LINEAR_SAMPLER, uv, depth, offset);"
+        in generated_code
+    )
+    assert ".Sample" not in generated_code
+    assert ".Gather" not in generated_code
+    assert ".Load" not in generated_code
+    assert ".GetDimensions" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_texture_helper_diagnostics_reject_invalid_resources():
+    non_shadow_compare = """
+    shader InvalidRustTextureCompare {
+        sampler2D colorMap;
+
+        fragment {
+            float main(vec2 uv, float depth) @ gl_FragDepth {
+                return textureCompare(colorMap, uv, depth);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="texture_compare.*shadow texture required"):
+        generate_code(parse_code(tokenize_code(non_shadow_compare)))
+
+    image_gather = """
+    shader InvalidRustImageGather {
+        image2D colorImage;
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return textureGather(colorImage, uv);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="texture_gather.*texture resource required"):
+        generate_code(parse_code(tokenize_code(image_gather)))
+
+    unsupported_member = """
+    Texture2D<float4> colorMap;
+    SamplerState linearSampler;
+
+    shader InvalidRustTextureMember {
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return colorMap.UnsupportedSample(linearSampler, uv);
+            }
+        }
+    }
+    """
+    with pytest.raises(
+        ValueError,
+        match="Unsupported Rust texture member operation UnsupportedSample",
+    ):
+        generate_code(parse_code(tokenize_code(unsupported_member)))
+
+
 def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path):
     code = """
     shader TextureAdvancedSamplingProbe {
@@ -17753,6 +18216,66 @@ def test_glsl_buffer_block_placeholders_and_access_diagnostics_compile(tmp_path)
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_glsl_buffer_block_binding_metadata_and_conflicts_for_rust_codegen(
+    tmp_path,
+):
+    code = """
+    shader RustGlslBufferBlockBindings {
+        struct Data {
+            uint value;
+        };
+
+        layout(std430, set = 2, binding = 4) buffer DataBlock {
+            Data values[];
+        } dataBlock;
+
+        Data explicitData @glsl_buffer_block(std140) @readonly @set(3) @binding(5);
+        Data automaticData @glsl_buffer_block(std430);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=dataBlock kind=glsl_buffer_block "
+        "layout=std430 access=readwrite set=2 binding=4 binding_source=explicit"
+        in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=explicitData kind=glsl_buffer_block "
+        "layout=std140 access=readonly set=3 binding=5 binding_source=explicit"
+        in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=automaticData kind=glsl_buffer_block "
+        "layout=std430 access=readwrite set=0 binding=0 binding_source=automatic"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+    duplicate_binding = """
+    shader DuplicateRustGlslBufferBlockBinding {
+        struct Data {
+            uint value;
+        };
+
+        Data values @glsl_buffer_block(std430) @binding(2);
+        RWStructuredBuffer<uint> counters @binding(2);
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_binding)))
+
+
 def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
     code = """
     shader RustResourceBindings {
@@ -17803,6 +18326,36 @@ def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen(
+    tmp_path,
+):
+    code = """
+    shader RustTextureSamplerBindings {
+        sampler2D colorMap @binding(2);
+        sampler linearSampler @binding(2);
+
+        fragment {
+            vec4 main(vec2 uv) @ gl_FragColor {
+                return texture(colorMap, linearSampler, uv);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=colorMap kind=texture set=0 "
+        "binding=2 binding_source=explicit" in generated_code
+    )
+    assert (
+        "// CrossGL resource metadata: name=linearSampler kind=sampler set=0 "
+        "binding=2 binding_source=explicit" in generated_code
+    )
+    assert "return sample_sampler(*COLOR_MAP, *LINEAR_SAMPLER, uv);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
     duplicate_texture_binding = """
     shader DuplicateRustTextureBindings {
@@ -17817,6 +18370,20 @@ def test_duplicate_resource_bindings_are_rejected_for_rust_codegen():
 
     with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
         generate_code(parse_code(tokenize_code(duplicate_texture_binding)))
+
+    duplicate_sampler_binding = """
+    shader DuplicateRustSamplerBindings {
+        @binding(1) sampler firstSampler;
+        @binding(1) sampler secondSampler;
+
+        compute {
+            void main() {}
+        }
+    }
+    """
+
+    with pytest.raises(ValueError, match="Conflicting Rust resource binding"):
+        generate_code(parse_code(tokenize_code(duplicate_sampler_binding)))
 
     overlapping_buffer_range = """
     shader DuplicateRustBufferBindings {
@@ -23701,37 +24268,167 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-@pytest.mark.parametrize(
-    ("stage_name", "normalized_stage"),
-    [
-        ("amplification", "amplification"),
-        ("mesh", "mesh"),
-        ("object", "object"),
-        ("task", "task"),
-    ],
-)
-def test_unsupported_shader_stages_are_rejected_for_rust_codegen(
-    stage_name, normalized_stage
-):
-    code = f"""
-    shader UnsupportedRustStage {{
-        {stage_name} {{
-            void main() {{
-            }}
-        }}
-    }}
+def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_path):
+    code = """
+    shader RustMeshTaskPipeline {
+        struct MeshPayload {
+            uint meshlet;
+        };
+
+        struct MeshVertex {
+            vec4 position @ gl_Position;
+        };
+
+        task {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() @numthreads(1, 1, 1) {
+                MeshPayload payload;
+                payload.meshlet = 7u;
+                DispatchMesh(1, 1, 1, payload);
+            }
+        }
+
+        object {
+            void main() @numthreads(2, 1, 1) {
+                DispatchMesh(2, 3, 4);
+            }
+        }
+
+        amplification {
+            void main() @numthreads(3, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+
+        mesh {
+            void main(
+                @mesh_payload in MeshPayload payload,
+                @vertices out MeshVertex verts[3],
+                @indices out uvec3 tris[1]
+            )
+                @numthreads(32, 1, 1)
+                @outputtopology(triangle)
+                @maxvertices(64)
+                @maxprimitives(32) {
+                SetMeshOutputCounts(3, 1);
+                verts[0].position = vec4(float(payload.meshlet), 0.0, 0.0, 1.0);
+                tris[0] = uvec3(0u, 1u, 2u);
+            }
+        }
+    }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=rf"Rust output does not support stage type\(s\): {normalized_stage}",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "// CrossGL mesh/task placeholders" in generated_code
+    assert "pub fn _crossgl_set_mesh_output_counts" in generated_code
+    assert "pub fn _crossgl_dispatch_mesh" in generated_code
+    assert "// CrossGL shader stage: task" in generated_code
+    assert "// CrossGL mesh/task stage: stage=task" in generated_code
+    assert "// CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
+    assert "// CrossGL mesh/task local size: 1, 1, 1" in generated_code
+    assert "// CrossGL shader stage: object" in generated_code
+    assert "// CrossGL shader stage: amplification" in generated_code
+    assert "// CrossGL shader stage: mesh" in generated_code
+    assert "// CrossGL mesh output topology: triangle" in generated_code
+    assert "// CrossGL mesh max vertices: 64" in generated_code
+    assert "// CrossGL mesh max primitives: 32" in generated_code
+    assert (
+        "// CrossGL mesh parameter role: mesh_payload:payload->MeshPayload, "
+        "vertices:verts->MeshVertex[3], indices:tris->uvec3[1]" in generated_code
+    )
+    assert "pub fn task_main() -> ()" in generated_code
+    assert "pub fn object_main() -> ()" in generated_code
+    assert "pub fn amplification_main() -> ()" in generated_code
+    assert "pub fn mesh_main(" in generated_code
+    assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
+    assert "_crossgl_dispatch_mesh_without_payload(2, 3, 4)" in generated_code
+    assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
+    assert "MeshOpNode" not in generated_code
+
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
+def test_rust_mesh_task_stages_validate_metadata_and_intrinsics():
+    missing_topology = """
+    shader MissingRustMeshTopology {
+        mesh {
+            void main() @maxvertices(3) @maxprimitives(1) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires outputtopology"):
+        generate_code(parse_code(tokenize_code(missing_topology)))
+
+    invalid_topology = """
+    shader BadRustMeshTopology {
+        mesh {
+            void main()
+                @outputtopology(line_strip)
+                @maxvertices(3)
+                @maxprimitives(1) {
+                SetMeshOutputCounts(3, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputtopology.*must be"):
+        generate_code(parse_code(tokenize_code(invalid_topology)))
+
+    bad_numthreads_arity = """
+    shader BadRustMeshNumthreads {
+        task {
+            void main() @numthreads(1, 1, 1, 1) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="numthreads requires at most three"):
+        generate_code(parse_code(tokenize_code(bad_numthreads_arity)))
+
+    bad_stage_context = """
+    shader BadRustMeshContext {
+        mesh {
+            void main() @outputtopology(triangle) {
+                DispatchMesh(1, 1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh.*only valid"):
+        generate_code(parse_code(tokenize_code(bad_stage_context)))
+
+    bad_arity = """
+    shader BadRustMeshArity {
+        task {
+            void main() {
+                DispatchMesh(1, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="DispatchMesh requires three"):
+        generate_code(parse_code(tokenize_code(bad_arity)))
+
+    bad_count_type = """
+    shader BadRustMeshCountType {
+        mesh {
+            void main() @outputtopology(triangle) {
+                SetMeshOutputCounts(1.0, 1);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="integer scalar"):
+        generate_code(parse_code(tokenize_code(bad_count_type)))
+
+
+def test_rust_qualified_mesh_stage_uses_deterministic_entry_name(tmp_path):
     ast = ShaderNode(
-        name="UnsupportedQualifiedRustStage",
+        name="QualifiedRustMeshStage",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
         functions=[
             FunctionNode(
@@ -23739,16 +24436,31 @@ def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
                 return_type=PrimitiveType("void"),
                 parameters=[],
                 body=BlockNode([]),
-                qualifiers=["hull", ShaderStage.MESH],
+                qualifiers=[ShaderStage.MESH],
+                attributes=[AttributeNode("outputtopology", ["triangle"])],
             )
         ],
     )
 
-    with pytest.raises(
-        ValueError,
-        match=(r"Rust output does not support stage type\(s\): mesh"),
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+
+    assert "// CrossGL shader stage: mesh" in generated_code
+    assert "pub fn mesh_main() -> ()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_direct_mesh_ir_node_lowers_to_rust_helper_without_ast_repr():
+    codegen = RustCodeGen()
+
+    codegen.current_shader_type = "mesh"
+    counts_expr = codegen.generate_expression(MeshOpNode("SetMeshOutputCounts", [1, 1]))
+    assert counts_expr == "_crossgl_set_mesh_output_counts(1, 1)"
+    assert "set_mesh_output_counts" in codegen.required_mesh_helpers
+
+    codegen.current_shader_type = "task"
+    dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
+    assert dispatch_expr == "_crossgl_dispatch_mesh_without_payload(1, 1, 1)"
+    assert "dispatch_mesh" in codegen.required_mesh_helpers
 
 
 def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp_path):
@@ -24476,6 +25188,99 @@ def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
     assert "unsupported wave op" not in generated_code
 
 
+def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
+    code = """
+    shader RustWaveContract {
+        compute {
+            void main(uint lane, bool active) {
+                uint sumValue = WaveActiveSum(lane);
+                uint productValue = WaveActiveProduct(lane + 1u);
+                uint minValue = WaveActiveMin(sumValue);
+                uint maxValue = WaveActiveMax(productValue);
+                bool anyLane = WaveActiveAnyTrue(active);
+                bool allLane = WaveActiveAllTrue(anyLane);
+                bool allEqual = WaveActiveAllEqual(lane);
+                uvec4 ballot = WaveActiveBallot(allEqual);
+                uint activeCount = WaveActiveCountBits(allEqual);
+                uint bitAnd = WaveActiveBitAnd(maxValue);
+                uint bitOr = WaveActiveBitOr(bitAnd);
+                uint bitXor = WaveActiveBitXor(bitOr);
+                uint laneCount = WaveGetLaneCount();
+                uint laneIndex = WaveGetLaneIndex();
+                bool firstLane = WaveIsFirstLane();
+                uint firstValue = WaveReadLaneFirst(bitXor);
+                uint laneValue = WaveReadLaneAt(firstValue, laneIndex);
+                uint prefixSum = WavePrefixSum(laneValue);
+                uint prefixProduct = WavePrefixProduct(prefixSum + 1u);
+                uint prefixCount = WavePrefixCountBits(allLane);
+                uvec4 matchMask = WaveMatch(prefixProduct);
+                uint quadLane = QuadReadLaneAt(prefixProduct, 1u);
+                uint quadX = QuadReadAcrossX(quadLane);
+                uint quadY = QuadReadAcrossY(quadX);
+                uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
+                bool quadAny = QuadAny(active);
+                bool quadAll = QuadAll(quadAny);
+                uint shuffled = WaveShuffle(quadDiagonal, 0u);
+                uint shuffledXor = WaveShuffleXor(shuffled, 1u);
+                uint partitionedSum = WaveMultiPrefixSum(shuffledXor, ballot);
+                uint partitionedProduct = WaveMultiPrefixProduct(partitionedSum, ballot);
+                uint partitionedCount = WaveMultiPrefixCountBits(quadAll, matchMask);
+                uint partitionedAnd = WaveMultiPrefixBitAnd(partitionedProduct, matchMask);
+                uint partitionedOr = WaveMultiPrefixBitOr(partitionedAnd, matchMask);
+                uint partitionedXor = WaveMultiPrefixBitXor(partitionedOr, matchMask);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    for expected in [
+        "subgroup_add(lane)",
+        "subgroup_mul((lane + 1))",
+        "subgroup_min(sumValue)",
+        "subgroup_max(productValue)",
+        "subgroup_any(active)",
+        "subgroup_all(anyLane)",
+        "subgroup_all_equal(lane)",
+        "subgroup_ballot(allEqual)",
+        "subgroup_ballot_bit_count(allEqual)",
+        "subgroup_and(maxValue)",
+        "subgroup_or(bitAnd)",
+        "subgroup_xor(bitOr)",
+        "subgroup_size()",
+        "subgroup_invocation_id()",
+        "subgroup_elect()",
+        "subgroup_broadcast_first(bitXor)",
+        "subgroup_broadcast(firstValue, laneIndex)",
+        "subgroup_exclusive_add(laneValue)",
+        "subgroup_exclusive_mul((prefixSum + 1))",
+        "subgroup_exclusive_ballot_bit_count(allLane)",
+        "subgroup_match(prefixProduct)",
+        "subgroup_quad_broadcast(prefixProduct, 1)",
+        "subgroup_quad_swap_horizontal(quadLane)",
+        "subgroup_quad_swap_vertical(quadX)",
+        "subgroup_quad_swap_diagonal(quadY)",
+        "subgroup_quad_any(active)",
+        "subgroup_quad_all(quadAny)",
+        "subgroup_shuffle(quadDiagonal, 0)",
+        "subgroup_shuffle_xor(shuffled, 1)",
+        "subgroup_partitioned_add(shuffledXor, ballot)",
+        "subgroup_partitioned_mul(partitionedSum, ballot)",
+        "subgroup_partitioned_ballot_bit_count(quadAll, matchMask)",
+        "subgroup_partitioned_and(partitionedProduct, matchMask)",
+        "subgroup_partitioned_or(partitionedAnd, matchMask)",
+        "subgroup_partitioned_xor(partitionedOr, matchMask)",
+    ]:
+        assert expected in generated_code
+    assert "Wave" not in generated_code
+    assert "QuadRead" not in generated_code
+    assert "QuadAny" not in generated_code
+    assert "QuadAll" not in generated_code
+    assert "unsupported wave op" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_barrier_emits_rust_workgroup_barrier():
     code = """
     shader ComputeSync {
@@ -24567,6 +25372,55 @@ def test_rust_user_defined_synchronization_names_are_not_lowered():
     assert "barrier();" in generated_code
     assert "workgroup_barrier()" not in generated_code
     assert "memory_barrier()" in generated_code
+
+
+def test_rust_synchronization_helper_contract_compiles(tmp_path):
+    code = """
+    shader RustSynchronizationContract {
+        compute {
+            void main() {
+                barrier();
+                workgroupBarrier();
+                memoryBarrier();
+                memoryBarrierShared();
+                memoryBarrierBuffer();
+                memoryBarrierImage();
+                groupMemoryBarrier();
+                allMemoryBarrier();
+                deviceMemoryBarrier();
+                GroupMemoryBarrier();
+                GroupMemoryBarrierWithGroupSync();
+                DeviceMemoryBarrier();
+                DeviceMemoryBarrierWithGroupSync();
+                AllMemoryBarrier();
+                AllMemoryBarrierWithGroupSync();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    for expected in [
+        "workgroup_barrier()",
+        "memory_barrier()",
+        "memory_barrier_shared()",
+        "memory_barrier_buffer()",
+        "memory_barrier_image()",
+        "group_memory_barrier()",
+        "all_memory_barrier()",
+        "device_memory_barrier()",
+        "group_memory_barrier_with_group_sync()",
+        "device_memory_barrier_with_group_sync()",
+        "all_memory_barrier_with_group_sync()",
+    ]:
+        assert expected in generated_code
+    assert "memoryBarrier" not in generated_code
+    assert "GroupMemoryBarrier" not in generated_code
+    assert "DeviceMemoryBarrier" not in generated_code
+    assert "AllMemoryBarrier" not in generated_code
+    assert "unsupported sync" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_multiple_wave_ops_in_one_function():
