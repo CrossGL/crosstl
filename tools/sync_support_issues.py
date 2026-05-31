@@ -154,13 +154,19 @@ def load_matrix(path: Path) -> dict[str, Any]:
 
 
 def load_signals(path: Path | None) -> dict[str, Any] | None:
-    return load_json_input(
+    report = load_json_input(
         path,
         required=False,
         expected_generator=SUPPORT_SIGNALS_GENERATOR,
         required_fields=SUPPORT_SIGNALS_REQUIRED_FIELDS,
         schema_version=SUPPORT_SIGNALS_SCHEMA_VERSION,
     )
+    if report is None or report.get("load_error"):
+        return report
+    contract_error = support_signals_contract_error(report, path)
+    if contract_error is not None:
+        return {"load_error": contract_error}
+    return report
 
 
 def load_optional_json(path: Path | None) -> dict[str, Any] | None:
@@ -264,6 +270,456 @@ def json_report_schema_error(
                 ),
             )["load_error"]
 
+    return None
+
+
+def value_type_label(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "list"
+    return type(value).__name__
+
+
+def type_label(expected_type: type | tuple[type, ...]) -> str:
+    if isinstance(expected_type, tuple):
+        return " or ".join(type_label(item) for item in expected_type)
+    if expected_type is dict:
+        return "object"
+    if expected_type is list:
+        return "list"
+    if expected_type is bool:
+        return "bool"
+    if expected_type is int:
+        return "int"
+    if expected_type is str:
+        return "str"
+    return expected_type.__name__
+
+
+def value_matches_type(value: Any, expected_type: type | tuple[type, ...]) -> bool:
+    if isinstance(expected_type, tuple):
+        return any(value_matches_type(value, item) for item in expected_type)
+    if expected_type is bool:
+        return type(value) is bool
+    if expected_type is int:
+        return type(value) is int
+    return isinstance(value, expected_type)
+
+
+def invalid_report_field(
+    path: Path | None,
+    field: str,
+    expected_type: type | tuple[type, ...],
+    value: Any,
+) -> dict[str, Any]:
+    return optional_json_load_error(
+        path,
+        "InvalidReportField",
+        "{} must be {}, got {}".format(
+            field,
+            type_label(expected_type),
+            value_type_label(value),
+        ),
+    )["load_error"]
+
+
+def missing_report_fields(
+    path: Path | None,
+    field: str,
+    fields: list[str],
+) -> dict[str, Any]:
+    return optional_json_load_error(
+        path,
+        "MissingReportFields",
+        "{} missing required fields: {}".format(field, ", ".join(fields)),
+    )["load_error"]
+
+
+def validate_required_fields(
+    value: dict[str, Any],
+    path: Path | None,
+    field: str,
+    required_fields: tuple[str, ...],
+) -> dict[str, Any] | None:
+    missing = [required for required in required_fields if required not in value]
+    if missing:
+        return missing_report_fields(path, field, missing)
+    return None
+
+
+def validate_nested_field_types(
+    value: dict[str, Any],
+    path: Path | None,
+    field: str,
+    fields: dict[str, type | tuple[type, ...]],
+) -> dict[str, Any] | None:
+    for key, expected_type in fields.items():
+        if key not in value:
+            continue
+        if not value_matches_type(value[key], expected_type):
+            return invalid_report_field(
+                path,
+                f"{field}.{key}",
+                expected_type,
+                value[key],
+            )
+    return None
+
+
+def validate_string_int_map(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_report_field(path, field, dict, value)
+    for key, item in value.items():
+        if not value_matches_type(key, str):
+            return invalid_report_field(path, f"{field} key", str, key)
+        if not value_matches_type(item, int):
+            return invalid_report_field(path, f"{field}.{key}", int, item)
+    return None
+
+
+def validate_string_list(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_report_field(path, field, list, value)
+    for index, item in enumerate(value):
+        if not value_matches_type(item, str):
+            return invalid_report_field(path, f"{field}[{index}]", str, item)
+    return None
+
+
+def validate_signal_hit_list(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_report_field(path, field, list, value)
+    for index, hit in enumerate(value):
+        hit_field = f"{field}[{index}]"
+        if not isinstance(hit, dict):
+            return invalid_report_field(path, hit_field, dict, hit)
+        error = validate_nested_field_types(
+            hit,
+            path,
+            hit_field,
+            {
+                "backend": str,
+                "category": str,
+                "kind": str,
+                "message": str,
+                "nodeid": str,
+                "path": str,
+                "source": str,
+                "symbol": str,
+                "term": str,
+                "url": str,
+                "count": int,
+            },
+        )
+        if error is not None:
+            return error
+        if "matched_terms" in hit:
+            error = validate_string_list(
+                hit["matched_terms"],
+                path,
+                f"{hit_field}.matched_terms",
+            )
+            if error is not None:
+                return error
+    return None
+
+
+def validate_signal_entry(
+    value: Any,
+    path: Path | None,
+    field: str,
+    *,
+    require_core: bool,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_report_field(path, field, dict, value)
+    if require_core:
+        error = validate_required_fields(
+            value,
+            path,
+            field,
+            (
+                "catalog_evidence_count",
+                "state",
+                "docs",
+                "implementation",
+                "tests",
+                "unsupported",
+            ),
+        )
+        if error is not None:
+            return error
+    error = validate_nested_field_types(
+        value,
+        path,
+        field,
+        {
+            "catalog_status": (str, type(None)),
+            "catalog_evidence_count": int,
+            "state": str,
+            "failure_count": int,
+            "category": str,
+        },
+    )
+    if error is not None:
+        return error
+    for hit_list in ("docs", "implementation", "tests", "unsupported", "failures"):
+        if hit_list not in value:
+            continue
+        error = validate_signal_hit_list(value[hit_list], path, f"{field}.{hit_list}")
+        if error is not None:
+            return error
+    return None
+
+
+def validate_support_signals_summary(
+    value: Any,
+    path: Path | None,
+) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return invalid_report_field(path, "summary", dict, value)
+    error = validate_required_fields(
+        value,
+        path,
+        "summary",
+        ("docs_probe", "pytest_failures"),
+    )
+    if error is not None:
+        return error
+    error = validate_nested_field_types(
+        value,
+        path,
+        "summary",
+        {
+            "backend_count": int,
+            "feature_count": int,
+            "issue_count": int,
+            "state_counts": dict,
+            "docs_probe": dict,
+            "pytest_failures": dict,
+        },
+    )
+    if error is not None:
+        return error
+    if "state_counts" in value:
+        error = validate_string_int_map(
+            value["state_counts"], path, "summary.state_counts"
+        )
+        if error is not None:
+            return error
+
+    docs_probe = value["docs_probe"]
+    error = validate_required_fields(
+        docs_probe,
+        path,
+        "summary.docs_probe",
+        ("provided", "total", "ok", "failed", "linked_documents"),
+    )
+    if error is not None:
+        return error
+    error = validate_nested_field_types(
+        docs_probe,
+        path,
+        "summary.docs_probe",
+        {
+            "provided": bool,
+            "total": int,
+            "ok": int,
+            "failed": int,
+            "linked_documents": int,
+        },
+    )
+    if error is not None:
+        return error
+    if docs_probe["ok"] + docs_probe["failed"] != docs_probe["total"]:
+        return optional_json_load_error(
+            path,
+            "InvalidReportField",
+            "summary.docs_probe.total must match ok + failed: {} != {}".format(
+                docs_probe["total"],
+                docs_probe["ok"] + docs_probe["failed"],
+            ),
+        )["load_error"]
+
+    pytest_failures = value["pytest_failures"]
+    error = validate_required_fields(
+        pytest_failures,
+        path,
+        "summary.pytest_failures",
+        (
+            "provided",
+            "report_count",
+            "load_error_count",
+            "failed_testcase_count",
+        ),
+    )
+    if error is not None:
+        return error
+    error = validate_nested_field_types(
+        pytest_failures,
+        path,
+        "summary.pytest_failures",
+        {
+            "provided": bool,
+            "report_count": int,
+            "load_error_count": int,
+            "failed_testcase_count": int,
+            "categories": dict,
+            "backends": dict,
+        },
+    )
+    if error is not None:
+        return error
+    for field in ("categories", "backends"):
+        if field in pytest_failures:
+            error = validate_string_int_map(
+                pytest_failures[field],
+                path,
+                f"summary.pytest_failures.{field}",
+            )
+            if error is not None:
+                return error
+    return None
+
+
+def support_signals_contract_error(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    error = validate_nested_field_types(
+        report,
+        path,
+        "support_signals",
+        {
+            "summary": dict,
+            "features": list,
+            "issues": list,
+            "backends": list,
+            "source": dict,
+        },
+    )
+    if error is not None:
+        return error
+    error = validate_support_signals_summary(report["summary"], path)
+    if error is not None:
+        return error
+
+    for index, feature in enumerate(report["features"]):
+        feature_field = f"features[{index}]"
+        if not isinstance(feature, dict):
+            return invalid_report_field(path, feature_field, dict, feature)
+        error = validate_required_fields(
+            feature,
+            path,
+            feature_field,
+            ("id", "support"),
+        )
+        if error is not None:
+            return error
+        error = validate_nested_field_types(
+            feature,
+            path,
+            feature_field,
+            {
+                "id": str,
+                "category": str,
+                "name": str,
+                "terms": list,
+                "support": dict,
+            },
+        )
+        if error is not None:
+            return error
+        if "terms" in feature:
+            error = validate_string_list(
+                feature["terms"], path, f"{feature_field}.terms"
+            )
+            if error is not None:
+                return error
+        for backend_id, signal in feature["support"].items():
+            if not value_matches_type(backend_id, str):
+                return invalid_report_field(
+                    path,
+                    f"{feature_field}.support key",
+                    str,
+                    backend_id,
+                )
+            error = validate_signal_entry(
+                signal,
+                path,
+                f"{feature_field}.support.{backend_id}",
+                require_core=True,
+            )
+            if error is not None:
+                return error
+
+    issue_fields = (
+        "key",
+        "kind",
+        "title",
+        "backend_id",
+        "backend",
+        "feature_id",
+        "feature",
+        "category",
+        "status",
+        "state",
+    )
+    for index, issue in enumerate(report["issues"]):
+        issue_field = f"issues[{index}]"
+        if not isinstance(issue, dict):
+            return invalid_report_field(path, issue_field, dict, issue)
+        error = validate_required_fields(issue, path, issue_field, issue_fields)
+        if error is not None:
+            return error
+        error = validate_nested_field_types(
+            issue,
+            path,
+            issue_field,
+            {field: str for field in issue_fields},
+        )
+        if error is not None:
+            return error
+        if not issue["key"].startswith("extracted:"):
+            return optional_json_load_error(
+                path,
+                "InvalidReportField",
+                f"{issue_field}.key must start with extracted:",
+            )["load_error"]
+        if "matched_terms" in issue:
+            error = validate_string_list(
+                issue["matched_terms"],
+                path,
+                f"{issue_field}.matched_terms",
+            )
+            if error is not None:
+                return error
+        if "signal" in issue:
+            error = validate_signal_entry(
+                issue["signal"],
+                path,
+                f"{issue_field}.signal",
+                require_core=False,
+            )
+            if error is not None:
+                return error
     return None
 
 
