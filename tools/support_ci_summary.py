@@ -612,28 +612,9 @@ def validate_matrix_check_contract(
     )
     if error is not None:
         return error
-    error = validate_counter_map(report, path, "summary", MATRIX_CHECK_SUMMARY_COUNTERS)
+    error = validate_matrix_check_summary_value(report["summary"], path, "summary")
     if error is not None:
         return error
-    stale_artifacts = report["summary"].get("stale_artifacts")
-    if stale_artifacts is None:
-        return load_error(
-            path,
-            "MissingReportFields",
-            "summary missing required fields: stale_artifacts",
-        )
-    if not isinstance(stale_artifacts, list):
-        return invalid_field_error(
-            path, "summary.stale_artifacts", list, stale_artifacts
-        )
-    for index, artifact_path in enumerate(stale_artifacts):
-        if not isinstance(artifact_path, str):
-            return invalid_field_error(
-                path,
-                f"summary.stale_artifacts[{index}]",
-                str,
-                artifact_path,
-            )
     error = validate_optional_object_list(report, path, "artifacts")
     if error is not None:
         return error
@@ -654,6 +635,45 @@ def validate_matrix_check_contract(
         diff = artifact.get("diff")
         if diff is not None and not isinstance(diff, list):
             return invalid_field_error(path, f"artifacts[{index}].diff", list, diff)
+    return None
+
+
+def validate_matrix_check_summary_value(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    error = validate_counter_map_value(
+        value,
+        path,
+        field,
+        MATRIX_CHECK_SUMMARY_COUNTERS,
+    )
+    if error is not None:
+        return error
+
+    stale_artifacts = value.get("stale_artifacts")
+    if stale_artifacts is None:
+        return load_error(
+            path,
+            "MissingReportFields",
+            f"{field} missing required fields: stale_artifacts",
+        )
+    error = validate_string_list_value(
+        stale_artifacts, path, f"{field}.stale_artifacts"
+    )
+    if error is not None:
+        return error
+    if value["stale_count"] != len(stale_artifacts):
+        return load_error(
+            path,
+            "InvalidReportField",
+            "{}.stale_count must match stale_artifacts length: {} != {}".format(
+                field,
+                value["stale_count"],
+                len(stale_artifacts),
+            ),
+        )
     return None
 
 
@@ -1026,6 +1046,156 @@ def validate_preflight_failure_contract(
     )
 
 
+def validate_embedded_stale_artifact_details(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_field_error(path, field, list, value)
+    for index, artifact in enumerate(value):
+        artifact_field = f"{field}[{index}]"
+        if not isinstance(artifact, dict):
+            return invalid_field_error(path, artifact_field, dict, artifact)
+        missing = [
+            required
+            for required in ("path", "diff_line_count")
+            if required not in artifact
+        ]
+        if missing:
+            return load_error(
+                path,
+                "MissingReportFields",
+                "{} missing required fields: {}".format(
+                    artifact_field,
+                    ", ".join(missing),
+                ),
+            )
+        error = validate_nested_field_types(
+            artifact,
+            path,
+            artifact_field,
+            {
+                "path": str,
+                "diff_line_count": int,
+                "actual_sha256": (str, type(None)),
+                "expected_sha256": (str, type(None)),
+            },
+        )
+        if error is not None:
+            return error
+    return None
+
+
+def validate_embedded_matrix_check_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    matrix_check = report["support_matrix_check"]
+    missing = [
+        required for required in ("provided", "path") if required not in matrix_check
+    ]
+    if missing:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "support_matrix_check missing required fields: {}".format(
+                ", ".join(missing)
+            ),
+        )
+
+    error = validate_nested_field_types(
+        matrix_check,
+        path,
+        "support_matrix_check",
+        {
+            "provided": bool,
+            "path": (str, type(None)),
+            "ok": bool,
+            "summary": dict,
+            "stale_artifacts": list,
+            "load_error": dict,
+        },
+    )
+    if error is not None:
+        return error
+
+    if not matrix_check["provided"]:
+        return None
+
+    if "ok" not in matrix_check:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "support_matrix_check missing required fields: ok",
+        )
+
+    load_error_summary = matrix_check.get("load_error")
+    if load_error_summary is not None:
+        if matrix_check["ok"] is not False:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "support_matrix_check.ok must be false when load_error is present",
+            )
+        error = validate_report_error_summary(
+            load_error_summary,
+            path,
+            "support_matrix_check.load_error",
+        )
+        if error is not None:
+            return error
+        if "stale_artifacts" in matrix_check:
+            return validate_embedded_stale_artifact_details(
+                matrix_check["stale_artifacts"],
+                path,
+                "support_matrix_check.stale_artifacts",
+            )
+        return None
+
+    missing = [
+        required
+        for required in ("summary", "stale_artifacts")
+        if required not in matrix_check
+    ]
+    if missing:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "support_matrix_check missing required fields: {}".format(
+                ", ".join(missing)
+            ),
+        )
+
+    error = validate_matrix_check_summary_value(
+        matrix_check["summary"],
+        path,
+        "support_matrix_check.summary",
+    )
+    if error is not None:
+        return error
+    error = validate_embedded_stale_artifact_details(
+        matrix_check["stale_artifacts"],
+        path,
+        "support_matrix_check.stale_artifacts",
+    )
+    if error is not None:
+        return error
+
+    summary_paths = matrix_check["summary"]["stale_artifacts"]
+    detail_paths = [artifact["path"] for artifact in matrix_check["stale_artifacts"]]
+    if detail_paths != summary_paths:
+        return load_error(
+            path,
+            "InvalidReportField",
+            (
+                "support_matrix_check.stale_artifacts paths must match "
+                "support_matrix_check.summary.stale_artifacts"
+            ),
+        )
+    return None
+
+
 def validate_issue_plan_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -1067,6 +1237,7 @@ def validate_issue_plan_contract(
         lambda: validate_preflight_failure_contract(report, path),
         lambda: validate_budget_contract(report, path, "planned_action_budget"),
         lambda: validate_budget_contract(report, path, "planned_closure_budget"),
+        lambda: validate_embedded_matrix_check_contract(report, path),
         lambda: validate_operation_reconciliation_contract(report, path),
     ):
         error = validator()
@@ -1099,31 +1270,6 @@ def validate_issue_plan_contract(
                 existing[counter],
             )
 
-    matrix_check = report["support_matrix_check"]
-    if "provided" not in matrix_check:
-        return load_error(
-            path,
-            "MissingReportFields",
-            "support_matrix_check missing required fields: provided",
-        )
-    if not value_matches_type(matrix_check["provided"], bool):
-        return invalid_field_error(
-            path,
-            "support_matrix_check.provided",
-            bool,
-            matrix_check["provided"],
-        )
-    if (
-        "ok" in matrix_check
-        and matrix_check["ok"] is not None
-        and not value_matches_type(
-            matrix_check["ok"],
-            bool,
-        )
-    ):
-        return invalid_field_error(
-            path, "support_matrix_check.ok", bool, matrix_check["ok"]
-        )
     return None
 
 

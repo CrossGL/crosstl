@@ -243,6 +243,7 @@ def issue_plan_report():
         },
         "support_matrix_check": {
             "provided": True,
+            "path": "support/generated/support-matrix-check.json",
             "ok": False,
             "summary": {
                 "artifact_count": 3,
@@ -250,6 +251,14 @@ def issue_plan_report():
                 "stale_artifacts": ["support/generated/support-matrix.json"],
                 "total_diff_line_count": 18,
             },
+            "stale_artifacts": [
+                {
+                    "path": "support/generated/support-matrix.json",
+                    "diff_line_count": 18,
+                    "actual_sha256": "actual",
+                    "expected_sha256": "expected",
+                }
+            ],
         },
         "preflight_failure": {
             "phase": "list_sub_issues",
@@ -421,6 +430,7 @@ def clean_issue_plan_report():
         },
         "support_matrix_check": {
             "provided": True,
+            "path": "support/generated/support-matrix-check.json",
             "ok": True,
             "summary": {
                 "artifact_count": 3,
@@ -428,6 +438,7 @@ def clean_issue_plan_report():
                 "stale_artifacts": [],
                 "total_diff_line_count": 0,
             },
+            "stale_artifacts": [],
         },
     }
 
@@ -1328,6 +1339,186 @@ def test_load_optional_json_reports_invalid_issue_plan_contract(tmp_path):
         "type": "InvalidReportField",
         "message": "planned_actions.created must be int, got str",
     }
+
+
+def test_load_optional_json_reports_invalid_embedded_matrix_summary_counter(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["support_matrix_check"]["summary"]["stale_count"] = "none"
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "support_matrix_check.summary.stale_count must be int, got str",
+    }
+
+
+def test_load_optional_json_rejects_missing_embedded_matrix_summary_paths(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    del report["support_matrix_check"]["summary"]["stale_artifacts"]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "MissingReportFields",
+        "message": (
+            "support_matrix_check.summary missing required fields: stale_artifacts"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_embedded_matrix_stale_count_mismatch(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["support_matrix_check"]["summary"]["stale_count"] = 1
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": (
+            "support_matrix_check.summary.stale_count must match "
+            "stale_artifacts length: 1 != 0"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_invalid_embedded_matrix_stale_artifact(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    report["support_matrix_check"]["stale_artifacts"][0]["diff_line_count"] = "many"
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": (
+            "support_matrix_check.stale_artifacts[0].diff_line_count "
+            "must be int, got str"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_embedded_matrix_stale_path_mismatch(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    report["support_matrix_check"]["summary"]["stale_artifacts"] = [
+        "support/generated/support-roadmap.json"
+    ]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": (
+            "support_matrix_check.stale_artifacts paths must match "
+            "support_matrix_check.summary.stale_artifacts"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_invalid_embedded_matrix_load_error(
+    tmp_path,
+):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["support_matrix_check"] = {
+        "provided": True,
+        "path": "support/generated/support-matrix-check.json",
+        "ok": False,
+        "stale_artifacts": [],
+        "load_error": {
+            "type": "JSONDecodeError",
+            "message": 17,
+        },
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "support_matrix_check.load_error.message must be str, got int",
+    }
+
+
+def test_load_optional_json_allows_missing_embedded_matrix_report(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["support_matrix_check"] = {
+        "provided": False,
+        "path": None,
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert "load_error" not in loaded
 
 
 def test_load_optional_json_reports_invalid_planned_action_sample_limit(tmp_path):
