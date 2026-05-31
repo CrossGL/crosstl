@@ -51,6 +51,12 @@ jobs:
           --enforce-support-traceability
           --summary-output support/generated/pr-issue-link-summary.json
 
+      - name: Validate PR issue link summary
+        if: always()
+        run: >
+          python tools/sync_pr_issue_links.py
+          --validate-summary support/generated/pr-issue-link-summary.json
+
       - name: Upload PR issue link summary
         if: always()
         uses: actions/upload-artifact@v4

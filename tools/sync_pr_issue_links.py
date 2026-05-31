@@ -1309,6 +1309,29 @@ def write_sync_summary_output(path: Path, summary: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
+def validate_sync_summary_file(path: Path) -> list[str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"could not read {path}: {exc}"]
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return [f"{path} is not valid JSON: {exc}"]
+    return validate_sync_summary_payload(payload)
+
+
+def validate_sync_summary_file_cli(path: Path) -> int:
+    errors = validate_sync_summary_file(path)
+    if errors:
+        print(f"PR issue link summary validation failed for {path}:", file=sys.stderr)
+        for error_item in errors:
+            print(f"- {error_item}", file=sys.stderr)
+        return 1
+    print(f"PR issue link summary validation passed: {path}")
+    return 0
+
+
 def emit_support_link_audit(summary: dict[str, Any]) -> None:
     audit = summary.get("support_link_audit")
     if not audit:
@@ -1518,11 +1541,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "traceability decisions"
         ),
     )
+    parser.add_argument(
+        "--validate-summary",
+        type=Path,
+        help="Validate a previously written PR issue link JSON summary and exit",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if args.validate_summary:
+        return validate_sync_summary_file_cli(args.validate_summary)
+
     token = os.environ.get(args.token_env) or os.environ.get("GH_TOKEN")
     if args.dry_run:
         token = token or "dry-run-token"

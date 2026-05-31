@@ -1758,6 +1758,10 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability(
         "--summary-output support/generated/pr-issue-link-summary.json"
         in pr_issue_links
     )
+    assert "name: Validate PR issue link summary" in pr_issue_links
+    assert "--validate-summary support/generated/pr-issue-link-summary.json" in (
+        pr_issue_links
+    )
     assert "name: Upload PR issue link summary" in pr_issue_links
     assert "if: always()" in pr_issue_links
     assert "name: pr-issue-link-summary" in pr_issue_links

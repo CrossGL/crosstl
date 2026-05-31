@@ -1295,6 +1295,60 @@ def test_sync_summary_payload_validator_rejects_contract_drift():
     ) in module.validate_sync_summary_payload(wrong_source)
 
 
+def test_validate_summary_cli_accepts_written_payload_without_github_context(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    output_path = tmp_path / "pr-issue-link-summary.json"
+    module.write_sync_summary_output(output_path, pr_issue_link_summary_fixture())
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+
+    result = module.main(["--validate-summary", str(output_path)])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert f"PR issue link summary validation passed: {output_path}" in captured.out
+    assert captured.err == ""
+
+
+def test_validate_summary_cli_rejects_malformed_artifact(tmp_path, capsys):
+    module = load_sync_module()
+    output_path = tmp_path / "pr-issue-link-summary.json"
+    output_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generator": "sync_pr_issue_links",
+                "summary": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = module.main(["--validate-summary", str(output_path)])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert f"PR issue link summary validation failed for {output_path}" in captured.err
+    assert "summary.linked must be a non-negative integer" in captured.err
+
+
+def test_validate_summary_cli_reports_missing_artifact(tmp_path, capsys):
+    module = load_sync_module()
+    output_path = tmp_path / "missing-pr-issue-link-summary.json"
+
+    result = module.main(["--validate-summary", str(output_path)])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert "could not read" in captured.err
+
+
 def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, capsys):
     module = load_sync_module()
     event = {
