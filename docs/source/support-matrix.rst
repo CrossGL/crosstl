@@ -29,8 +29,8 @@ implicitly supported.
    "CUDA", ".cu", "crosstl/translator/codegen/cuda_codegen.py", "crosstl/backend/CUDA", "tests/test_translator/test_codegen/test_CUDA_codegen.py, tests/test_backend/test_CUDA", "435", "114", "CUDA C++ programming guide"
    "HIP", ".hip", "crosstl/translator/codegen/hip_codegen.py", "crosstl/backend/HIP", "tests/test_translator/test_codegen/test_hip_codegen.py, tests/test_backend/test_HIP", "484", "71", "ROCm HIP documentation"
    "Mojo", ".mojo", "crosstl/translator/codegen/mojo_codegen.py", "crosstl/backend/Mojo", "tests/test_translator/test_codegen/test_mojo_codegen.py, tests/test_backend/test_mojo", "568", "95", "Mojo manual"
-   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "642", "53", "Rust reference"
-   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "477", "351", "Slang user guide"
+   "Rust", ".rs", "crosstl/translator/codegen/rust_codegen.py", "crosstl/backend/Rust", "tests/test_translator/test_codegen/test_rust_codegen.py, tests/test_backend/test_rust", "644", "58", "Rust reference"
+   "Slang", ".slang", "crosstl/translator/codegen/slang_codegen.py", "crosstl/backend/slang", "tests/test_translator/test_codegen/test_slang_codegen.py, tests/test_backend/test_slang", "479", "356", "Slang user guide"
 
 .. csv-table:: Summary by backend
    :header: "Backend", "supported", "partial", "diagnostic", "validated_rejection", "unsupported", "unknown"
@@ -41,9 +41,9 @@ implicitly supported.
    "Vulkan SPIR-V", "20", "14", "1", "0", "0", "8"
    "CUDA", "13", "10", "0", "0", "4", "16"
    "HIP", "12", "10", "0", "0", "4", "17"
-   "Mojo", "12", "26", "0", "0", "5", "0"
-   "Rust", "13", "5", "0", "0", "4", "21"
-   "Slang", "15", "20", "0", "0", "0", "8"
+   "Mojo", "13", "25", "0", "0", "5", "0"
+   "Rust", "14", "5", "0", "0", "4", "20"
+   "Slang", "16", "19", "0", "0", "0", "8"
 
 Graphics Backend Focus
 ----------------------
@@ -112,8 +112,8 @@ Each category below uses the status codes from the legend.
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
 
    "Stage parameter semantics", "Y", "Y", "Y", "Y", "P", "P", "P", "P", "P"
-   "Direct function return semantics", "Y", "Y", "Y", "?", "?", "?", "P", "?", "P"
-   "Struct member semantics", "Y", "Y", "Y", "P", "P", "P", "P", "P", "P"
+   "Direct function return semantics", "Y", "Y", "Y", "?", "?", "?", "P", "P", "P"
+   "Struct member semantics", "Y", "Y", "Y", "P", "P", "P", "Y", "Y", "Y"
 
 .. csv-table:: resources
    :header: "Feature", "DirectX / HLSL", "OpenGL / GLSL", "Metal", "Vulkan SPIR-V", "CUDA", "HIP", "Mojo", "Rust", "Slang"
@@ -222,20 +222,17 @@ need an audit before implementation work can be scoped accurately.
    "CUDA", "stage I/O", "Stage parameter semantics", "partial", ""
    "HIP", "stage I/O", "Stage parameter semantics", "partial", ""
    "Mojo", "stage I/O", "Stage parameter semantics", "partial", "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete."
-   "Rust", "stage I/O", "Stage parameter semantics", "partial", ""
-   "Slang", "stage I/O", "Stage parameter semantics", "partial", ""
+   "Rust", "stage I/O", "Stage parameter semantics", "partial", "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete."
+   "Slang", "stage I/O", "Stage parameter semantics", "partial", "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete."
    "Vulkan SPIR-V", "stage I/O", "Direct function return semantics", "unknown", ""
    "CUDA", "stage I/O", "Direct function return semantics", "unknown", ""
    "HIP", "stage I/O", "Direct function return semantics", "unknown", ""
    "Mojo", "stage I/O", "Direct function return semantics", "partial", "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete."
-   "Rust", "stage I/O", "Direct function return semantics", "unknown", ""
+   "Rust", "stage I/O", "Direct function return semantics", "partial", "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete."
    "Slang", "stage I/O", "Direct function return semantics", "partial", "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete."
    "Vulkan SPIR-V", "stage I/O", "Struct member semantics", "partial", ""
    "CUDA", "stage I/O", "Struct member semantics", "partial", ""
    "HIP", "stage I/O", "Struct member semantics", "partial", ""
-   "Mojo", "stage I/O", "Struct member semantics", "partial", "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete."
-   "Rust", "stage I/O", "Struct member semantics", "partial", ""
-   "Slang", "stage I/O", "Struct member semantics", "partial", ""
    "CUDA", "resources", "Constant/uniform buffers", "partial", ""
    "HIP", "resources", "Constant/uniform buffers", "partial", ""
    "Mojo", "resources", "Constant/uniform buffers", "partial", "CrossGL cbuffers lower to registered Mojo value structs with scalar/vector/matrix/array member storage, deterministic resource metadata comments, and compile-smoke coverage for local values, function parameters, and returns. Target-native uniform binding ABI is not complete."

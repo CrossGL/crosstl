@@ -182,6 +182,9 @@ class RustCodeGen:
             "gl_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
+            "SV_Position": "position",
+            "SV_VertexID": "vertex_id",
+            "SV_InstanceID": "instance_id",
             # Fragment attributes
             "gl_FragColor": "target(0)",
             "gl_FragColor0": "target(0)",
@@ -192,6 +195,17 @@ class RustCodeGen:
             "gl_FragCoord": "position",
             "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
+            "SV_Target": "target(0)",
+            "SV_Target0": "target(0)",
+            "SV_Target1": "target(1)",
+            "SV_Target2": "target(2)",
+            "SV_Target3": "target(3)",
+            "SV_Target4": "target(4)",
+            "SV_Target5": "target(5)",
+            "SV_Target6": "target(6)",
+            "SV_Target7": "target(7)",
+            "SV_Depth": "depth(any)",
+            "SV_IsFrontFace": "front_facing",
             # Standard vertex semantics
             "POSITION": "position",
             "NORMAL": "normal",
@@ -415,6 +429,7 @@ class RustCodeGen:
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_generic_params = {}
         self.static_variable_names = set()
         self.static_symbol_names = {}
@@ -464,6 +479,7 @@ class RustCodeGen:
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_generic_params = {}
         self.static_variable_names = self.collect_static_variable_names(ast)
         self.static_symbol_names = self.build_static_symbol_names(
@@ -1388,6 +1404,7 @@ class RustCodeGen:
         wrapper_enum = self.struct_enum_wrapper(node)
         if wrapper_enum is not None:
             self.struct_member_types[node.name] = {}
+            self.struct_member_semantics[node.name] = {}
             self.struct_generic_params[node.name] = self.generic_param_names(node)
             return self.generate_enum(
                 wrapper_enum,
@@ -1406,6 +1423,7 @@ class RustCodeGen:
         code = f"#[repr(C)]\n#[derive({derive_traits})]\n"
         code += f"pub struct {node.name}{self.format_generic_params(node)} {{\n"
         member_types = {}
+        member_semantics = {}
 
         for member in members:
             if isinstance(member, ArrayNode):
@@ -1433,18 +1451,19 @@ class RustCodeGen:
                     member_type = "float"
                 member_types[member.name] = member_type
 
-                semantic = None
-                if hasattr(member, "semantic"):
-                    semantic = member.semantic
-                elif hasattr(member, "attributes"):
-                    semantic = self.extract_semantic_from_attributes(member.attributes)
-
+                semantic = self.node_semantic(member)
+                if semantic:
+                    member_semantics[member.name] = semantic
+                    self.validate_rust_builtin_semantic_type(
+                        semantic, member_type, "struct member semantic"
+                    )
                 semantic_comment = (
                     f"  // {self.map_semantic(semantic)}" if semantic else ""
                 )
                 code += f"    pub {member.name}: {self.map_type(member_type)},{semantic_comment}\n"
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_semantics[node.name] = member_semantics
         self.struct_generic_params[node.name] = self.generic_param_names(node)
         code += "}\n\n"
         code += self.generate_struct_constructor_impl(node, member_types)
@@ -1756,6 +1775,127 @@ class RustCodeGen:
             if hasattr(attr, "name") and attr.name in self.semantic_map:
                 return attr.name
         return None
+
+    def node_semantic(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        return self.extract_semantic_from_attributes(getattr(node, "attributes", []))
+
+    def rust_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        input_only_sources = {
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_instanceid",
+            "gl_pointcoord",
+            "gl_vertexid",
+        }
+        input_only_sv_sources = {
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }
+        if lower_name in input_only_sources or upper_name in input_only_sv_sources:
+            return "input_only"
+
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def is_rust_vec4_float_type(self, type_name):
+        return self.map_type(type_name) == "Vec4<f32>"
+
+    def is_rust_float_scalar_type(self, type_name):
+        return self.map_type(type_name) == "f32"
+
+    def validate_rust_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.rust_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_rust_vec4_float_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "expected vec4-compatible type"
+            )
+
+        if kind == "depth" and not self.is_rust_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "expected float type"
+            )
+
+    def validate_rust_output_semantic_stage(self, shader_type, semantic, context):
+        kind = self.rust_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if shader_type is None:
+            return
+
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_type not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Rust {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def validate_rust_return_semantic(self, shader_type, return_type, semantic):
+        if semantic is None:
+            return
+        if self.map_type(return_type) == "()":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for Rust codegen; "
+                "void return type"
+            )
+        self.validate_rust_output_semantic_stage(
+            shader_type, semantic, "return semantic"
+        )
+        self.validate_rust_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def validate_rust_struct_return_semantics(self, shader_type, return_type):
+        if shader_type is None:
+            return
+        base_type = str(return_type).split("<", 1)[0].split("[", 1)[0].strip()
+        member_semantics = self.struct_member_semantics.get(base_type, {})
+        if not member_semantics:
+            return
+        member_types = self.struct_member_types.get(base_type, {})
+        for member_name, semantic in member_semantics.items():
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_rust_output_semantic_stage(shader_type, semantic, context)
+            self.validate_rust_builtin_semantic_type(
+                semantic, member_types.get(member_name, "float"), context
+            )
 
     def get_member_type(self, member):
         if hasattr(member, "member_type"):
@@ -2108,6 +2248,9 @@ class RustCodeGen:
         else:
             return_type = "void"
         self.current_return_type = return_type
+        return_semantic = self.node_semantic(func)
+        self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
+        self.validate_rust_struct_return_semantics(shader_type, return_type)
 
         param_types = [self.function_parameter_type(p) for p in param_list]
         reference_lifetime = self.function_reference_return_lifetime(

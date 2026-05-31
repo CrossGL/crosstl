@@ -23200,6 +23200,114 @@ def test_rust_struct_semantic_fragment_outputs():
     assert "// target(2)" in generated_code
 
 
+def test_rust_struct_semantics_validate_builtin_types_and_stage_context():
+    """Rust validates builtin output semantics on returned structs."""
+    valid_code = """
+    shader StructSemantics {
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ gl_FragDepth;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "pub color: Vec4<f32>,  // target(1)" in generated_code
+    assert "pub depth: f32,  // depth(any)" in generated_code
+    assert "pub uv: Vec2<f32>,  // texcoord(0)" in generated_code
+
+    invalid_type = """
+    shader BadStructSemanticType {
+        struct FSOutput {
+            vec3 color @ gl_FragColor;
+        };
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader BadStructSemanticStage {
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        vertex {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadStructInputOnlySemantic {
+        struct VSOutput {
+            uint vertexId @ gl_VertexID;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_rust_return_semantics_validate_builtin_types_and_stage_context():
+    """Rust validates builtin direct return semantics before emitting code."""
+    invalid_depth_type = """
+    shader BadDepthType {
+        fragment {
+            vec4 main() @ gl_FragDepth {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+        generate_code(parse_code(tokenize_code(invalid_depth_type)))
+
+    invalid_stage = """
+    shader BadStage {
+        vertex {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadInputOnlyReturn {
+        vertex {
+            uint main() @ gl_VertexID {
+                return uint(0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
@@ -23532,7 +23640,7 @@ def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
         };
         struct FullOutput {
             vec4 position @ gl_Position;
-            vec4 fragColor @ gl_FragColor;
+            vec4 fragColor @ COLOR0;
         };
         vertex {
             FullOutput main(FullInput input) {

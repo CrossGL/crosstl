@@ -521,8 +521,23 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
           ]
         },
-        "rust": {"status": "partial"},
-        "slang": {"status": "partial"}
+        "rust": {
+          "status": "partial",
+          "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct"
+          ]
+        },
+        "slang": {
+          "status": "partial",
+          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations"
+          ]
+        }
       }
     },
     {
@@ -545,13 +560,21 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
           ]
         },
-        "rust": {"status": "unknown"},
+        "rust": {
+          "status": "partial",
+          "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_output_semantic",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context"
+          ]
+        },
         "slang": {
           "status": "partial",
           "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
@@ -572,15 +595,36 @@
         "cuda": {"status": "partial"},
         "hip": {"status": "partial"},
         "mojo": {
-          "status": "partial",
-          "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
+          "status": "supported",
+          "notes": "Struct member semantics are preserved as deterministic Mojo field comments, HLSL SV aliases map to Mojo semantic comments, builtin output semantic types are validated, struct-return builtin semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo"
           ]
         },
-        "rust": {"status": "partial"},
-        "slang": {"status": "partial"}
+        "rust": {
+          "status": "supported",
+          "notes": "Struct member semantics are preserved as Rust field comments, GLSL builtins and HLSL SV aliases map to Rust semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_member_semantic_position",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantic_fragment_outputs",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Struct member semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, tessellation, and stage-interface structs; builtin output semantic types are validated on struct members and direct returns, struct-return semantics validate stage compatibility, input-only builtins are rejected for outputs, and stage/execution attributes are filtered from semantic lowering.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_struct_semantics_map_without_stage_context",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ]
+        }
       }
     },
     {

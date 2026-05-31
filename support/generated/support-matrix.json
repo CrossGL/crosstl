@@ -835,7 +835,7 @@
         "path": "crosstl/backend/Rust"
       },
       "signals": {
-        "unsupported_marker_count": 53,
+        "unsupported_marker_count": 58,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
@@ -875,6 +875,26 @@
           },
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Rust codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Rust codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Rust codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Rust {shader_type} stage; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} return semantic for Rust codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "return f\"{indent_str}/* unsupported sync: {sync_type} */\\n\""
           },
           {
@@ -896,26 +916,6 @@
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "return self.unsupported_glsl_buffer_block_statement("
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "return self.unsupported_glsl_buffer_block_expression("
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "def unsupported_glsl_buffer_block_expression(self, operation, reason, result_type):"
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "f\"/* unsupported Rust GLSL buffer block: {operation} {reason} */ {fallback}\""
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "def unsupported_glsl_buffer_block_statement(self, operation, reason):"
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "return f\"/* unsupported Rust GLSL buffer block: {operation} {reason} */\""
           }
         ]
       },
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 642
+        "test_count": 644
       },
       "translator_codegen": {
         "exists": true,
@@ -949,7 +949,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 351,
+        "unsupported_marker_count": 356,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -970,6 +970,26 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "if node.name not in unsupported_tess_factor_builtins:"
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang {shader_type} stage; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for Slang {shader_type} stage; \""
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -1010,26 +1030,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "return self.unsupported_slang_mesh_op_expression("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "def unsupported_slang_mesh_op_expression(self, operation, reason):"
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang mesh intrinsic: {operation} {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "f\"/* unsupported Slang match expression: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return \"/* unsupported Slang match expression: requires typed result context */ 0\""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "\"/* unsupported Slang match expression: requires statement \""
           }
         ]
       },
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 477
+        "test_count": 479
       },
       "translator_codegen": {
         "exists": true,
@@ -1495,7 +1495,7 @@
       "category": "stage I/O",
       "feature": "Stage parameter semantics",
       "feature_id": "io.stage_parameters",
-      "notes": "",
+      "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
       "status": "partial"
     },
     {
@@ -1504,7 +1504,7 @@
       "category": "stage I/O",
       "feature": "Stage parameter semantics",
       "feature_id": "io.stage_parameters",
-      "notes": "",
+      "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
       "status": "partial"
     },
     {
@@ -1549,8 +1549,8 @@
       "category": "stage I/O",
       "feature": "Direct function return semantics",
       "feature_id": "io.return_semantics",
-      "notes": "",
-      "status": "unknown"
+      "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+      "status": "partial"
     },
     {
       "backend": "Slang",
@@ -1582,33 +1582,6 @@
     {
       "backend": "HIP",
       "backend_id": "hip",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
       "category": "stage I/O",
       "feature": "Struct member semantics",
       "feature_id": "io.struct_semantics",
@@ -3686,13 +3659,20 @@
           "status": "supported"
         },
         "rust": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct"
+          ],
+          "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
           "status": "partial"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations"
+          ],
+          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
           "status": "partial"
         },
         "vulkan": {
@@ -3752,14 +3732,18 @@
           "status": "supported"
         },
         "rust": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_output_semantic",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context"
+          ],
+          "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "status": "partial"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
@@ -3809,8 +3793,8 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo"
           ],
-          "notes": "Struct member semantics are preserved as Mojo field comments, builtin output semantic types are validated, and struct-return builtin semantics validate stage compatibility. Target-native shader I/O ABI lowering remains incomplete.",
-          "status": "partial"
+          "notes": "Struct member semantics are preserved as deterministic Mojo field comments, HLSL SV aliases map to Mojo semantic comments, builtin output semantic types are validated, struct-return builtin semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -3820,14 +3804,27 @@
           "status": "supported"
         },
         "rust": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_member_semantic_position",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantic_fragment_outputs",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target"
+          ],
+          "notes": "Struct member semantics are preserved as Rust field comments, GLSL builtins and HLSL SV aliases map to Rust semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "status": "supported"
         },
         "slang": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_struct_semantics_map_without_stage_context",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
+          ],
+          "notes": "Struct member semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, tessellation, and stage-interface structs; builtin output semantic types are validated on struct members and direct returns, struct-return semantics validate stage compatibility, input-only builtins are rejected for outputs, and stage/execution attributes are filtered from semantic lowering.",
+          "status": "supported"
         },
         "vulkan": {
           "evidence": [],
@@ -6233,7 +6230,7 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 191,
+    "backlog_count": 188,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
@@ -6270,8 +6267,8 @@
       },
       "mojo": {
         "diagnostic": 0,
-        "partial": 26,
-        "supported": 12,
+        "partial": 25,
+        "supported": 13,
         "unknown": 0,
         "unsupported": 5,
         "validated_rejection": 0
@@ -6287,15 +6284,15 @@
       "rust": {
         "diagnostic": 0,
         "partial": 5,
-        "supported": 13,
-        "unknown": 21,
+        "supported": 14,
+        "unknown": 20,
         "unsupported": 4,
         "validated_rejection": 0
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 20,
-        "supported": 15,
+        "partial": 19,
+        "supported": 16,
         "unknown": 8,
         "unsupported": 0,
         "validated_rejection": 0

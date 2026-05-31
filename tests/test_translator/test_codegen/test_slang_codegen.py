@@ -4805,6 +4805,112 @@ def test_semantics_map_to_slang_system_values():
     assert ": gl_GlobalInvocationID" not in generated_code
 
 
+def test_struct_semantics_validate_builtin_types_and_stage_context_for_slang():
+    valid_code = """
+    shader StructSemantics {
+        struct FSOutput {
+            vec4 color @ SV_Target1;
+            float depth @ gl_FragDepth;
+            vec2 uv @ TEXCOORD0;
+        };
+
+        fragment {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(valid_code)))
+
+    assert "float4 color : SV_Target1;" in generated_code
+    assert "float depth : SV_Depth;" in generated_code
+    assert "float2 uv : TEXCOORD0;" in generated_code
+
+    invalid_type = """
+    shader BadStructSemanticType {
+        struct FSOutput {
+            vec3 color @ gl_FragColor;
+        };
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader BadStructSemanticStage {
+        struct FSOutput {
+            vec4 color @ gl_FragColor;
+        };
+
+        vertex {
+            FSOutput main() {
+                FSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadStructInputOnlySemantic {
+        struct VSOutput {
+            uint vertexId @ gl_VertexID;
+        };
+
+        vertex {
+            VSOutput main() {
+                VSOutput output;
+                return output;
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
+def test_return_semantics_validate_builtin_types_and_stage_context_for_slang():
+    invalid_depth_type = """
+    shader BadDepthType {
+        fragment {
+            vec4 main() @ gl_FragDepth {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+        generate_code(parse_code(tokenize_code(invalid_depth_type)))
+
+    invalid_stage = """
+    shader BadStage {
+        vertex {
+            vec4 main() @ gl_FragColor {
+                return vec4(0.0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_input_only = """
+    shader BadInputOnlyReturn {
+        vertex {
+            uint main() @ gl_VertexID {
+                return uint(0);
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+        generate_code(parse_code(tokenize_code(invalid_input_only)))
+
+
 def test_slangc_smoke_compiles_generated_stage_interfaces_if_available(tmp_path):
     code = """
     shader SlangStageInterfaceCompileSmoke {

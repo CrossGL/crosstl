@@ -2256,6 +2256,139 @@ class SlangCodeGen:
                 return f"SV_Target{target_index}"
         return self.semantic_map.get(semantic_name, semantic_name)
 
+    def slang_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        input_only_sources = {
+            "gl_baseinstance",
+            "gl_basevertex",
+            "gl_drawid",
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_invocationid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_sampleid",
+            "gl_tesscoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        }
+        if lower_name in input_only_sources:
+            return "input_only"
+
+        mapped_semantic = str(self.map_semantic(semantic))
+        mapped_upper = mapped_semantic.upper()
+        if lower_name == "gl_position" or mapped_upper == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
+            return "depth"
+        if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
+            return "tess_factor"
+        if lower_name == "gl_tesslevelinner" or mapped_upper == "SV_INSIDETESSFACTOR":
+            return "inside_tess_factor"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if mapped_upper.startswith("SV_TARGET"):
+            suffix = mapped_upper[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+
+        if mapped_upper in {
+            "SV_DISPATCHTHREADID",
+            "SV_DOMAINLOCATION",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_GSINSTANCEID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_OUTPUTCONTROLPOINTID",
+            "SV_SAMPLEINDEX",
+            "SV_STARTINSTANCELOCATION",
+            "SV_STARTVERTEXLOCATION",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+        return None
+
+    def is_slang_float_scalar_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == "float"
+
+    def is_slang_float_vector_width(self, type_name, width):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == f"float{width}"
+
+    def validate_slang_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.slang_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+        if kind in {"tess_factor", "inside_tess_factor"}:
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_slang_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected vec4-compatible type"
+            )
+
+        if kind == "depth" and not self.is_slang_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected float type"
+            )
+
+    def validate_slang_output_semantic_stage(
+        self, shader_type, semantic, context, stage_role=None
+    ):
+        kind = self.slang_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if shader_type is None:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        if kind in {"tess_factor", "inside_tess_factor"}:
+            if shader_stage == "hull" and stage_role == "patch_constant":
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
+                "valid stage is tessellation_control patch constant"
+            )
+
+        allowed_stages = {
+            "position": {"domain", "geometry", "hull", "mesh", "vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if shader_stage not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for Slang {shader_type} stage; "
+                f"valid stage is {allowed}"
+            )
+
     def semantic_suffix(self, semantic, shader_type=None):
         mapped_semantic = self.map_semantic(semantic, shader_type)
         return f" : {mapped_semantic}" if mapped_semantic else ""
@@ -3338,7 +3471,13 @@ class SlangCodeGen:
             else:
                 member_type = "float"
 
-            semantic_str = self.semantic_suffix(self.semantic_from_node(member))
+            semantic = self.semantic_from_node(member)
+            self.validate_slang_builtin_semantic_type(
+                semantic,
+                self.slang_tess_factor_member_type_name(member),
+                f"struct member semantic '{node.name}.{member.name}'",
+            )
+            semantic_str = self.semantic_suffix(semantic)
             declaration = self.format_declaration(member_type, member.name)
             result += f"{self.indent()}{declaration}{semantic_str};\n"
 
@@ -3398,6 +3537,9 @@ class SlangCodeGen:
         )
         self.validate_slang_return_semantic(
             shader_type, semantic, stage_role, ret_type_name
+        )
+        self.validate_slang_struct_return_semantics(
+            shader_type, ret_type_name, stage_role=stage_role
         )
         hull_output_rewrite = None
         if stage_role != "patch_constant":
@@ -3638,6 +3780,39 @@ class SlangCodeGen:
             raise ValueError(
                 f"Slang void function return cannot use return semantic {semantic}"
             )
+
+        self.validate_slang_output_semantic_stage(
+            shader_type, semantic, "return semantic", stage_role=stage_role
+        )
+        self.validate_slang_builtin_semantic_type(
+            semantic, ret_type_name, "return semantic"
+        )
+
+    def validate_slang_struct_return_semantics(
+        self, shader_type, return_type_name, stage_role=None
+    ):
+        if shader_type is None:
+            return
+
+        base_type = self.type_name_string(return_type_name)
+        if not base_type:
+            return
+        base_type = base_type.split("<", 1)[0].split("[", 1)[0].strip()
+        struct_node = self.user_structs_by_name.get(base_type)
+        if struct_node is None:
+            return
+
+        for member in getattr(struct_node, "members", []) or []:
+            semantic = self.semantic_from_node(member)
+            if semantic is None:
+                continue
+            member_name = getattr(member, "name", "<anonymous>")
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_slang_output_semantic_stage(
+                shader_type, semantic, context, stage_role=stage_role
+            )
+            member_type = self.slang_tess_factor_member_type_name(member)
+            self.validate_slang_builtin_semantic_type(semantic, member_type, context)
 
     def slang_stage_hull_output_rewrite(
         self, body_statements, shader_type, ret_type_name, semantic, param_list
