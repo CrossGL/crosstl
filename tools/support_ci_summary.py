@@ -2244,6 +2244,22 @@ def action_reason_summary(
     )
 
 
+def action_reason_rows(
+    action_reasons: dict[str, dict[str, int]] | None,
+) -> list[list[Any]]:
+    rows = []
+    for action in ISSUE_ACTION_COUNTERS[:-1]:
+        reasons = (action_reasons or {}).get(action) or {}
+        if reasons:
+            rows.append(
+                [
+                    "Operation " + action + " reasons",
+                    action_reason_summary(action_reasons, action),
+                ]
+            )
+    return rows
+
+
 def render_operation_ledger(entries: list[dict[str, Any]] | None) -> list[str]:
     if not entries:
         return []
@@ -2780,6 +2796,11 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
                     "Operation action shortfalls",
                     len(reconciliation.get("action_shortfalls", [])),
                 ],
+            ]
+        )
+        rows.extend(action_reason_rows(reconciliation.get("actual_action_reasons")))
+        rows.extend(
+            [
                 [
                     "Operation closure overruns",
                     len(reconciliation.get("closure_overruns", [])),

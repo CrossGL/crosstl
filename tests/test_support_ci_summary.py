@@ -600,6 +600,8 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Operation reconciliation | fail |" in text
     assert "| Operation action overruns | 2 |" in text
     assert "| Operation action shortfalls | 1 |" in text
+    assert "| Operation updated reasons | desired_issue_drift=2 |" in text
+    assert "| Operation attached reasons | missing_sub_issue_relationship=3 |" in text
     assert "| Operation closure overruns | 0 |" in text
     assert "| Operation closure shortfalls | 0 |" in text
     assert "Operation reconciliation differences:" in text
