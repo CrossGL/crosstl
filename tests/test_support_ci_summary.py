@@ -1583,6 +1583,136 @@ def test_load_optional_json_rejects_sync_summary_ledger_mismatch(tmp_path):
     }
 
 
+def test_load_optional_json_rejects_missing_sync_failure_fields(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    del report["sync_failure"]["operation_ledger"]
+    del report["sync_failure"]["recovery"]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "MissingReportFields",
+        "message": "sync_failure missing required fields: operation_ledger, recovery",
+    }
+
+
+def test_load_optional_json_rejects_invalid_sync_failure_ledger(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_failure"]["operation_ledger"][0]["reasons"] = ["body", 17]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "sync_failure.operation_ledger[0].reasons[1] must be str, got int",
+    }
+
+
+def test_load_optional_json_rejects_sync_failure_partial_summary_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_failure"]["partial_summary"]["updated"] = 2
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "sync_failure.partial_summary.updated must match operation ledger: "
+            "2 != 1"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_invalid_sync_failure_error(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_failure"]["error"]["status"] = "500"
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "sync_failure.error.status must be int, got str",
+    }
+
+
+def test_load_optional_json_rejects_invalid_sync_failure_recovery(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_failure"]["recovery"]["rerun_safe"] = "yes"
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "sync_failure.recovery.rerun_safe must be bool, got str",
+    }
+
+
+def test_load_optional_json_rejects_empty_sync_failure_recovery_strategy(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["sync_failure"]["recovery"]["strategy"] = "   "
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": "sync_failure.recovery.strategy must not be empty",
+    }
+
+
 def test_load_optional_json_reports_invalid_reconciliation_counter_contract(tmp_path):
     module = load_summary_module()
     sync_path = tmp_path / "support-issue-sync-summary.json"

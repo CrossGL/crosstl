@@ -995,62 +995,37 @@ def validate_issue_plan_contract(
     return None
 
 
-def validate_sync_failure_contract(
-    report: dict[str, Any],
+def validate_operation_ledger_value(
+    value: Any,
     path: Path | None,
+    field: str,
 ) -> dict[str, Any] | None:
-    failure = report.get("sync_failure")
-    if failure is None:
-        return None
-    if not isinstance(failure, dict):
-        return invalid_field_error(path, "sync_failure", dict, failure)
-    error = validate_nested_field_types(
-        failure,
-        path,
-        "sync_failure",
-        {
-            "phase": str,
-            "operation": dict,
-            "partial_summary": dict,
-            "error": dict,
-        },
-    )
-    if error is not None:
-        return error
-    return validate_counter_map(
-        failure,
-        path,
-        "partial_summary",
-        ISSUE_ACTION_COUNTERS,
-    )
-
-
-def validate_operation_ledger_contract(
-    report: dict[str, Any],
-    path: Path | None,
-) -> dict[str, Any] | None:
-    error = validate_object_list_item_fields(
-        report,
-        path,
-        "operation_ledger",
-        {
-            "action": str,
-            "key": str,
-            "number": int,
-            "title": str,
-            "state": str,
-            "parent_key": str,
-            "parent_number": int,
-            "child_key": str,
-            "child_number": int,
-            "reason": str,
-            "reasons": list,
-        },
-    )
-    if error is not None:
-        return error
-
-    for index, entry in enumerate(report.get("operation_ledger") or []):
+    if not isinstance(value, list):
+        return invalid_field_error(path, field, list, value)
+    for index, entry in enumerate(value):
+        entry_field = f"{field}[{index}]"
+        if not isinstance(entry, dict):
+            return invalid_field_error(path, entry_field, dict, entry)
+        error = validate_nested_field_types(
+            entry,
+            path,
+            entry_field,
+            {
+                "action": str,
+                "key": str,
+                "number": int,
+                "title": str,
+                "state": str,
+                "parent_key": str,
+                "parent_number": int,
+                "child_key": str,
+                "child_number": int,
+                "reason": str,
+                "reasons": list,
+            },
+        )
+        if error is not None:
+            return error
         reasons = entry.get("reasons")
         if reasons is None:
             continue
@@ -1058,11 +1033,21 @@ def validate_operation_ledger_contract(
             if not value_matches_type(reason, str):
                 return invalid_field_error(
                     path,
-                    f"operation_ledger[{index}].reasons[{reason_index}]",
+                    f"{entry_field}.reasons[{reason_index}]",
                     str,
                     reason,
                 )
     return None
+
+
+def validate_operation_ledger_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    value = report.get("operation_ledger")
+    if value is None:
+        return None
+    return validate_operation_ledger_value(value, path, "operation_ledger")
 
 
 def operation_ledger_action_counts(
@@ -1140,6 +1125,145 @@ def counter_map_mismatch_error(
             expected,
         ),
     )
+
+
+def validate_sync_failure_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    failure = report.get("sync_failure")
+    if failure is None:
+        return None
+    if not isinstance(failure, dict):
+        return invalid_field_error(path, "sync_failure", dict, failure)
+
+    missing_fields = [
+        field
+        for field in (
+            "phase",
+            "operation",
+            "partial_summary",
+            "operation_ledger",
+            "error",
+            "recovery",
+        )
+        if field not in failure
+    ]
+    if missing_fields:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "sync_failure missing required fields: {}".format(
+                ", ".join(missing_fields)
+            ),
+        )
+
+    error = validate_nested_field_types(
+        failure,
+        path,
+        "sync_failure",
+        {
+            "phase": str,
+            "operation": dict,
+            "partial_summary": dict,
+            "operation_ledger": list,
+            "error": dict,
+            "recovery": dict,
+        },
+    )
+    if error is not None:
+        return error
+
+    error = validate_counter_map_value(
+        failure["partial_summary"],
+        path,
+        "sync_failure.partial_summary",
+        ISSUE_ACTION_COUNTERS,
+    )
+    if error is not None:
+        return error
+
+    error = validate_operation_ledger_value(
+        failure["operation_ledger"],
+        path,
+        "sync_failure.operation_ledger",
+    )
+    if error is not None:
+        return error
+
+    expected_partial_actions = operation_ledger_action_counts(
+        failure["operation_ledger"]
+    )
+    for action, expected_count in expected_partial_actions.items():
+        if failure["partial_summary"][action] != expected_count:
+            return load_error(
+                path,
+                "InvalidReportField",
+                "sync_failure.partial_summary.{} must match operation ledger: {} != {}".format(
+                    action,
+                    failure["partial_summary"][action],
+                    expected_count,
+                ),
+            )
+
+    error_summary = failure["error"]
+    error = validate_nested_field_types(
+        error_summary,
+        path,
+        "sync_failure.error",
+        {
+            "type": str,
+            "message": str,
+            "method": str,
+            "path": str,
+            "status": int,
+            "body": str,
+        },
+    )
+    if error is not None:
+        return error
+    missing_error_fields = [
+        field for field in ("type", "message") if field not in error_summary
+    ]
+    if missing_error_fields:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "sync_failure.error missing required fields: {}".format(
+                ", ".join(missing_error_fields)
+            ),
+        )
+
+    recovery = failure["recovery"]
+    error = validate_nested_field_types(
+        recovery,
+        path,
+        "sync_failure.recovery",
+        {
+            "rerun_safe": bool,
+            "strategy": str,
+        },
+    )
+    if error is not None:
+        return error
+    missing_recovery_fields = [
+        field for field in ("rerun_safe", "strategy") if field not in recovery
+    ]
+    if missing_recovery_fields:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "sync_failure.recovery missing required fields: {}".format(
+                ", ".join(missing_recovery_fields)
+            ),
+        )
+    if not recovery["strategy"].strip():
+        return load_error(
+            path,
+            "InvalidReportField",
+            "sync_failure.recovery.strategy must not be empty",
+        )
+    return None
 
 
 def validate_reconciliation_differences(
