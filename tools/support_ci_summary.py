@@ -875,7 +875,17 @@ def validate_evidence_check_contract(
             "InvalidReportField",
             "summary.by_backend must match rows",
         )
-    if by_status != actual_by_status:
+    actual_by_status_complete = {
+        status: actual_by_status.get(status, 0) for status in by_status
+    }
+    actual_by_status_complete.update(
+        {
+            status: count
+            for status, count in actual_by_status.items()
+            if status not in actual_by_status_complete
+        }
+    )
+    if by_status != actual_by_status_complete:
         return load_error(
             path,
             "InvalidReportField",

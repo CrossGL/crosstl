@@ -1263,6 +1263,30 @@ def test_load_optional_json_rejects_evidence_status_summary_mismatch(tmp_path):
     }
 
 
+def test_load_optional_json_allows_zero_evidence_status_buckets(tmp_path):
+    module = load_summary_module()
+    evidence_path = tmp_path / "support-evidence-check.json"
+    report = evidence_check_report()
+    report["summary"]["by_status"] = {
+        "supported": 3,
+        "partial": 0,
+        "diagnostic": 0,
+        "validated_rejection": 0,
+        "unsupported": 0,
+        "unknown": 0,
+    }
+    evidence_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        evidence_path,
+        expected_generator=module.EVIDENCE_CHECK_GENERATOR,
+        required_fields=module.EVIDENCE_CHECK_REQUIRED_FIELDS,
+        contract_validator=module.validate_evidence_check_contract,
+    )
+
+    assert "load_error" not in loaded
+
+
 def test_load_optional_json_reports_invalid_issue_plan_contract(tmp_path):
     module = load_summary_module()
     plan_path = tmp_path / "support-issue-plan.json"
