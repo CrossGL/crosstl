@@ -48,4 +48,4 @@ jobs:
           --event-path "$GITHUB_EVENT_PATH"
           --sync-support-closures
           --sync-support-references
-          --check-support-traceability
+          --enforce-support-traceability

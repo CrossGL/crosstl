@@ -189,7 +189,7 @@ PR_ISSUE_LINK_REQUIRED_POLICIES = {
     "pull_requests_write": "pull-requests: write",
     "trusted_base_checkout": "Checkout trusted base",
     "sync_command": "python tools/sync_pr_issue_links.py",
-    "support_traceability": "--check-support-traceability",
+    "support_traceability": "--enforce-support-traceability",
     "support_closure_sync": "--sync-support-closures",
     "support_reference_sync": "--sync-support-references",
 }
@@ -535,6 +535,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
     checkout_credentials_persist = {}
     head_context_markers = {}
     support_traceability = {}
+    support_traceability_enforcement = {}
     support_closure_sync = {}
     support_reference_sync = {}
     github_token_scoped_to_sync = {}
@@ -556,7 +557,14 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
             head_context_markers[workflow_name] = markers
         support_traceability[workflow_name] = (
             "python tools/sync_pr_issue_links.py" in sync_step
-            and "--check-support-traceability" in sync_step
+            and (
+                "--check-support-traceability" in sync_step
+                or "--enforce-support-traceability" in sync_step
+            )
+        )
+        support_traceability_enforcement[workflow_name] = (
+            "python tools/sync_pr_issue_links.py" in sync_step
+            and "--enforce-support-traceability" in sync_step
         )
         support_closure_sync[workflow_name] = (
             "python tools/sync_pr_issue_links.py" in sync_step
@@ -578,6 +586,7 @@ def pull_request_target_report(workflows: dict[str, str]) -> dict[str, Any]:
         "checkout_credentials_persist": checkout_credentials_persist,
         "head_context_markers": head_context_markers,
         "support_traceability": support_traceability,
+        "support_traceability_enforcement": support_traceability_enforcement,
         "support_closure_sync": support_closure_sync,
         "support_reference_sync": support_reference_sync,
         "github_token_scoped_to_sync": github_token_scoped_to_sync,
@@ -1127,17 +1136,10 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
 def pr_issue_links_report(workflow: str) -> dict[str, Any]:
     return {
         "workflow": "pr-issue-links.yml",
-        "required_policies": (
-            {
-                name: marker in workflow
-                for name, marker in PR_ISSUE_LINK_REQUIRED_POLICIES.items()
-            }
-            | {
-                "support_traceability_not_enforced": (
-                    "--enforce-support-traceability" not in workflow
-                ),
-            }
-        ),
+        "required_policies": {
+            name: marker in workflow
+            for name, marker in PR_ISSUE_LINK_REQUIRED_POLICIES.items()
+        },
     }
 
 
@@ -1316,6 +1318,15 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         if not enabled:
             errors.append(
                 "{} pull_request_target must check support traceability".format(
+                    workflow_name
+                )
+            )
+    for workflow_name, enabled in pull_request_target[
+        "support_traceability_enforcement"
+    ].items():
+        if not enabled:
+            errors.append(
+                "{} pull_request_target must enforce support traceability".format(
                     workflow_name
                 )
             )
@@ -1619,6 +1630,10 @@ def pull_request_target_policy_presence(report: dict[str, Any]) -> dict[str, boo
         presence[f"{workflow_name}:no_pr_head_context"] = not bool(markers)
     for workflow_name, enabled in report["support_traceability"].items():
         presence[f"{workflow_name}:support_traceability"] = enabled
+    for workflow_name, enabled in report.get(
+        "support_traceability_enforcement", {}
+    ).items():
+        presence[f"{workflow_name}:support_traceability_enforcement"] = enabled
     for workflow_name, enabled in report["support_closure_sync"].items():
         presence[f"{workflow_name}:support_closure_sync"] = enabled
     for workflow_name, enabled in report["support_reference_sync"].items():
@@ -2179,6 +2194,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "No persisted credentials",
                 "No PR head context",
                 "Traceability",
+                "Traceability gate",
                 "Support closures",
                 "Support refs",
                 "Token scoped",
@@ -2203,6 +2219,11 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ),
                     ok_text(
                         pull_request_target["support_traceability"].get(
+                            workflow_name, False
+                        )
+                    ),
+                    ok_text(
+                        pull_request_target["support_traceability_enforcement"].get(
                             workflow_name, False
                         )
                     ),

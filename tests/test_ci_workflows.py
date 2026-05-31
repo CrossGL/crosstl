@@ -183,6 +183,11 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["pull_request_target"]["support_traceability"].values()
     )
     assert all(
+        report["workflows"]["pull_request_target"][
+            "support_traceability_enforcement"
+        ].values()
+    )
+    assert all(
         report["workflows"]["pull_request_target"]["support_closure_sync"].values()
     )
     assert all(
@@ -974,6 +979,7 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     target["checkout_credentials_persist"]["pr-issue-links.yml"] = True
     target["head_context_markers"]["pr-issue-links.yml"] = ["github.head_ref"]
     target["support_traceability"]["pr-issue-links.yml"] = False
+    target["support_traceability_enforcement"]["pr-issue-links.yml"] = False
     target["support_closure_sync"]["pr-issue-links.yml"] = False
     target["support_reference_sync"]["pr-issue-links.yml"] = False
     target["github_token_scoped_to_sync"]["pr-issue-links.yml"] = False
@@ -992,6 +998,10 @@ def test_ci_coverage_reports_pull_request_target_trust_boundary_regressions():
     )
     assert (
         "pr-issue-links.yml pull_request_target must check support traceability"
+        in errors
+    )
+    assert (
+        "pr-issue-links.yml pull_request_target must enforce support traceability"
         in errors
     )
     assert (
@@ -1662,7 +1672,7 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "support/generated/support-issue-ci-summary.md" in issue_sync
 
 
-def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
+def test_pr_issue_link_workflow_assigns_closing_keywords_and_gates_traceability():
     workflows = _workflow_texts()
     pr_issue_links = workflows.get("pr-issue-links.yml", "")
 
@@ -1674,8 +1684,8 @@ def test_pr_issue_link_workflow_assigns_closing_keywords_without_body_gate():
     assert "python tools/sync_pr_issue_links.py" in pr_issue_links
     assert "--sync-support-closures" in pr_issue_links
     assert "--sync-support-references" in pr_issue_links
-    assert "--check-support-traceability" in pr_issue_links
-    assert "--enforce-support-traceability" not in pr_issue_links
+    assert "--check-support-traceability" not in pr_issue_links
+    assert "--enforce-support-traceability" in pr_issue_links
 
 
 def test_windows_validator_install_retries_and_uses_direct_lunarg_fallback():
