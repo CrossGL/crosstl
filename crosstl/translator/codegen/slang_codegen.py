@@ -130,6 +130,22 @@ class SlangCodeGen:
         "SetMeshOutputCounts": {2},
         "DispatchMesh": {3, 4},
     }
+    SLANG_GEOMETRY_STREAM_TYPES = {
+        "PointStream",
+        "LineStream",
+        "TriangleStream",
+    }
+    SLANG_GEOMETRY_INPUT_PRIMITIVE_ARITIES = {
+        "point": 1,
+        "line": 2,
+        "triangle": 3,
+        "lineadj": 4,
+        "triangleadj": 6,
+    }
+    SLANG_GEOMETRY_STREAM_METHOD_ARITIES = {
+        "Append": {1},
+        "RestartStrip": {0},
+    }
 
     def __init__(self):
         """Initialize Slang generation state and helper caches."""
@@ -1313,6 +1329,33 @@ class SlangCodeGen:
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
+    def validate_required_slang_tessellation_attributes(self, func, stage_name):
+        shader_stage = self.slang_shader_stage_name(stage_name)
+        if shader_stage == "hull":
+            arguments = self.slang_stage_attribute_arguments(
+                func, "outputcontrolpoints"
+            )
+            if not arguments:
+                raise ValueError(
+                    "Slang tessellation_control stage requires " "outputcontrolpoints"
+                )
+            if (
+                self.slang_stage_attribute_int_argument(func, "outputcontrolpoints")
+                is None
+            ):
+                raise ValueError(
+                    "Slang tessellation_control stage outputcontrolpoints "
+                    "requires an integer value"
+                )
+            return
+
+        if shader_stage == "domain":
+            domain = self.normalized_slang_stage_attribute_argument(func, "domain")
+            if not domain:
+                raise ValueError(
+                    "Slang tessellation_evaluation stage requires a domain " "attribute"
+                )
+
     def validate_slang_patch_constant_function(self, func, stage_name):
         if self.slang_shader_stage_name(stage_name) != "hull":
             return
@@ -1373,8 +1416,266 @@ class SlangCodeGen:
         self.validate_slang_tessellation_domain_topology(func, stage_name)
         self.validate_slang_tessellation_partitioning(func, stage_name)
         self.validate_slang_patch_constant_function(func, stage_name)
+        self.validate_required_slang_tessellation_attributes(func, stage_name)
         self.validate_slang_mesh_output_topology(func, stage_name)
         self.validate_slang_numthreads(func, stage_name)
+
+    def slang_geometry_parameter_type_base(self, parameter):
+        type_name = self.slang_parameter_type_name(parameter)
+        if not type_name:
+            return None
+
+        base_type = self.resource_base_type(type_name)
+        if not isinstance(base_type, str):
+            return None
+        return base_type.split("<", 1)[0].strip()
+
+    def is_slang_geometry_stream_type(self, type_name):
+        type_name = self.resource_base_type(self.type_name_string(type_name))
+        if not isinstance(type_name, str):
+            return False
+        base_type = type_name.split("<", 1)[0].strip()
+        return base_type in self.SLANG_GEOMETRY_STREAM_TYPES
+
+    def is_slang_geometry_stream_parameter(self, parameter):
+        return (
+            self.slang_geometry_parameter_type_base(parameter)
+            in self.SLANG_GEOMETRY_STREAM_TYPES
+        )
+
+    def slang_geometry_stream_element_type_from_type(self, type_name):
+        type_name = self.resource_base_type(self.type_name_string(type_name))
+        if (
+            not isinstance(type_name, str)
+            or "<" not in type_name
+            or not type_name.endswith(">")
+        ):
+            return None
+
+        base_type, element_type = type_name.split("<", 1)
+        if base_type.strip() not in self.SLANG_GEOMETRY_STREAM_TYPES:
+            return None
+
+        element_type = element_type[:-1].strip()
+        return element_type or None
+
+    def slang_geometry_stream_element_type(self, parameter):
+        param_type = getattr(
+            parameter,
+            "param_type",
+            getattr(parameter, "var_type", getattr(parameter, "vtype", None)),
+        )
+        name = getattr(param_type, "name", None)
+        generic_args = getattr(param_type, "generic_args", []) or []
+        if name in self.SLANG_GEOMETRY_STREAM_TYPES and generic_args:
+            return self.convert_type_node_to_string(generic_args[0])
+
+        return self.slang_geometry_stream_element_type_from_type(
+            self.slang_parameter_type_name(parameter)
+        )
+
+    def slang_geometry_input_primitive_qualifier(self, parameter):
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in self.SLANG_GEOMETRY_INPUT_PRIMITIVE_ARITIES:
+                return normalized
+        return None
+
+    def validate_slang_geometry_stage(self, func, shader_type, parameters):
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        stream_parameters = [
+            parameter
+            for parameter in parameters or []
+            if self.is_slang_geometry_stream_parameter(parameter)
+        ]
+        if shader_stage != "geometry":
+            if stream_parameters:
+                raise ValueError(
+                    f"Slang {shader_type} stage cannot declare a geometry stream "
+                    "output parameter"
+                )
+            return
+
+        if parameters:
+            self.validate_slang_geometry_stage_parameters(parameters)
+            self.validate_slang_geometry_stream_output_semantics(parameters)
+        self.validate_slang_geometry_stream_calls(func, shader_type, parameters)
+
+    def validate_slang_geometry_stage_parameters(self, parameters):
+        stream_parameters = [
+            parameter
+            for parameter in parameters or []
+            if self.is_slang_geometry_stream_parameter(parameter)
+        ]
+        if not stream_parameters:
+            raise ValueError(
+                "Slang geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+        if len(stream_parameters) > 1:
+            raise ValueError(
+                "Slang geometry stage must declare at most one stream output "
+                "parameter"
+            )
+
+        stream_parameter = stream_parameters[0]
+        directions = self.slang_parameter_direction_qualifiers(stream_parameter)
+        if directions != {"inout"}:
+            raise ValueError(
+                f"Slang geometry stream parameter '{stream_parameter.name}' "
+                "must use the inout qualifier"
+            )
+        if self.slang_geometry_stream_element_type(stream_parameter) is None:
+            raise ValueError(
+                f"Slang geometry stream parameter '{stream_parameter.name}' "
+                "requires an output element type"
+            )
+
+        input_parameters = [
+            parameter
+            for parameter in parameters or []
+            if self.slang_geometry_input_primitive_qualifier(parameter) is not None
+        ]
+        if not input_parameters:
+            raise ValueError(
+                "Slang geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or "
+                "triangleadj"
+            )
+        if len(input_parameters) > 1:
+            raise ValueError(
+                "Slang geometry stage must declare at most one input primitive "
+                "parameter"
+            )
+
+        self.validate_slang_geometry_input_primitive_arity(input_parameters[0])
+
+    def validate_slang_geometry_input_primitive_arity(self, parameter):
+        primitive = self.slang_geometry_input_primitive_qualifier(parameter)
+        expected_count = self.SLANG_GEOMETRY_INPUT_PRIMITIVE_ARITIES.get(primitive)
+        if expected_count is None:
+            return
+
+        if self.slang_parameter_array_size_expression(parameter) is None:
+            raise ValueError(
+                f"Slang geometry stage {primitive} input primitive parameter "
+                f"'{parameter.name}' must be an array with {expected_count} "
+                "element(s)"
+            )
+
+        array_count = self.slang_parameter_array_count(parameter)
+        if array_count is None:
+            return
+        if array_count != expected_count:
+            raise ValueError(
+                f"Slang geometry stage {primitive} input primitive parameter "
+                f"'{parameter.name}' must have {expected_count} element(s), "
+                f"got {array_count}"
+            )
+
+    def validate_slang_geometry_stream_output_semantics(self, parameters):
+        for parameter in parameters or []:
+            if not self.is_slang_geometry_stream_parameter(parameter):
+                continue
+
+            stream_type_name = self.slang_geometry_stream_element_type(parameter)
+            if stream_type_name is None:
+                continue
+
+            stream_type_name = stream_type_name.split("<", 1)[0].split("[", 1)[0]
+            stream_struct = self.structs_by_name.get(stream_type_name.strip())
+            if stream_struct is None:
+                continue
+
+            for member in getattr(stream_struct, "members", []) or []:
+                semantic = self.semantic_from_node(member)
+                member_name = getattr(member, "name", "<anonymous>")
+                context = (
+                    f"output stream struct '{stream_type_name}.{member_name}' "
+                    "semantic"
+                )
+                self.validate_slang_builtin_semantic_type(
+                    semantic,
+                    self.slang_tess_factor_member_type_name(member),
+                    context,
+                )
+                self.validate_slang_output_semantic_stage("geometry", semantic, context)
+
+    def validate_slang_geometry_stream_calls(self, func, shader_type, parameters):
+        if self.slang_shader_stage_name(shader_type) != "geometry":
+            return
+
+        saved_variable_types = self.variable_types.copy()
+        try:
+            for parameter in parameters or []:
+                type_name = self.slang_parameter_type_name(parameter)
+                if type_name:
+                    self.register_variable_type(parameter.name, type_name, parameter)
+            for name, type_name in self.slang_function_scope_variable_types(
+                func
+            ).items():
+                self.register_variable_type(name, type_name)
+
+            for node in self.walk_ast(getattr(func, "body", [])):
+                if not isinstance(node, FunctionCallNode):
+                    continue
+                func_expr = getattr(node, "function", None)
+                if not isinstance(func_expr, MemberAccessNode):
+                    continue
+
+                receiver = getattr(
+                    func_expr, "object", getattr(func_expr, "object_expr", None)
+                )
+                receiver_type = self.expression_result_type(receiver)
+                if not self.is_slang_geometry_stream_type(receiver_type):
+                    continue
+
+                member = str(getattr(func_expr, "member", ""))
+                self.validate_slang_geometry_stream_call(
+                    member, getattr(node, "args", []), receiver_type
+                )
+        finally:
+            self.variable_types = saved_variable_types
+
+    def validate_slang_geometry_stream_call(self, member, args, receiver_type):
+        expected_arities = self.SLANG_GEOMETRY_STREAM_METHOD_ARITIES.get(member)
+        if expected_arities is None:
+            valid = ", ".join(sorted(self.SLANG_GEOMETRY_STREAM_METHOD_ARITIES))
+            raise ValueError(
+                f"Slang geometry stream method {member} is unsupported; "
+                f"valid methods are: {valid}"
+            )
+
+        if len(args) not in expected_arities:
+            expected = " or ".join(str(arity) for arity in sorted(expected_arities))
+            raise ValueError(
+                f"Slang geometry stream {member} requires {expected} "
+                f"argument(s), got {len(args)}"
+            )
+
+        if member == "Append":
+            self.validate_slang_geometry_stream_append_argument(args[0], receiver_type)
+
+    def validate_slang_geometry_stream_append_argument(self, argument, receiver_type):
+        expected_type = self.slang_geometry_stream_element_type_from_type(receiver_type)
+        actual_type = self.expression_result_type(argument)
+        if expected_type is None or actual_type is None:
+            return
+
+        expected_base, expected_suffix = split_array_type_suffix(
+            self.convert_type(expected_type)
+        )
+        actual_base, actual_suffix = split_array_type_suffix(
+            self.convert_type(actual_type)
+        )
+        if expected_base == actual_base and expected_suffix == actual_suffix:
+            return
+
+        raise ValueError(
+            "Slang geometry stream Append argument type "
+            f"{self.convert_type(actual_type)} must match stream element type "
+            f"{self.convert_type(expected_type)}"
+        )
 
     def validate_slang_mesh_payload_parameter(self, shader_type, parameters):
         payload_parameters = self.slang_mesh_payload_parameters(parameters)
@@ -2987,6 +3288,16 @@ class SlangCodeGen:
             return ""
         return " ".join(qualifiers) + " "
 
+    def slang_stage_parameter_qualifier_prefix(self, node, shader_type):
+        prefix = self.slang_parameter_qualifier_prefix(node)
+        if self.slang_shader_stage_name(shader_type) != "geometry":
+            return prefix
+
+        primitive = self.slang_geometry_input_primitive_qualifier(node)
+        if primitive is None:
+            return prefix
+        return f"{primitive} {prefix}"
+
     def get_variable_type(self, node):
         var_type = getattr(node, "var_type", None)
         if var_type is not None:
@@ -3711,6 +4022,7 @@ class SlangCodeGen:
             self.validate_slang_mesh_output_parameters(
                 node, shader_type, effective_param_list
             )
+            self.validate_slang_geometry_stage(node, shader_type, effective_param_list)
             self.validate_slang_stage_parameter_semantics(
                 shader_type, effective_param_list, stage_role=stage_role
             )
@@ -3769,7 +4081,8 @@ class SlangCodeGen:
                         params.append(mesh_output_declaration)
                         continue
                     declaration = (
-                        self.slang_parameter_qualifier_prefix(param) + declaration
+                        self.slang_stage_parameter_qualifier_prefix(param, shader_type)
+                        + declaration
                     )
                     declaration = self.apply_slang_resource_binding_decorations(
                         declaration, param, param_type_name
@@ -6653,6 +6966,13 @@ class SlangCodeGen:
                 if resource_call is not None:
                     return resource_call
             if isinstance(func_expr, MemberAccessNode):
+                geometry_stream_call = self.generate_slang_geometry_stream_member_call(
+                    func_expr,
+                    node.args,
+                    statement_context=self.is_direct_statement_expression(node),
+                )
+                if geometry_stream_call is not None:
+                    return geometry_stream_call
                 resource_member_call = self.generate_resource_member_call(
                     func_expr,
                     node.args,
@@ -6772,6 +7092,33 @@ class SlangCodeGen:
                 "and cannot be used as a value"
             )
         return f"{intrinsic}()"
+
+    def generate_slang_geometry_stream_member_call(
+        self, func_expr, args, statement_context=False
+    ):
+        receiver = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        receiver_type = self.expression_result_type(receiver)
+        if not self.is_slang_geometry_stream_type(receiver_type):
+            return None
+
+        member = str(getattr(func_expr, "member", ""))
+        self.validate_slang_geometry_stream_call(member, args, receiver_type)
+        shader_stage = self.slang_shader_stage_name(self.current_shader_type)
+        if self.current_shader_type is not None and shader_stage != "geometry":
+            raise ValueError(
+                f"Slang {self.current_shader_type} stage cannot call geometry "
+                f"stream {member}; geometry stream methods are only valid in "
+                "geometry stages"
+            )
+        if not statement_context:
+            raise ValueError(
+                f"Slang geometry stream {member} is statement-only and cannot "
+                "be used as a value"
+            )
+
+        receiver_expr = self.generate_expression(receiver)
+        args_expr = ", ".join(self.generate_expression(arg) for arg in args)
+        return f"{receiver_expr}.{member}({args_expr})"
 
     def slang_synchronization_intrinsic_name(self, callee):
         return {
@@ -8024,6 +8371,9 @@ class SlangCodeGen:
             "RWStructuredBuffer",
             "AppendStructuredBuffer",
             "ConsumeStructuredBuffer",
+            "PointStream",
+            "LineStream",
+            "TriangleStream",
         }
         for resource_type in generic_resource_types:
             prefix = f"{resource_type}<"

@@ -507,6 +507,30 @@ def test_use_statement_parsing():
         pytest.fail(f"Use statement parsing failed: {e}")
 
 
+def test_cfg_attributes_preserved_on_use_and_function_items():
+    code = """
+    #[cfg(feature = "gpu")]
+    pub use crate::gpu::*;
+
+    #[cfg(target_os = "unknown")]
+    pub fn shader_entry() -> f32 {
+        return 1.0;
+    }
+    """
+    ast = parse_code(code)
+
+    use_stmt = ast.use_statements[0]
+    assert use_stmt.visibility == "pub"
+    assert use_stmt.path == "crate::gpu::*"
+    assert use_stmt.attributes[0].name == "cfg"
+    assert use_stmt.attributes[0].args == ["feature", "=", '"gpu"']
+
+    function = ast.functions[0]
+    assert function.visibility == "pub"
+    assert function.attributes[0].name == "cfg"
+    assert function.attributes[0].args == ["target_os", "=", '"unknown"']
+
+
 def test_restricted_visibility_parsing():
     code = """
     #[inline]

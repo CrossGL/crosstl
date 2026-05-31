@@ -99,12 +99,9 @@ class TestHipCodeGen:
         ("stage_name", "normalized_stage"),
         [
             ("amplification", "amplification"),
-            ("geometry", "geometry"),
             ("mesh", "mesh"),
             ("object", "object"),
             ("task", "task"),
-            ("tessellation_control", "tessellation_control"),
-            ("tessellation_evaluation", "tessellation_evaluation"),
         ],
     )
     def test_unsupported_shader_stages_are_rejected_for_hip_codegen(
@@ -125,6 +122,219 @@ class TestHipCodeGen:
         ):
             HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
+    def test_geometry_stage_lowers_to_hip_metadata_and_stream_placeholders(self):
+        """Geometry stages lower to deterministic HIP helper representation."""
+        source_code = """
+        shader HipGeometryExpansion {
+            struct GSInput {
+                vec4 position @ gl_Position;
+                vec3 normal @ NORMAL;
+            };
+
+            struct GSOutput {
+                vec4 position @ gl_Position;
+                vec3 color @ COLOR;
+            };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(3) {
+                    GSOutput output;
+                    output.position = input[0].position;
+                    output.color = input[0].normal;
+                    stream.Append(output);
+                    stream.RestartStrip();
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "template <typename T>" in hip_code
+        assert "struct CglHipTriangleStream" in hip_code
+        assert "// CrossGL geometry stage: maxvertexcount=3" in hip_code
+        assert "// CrossGL geometry input primitive: triangle:input" in hip_code
+        assert (
+            "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
+            in hip_code
+        )
+        assert "__device__ void geometry_main(" in hip_code
+        assert "GSInput input[3]" in hip_code
+        assert "CglHipTriangleStream<GSOutput>& stream" in hip_code
+        assert "stream.Append(output);" in hip_code
+        assert "stream.RestartStrip();" in hip_code
+
+    def test_tessellation_stages_lower_to_hip_metadata_and_patch_placeholders(self):
+        """Tessellation stages lower to deterministic HIP helper representation."""
+        source_code = """
+        shader HipTessellationPipeline {
+            struct HSInput {
+                vec3 position;
+            };
+
+            struct HSOutput {
+                vec3 position;
+            };
+
+            struct PatchConstants {
+                float edge;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<HSInput, 3> patch) {
+                    PatchConstants constants;
+                    return constants;
+                }
+
+                HSOutput main(InputPatch<HSInput, 3> patch)
+                    @domain(tri)
+                    @partitioning(fractional_odd)
+                    @outputtopology(triangle_cw)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                    HSOutput output;
+                    output.position = patch[0].position;
+                    return output;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<HSOutput, 3> patch) @domain(tri) {
+                    vec3 position = patch[0].position;
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "template <typename T, int N>" in hip_code
+        assert "struct CglHipInputPatch" in hip_code
+        assert "struct CglHipOutputPatch" in hip_code
+        assert (
+            "// CrossGL tessellation control stage: outputcontrolpoints=3" in hip_code
+        )
+        assert "// CrossGL tessellation domain: tri" in hip_code
+        assert "// CrossGL tessellation partitioning: fractional_odd" in hip_code
+        assert "// CrossGL tessellation output topology: triangle_cw" in hip_code
+        assert "// CrossGL tessellation patch constant function: HSConst" in hip_code
+        assert "// CrossGL tessellation evaluation stage: domain=tri" in hip_code
+        assert (
+            "__device__ HSOutput tessellation_control_main"
+            "(CglHipInputPatch<HSInput, 3> patch)" in hip_code
+        )
+        assert (
+            "__device__ void tessellation_evaluation_main"
+            "(CglHipOutputPatch<HSOutput, 3> patch)" in hip_code
+        )
+        assert "output.position = patch[0].position;" in hip_code
+        assert "float3 position = patch[0].position;" in hip_code
+
+    def test_tessellation_stages_validate_hip_metadata(self):
+        missing_control_points = """
+        shader MissingHipTessControlPoints {
+            tessellation_control {
+                void main() @domain(tri) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires outputcontrolpoints"):
+            HipCodeGen().generate(Parser(Lexer(missing_control_points).tokens).parse())
+
+        invalid_control_points = """
+        shader BadHipTessControlPoints {
+            tessellation_control {
+                void main() @outputcontrolpoints(0) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+            HipCodeGen().generate(Parser(Lexer(invalid_control_points).tokens).parse())
+
+        missing_domain = """
+        shader MissingHipTessDomain {
+            tessellation_evaluation {
+                void main() { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires domain"):
+            HipCodeGen().generate(Parser(Lexer(missing_domain).tokens).parse())
+
+        invalid_domain = """
+        shader BadHipTessDomain {
+            tessellation_evaluation {
+                void main() @domain(hex) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="domain.*must be tri"):
+            HipCodeGen().generate(Parser(Lexer(invalid_domain).tokens).parse())
+
+    def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_hip(self):
+        missing_attribute = """
+        shader MissingHipGeometryMax {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires maxvertexcount"):
+            HipCodeGen().generate(Parser(Lexer(missing_attribute).tokens).parse())
+
+        invalid_max = """
+        shader BadHipGeometryMax {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(0) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="maxvertexcount.*positive"):
+            HipCodeGen().generate(Parser(Lexer(invalid_max).tokens).parse())
+
+        wrong_arity = """
+        shader BadHipGeometryInputArity {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[2],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(3) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
+            HipCodeGen().generate(Parser(Lexer(wrong_arity).tokens).parse())
+
+        missing_stream = """
+        shader BadHipGeometryStream {
+            struct GSInput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(triangle GSInput input[3]) @maxvertexcount(3) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="must include a PointStream"):
+            HipCodeGen().generate(Parser(Lexer(missing_stream).tokens).parse())
+
     def test_unsupported_function_stage_qualifiers_are_rejected_for_hip_codegen(self):
         ast = ShaderNode(
             name="UnsupportedQualifiedHipStage",
@@ -142,10 +352,7 @@ class TestHipCodeGen:
 
         with pytest.raises(
             ValueError,
-            match=(
-                r"HIP output does not support stage type\(s\): "
-                r"mesh, tessellation_control"
-            ),
+            match=(r"HIP output does not support stage type\(s\): " r"mesh"),
         ):
             HipCodeGen().generate(ast)
 

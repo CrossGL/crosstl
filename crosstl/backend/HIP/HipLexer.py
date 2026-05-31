@@ -1,7 +1,9 @@
 """Lexer for importing HIP source into CrossGL Translator."""
 
 import re
-from typing import List
+from typing import Dict, List, Optional
+
+from .preprocessor import HipPreprocessor
 
 
 class Token:
@@ -246,8 +248,25 @@ KEYWORDS = {
 class HipLexer:
     """Tokenize HIP source for the HIP backend parser."""
 
-    def __init__(self, code: str):
-        """Initialize the lexer with raw HIP source text."""
+    def __init__(
+        self,
+        code: str,
+        preprocess: bool = True,
+        include_paths: Optional[List[str]] = None,
+        defines: Optional[Dict[str, str]] = None,
+        strict_preprocessor: bool = False,
+        max_expansion_depth: int = 64,
+        file_path: Optional[str] = None,
+    ):
+        """Initialize the lexer and optionally preprocess HIP source text."""
+        if preprocess:
+            preprocessor = HipPreprocessor(
+                include_paths=include_paths,
+                defines=defines,
+                strict=strict_preprocessor,
+                max_expansion_depth=max_expansion_depth,
+            )
+            code = preprocessor.preprocess(code, file_path=file_path)
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
         self._length = len(code)

@@ -90,36 +90,77 @@
           ]
         },
         "vulkan": {
-          "status": "diagnostic",
-          "notes": "Mesh/task IR operation nodes emit deterministic unsupported diagnostics with type-correct fallback values. Real SPIR-V mesh/task stage entry-point and payload lowering is not implemented yet.",
+          "status": "supported",
+          "notes": "Vulkan source imports run a GLSL-compatible preprocessor before lexing, expanding object-like and function-like defines, include files, and conditional compilation while enforcing #version placement. Remaining native directives such as #version and #extension are accepted and filtered before parsing, so preprocessed Vulkan GLSL/SPIR-V-style sources parse without leaking directive tokens into the AST.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_represented_ray_mesh_ir_nodes_emit_deterministic_unsupported_diagnostics",
-            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_unsupported_ray_mesh_ir_fallback_module_validates"
+            "tests/test_backend/test_SPIRV/test_preprocessor.py::def test_preprocessor_conditional_expansion",
+            "tests/test_backend/test_SPIRV/test_preprocessor.py::def test_preprocessor_include_with_search_path",
+            "tests/test_backend/test_SPIRV/test_preprocessor.py::def test_preprocessor_function_like_macro_expansion",
+            "tests/test_backend/test_SPIRV/test_preprocessor.py::def test_preprocessor_version_must_be_first",
+            "tests/test_backend/test_SPIRV/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals",
+            "tests/test_backend/test_SPIRV/test_lexer.py::def test_preprocessor_version_directive_tokenization",
+            "tests/test_backend/test_SPIRV/test_lexer.py::def test_preprocessor_extension_directive_tokenization",
+            "tests/test_backend/test_SPIRV/test_parser.py::def test_version_and_extension_directives_before_layout_parse"
           ]
         },
         "cuda": {
-          "status": "partial",
-          "notes": "Plain 2D textureGather lowers to CUDA tex2Dgather with component selection and explicit-sampler overloads; native tex2Dgather imports back to CrossGL textureGather. Array, cube, offset, shadow, multisample, and sparse-residency gather forms emit deterministic diagnostics.",
+          "status": "supported",
+          "notes": "CUDA source imports run a native C/CUDA-style preprocessor before lexing, expanding object-like and function-like defines, local include files, and conditional compilation. Unresolved system includes such as CUDA runtime headers are preserved as preprocessor nodes for parser/codegen handling, while #error/#warning and malformed conditional directives emit deterministic diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_calls_emit_cuda_diagnostics",
-            "tests/test_backend/test_CUDA/test_codegen.py::def test_cuda_texture_gather_helpers_convert"
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_preprocessor_conditional_expansion",
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_preprocessor_include_with_search_path",
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_preprocessor_preserves_unresolved_system_includes",
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_preprocessor_function_like_macro_expansion",
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_preprocessor_error_directive_raises",
+            "tests/test_backend/test_CUDA/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals",
+            "tests/test_backend/test_CUDA/test_codegen.py::def test_cooperative_groups_thread_block_sync_converts"
           ]
         },
-        "hip": {"status": "unknown"},
+        "hip": {
+          "status": "supported",
+          "notes": "HIP source imports run a native C/HIP-style preprocessor before lexing, expanding object-like and function-like defines, local include files, and conditional compilation. Unresolved system includes such as HIP runtime headers are preserved as parser preprocessor nodes for backend conversion, while #error/#warning and malformed conditional directives emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_preprocessor_conditional_expansion",
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_preprocessor_include_with_search_path",
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_preprocessor_preserves_unresolved_system_includes",
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_preprocessor_function_like_macro_expansion",
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_preprocessor_error_directive_raises",
+            "tests/test_backend/test_HIP/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals",
+            "tests/test_backend/test_HIP/test_lexer.py::def test_preprocessor_directives",
+            "tests/test_backend/test_HIP/test_codegen.py::def test_basic_kernel_conversion"
+          ]
+        },
         "mojo": {
-          "status": "unsupported",
-          "notes": "Mojo source has no C-style preprocessor expansion in this frontend; # lines are treated as comments and native import/from-import declarations are parsed separately.",
+          "status": "supported",
+          "notes": "Mojo has no C-style preprocessor surface in this frontend; the supported source-handling contract treats # lines as comments and parses native import/from-import declarations as the inclusion mechanism. Tests cover hash-prefixed directive-like lines being ignored without leaking macro tokens and imports continuing to parse normally.",
           "evidence": [
             "tests/test_backend/test_mojo/test_lexer.py::def test_comments_tokenization",
+            "tests/test_backend/test_mojo/test_lexer.py::def test_hash_prefixed_lines_are_comments_not_preprocessor_tokens",
+            "tests/test_backend/test_mojo/test_parser.py::def test_hash_prefixed_lines_do_not_affect_import_parsing",
             "tests/test_backend/test_mojo/test_parser.py::def test_import_parsing"
           ]
         },
-        "rust": {"status": "unknown"},
-        "slang": {
-          "status": "partial",
-          "notes": "Storage-image readonly/writeonly access metadata is tracked for Slang RWTexture resources; invalid reads, writes, and image atomics emit deterministic diagnostics. Structured-buffer and byte-address-buffer access qualifiers are not audited yet.",
+        "rust": {
+          "status": "supported",
+          "notes": "Rust has no C-style preprocessor; native source-control constructs are represented as attributes and use items. The Rust backend tokenizes and parses cfg-style attributes on functions and use statements, preserves attribute arguments for downstream handling, and parses simple, grouped, glob, alias, and public use imports.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_storage_image_access_qualifiers_emit_slang_diagnostics"
+            "tests/test_backend/test_rust/test_lexer.py::def test_cfg_attribute_and_use_tokenization",
+            "tests/test_backend/test_rust/test_parser.py::def test_cfg_attributes_preserved_on_use_and_function_items",
+            "tests/test_backend/test_rust/test_lexer.py::def test_attributes_tokenization",
+            "tests/test_backend/test_rust/test_parser.py::def test_attributes_parsing",
+            "tests/test_backend/test_rust/test_parser.py::def test_use_statement_parsing"
+          ]
+        },
+        "slang": {
+          "status": "supported",
+          "notes": "Slang source imports run a native C/HLSL-style preprocessor before lexing, expanding object-like and function-like defines, local include files, and conditional compilation. Remaining directive lines such as pragmas are filtered before parsing, and #error/#warning or malformed conditional directives emit deterministic diagnostics.",
+          "evidence": [
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_conditional_expansion",
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_include_with_search_path",
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_function_like_macro_expansion",
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_unknown_directive_is_filtered",
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_preprocessor_error_directive_raises",
+            "tests/test_backend/test_slang/test_preprocessor.py::def test_parser_uses_preprocessed_conditionals"
           ]
         }
       }
@@ -134,14 +175,54 @@
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_value_parameter_emits_stage_input_declaration"]},
         "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
         "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_vertex_stage_entry_point_has_no_fragment_execution_mode"]},
-        "cuda": {"status": "partial", "notes": "Graphics examples lower to CUDA-shaped code, not native raster pipeline stages."},
-        "hip": {"status": "partial", "notes": "Graphics examples lower to HIP-shaped code, not native raster pipeline stages."},
-        "mojo": {
-          "status": "partial",
-          "notes": "Vertex entry points lower to Mojo shader decorators and compile-oriented signatures, but Mojo has no complete raster pipeline/resource ABI in this repo.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        "cuda": {
+          "status": "supported",
+          "notes": "CUDA has no native raster vertex stage, so CrossGL vertex entry points lower to CUDA device functions with deterministic CrossGL stage metadata. Vertex return semantics such as gl_Position/SV_Position and vertex input semantics such as gl_VertexID/SV_InstanceID are preserved as metadata comments with stage/type/direction validation, and optional nvcc smoke coverage verifies the generated device signatures when nvcc is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_simple_function_generation",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_direct_return_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda"
+          ]
         },
-        "rust": {"status": "partial"},
+        "hip": {
+          "status": "supported",
+          "notes": "HIP has no native raster vertex stage, so CrossGL vertex entry points lower to HIP device functions with deterministic CrossGL stage metadata. Vertex return semantics such as gl_Position/SV_Position and vertex input semantics such as gl_VertexID/SV_InstanceID are preserved as metadata comments with stage/type/direction validation, and optional hipcc smoke coverage verifies generated device signatures when hipcc is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_simple_function_generation",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_direct_return_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_vertex_stage_with_position_output"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "Mojo vertex entry points lower to compile-oriented Mojo functions with deterministic CrossGL shader-stage metadata. Vertex return semantics such as gl_Position/SV_Position and vertex input semantics such as gl_VertexID/SV_InstanceID and TEXCOORD/NORMAL/POSITION parameters are preserved as metadata comments with stage/type/direction validation, full vertex input structs lower to Mojo signatures, and optional Mojo compile coverage validates generated vertex/fragment packages when the Mojo toolchain is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_multiple_stage_parameters_with_different_semantics_all_handled",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_stage_full_input_struct_position_normal_texcoord"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Rust vertex entry points lower to #[vertex_shader] functions with deterministic entry names, including duplicate CrossGL stage main names. Vertex input/output structs, stage-local structs and uniform statics, direct return semantics such as gl_Position/SV_Position, and builtin vertex parameters such as gl_VertexID/SV_InstanceID are preserved as generated Rust types or deterministic CrossGL metadata comments with stage/type/direction validation. Rust source roundtrips preserve vertex stage entries through the backend translate API, and smoke coverage validates representative generated vertex modules with rustc when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_vertex_stage_basic",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_vertex_multiple_attributes",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types",
+            "tests/test_backend/test_rust/test_codegen.py::def test_translate_api_accepts_rust_source_preserves_stage_entry"
+          ]
+        },
         "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_only_shader_emits_slang_entry_point"]}
       }
     },
@@ -155,14 +236,52 @@
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_fragment_value_parameter_emits_stage_input_declaration"]},
         "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"]},
         "vulkan": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_fragment_stage_execution_mode_uses_entry_function_id"]},
-        "cuda": {"status": "partial"},
-        "hip": {"status": "partial"},
-        "mojo": {
-          "status": "partial",
-          "notes": "Fragment entry points lower to Mojo shader decorators and compile-oriented signatures, but direct render-target ABI semantics are not complete.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader"]
+        "cuda": {
+          "status": "supported",
+          "notes": "CUDA has no native raster fragment stage, so CrossGL fragment entry points lower to CUDA device functions with deterministic CrossGL stage metadata. Fragment return semantics such as gl_FragColor/SV_Target and gl_FragDepth, fragment input semantics such as gl_FragCoord/SV_Position and gl_FrontFacing/SV_IsFrontFace, and struct-member render-target/depth semantics are preserved as metadata comments with stage/type/direction validation. Optional nvcc smoke coverage verifies representative generated fragment device signatures when nvcc is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_direct_return_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda"
+          ]
         },
-        "rust": {"status": "partial"},
+        "hip": {
+          "status": "supported",
+          "notes": "HIP has no native raster fragment stage, so CrossGL fragment entry points lower to HIP device functions with deterministic CrossGL stage metadata. Fragment return semantics such as gl_FragColor/SV_Target and gl_FragDepth, fragment input semantics such as gl_FragCoord/SV_Position and gl_FrontFacing/SV_IsFrontFace, and struct-member render-target/depth semantics are preserved as metadata comments with stage/type/direction validation. Optional hipcc smoke coverage verifies representative generated fragment device signatures when hipcc is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_direct_return_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip"
+          ]
+        },
+        "mojo": {
+          "status": "supported",
+          "notes": "Mojo fragment entry points lower to compile-oriented fragment_main signatures with deterministic CrossGL shader-stage metadata. Fragment return semantics such as gl_FragColor/SV_Target and gl_FragDepth, fragment input semantics such as gl_FragCoord/SV_Position, gl_FrontFacing/SV_IsFrontFace, gl_PointCoord, and TEXCOORD parameters, and struct-member render-target/depth semantics are preserved as Mojo comments or field annotations with stage/type/direction validation. Optional Mojo package smoke coverage validates representative generated vertex/fragment modules when the Mojo toolchain is available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_function_return_semantic_sv_target_produces_output_annotation"
+          ]
+        },
+        "rust": {
+          "status": "supported",
+          "notes": "Rust fragment entry points lower to #[fragment_shader] functions with deterministic entry names, including duplicate CrossGL stage main names. Fragment return semantics such as gl_FragColor/SV_Target and gl_FragDepth, fragment input semantics such as gl_FragCoord/SV_Position and gl_FrontFacing/SV_IsFrontFace, multiple render-target structs, and struct-member color/depth semantics are preserved as generated Rust types or deterministic CrossGL metadata comments with stage/type/direction validation. Backend Rust-to-CrossGL conversion preserves fragment shader entries, and smoke coverage validates representative generated fragment modules with rustc when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_fragment_stage_basic",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_fragment_stage_multiple_render_targets",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc",
+            "tests/test_backend/test_rust/test_codegen.py::def test_fragment_shader_conversion"
+          ]
+        },
         "slang": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_output_assignments_rewrite_to_slang_return_semantics"]}
       }
     },
@@ -198,34 +317,66 @@
       "support": {
         "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_geometry_stage_lowers_hlsl_stage_attributes"]},
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_geometry_stage_entrypoint"]},
-        "metal": {"status": "unsupported", "evidence": ["crosstl/translator/codegen/metal_codegen.py::does not support stage type"]},
-        "vulkan": {"status": "unknown"},
+        "metal": {
+          "status": "supported",
+          "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mixed_shader_with_geometry_emits_all_requested_stages"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "SPIR-V geometry stages lower to Geometry entry points with OpCapability Geometry and stage execution modes for input primitive topology, output topology, OutputVertices/maxvertexcount, and invocation count. Geometry stage builtins are emitted into the entry interface, EmitVertex and EndPrimitive lower to OpEmitVertex and OpEndPrimitive, and invalid geometry metadata, wrong-stage stream calls, and stream builtin arity errors produce deterministic diagnostics.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_stage_layouts_emit_execution_modes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_tessellation_stage_builtins_emit_interface_and_stream_ops",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_stream_builtins_reject_invalid_stage_and_arity",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_geometry_tessellation_execution_modes_reject_invalid_metadata"
+          ]
+        },
         "cuda": {
-          "status": "unsupported",
-          "notes": "CUDA codegen rejects geometry stages explicitly because CUDA has no geometry shader-stage equivalent.",
-          "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
+          "status": "supported",
+          "notes": "CUDA geometry stages lower to deterministic __device__ helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_geometry_stage_lowers_to_cuda_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape"
+          ]
         },
         "hip": {
-          "status": "unsupported",
-          "notes": "HIP codegen rejects geometry stages explicitly because HIP has no geometry shader-stage equivalent.",
-          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+          "status": "supported",
+          "notes": "HIP geometry stages lower to deterministic __device__ helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_geometry_stage_lowers_to_hip_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_hip"
+          ]
         },
         "mojo": {
-          "status": "unsupported",
-          "notes": "Mojo codegen rejects geometry stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+          "status": "supported",
+          "notes": "Mojo geometry stages lower to deterministic compile-smoke helper functions with CrossGL geometry-stage metadata and PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_geometry_stage_lowers_to_mojo_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_mojo"
+          ]
         },
         "rust": {
-          "status": "unsupported",
-          "notes": "Rust codegen rejects geometry stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
-          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+          "status": "supported",
+          "notes": "Rust geometry stages lower to deterministic compile-smoke functions with CrossGL geometry-stage metadata and PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder helpers, requires positive maxvertexcount attributes, validates point/line/triangle/adjacent input primitive array arity, and is covered by rustc smoke compilation.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_geometry_stage_validates_maxvertexcount_and_input_shape"
+          ]
         },
         "slang": {
-          "status": "partial",
-          "notes": "Maps geometry blocks to Slang geometry entry points, lowers geometry system-value builtins, preserves semantic aliases, emits maxvertexcount attributes, and validates stage-attribute shapes. Full stream-output/emission semantics are still incomplete.",
+          "status": "supported",
+          "notes": "Maps geometry blocks to Slang geometry entry points, lowers geometry system-value builtins, preserves semantic aliases, emits maxvertexcount attributes, preserves input primitive qualifiers and PointStream/LineStream/TriangleStream signatures, lowers stream Append/RestartStrip calls, and validates stream method arity, element types, inout stream qualifiers, input primitive presence, and primitive array arity.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_lowers_stream_signature_and_emission_calls",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stream_signature_and_method_validation",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
@@ -240,35 +391,69 @@
       "support": {
         "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_tessellation_stages_lower_hlsl_stage_attributes"]},
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"]},
-        "metal": {"status": "unsupported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::unsupported_geometry_and_tessellation"]},
-        "vulkan": {"status": "unknown"},
+        "metal": {
+          "status": "supported",
+          "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_control_stage_lowers_with_patch_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
+          ]
+        },
+        "vulkan": {
+          "status": "supported",
+          "notes": "SPIR-V codegen lowers tessellation control and evaluation stages to TessellationControl/TessellationEvaluation entry points with deterministic execution modes from stage layouts, stage attributes, and top-level qualified FunctionNode metadata. It preserves output vertices, domain, spacing, vertex order, patch-constant data, patch builtins, and patch parameter interfaces while validating tessellation metadata and patch contexts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_stage_layouts_emit_execution_modes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_stage_attributes_feed_evaluation_execution_modes",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_qualified_entries_use_function_metadata",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_patch_builtins_emit_stage_specific_interfaces",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_tessellation_patch_parameters_emit_stage_specific_interfaces"
+          ]
+        },
         "cuda": {
-          "status": "unsupported",
-          "notes": "CUDA codegen rejects tessellation control and evaluation stages explicitly because CUDA has no tessellation shader-stage equivalent.",
-          "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
+          "status": "supported",
+          "notes": "CUDA tessellation control and evaluation stages lower to deterministic __device__ helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder templates, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_tessellation_stages_lower_to_cuda_metadata_and_patch_placeholders",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_tessellation_stages_validate_cuda_metadata"
+          ]
         },
         "hip": {
-          "status": "unsupported",
-          "notes": "HIP codegen rejects tessellation control and evaluation stages explicitly because HIP has no tessellation shader-stage equivalent.",
-          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+          "status": "supported",
+          "notes": "HIP tessellation control and evaluation stages lower to deterministic __device__ helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder templates, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_tessellation_stages_lower_to_hip_metadata_and_patch_placeholders",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_tessellation_stages_validate_hip_metadata"
+          ]
         },
         "mojo": {
-          "status": "unsupported",
-          "notes": "Mojo codegen rejects tessellation stages explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
-          "evidence": ["tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen"]
+          "status": "supported",
+          "notes": "Mojo tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, and patchconstantfunc metadata, maps patch parameter types to placeholder containers, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, and validates partitioning values.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_tessellation_stages_lower_to_mojo_metadata_and_patch_placeholders",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_tessellation_stages_validate_mojo_metadata"
+          ]
         },
         "rust": {
-          "status": "unsupported",
-          "notes": "Rust codegen rejects tessellation control and evaluation stages explicitly; the Rust backend currently exposes vertex, fragment, and compute shader entry attributes only.",
-          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+          "status": "supported",
+          "notes": "Rust tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves outputcontrolpoints, domain, partitioning, output topology, patchconstantfunc, and patch parameter metadata, maps patch parameter types to placeholder containers, requires positive outputcontrolpoints on control stages, requires valid domain metadata on evaluation stages, validates partitioning values, and rejects invalid patch generic shapes/counts.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_tessellation_stages_validate_metadata_and_patch_shapes"
+          ]
         },
         "slang": {
-          "status": "partial",
-          "notes": "Maps tessellation_control and tessellation_evaluation to Slang hull/domain stages, lowers tessellation system values, tessellation-factor semantics, gl_in/gl_out patch rewrites, patch-constant functions, and validates hull/domain patch shapes and attributes. Full cross-stage compiler-backed tessellation coverage remains incomplete.",
+          "status": "supported",
+          "notes": "Maps tessellation_control and tessellation_evaluation to Slang hull/domain stages, lowers tessellation system values, tessellation-factor semantics, gl_in/gl_out patch rewrites, patch-constant functions, stage attributes, and validates hull/domain patch shapes plus required outputcontrolpoints/domain metadata.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_stages_emit_hull_and_domain_shader_attributes",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_factor_semantics_map_to_slang_patch_constant_outputs",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_gl_out_output_patch_lowers_to_hull_return",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_output_patch_matches_hull_output_shape",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_mismatch_raises_diagnostic",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_stage_attributes_raise",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics"
           ]
         }
@@ -297,8 +482,8 @@
           ]
         },
         "metal": {
-          "status": "partial",
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
+          "status": "supported",
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. The backend validates literal output-count bounds, write ordering, helper ordering, if/switch branch dominance, loop-exit dominance for post-branch/output writes, payload address spaces, dispatch payload source/type shapes, grid arguments, and generated name collisions.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_mesh_object_stage_codegen",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mesh_object_stage_attributes_and_threadgroup_limits",
@@ -327,11 +512,30 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ]
         },
-        "vulkan": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "SPIR-V codegen lowers mesh and task stages with SPV_EXT_mesh_shader capability/extension metadata, MeshEXT/TaskEXT entry points, local-size execution modes, mesh output limits/topology, SetMeshOutputCounts, SetVertex/SetPrimitive, mesh output signature parameters, per-primitive and builtin outputs, helper forwarding, taskPayloadSharedEXT payload interfaces, and DispatchMesh payload operands while validating arity, scalar/non-negative counts, declared output limits, output assignment shapes, invalid members/components, ambiguous payload targets, and wrong-stage mesh helpers.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_set_mesh_output_counts_emits_ext_instruction",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_set_vertex_and_primitive_emit_output_stores",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_output_parameter_assignments_emit_output_stores",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_output_parameter_helper_forwards_interfaces",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_mesh_stage_primitive_builtin_output_parameters",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_task_stage_dispatch_mesh_emits_ext_terminator",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_task_stage_dispatch_mesh_payload_emits_ext_operand",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_task_stage_dispatch_mesh_payload_rejects_ambiguous_targets",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_task_stage_dispatch_mesh_rejects_non_scalar_group_counts",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_nested_helper_synchronization_allows_compute_mesh_task_callgraph"
+          ]
+        },
         "cuda": {
-          "status": "unsupported",
-          "notes": "CUDA codegen rejects mesh, task, object, and amplification-style stages explicitly because CUDA has no mesh shader-stage equivalent.",
-          "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
+          "status": "supported",
+          "notes": "CUDA mesh, task, object, and amplification stages lower to deterministic __device__ helper functions with CrossGL mesh/task metadata and compile-oriented placeholder hooks. Mesh lowering preserves numthreads, output topology, max_vertices, max_primitives, and SetMeshOutputCounts calls; task/object/amplification lowering preserves numthreads and DispatchMesh payload calls. The backend validates output topology, positive local-size metadata, SetMeshOutputCounts arity, and DispatchMesh stage/arity.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_mesh_task_stages_validate_cuda_metadata_and_intrinsics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_mesh_function_stage_qualifier_lowers_cuda_metadata"
+          ]
         },
         "hip": {
           "status": "unsupported",
@@ -339,11 +543,13 @@
           "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
         },
         "mojo": {
-          "status": "unsupported",
-          "notes": "Mojo codegen rejects mesh/task/object stages and mesh IR intrinsics explicitly; the Mojo backend currently exposes only vertex, fragment, and compute compile-smoke stages.",
+          "status": "supported",
+          "notes": "Mojo mesh, task, object, and amplification stages lower to compile-oriented Mojo functions with deterministic CrossGL mesh/task metadata and placeholder helpers. Mesh lowering preserves output topology, max vertex/primitive limits, mesh payload/output roles, SetMeshOutputCounts calls, and task/object/amplification DispatchMesh calls while validating topology, positive limits, helper stage context, and helper arity.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_task_stages_validate_mojo_metadata_and_intrinsics",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_intrinsics_reject_invalid_mojo_stage_contexts",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr"
           ]
         },
         "rust": {
@@ -352,8 +558,8 @@
           "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
         },
         "slang": {
-          "status": "partial",
-          "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes emit numthreads metadata, outputtopology emits quoted Slang attributes, and SetMeshOutputCounts/DispatchMesh lower to native Slang calls with arity and stage validation. Full mesh output signature/payload validation and slangc-backed mesh compilation remain incomplete.",
+          "status": "supported",
+          "notes": "Entry points lower to Slang mesh/amplification shader attributes with deterministic duplicate-entry names, local-size layouts or @numthreads attributes, quoted outputtopology attributes, native SetMeshOutputCounts/DispatchMesh calls, mesh output signatures for vertices/indices/primitives, helper forwarding, mesh payload parameters, and DispatchMesh payload arguments. The backend validates intrinsic arity/stage/value contexts, count argument types, output roles/counts/topology, SetMeshOutputCounts ordering and duplicates, output write order and literal indices, payload parameter shapes, payload lvalue/type matching, and invalid helper payload arguments.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_stages_emit_execution_layout_numthreads",
@@ -361,7 +567,12 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_attributes_lower_to_slang_attributes_not_return_semantics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_and_task_intrinsics_lower_to_native_slang_calls",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsic_invalid_arities_emit_slang_diagnostics",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsics_reject_invalid_slang_stages"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_intrinsics_reject_invalid_slang_stages",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_payload_parameter_lowers_to_native_slang_payload_qualifier",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_signature_and_helper_roles_lower_to_native_slang",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_signature_validates_roles_counts_and_topology",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_matches_mesh_payload_parameter",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_dispatch_mesh_payload_argument_rejects_non_lvalue_payload_expressions"
           ]
         }
       }
@@ -373,21 +584,42 @@
       "description": "Ray generation, hit, miss, callable, and intersection stages.",
       "support": {
         "directx": {
-          "status": "partial",
-          "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
+          "status": "supported",
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to HLSL library shader attributes with deterministic stage names. Payload, callable-data, and hit-attribute stage parameters map to native HLSL inout/in signatures with role, order, and type validation. RaytracingAccelerationStructure resources and RayDesc operands preserve HLSL ray-tracing types and bindings, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to native HLSL calls with stage, arity, operand, ray-flag, and instance-mask validation, and RayQuery methods lower to native HLSL methods with receiver/argument validation and result type inference.",
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_payload_semantics",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_emit_and_validate",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_reject_duplicates_order_and_extras",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_require_stage_roles",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_stage_and_arity",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_payload_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_trace_ray_expanded_shape",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_methods_validate_trace_and_infer_results",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_result_methods_infer_all_hlsl_result_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_receiver_and_trace_ray_inline_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_commit_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_trace_ray_validates_global_acceleration_structure_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_global_acceleration_structure_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_validates_literal_instance_inclusion_masks",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_validates_literal_ray_flags",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_multi_stage_pipeline"
           ]
         },
         "opengl": {
-          "status": "partial",
-          "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
-          "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names"]
+          "status": "supported",
+          "notes": "Ray generation, closest-hit, any-hit, miss, intersection, and callable stages lower with deterministic combined-stage entry names or target-stage main entry points and GL_EXT_ray_tracing enablement. Acceleration-structure resources, shaderRecordEXT buffers, rayPayloadEXT/rayPayloadInEXT, hitAttributeEXT, callableDataEXT/callableDataInEXT, TraceRay, CallShader, IgnoreHit, ReportHit, and ray hit position-fetch extension scoping are covered by GLSL codegen tests.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_generation_shader_emits_ray_tracing_extension",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_hit_position_fetch_builtin_emits_extension_only_for_users"
+          ]
         },
         "metal": {
-          "status": "partial",
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
+          "status": "supported",
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_payload_semantics",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_hit_and_callable_stages_lower_to_visible_functions",
@@ -431,9 +663,12 @@
           ]
         },
         "vulkan": {
-          "status": "partial",
-          "notes": "Registers RayQuery types and acceleration-structure resources as SPIR-V KHR objects; lowers TraceRayInline, Proceed, CandidateRayT, CommittedRayT, abort/terminate, generated/procedural intersection commits, non-opaque/confirm intersection commits, ray state getters for RayTMin and RayFlags, world ray vector getters, candidate/committed object ray vector getters, object/world transform matrix getters, candidate AABB opacity, and intersection metadata getters for type, primitive index, instance ID, instance custom index, shader-binding-table record offset, geometry index, barycentrics, and triangle front-face to KHR ray-query instructions with validator-backed coverage. Full ray tracing stages, TraceRay, acceleration-structure arrays, and triangle vertex positions remain incomplete.",
+          "status": "supported",
+          "notes": "Ray generation, intersection, any-hit, closest-hit, miss, and callable stages lower to SPIR-V KHR ray tracing entry points with validator-backed RayTracingKHR capability and SPV_KHR_ray_tracing extension coverage. Acceleration-structure resources preserve descriptor metadata and participate in entry-point interfaces, ray payload, callable data, and hit attribute values are bridged through RayPayloadKHR, CallableDataKHR, and HitAttributeKHR storage variables, launch and hit builtins lower to SPIR-V builtins, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to native KHR instructions, and RayQuery methods lower to KHR ray-query instructions including triangle position fetch coverage.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_tracing_stages_emit_khr_entrypoints_intrinsics_and_builtins",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_tracing_trace_ray_emits_optraceraykhr",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_tracing_report_intersection_emits_op",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_proceed_and_intersection_t_emit_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_parsed_ray_query_generic_type_lowers_to_khr_instructions",
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_ray_query_supported_operations_reject_unexpected_arguments",
@@ -480,7 +715,7 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_tracing_stages_emit_mojo_metadata_and_hooks",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mojo_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr"
           ]
         },
         "rust": {
@@ -2308,9 +2543,11 @@
         },
         "metal": {
           "status": "supported",
+          "notes": "Metal codegen validates geometry maxvertexcount/input primitive shapes, tessellation patch metadata and domain-location shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_raises_with_diagnostic_message"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
           ]
         },
         "vulkan": {
@@ -2344,10 +2581,11 @@
         },
         "cuda": {
           "status": "supported",
-          "notes": "CUDA codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
+          "notes": "CUDA codegen validates geometry maxvertexcount/input primitive shapes, tessellation outputcontrolpoints/domain/partitioning metadata, mesh/task output topology, local-size metadata, SetMeshOutputCounts/DispatchMesh shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors, emitted helpers, or compile-safe diagnostics.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics",
-            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_function_stage_qualifiers_raise_diagnostics",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_tessellation_stages_validate_cuda_metadata",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_mesh_task_stages_validate_cuda_metadata_and_intrinsics",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_coordinate_shapes_emit_cuda_helpers_or_diagnostics",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_gather_coordinate_shapes_emit_cuda_helpers_or_diagnostics",
             "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_texture_offset_argument_shapes_emit_cuda_diagnostics",
@@ -2362,8 +2600,10 @@
         },
         "hip": {
           "status": "supported",
-          "notes": "HIP codegen rejects unsupported geometry, tessellation, mesh/task/object/amplification, and ray stages with deterministic errors, and covers invalid texture, image, resource-array, and resource-query shapes with emitted helpers or compile-safe diagnostics.",
+          "notes": "HIP codegen validates geometry maxvertexcount/input primitive shapes, tessellation outputcontrolpoints/domain/partitioning metadata, unsupported mesh/task/object/amplification stages, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors, emitted helpers, or compile-safe diagnostics.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_tessellation_stages_validate_hip_metadata",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_function_stage_qualifiers_are_rejected_for_hip_codegen",
             "tests/test_translator/test_codegen/test_hip_codegen.py::def test_texture_coordinate_shapes_emit_hip_helpers_or_diagnostics",
@@ -2376,14 +2616,15 @@
         },
         "mojo": {
           "status": "supported",
-          "notes": "Mojo codegen validates unsupported payload enum shapes, payload constructor arity, parameter/return semantics, struct builtin semantics, unsupported stage and pipeline IR shapes, resource-size and expression target shapes, duplicate resource bindings, invalid texture/image/buffer operations, ray/mesh intrinsics, ray-query methods, buffer counter/atomic methods, and unsupported match pattern shapes with deterministic errors or compile-safe diagnostics.",
+          "notes": "Mojo codegen validates unsupported payload enum shapes, payload constructor arity, parameter/return semantics, struct builtin semantics, geometry and mesh/task stage metadata, pipeline IR shapes, resource-size and expression target shapes, duplicate resource bindings, invalid texture/image/buffer operations, ray/mesh intrinsic contexts, ray-query methods, buffer counter/atomic methods, and unsupported match pattern shapes with deterministic errors or compile-safe diagnostics.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_invalid_shapes_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_payload_enum_constructor_arity_is_validated_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_geometry_stage_validates_maxvertexcount_and_input_shape_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_task_stages_validate_mojo_metadata_and_intrinsics",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_resource_size_target_shape_diagnostics_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_invalid_buffer_operations_are_rejected_for_mojo_codegen",
@@ -2392,17 +2633,18 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_byte_address_atomic_methods_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mesh_intrinsics_reject_invalid_mojo_stage_contexts",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen"
           ]
         },
         "rust": {
           "status": "supported",
-          "notes": "Rust codegen rejects unsupported geometry, tessellation, mesh/task, and ray stages with deterministic errors; odd-but-valid empty/no-stage shaders remain compile-safe, and stage parameter semantics are mapped through tested Rust attributes/comments.",
+          "notes": "Rust codegen validates geometry maxvertexcount/input primitive shapes, rejects unsupported tessellation, mesh/task, and ray stages with deterministic errors, keeps odd-but-valid empty/no-stage shaders compile-safe, and maps stage parameter semantics through tested Rust attributes/comments.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_geometry_stage_validates_maxvertexcount_and_input_shape",
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen",
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen",
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_invalid_shader_completely_empty",
@@ -2416,6 +2658,7 @@
           "status": "supported",
           "notes": "Slang codegen validates invalid tessellation patch shapes, mesh payload parameters, ray intrinsic result shapes, stage semantic parameters, stage attributes, and return semantics with deterministic errors or compile-safe diagnostics.",
           "evidence": [
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stream_signature_and_method_validation",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_patch_constant_invalid_input_patch_shape_raises",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_domain_invalid_output_patch_shape_raises",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_payload_parameter_rejects_invalid_slang_shapes",

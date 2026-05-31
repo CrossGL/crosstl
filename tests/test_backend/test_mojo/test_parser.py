@@ -550,6 +550,26 @@ def test_import_parsing():
         pytest.fail("Import parsing not implemented.")
 
 
+def test_hash_prefixed_lines_do_not_affect_import_parsing():
+    code = """
+    #define ENABLE_MATH 1
+    #if ENABLE_MATH
+    import math
+    from tensor import Tensor
+    #endif
+
+    fn main():
+        let result = math.sin(0.5)
+    """
+    tokens = tokenize_code(code)
+    ast = parse_code(tokens)
+    imports = ast.includes
+
+    assert [import_node.module_name for import_node in imports] == ["math", "tensor"]
+    assert imports[0].items == []
+    assert imports[1].items == ["Tensor"]
+
+
 def test_data_types_parsing():
     code = """
     fn main():

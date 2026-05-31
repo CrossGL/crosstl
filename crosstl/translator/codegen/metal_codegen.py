@@ -1198,6 +1198,10 @@ class MetalCodeGen:
         if self.uses_metal_raytracing_namespace(ast, global_vars, all_functions):
             code += "using namespace metal::raytracing;\n"
         code += "\n"
+        if self.has_geometry_stage(ast, target_stage):
+            code += self.generate_metal_geometry_stream_helpers()
+        if self.has_tessellation_stage(ast, target_stage):
+            code += self.generate_metal_tessellation_patch_helpers()
         code += generate_enum_constants(
             self, self.plain_enums + self.struct_payload_enums
         )
@@ -2493,6 +2497,29 @@ class MetalCodeGen:
                 return_type = return_wrapper["struct_name"]
             self.current_function_return_wrapper = return_wrapper
             code += f"fragment {return_type} {function_name}({params_str}) {{\n"
+        elif shader_type == "geometry":
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name
+            )
+            function_name = entry_name or f"geometry_{func.name}"
+            self.validate_metal_geometry_stage(func, param_list)
+            code += self.generate_metal_geometry_stage_comments(
+                func,
+                param_list,
+            )
+            code += f"{return_type} {function_name}({params_str}) {{\n"
+        elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            params_str = self.append_global_resource_parameters(
+                params_str, self.current_function_name
+            )
+            function_name = entry_name or self.stage_entry_base_name(shader_type, func)
+            self.validate_metal_tessellation_stage(func, param_list, shader_type)
+            code += self.generate_metal_tessellation_stage_comments(
+                func,
+                param_list,
+                shader_type,
+            )
+            code += f"{return_type} {function_name}({params_str}) {{\n"
         elif shader_type in ["compute", "ray_generation"]:
             params_str = self.append_global_resource_parameters(
                 params_str, self.current_function_name
@@ -8217,12 +8244,21 @@ class MetalCodeGen:
             and ray_semantic_role == "callable_data"
         ):
             return ""
+        if self.is_metal_tessellation_helper_semantic(semantic) and shader_type in {
+            None,
+            "tessellation_control",
+            "tessellation_evaluation",
+        }:
+            return ""
         if semantic:
             return self.map_semantic(semantic)
         if shader_type in {
             "vertex",
             "fragment",
             "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
             "ray_generation",
             "object",
             "task",
@@ -8487,6 +8523,19 @@ class MetalCodeGen:
         self, raw_param_type, mapped_type, name, node=None, shader_type=None
     ):
         self.validate_metal_ray_resource_parameter_value_type(raw_param_type, name)
+
+        geometry_stream_declaration = self.format_metal_geometry_stream_parameter(
+            raw_param_type,
+            name,
+        )
+        if geometry_stream_declaration is not None:
+            return geometry_stream_declaration
+
+        tessellation_patch_declaration = self.format_metal_tessellation_patch_parameter(
+            raw_param_type, name
+        )
+        if tessellation_patch_declaration is not None:
+            return tessellation_patch_declaration
 
         ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
             mapped_type, name, node, shader_type
@@ -9577,7 +9626,7 @@ class MetalCodeGen:
         )
 
     def unsupported_stage_types(self):
-        return {"geometry", "tessellation_control", "tessellation_evaluation"}
+        return set()
 
     def validate_supported_stage_types(self, ast, target_stage=None):
         unsupported_stages = []
@@ -9594,11 +9643,88 @@ class MetalCodeGen:
                 f"Metal output does not support stage type(s): {stage_list}"
             )
 
+    def has_geometry_stage(self, ast, target_stage=None):
+        if not stage_matches(target_stage, "geometry"):
+            return False
+
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) == "geometry":
+                return True
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifiers = getattr(func, "qualifiers", None)
+            if qualifiers is None:
+                qualifiers = [getattr(func, "qualifier", None)]
+            if any(
+                normalize_stage_name(qualifier) == "geometry"
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_metal_geometry_stream_helpers(self):
+        return (
+            "template <typename T>\n"
+            "struct CrossGLMetalPointStream {\n"
+            "    void Append(T value) { }\n"
+            "    void RestartStrip() { }\n"
+            "};\n\n"
+            "template <typename T>\n"
+            "struct CrossGLMetalLineStream {\n"
+            "    void Append(T value) { }\n"
+            "    void RestartStrip() { }\n"
+            "};\n\n"
+            "template <typename T>\n"
+            "struct CrossGLMetalTriangleStream {\n"
+            "    void Append(T value) { }\n"
+            "    void RestartStrip() { }\n"
+            "};\n\n"
+        )
+
+    def has_tessellation_stage(self, ast, target_stage=None):
+        tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
+        if not any(stage_matches(target_stage, stage) for stage in tessellation_stages):
+            return False
+
+        for stage_type in getattr(ast, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) in tessellation_stages:
+                return True
+
+        for func in getattr(ast, "functions", []) or []:
+            qualifiers = getattr(func, "qualifiers", None)
+            if qualifiers is None:
+                qualifiers = [getattr(func, "qualifier", None)]
+            if any(
+                normalize_stage_name(qualifier) in tessellation_stages
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_metal_tessellation_patch_helpers(self):
+        return (
+            "template <typename T, int N>\n"
+            "struct CrossGLMetalInputPatch {\n"
+            "    T control_points[N];\n"
+            "    T operator[](uint index) const { return control_points[index]; }\n"
+            "};\n\n"
+            "template <typename T, int N>\n"
+            "struct CrossGLMetalOutputPatch {\n"
+            "    T control_points[N];\n"
+            "    T operator[](uint index) const { return control_points[index]; }\n"
+            "};\n\n"
+        )
+
     def stage_entry_types(self):
         return {
             "vertex",
             "fragment",
             "compute",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
             "mesh",
             "task",
             "amplification",
@@ -9624,6 +9750,12 @@ class MetalCodeGen:
             return f"fragment_{func_name}"
         if stage_name in {"compute", "ray_generation"}:
             return f"kernel_{func_name}"
+        if stage_name == "geometry":
+            return f"geometry_{func_name}"
+        if stage_name == "tessellation_control":
+            return f"tessellation_control_{func_name}"
+        if stage_name == "tessellation_evaluation":
+            return f"tessellation_evaluation_{func_name}"
         if stage_name in {"mesh", "object", "task", "amplification"}:
             stage_keyword = "mesh" if stage_name == "mesh" else "object"
             return f"{stage_keyword}_{func_name}"
@@ -9748,6 +9880,674 @@ class MetalCodeGen:
             if self.metal_stage_control_attribute_name(attr) == attribute_name:
                 return getattr(attr, "arguments", []) or []
         return []
+
+    def metal_geometry_maxvertexcount(self, func):
+        arguments = self.metal_stage_attribute_arguments(func, "maxvertexcount")
+        if not arguments:
+            raise ValueError("Metal geometry stage requires maxvertexcount attribute")
+        if len(arguments) != 1:
+            raise ValueError(
+                "Metal geometry stage maxvertexcount requires exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(value_text, self.literal_int_constants)
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Metal geometry stage maxvertexcount ({value}) must be positive"
+            )
+        return value_text
+
+    def metal_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            primitive = self.attribute_value_to_string(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+        return qualifiers
+
+    def metal_geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.metal_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def metal_parameter_is_array(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            return True
+        type_name = self.type_name_string(raw_type)
+        return bool(type_name and "[" in type_name and "]" in type_name)
+
+    def metal_parameter_array_count(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            size = getattr(raw_type, "size", None)
+            if size is None:
+                return None
+            return self.literal_int_value(size, self.literal_int_constants)
+
+        type_name = self.type_name_string(raw_type)
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return None
+        _base_type, array_size = parse_array_type(type_name)
+        if array_size is None:
+            return None
+        return self.literal_int_value(array_size, self.literal_int_constants)
+
+    def validate_metal_geometry_input_primitive_arity(self, parameters):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter in parameters:
+            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.metal_parameter_is_array(parameter):
+                raise ValueError(
+                    "Metal geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.metal_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "Metal geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def validate_metal_geometry_stage(self, func, parameters):
+        self.metal_geometry_maxvertexcount(func)
+
+        if not any(
+            self.metal_geometry_stream_info(self.parameter_raw_type(param))
+            for param in parameters
+        ):
+            raise ValueError(
+                "Metal geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+
+        if not any(
+            self.metal_geometry_input_primitive_qualifier(param) for param in parameters
+        ):
+            raise ValueError(
+                "Metal geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
+            )
+
+        self.validate_metal_geometry_input_primitive_arity(parameters)
+
+    def generate_metal_geometry_stage_comments(self, func, parameters):
+        maxvertexcount = self.metal_geometry_maxvertexcount(func)
+        input_descriptions = []
+        stream_descriptions = []
+
+        for parameter in parameters:
+            primitive = self.metal_geometry_input_primitive_qualifier(parameter)
+            if primitive is not None:
+                input_descriptions.append(f"{primitive}:{parameter.name}")
+
+            stream_info = self.metal_geometry_stream_info(
+                self.parameter_raw_type(parameter)
+            )
+            if stream_info is not None:
+                stream_name, output_type = stream_info
+                stream_descriptions.append(
+                    f"{stream_name}:{parameter.name}->{output_type}"
+                )
+
+        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
+        if input_descriptions:
+            lines.append(
+                "// CrossGL geometry input primitive: "
+                f"{', '.join(input_descriptions)}\n"
+            )
+        if stream_descriptions:
+            lines.append(
+                "// CrossGL geometry output stream: "
+                f"{', '.join(stream_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def metal_tessellation_stage_attribute_value(self, func, attribute_name):
+        arguments = self.metal_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Metal tessellation stage attribute {attribute_name} requires "
+                "exactly one argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def metal_tessellation_output_control_points(self, func):
+        output_control_points = self.metal_tessellation_stage_attribute_value(
+            func, "outputcontrolpoints"
+        )
+        if output_control_points is None:
+            output_control_points = self.metal_tessellation_stage_attribute_value(
+                func, "vertices"
+            )
+        return output_control_points
+
+    def metal_tessellation_positive_int_attribute(
+        self, func, attribute_name, stage_name, display_name=None
+    ):
+        value_text = self.metal_tessellation_stage_attribute_value(func, attribute_name)
+        if value_text is None:
+            return None
+        value = self.literal_int_value(value_text, self.literal_int_constants)
+        display_name = display_name or attribute_name
+        if value is None:
+            raise ValueError(
+                f"Metal {stage_name} stage {display_name} must be an integer "
+                f"constant, got {value_text}"
+            )
+        if value <= 0:
+            raise ValueError(
+                f"Metal {stage_name} stage {display_name} ({value}) must be " "positive"
+            )
+        return value
+
+    def metal_tessellation_domain(self, func):
+        value = self.metal_tessellation_stage_attribute_value(func, "domain")
+        if value is None:
+            return None
+        domain_name = str(value).strip().strip('"').lower()
+        domain_map = {
+            "tri": "triangle",
+            "triangle": "triangle",
+            "triangles": "triangle",
+            "quad": "quad",
+            "quads": "quad",
+            "isoline": "isoline",
+            "isolines": "isoline",
+        }
+        mapped = domain_map.get(domain_name)
+        if mapped is None:
+            raise ValueError(
+                f"Metal tessellation domain cannot be represented: {value}"
+            )
+        return mapped
+
+    def metal_tessellation_partitioning(self, func):
+        value = self.metal_tessellation_stage_attribute_value(func, "partitioning")
+        if value is None:
+            return None
+        partition_name = str(value).strip().strip('"').lower()
+        partition_map = {
+            "integer": "integer",
+            "equal": "integer",
+            "equal_spacing": "integer",
+            "fractional_even": "fractional_even",
+            "fractional_even_spacing": "fractional_even",
+            "fractional_odd": "fractional_odd",
+            "fractional_odd_spacing": "fractional_odd",
+        }
+        mapped = partition_map.get(partition_name)
+        if mapped is None:
+            raise ValueError(
+                f"Metal tessellation partitioning cannot be represented: {value}"
+            )
+        return mapped
+
+    def metal_tessellation_output_topology(self, func, domain):
+        value = self.metal_tessellation_stage_attribute_value(func, "outputtopology")
+        if value is None:
+            return None
+
+        topology_name = str(value).strip().strip('"').lower()
+        if topology_name in {"triangle_cw", "triangles_cw"}:
+            if domain != "triangle":
+                raise ValueError(
+                    "Metal tessellation outputtopology triangle_cw requires "
+                    "triangle domain"
+                )
+            return "triangle_cw"
+        if topology_name in {"triangle_ccw", "triangles_ccw"}:
+            if domain != "triangle":
+                raise ValueError(
+                    "Metal tessellation outputtopology triangle_ccw requires "
+                    "triangle domain"
+                )
+            return "triangle_ccw"
+        if topology_name in {"line", "lines"}:
+            if domain != "isoline":
+                raise ValueError(
+                    "Metal tessellation outputtopology line requires isoline domain"
+                )
+            return "line"
+        if topology_name in {"point", "points"}:
+            return "point"
+
+        raise ValueError(
+            f"Metal tessellation outputtopology cannot be represented: {value}"
+        )
+
+    def metal_tessellation_patch_constant_function_name(self, func):
+        return self.metal_tessellation_stage_attribute_value(func, "patchconstantfunc")
+
+    def metal_tessellation_patch_parameters(self, parameters, patch_type):
+        for parameter in parameters:
+            info = self.metal_tessellation_patch_info(
+                self.parameter_raw_type(parameter)
+            )
+            if info is not None and info["kind"] == patch_type:
+                yield parameter, info
+
+    def metal_tessellation_patch_control_point_count(self, parameters, patch_type):
+        for _parameter, info in self.metal_tessellation_patch_parameters(
+            parameters, patch_type
+        ):
+            return info["count_value"]
+        return None
+
+    def validate_metal_tessellation_patch_parameter_signature(
+        self, parameter, info, stage_name
+    ):
+        patch_type = info["kind"]
+        parameter_name = getattr(parameter, "name", None)
+        name_clause = (
+            f" parameter '{parameter_name}'" if parameter_name else " parameter"
+        )
+        type_name = self.type_name_string(self.parameter_raw_type(parameter))
+
+        if not info["valid"]:
+            raise ValueError(
+                f"Metal {stage_name} stage {patch_type}{name_clause} must use "
+                f"{patch_type}<T, N>; found '{type_name or patch_type}'"
+            )
+
+        if info["element_type"] is None:
+            raise ValueError(
+                f"Metal {stage_name} stage {patch_type}{name_clause} must include "
+                "an element type"
+            )
+
+        control_points = info["count_value"]
+        if control_points is None:
+            raise ValueError(
+                f"Metal {stage_name} stage {patch_type}{name_clause} control "
+                f"point count '{info['count_text']}' must be an integer constant"
+            )
+        if control_points <= 0:
+            raise ValueError(
+                f"Metal {stage_name} stage {patch_type}{name_clause} control "
+                f"point count ({control_points}) must be positive"
+            )
+        if control_points > 32:
+            raise ValueError(
+                f"Metal {stage_name} stage {patch_type}{name_clause} control "
+                f"point count ({control_points}) must be at most 32"
+            )
+
+    def validate_metal_tessellation_patch_parameter_signatures(
+        self, parameters, patch_type, stage_name
+    ):
+        for parameter, info in self.metal_tessellation_patch_parameters(
+            parameters, patch_type
+        ):
+            self.validate_metal_tessellation_patch_parameter_signature(
+                parameter, info, stage_name
+            )
+
+    def validate_metal_tessellation_control_stage(self, func, parameters):
+        stage_name = "tessellation_control"
+        domain = self.metal_tessellation_domain(func)
+        if domain is None:
+            raise ValueError(
+                "Metal tessellation_control stage requires domain attribute"
+            )
+        if self.metal_tessellation_partitioning(func) is None:
+            raise ValueError(
+                "Metal tessellation_control stage requires partitioning attribute"
+            )
+        if self.metal_tessellation_output_topology(func, domain) is None:
+            raise ValueError(
+                "Metal tessellation_control stage requires outputtopology attribute"
+            )
+
+        input_patch_parameters = list(
+            self.metal_tessellation_patch_parameters(parameters, "InputPatch")
+        )
+        if not input_patch_parameters:
+            raise ValueError(
+                "Metal tessellation_control stage parameters must include an "
+                "InputPatch<T, N> parameter"
+            )
+        self.validate_metal_tessellation_patch_parameter_signatures(
+            parameters, "InputPatch", stage_name
+        )
+
+        output_control_points = self.metal_tessellation_positive_int_attribute(
+            func, "outputcontrolpoints", stage_name
+        )
+        if output_control_points is None:
+            output_control_points = self.metal_tessellation_positive_int_attribute(
+                func, "vertices", stage_name, display_name="outputcontrolpoints"
+            )
+        if output_control_points is None:
+            raise ValueError(
+                "Metal tessellation_control stage requires outputcontrolpoints "
+                "attribute"
+            )
+        if output_control_points > 32:
+            raise ValueError(
+                "Metal tessellation_control stage outputcontrolpoints "
+                f"({output_control_points}) must be at most 32"
+            )
+
+        input_control_points = self.metal_tessellation_patch_control_point_count(
+            parameters, "InputPatch"
+        )
+        if (
+            input_control_points is not None
+            and output_control_points != input_control_points
+        ):
+            raise ValueError(
+                "Metal tessellation_control stage outputcontrolpoints "
+                f"({output_control_points}) must match the InputPatch control "
+                f"point count ({input_control_points})"
+            )
+
+        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
+        if patch_constant_func is None:
+            raise ValueError(
+                "Metal tessellation_control stage requires patchconstantfunc "
+                "attribute"
+            )
+        if patch_constant_func not in self.user_function_names:
+            raise ValueError(
+                "Metal tessellation_control stage patchconstantfunc "
+                f"'{patch_constant_func}' must name a function in the program"
+            )
+
+        if not any(
+            self.metal_parameter_has_semantic(parameter, "SV_OutputControlPointID")
+            for parameter in parameters
+        ):
+            raise ValueError(
+                "Metal tessellation_control stage parameters must include an "
+                "SV_OutputControlPointID parameter"
+            )
+        self.validate_metal_scalar_integer_semantic_types(
+            parameters,
+            stage_name,
+            ("SV_OutputControlPointID", "SV_PrimitiveID"),
+        )
+        self.validate_metal_tessellation_max_factor(func, stage_name)
+
+    def validate_metal_tessellation_evaluation_stage(self, func, parameters):
+        stage_name = "tessellation_evaluation"
+        domain = self.metal_tessellation_domain(func)
+        if domain is None:
+            raise ValueError(
+                "Metal tessellation_evaluation stage requires domain attribute"
+            )
+        self.metal_tessellation_output_topology(func, domain)
+
+        output_patch_parameters = list(
+            self.metal_tessellation_patch_parameters(parameters, "OutputPatch")
+        )
+        if not output_patch_parameters:
+            raise ValueError(
+                "Metal tessellation_evaluation stage parameters must include an "
+                "OutputPatch<T, N> parameter"
+            )
+        self.validate_metal_tessellation_patch_parameter_signatures(
+            parameters, "OutputPatch", stage_name
+        )
+
+        if not any(
+            self.metal_parameter_has_semantic(parameter, "SV_DomainLocation")
+            for parameter in parameters
+        ):
+            raise ValueError(
+                "Metal tessellation_evaluation stage parameters must include an "
+                "SV_DomainLocation parameter"
+            )
+        self.validate_metal_domain_location_type(parameters)
+        self.validate_metal_domain_location_components(func, parameters)
+        self.validate_metal_scalar_integer_semantic_types(
+            parameters,
+            stage_name,
+            ("SV_PrimitiveID",),
+        )
+
+    def validate_metal_tessellation_max_factor(self, func, stage_name):
+        max_tess_factor_text = self.metal_tessellation_stage_attribute_value(
+            func, "maxtessfactor"
+        )
+        if max_tess_factor_text is None:
+            return
+        try:
+            max_tess_factor = float(str(max_tess_factor_text).strip().strip('"'))
+        except ValueError as exc:
+            raise ValueError(
+                "Metal tessellation_control stage maxtessfactor "
+                f"'{max_tess_factor_text}' must be a numeric literal"
+            ) from exc
+        if not (1.0 <= max_tess_factor <= 64.0):
+            raise ValueError(
+                "Metal tessellation_control stage maxtessfactor "
+                f"({max_tess_factor_text}) must be in the range 1.0..64.0"
+            )
+
+    def validate_metal_tessellation_stage(self, func, parameters, shader_type):
+        if shader_type == "tessellation_control":
+            self.validate_metal_tessellation_control_stage(func, parameters)
+        elif shader_type == "tessellation_evaluation":
+            self.validate_metal_tessellation_evaluation_stage(func, parameters)
+
+    def validate_metal_domain_location_type(self, parameters):
+        for parameter in parameters:
+            if not self.metal_parameter_has_semantic(parameter, "SV_DomainLocation"):
+                continue
+
+            base_type, array_suffix = self.metal_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+
+            floating_scalar_bases = ("float", "half", "double")
+            is_floating_type = False
+            for scalar_base in floating_scalar_bases:
+                if not base_type.startswith(scalar_base):
+                    continue
+                suffix = base_type[len(scalar_base) :]
+                if suffix in {"", "2", "3", "4"}:
+                    is_floating_type = True
+                break
+
+            if array_suffix or not is_floating_type:
+                raise ValueError(
+                    "Metal tessellation_evaluation stage SV_DomainLocation "
+                    f"parameter '{parameter.name}' must be a floating-point "
+                    "scalar or vector"
+                )
+
+    def validate_metal_domain_location_components(self, func, parameters):
+        domain = self.metal_tessellation_domain(func)
+        expected_counts = {
+            "triangle": 3,
+            "quad": 2,
+            "isoline": 2,
+        }
+        expected_count = expected_counts.get(domain)
+        if expected_count is None:
+            return
+
+        for parameter in parameters:
+            if not self.metal_parameter_has_semantic(parameter, "SV_DomainLocation"):
+                continue
+
+            component_count = self.metal_parameter_component_count(parameter)
+            if component_count is None:
+                continue
+            if component_count != expected_count:
+                raise ValueError(
+                    "Metal tessellation_evaluation stage SV_DomainLocation "
+                    f"parameter '{parameter.name}' must have {expected_count} "
+                    f"component(s) for {domain} domains, got {component_count}"
+                )
+
+    def validate_metal_scalar_integer_semantic_type(
+        self, parameters, shader_type, semantic
+    ):
+        for parameter in parameters:
+            if not self.metal_parameter_has_semantic(parameter, semantic):
+                continue
+
+            base_type, array_suffix = self.metal_parameter_mapped_base_and_array_suffix(
+                parameter
+            )
+            if base_type is None:
+                continue
+            if array_suffix or base_type not in {"int", "uint"}:
+                raise ValueError(
+                    f"Metal {shader_type} stage {semantic} parameter "
+                    f"'{parameter.name}' must be scalar int or uint"
+                )
+
+    def validate_metal_scalar_integer_semantic_types(
+        self, parameters, shader_type, semantics
+    ):
+        for semantic in semantics:
+            self.validate_metal_scalar_integer_semantic_type(
+                parameters, shader_type, semantic
+            )
+
+    def metal_parameter_has_semantic(self, parameter, expected_semantic):
+        semantic = self.semantic_from_node(parameter)
+        if semantic is None:
+            return False
+        return str(semantic).lower() == expected_semantic.lower()
+
+    def metal_parameter_mapped_base_and_array_suffix(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        type_name = self.type_name_string(raw_type)
+        if not type_name:
+            return None, None
+        mapped_type = self.map_type(type_name)
+        return split_array_type_suffix(str(mapped_type))
+
+    def metal_parameter_component_count(self, parameter):
+        base_type, _array_suffix = self.metal_parameter_mapped_base_and_array_suffix(
+            parameter
+        )
+        if base_type is None:
+            return None
+
+        scalar_bases = (
+            "float",
+            "half",
+            "double",
+            "int",
+            "uint",
+            "bool",
+        )
+        for scalar_base in scalar_bases:
+            if not base_type.startswith(scalar_base):
+                continue
+            suffix = base_type[len(scalar_base) :]
+            if suffix in {"2", "3", "4"}:
+                return int(suffix)
+            if suffix == "":
+                return 1
+        return None
+
+    def generate_metal_tessellation_stage_comments(self, func, parameters, shader_type):
+        metadata = []
+        domain = self.metal_tessellation_domain(func)
+        if domain:
+            metadata.append(f"domain={domain}")
+        partitioning = self.metal_tessellation_partitioning(func)
+        if partitioning:
+            metadata.append(f"partitioning={partitioning}")
+        output_topology = self.metal_tessellation_output_topology(func, domain)
+        if output_topology:
+            metadata.append(f"outputtopology={output_topology}")
+        output_control_points = self.metal_tessellation_output_control_points(func)
+        if output_control_points:
+            metadata.append(f"outputcontrolpoints={output_control_points}")
+        patch_constant_func = self.metal_tessellation_patch_constant_function_name(func)
+        if patch_constant_func:
+            metadata.append(f"patchconstantfunc={patch_constant_func}")
+        max_tess_factor = self.metal_tessellation_stage_attribute_value(
+            func, "maxtessfactor"
+        )
+        if max_tess_factor:
+            metadata.append(f"maxtessfactor={max_tess_factor}")
+
+        lines = [
+            f"// CrossGL {shader_type} stage"
+            f"{': ' + ', '.join(metadata) if metadata else ''}\n"
+        ]
+
+        patch_descriptions = []
+        for parameter in parameters:
+            info = self.metal_tessellation_patch_info(
+                self.parameter_raw_type(parameter)
+            )
+            if info is None or not info["valid"]:
+                continue
+            patch_descriptions.append(
+                f"{info['kind']}:{parameter.name}->{info['element_type']}"
+                f"[{info['count_text']}]"
+            )
+        if patch_descriptions:
+            lines.append(
+                "// CrossGL tessellation patch parameters: "
+                f"{', '.join(patch_descriptions)}\n"
+            )
+        return "".join(lines)
 
     def metal_local_size_threadgroup_total(self, execution_config):
         values = [str(value).strip() for value in compute_local_size(execution_config)]
@@ -12084,6 +12884,7 @@ class MetalCodeGen:
             "local_size_y",
             "local_size_z",
             "max_primitives",
+            "maxtessfactor",
             "max_total_threads_per_threadgroup",
             "max_vertices",
             "maxvertexcount",
@@ -16180,7 +16981,9 @@ class MetalCodeGen:
         generic_args = getattr(type_node, "generic_args", [])
         if hasattr(type_node, "name") and generic_args:
             args = ", ".join(
-                self.convert_type_node_to_string(arg) for arg in generic_args
+                self.convert_type_node_to_string(arg)
+                or self.metal_tessellation_patch_argument_text(arg)
+                for arg in generic_args
             )
             return f"{type_node.name}<{args}>"
         if hasattr(type_node, "name"):
@@ -16293,6 +17096,14 @@ class MetalCodeGen:
         else:
             vtype_str = str(vtype)
 
+        tessellation_patch_type = self.metal_tessellation_patch_mapped_type(vtype)
+        if tessellation_patch_type is not None:
+            return tessellation_patch_type
+
+        geometry_stream_type = self.metal_geometry_stream_mapped_type(vtype)
+        if geometry_stream_type is not None:
+            return geometry_stream_type
+
         if "[" in vtype_str and "]" in vtype_str:
             base_type, array_suffix = split_array_type_suffix(vtype_str)
             base_mapped = self.map_type(base_type)
@@ -16319,6 +17130,148 @@ class MetalCodeGen:
             return vtype_str
 
         return self.type_mapping.get(vtype_str, vtype_str)
+
+    def metal_geometry_stream_info(self, vtype):
+        if vtype is None:
+            return None
+
+        stream_names = {"PointStream", "LineStream", "TriangleStream"}
+        if isinstance(vtype, (PointerType, ReferenceType)):
+            return None
+
+        name = getattr(vtype, "name", None)
+        generic_args = getattr(vtype, "generic_args", []) or []
+        if name in stream_names and generic_args:
+            return name, self.map_type(generic_args[0])
+
+        type_name = self.type_name_string(vtype)
+        if not type_name or "<" not in type_name or not type_name.endswith(">"):
+            return None
+
+        base_name, generic_arg = type_name.split("<", 1)
+        base_name = base_name.strip()
+        if base_name not in stream_names:
+            return None
+        generic_arg = generic_arg[:-1].strip()
+        if not generic_arg:
+            return None
+        return base_name, self.map_type(generic_arg)
+
+    def metal_geometry_stream_mapped_type(self, vtype):
+        stream_info = self.metal_geometry_stream_info(vtype)
+        if stream_info is None:
+            return None
+        stream_name, output_type = stream_info
+        return f"CrossGLMetal{stream_name}<{output_type}>"
+
+    def format_metal_geometry_stream_parameter(self, raw_param_type, name):
+        stream_type = self.metal_geometry_stream_mapped_type(raw_param_type)
+        if stream_type is None:
+            return None
+        return f"thread {stream_type}& {name}"
+
+    def split_metal_generic_argument_string(self, arguments):
+        split_arguments = []
+        start = 0
+        depth = 0
+        for index, char in enumerate(arguments):
+            if char == "<":
+                depth += 1
+            elif char == ">":
+                depth = max(depth - 1, 0)
+            elif char == "," and depth == 0:
+                split_arguments.append(arguments[start:index].strip())
+                start = index + 1
+        split_arguments.append(arguments[start:].strip())
+        return [argument for argument in split_arguments if argument]
+
+    def metal_type_generic_arguments(self, vtype):
+        generic_args = getattr(vtype, "generic_args", None)
+        if generic_args:
+            return generic_args
+
+        type_name = self.type_name_string(vtype)
+        if not type_name or "<" not in type_name or not type_name.endswith(">"):
+            return []
+        arguments = type_name.split("<", 1)[1][:-1].strip()
+        return self.split_metal_generic_argument_string(arguments)
+
+    def metal_tessellation_patch_type_base(self, vtype):
+        if isinstance(vtype, PointerType):
+            vtype = vtype.pointee_type
+        elif isinstance(vtype, ReferenceType):
+            vtype = vtype.referenced_type
+
+        name = getattr(vtype, "name", None)
+        if name:
+            return name
+
+        type_name = self.type_name_string(vtype)
+        if not type_name:
+            return None
+        return type_name.split("<", 1)[0].strip()
+
+    def metal_tessellation_patch_argument_text(self, argument):
+        if argument is None:
+            return None
+        if isinstance(argument, str):
+            return argument
+        if hasattr(argument, "value"):
+            return str(argument.value)
+        if hasattr(argument, "name"):
+            return str(argument.name)
+        return self.type_name_string(argument) or str(argument)
+
+    def metal_tessellation_patch_info(self, vtype):
+        if isinstance(vtype, PointerType):
+            vtype = vtype.pointee_type
+        elif isinstance(vtype, ReferenceType):
+            vtype = vtype.referenced_type
+
+        patch_type = self.metal_tessellation_patch_type_base(vtype)
+        if patch_type not in {"InputPatch", "OutputPatch"}:
+            return None
+
+        generic_args = self.metal_type_generic_arguments(vtype)
+        valid = len(generic_args) == 2
+        element_type = None
+        count_text = None
+        count_value = None
+        if valid:
+            element_type = self.map_type(generic_args[0])
+            count_text = self.metal_tessellation_patch_argument_text(generic_args[1])
+            count_value = self.literal_int_value(
+                generic_args[1], self.literal_int_constants
+            )
+            if count_value is None:
+                count_value = self.literal_int_value(
+                    count_text, self.literal_int_constants
+                )
+
+        return {
+            "kind": patch_type,
+            "valid": valid,
+            "element_type": element_type,
+            "count_text": count_text,
+            "count_value": count_value,
+        }
+
+    def metal_tessellation_patch_mapped_type(self, vtype):
+        info = self.metal_tessellation_patch_info(vtype)
+        if info is None or not info["valid"]:
+            return None
+        if not info["element_type"] or not info["count_text"]:
+            return None
+        return (
+            f"CrossGLMetal{info['kind']}<"
+            f"{info['element_type']}, {info['count_text']}>"
+        )
+
+    def format_metal_tessellation_patch_parameter(self, raw_param_type, name):
+        patch_type = self.metal_tessellation_patch_mapped_type(raw_param_type)
+        if patch_type is None:
+            return None
+        return f"thread const {patch_type}& {name}"
 
     def map_operator(self, op):
         op_map = {
@@ -16357,6 +17310,8 @@ class MetalCodeGen:
     def map_semantic(self, semantic):
         """Map a CrossGL semantic to Metal attribute syntax."""
         if semantic is not None:
+            if self.is_metal_tessellation_helper_semantic(semantic):
+                return ""
             mapped_semantic = self.semantic_map.get(semantic, semantic)
             # If the mapped semantic already has brackets, use it as-is
             if mapped_semantic.startswith("[[") and mapped_semantic.endswith("]]"):
@@ -16366,3 +17321,14 @@ class MetalCodeGen:
                 return f" [[{mapped_semantic}]]"
         else:
             return ""
+
+    def is_metal_tessellation_helper_semantic(self, semantic):
+        if semantic is None:
+            return False
+        return str(semantic).lower() in {
+            "sv_domainlocation",
+            "sv_insidetessfactor",
+            "sv_outputcontrolpointid",
+            "sv_primitiveid",
+            "sv_tessfactor",
+        }

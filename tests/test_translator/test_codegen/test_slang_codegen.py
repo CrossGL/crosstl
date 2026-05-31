@@ -700,8 +700,20 @@ def test_geometry_stage_builtins_emit_stage_specific_slang_parameters():
 def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias():
     code = """
     shader main {
+        struct GSInput {
+            vec4 position @ gl_Position;
+        };
+
+        struct GSOutput {
+            vec4 position @ gl_Position;
+        };
+
         geometry {
-            void main(uint gsInstance @ gl_InvocationID) {
+            void main(
+                triangle GSInput input[3],
+                inout TriangleStream<GSOutput> stream,
+                uint gsInstance @ gl_InvocationID
+            ) @maxvertexcount(3) {
                 uint invocation = gl_InvocationID;
             }
         }
@@ -709,16 +721,121 @@ def test_geometry_invocation_builtin_uses_existing_semantic_parameter_alias():
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "void main(uint gsInstance : SV_GSInstanceID)" in generated_code
+    assert (
+        "void main(triangle GSInput input[3], "
+        "inout TriangleStream<GSOutput> stream, "
+        "uint gsInstance : SV_GSInstanceID)" in generated_code
+    )
     assert "uint gl_InvocationID : SV_GSInstanceID" not in generated_code
     assert "uint invocation = gsInstance;" in generated_code
+
+
+def test_geometry_stage_lowers_stream_signature_and_emission_calls():
+    code = """
+    shader SlangGeometryStream {
+        struct GSInput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+        };
+
+        struct GSOutput {
+            vec4 position @ gl_Position;
+            vec3 color @ COLOR;
+        };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) {
+                GSOutput output;
+                output.position = input[0].position;
+                output.color = input[0].normal;
+                stream.Append(output);
+                stream.RestartStrip();
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "[maxvertexcount(3)]" in generated_code
+    assert '[shader("geometry")]' in generated_code
+    assert (
+        "void main(triangle GSInput input[3], "
+        "inout TriangleStream<GSOutput> stream)" in generated_code
+    )
+    assert "stream.Append(output);" in generated_code
+    assert "stream.RestartStrip();" in generated_code
+    assert "void main(GSInput input[3]" not in generated_code
+
+
+@pytest.mark.parametrize(
+    ("stage_source", "message"),
+    [
+        (
+            "void main(triangle GSInput input[3]) @maxvertexcount(3) { }",
+            "PointStream",
+        ),
+        (
+            "void main(inout TriangleStream<GSOutput> stream) "
+            "@maxvertexcount(3) { }",
+            "input primitive",
+        ),
+        (
+            "void main(triangle GSInput input[2], "
+            "inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { }",
+            "triangle input primitive.*3 element",
+        ),
+        (
+            "void main(triangle GSInput input[3], "
+            "TriangleStream<GSOutput> stream) @maxvertexcount(3) { }",
+            "must use the inout qualifier",
+        ),
+        (
+            "void main(triangle GSInput input[3], "
+            "inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { "
+            "stream.Append(); }",
+            "Append requires 1 argument",
+        ),
+        (
+            "void main(triangle GSInput input[3], "
+            "inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { "
+            "GSOutput output; stream.RestartStrip(output); }",
+            "RestartStrip requires 0 argument",
+        ),
+        (
+            "void main(triangle GSInput input[3], "
+            "inout TriangleStream<GSOutput> stream) @maxvertexcount(3) { "
+            "stream.Append(input[0]); }",
+            "Append argument type GSInput must match stream element type GSOutput",
+        ),
+    ],
+)
+def test_geometry_stream_signature_and_method_validation(stage_source, message):
+    code = f"""
+    shader InvalidSlangGeometryStream {{
+        struct GSInput {{
+            vec4 position @ gl_Position;
+        }};
+
+        struct GSOutput {{
+            vec4 position @ gl_Position;
+        }};
+
+        geometry {{
+            {stage_source}
+        }}
+    }}
+    """
+
+    with pytest.raises(ValueError, match=message):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_tessellation_control_builtins_emit_hull_slang_parameters():
     code = """
     shader main {
         tessellation_control {
-            void main() {
+            void main() @outputcontrolpoints(3) {
                 uint controlPoint = gl_InvocationID;
                 uint primitive = gl_PrimitiveID;
             }
@@ -739,7 +856,8 @@ def test_tessellation_invocation_builtin_uses_hull_semantic_alias():
     code = """
     shader main {
         tessellation_control {
-            void main(uint controlPoint @ gl_InvocationID) {
+            void main(uint controlPoint @ gl_InvocationID)
+                @outputcontrolpoints(3) {
                 uint index = gl_InvocationID;
             }
         }
@@ -757,7 +875,7 @@ def test_tessellation_evaluation_builtins_emit_domain_slang_parameters():
     code = """
     shader main {
         tessellation_evaluation {
-            void main() {
+            void main() @domain(tri) {
                 vec3 coord = gl_TessCoord;
                 uint primitive = gl_PrimitiveID;
             }
@@ -852,7 +970,8 @@ def test_tessellation_control_gl_in_aliases_explicit_input_patch_parameter():
         };
 
         tessellation_control {
-            void main(InputPatch<VSOut, 3> inputPatch) {
+            void main(InputPatch<VSOut, 3> inputPatch)
+                @outputcontrolpoints(3) {
                 VSOut first = gl_in[0];
                 VSOut current = gl_in[gl_InvocationID];
             }
@@ -878,7 +997,7 @@ def test_tessellation_evaluation_gl_in_aliases_explicit_output_patch_parameter()
         };
 
         tessellation_evaluation {
-            void main(OutputPatch<HSOut, 3> patch) {
+            void main(OutputPatch<HSOut, 3> patch) @domain(tri) {
                 HSOut first = gl_in[0];
                 vec3 coord = gl_TessCoord;
             }
@@ -912,7 +1031,7 @@ def test_tessellation_control_gl_out_output_patch_lowers_to_hull_return():
             void main(
                 InputPatch<VSOut, 3> inputPatch,
                 OutputPatch<HSOut, 3> gl_out
-            ) {
+            ) @outputcontrolpoints(3) {
                 gl_out[gl_InvocationID].position =
                     inputPatch[gl_InvocationID].position;
                 gl_out[gl_InvocationID].color = vec4(1.0);
@@ -949,7 +1068,8 @@ def test_tessellation_control_gl_out_non_void_return_lowers_assignments():
         };
 
         tessellation_control {
-            HSOut main(InputPatch<VSOut, 3> inputPatch) {
+            HSOut main(InputPatch<VSOut, 3> inputPatch)
+                @outputcontrolpoints(3) {
                 gl_out[gl_InvocationID].position =
                     inputPatch[gl_InvocationID].position;
             }
@@ -982,7 +1102,7 @@ def test_tessellation_control_gl_out_uses_existing_control_point_parameter():
             void main(
                 OutputPatch<HSOut, 3> outputs,
                 uint controlPoint @ gl_InvocationID
-            ) {
+            ) @outputcontrolpoints(3) {
                 gl_out[controlPoint].position = vec4(1.0);
             }
         }
@@ -1012,7 +1132,7 @@ def test_tessellation_control_gl_out_whole_control_point_assignment_lowers():
             void main(
                 InputPatch<VSOut, 3> inputPatch,
                 OutputPatch<HSOut, 3> gl_out
-            ) {
+            ) @outputcontrolpoints(3) {
                 HSOut output;
                 output.position = inputPatch[gl_InvocationID].position;
                 output.color = vec4(1.0);
@@ -1041,7 +1161,8 @@ def test_tessellation_control_gl_out_current_reads_alias_to_hull_return_local():
         };
 
         tessellation_control {
-            void main(OutputPatch<HSOut, 3> gl_out) {
+            void main(OutputPatch<HSOut, 3> gl_out)
+                @outputcontrolpoints(3) {
                 gl_out[gl_InvocationID].position = vec4(1.0);
                 vec4 copied = gl_out[gl_InvocationID].position;
                 gl_out[gl_InvocationID].position.x = copied.y;
@@ -1176,7 +1297,7 @@ def test_tessellation_output_patch_generic_literal_return_type_emits():
                 return patch;
             }
 
-            void main() {
+            void main() @outputcontrolpoints(3) {
             }
         }
     }
@@ -3114,11 +3235,11 @@ def test_advanced_stage_attributes_emit_slang_shader_names():
             }
         }
         tessellation_control {
-            void main() {
+            void main() @domain(tri) @outputcontrolpoints(3) {
             }
         }
         tessellation_evaluation {
-            void main() {
+            void main() @domain(tri) {
             }
         }
         mesh {
@@ -9091,6 +9212,18 @@ def test_invalid_slang_ray_query_helper_method_arguments_raise(helper_source, me
         (
             "tessellation_control { void main() @outputcontrolpoints(0) { } }",
             "outputcontrolpoints.*positive",
+        ),
+        (
+            "tessellation_control { void main() { } }",
+            "tessellation_control stage requires outputcontrolpoints",
+        ),
+        (
+            "tessellation_control { void main() @outputcontrolpoints(points) { } }",
+            "outputcontrolpoints requires an integer value",
+        ),
+        (
+            "tessellation_evaluation { void main() { } }",
+            "tessellation_evaluation stage requires a domain attribute",
         ),
         (
             "mesh { void main() @outputtopology(triangle_cw) { } }",

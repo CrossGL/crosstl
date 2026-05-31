@@ -175,6 +175,11 @@ class RustCodeGen:
             "ConsumeStructuredBuffer": "ConsumeStructuredBuffer",
             "ByteAddressBuffer": "ByteAddressBuffer",
             "RWByteAddressBuffer": "RwByteAddressBuffer",
+            "PointStream": "CglRustPointStream",
+            "LineStream": "CglRustLineStream",
+            "TriangleStream": "CglRustTriangleStream",
+            "InputPatch": "CglRustInputPatch",
+            "OutputPatch": "CglRustOutputPatch",
             "accelerationStructureEXT": "RayTracingAccelerationStructure",
             "AccelerationStructure": "RayTracingAccelerationStructure",
             "acceleration_structure": "RayTracingAccelerationStructure",
@@ -237,6 +242,12 @@ class RustCodeGen:
             "SV_GroupThreadID": "local_invocation_id",
             "SV_DispatchThreadID": "global_invocation_id",
             "SV_GroupIndex": "local_invocation_index",
+            # Tessellation attributes
+            "gl_InvocationID": "output_control_point_id",
+            "gl_PrimitiveIDIn": "primitive_id",
+            "gl_TessCoord": "domain_location",
+            "SV_OutputControlPointID": "output_control_point_id",
+            "SV_DomainLocation": "domain_location",
             # Ray tracing attributes
             "payload": "ray_payload",
             "rayPayloadEXT": "ray_payload",
@@ -576,6 +587,10 @@ class RustCodeGen:
         code = "// Generated Rust GPU Shader Code\n"
         code += "use gpu::*;\n"
         code += "use math::*;\n\n"
+        if self.has_geometry_stage(ast):
+            code += self.generate_rust_geometry_stream_helpers()
+        if self.has_tessellation_stage(ast):
+            code += self.generate_rust_tessellation_patch_helpers()
 
         structs = getattr(ast, "structs", [])
         for node in structs:
@@ -609,16 +624,38 @@ class RustCodeGen:
                 qualifier = func.qualifiers[0] if func.qualifiers else None
             else:
                 qualifier = getattr(func, "qualifier", None)
+            qualifier_name = normalize_stage_name(qualifier)
 
-            if qualifier == "vertex":
+            if qualifier_name == "vertex":
                 code += "// Vertex Shader\n"
                 code += self.generate_function(func, shader_type="vertex")
-            elif qualifier == "fragment":
+            elif qualifier_name == "fragment":
                 code += "// Fragment Shader\n"
                 code += self.generate_function(func, shader_type="fragment")
-            elif qualifier == "compute":
+            elif qualifier_name == "compute":
                 code += "// Compute Shader\n"
                 code += self.generate_function(func, shader_type="compute")
+            elif qualifier_name == "geometry":
+                code += "// Geometry Shader\n"
+                code += self.generate_function(func, shader_type="geometry")
+            elif qualifier_name == "tessellation_control":
+                code += "// Tessellation Control Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type="tessellation_control",
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
+            elif qualifier_name == "tessellation_evaluation":
+                code += "// Tessellation Evaluation Shader\n"
+                code += self.generate_function(
+                    func,
+                    shader_type="tessellation_evaluation",
+                    function_name=self.rust_stage_entry_function_name(
+                        qualifier_name, func
+                    ),
+                )
             else:
                 code += self.generate_function(func)
 
@@ -665,13 +702,156 @@ class RustCodeGen:
     def unsupported_stage_types(self):
         return {
             "amplification",
-            "geometry",
             "mesh",
             "object",
             "task",
-            "tessellation_control",
-            "tessellation_evaluation",
         }
+
+    def has_geometry_stage(self, ast_node, target_stage=None):
+        """Return whether the AST contains a geometry stage to emit."""
+        if not stage_matches(target_stage, "geometry"):
+            return False
+
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) == "geometry":
+                return True
+
+        for func in getattr(ast_node, "functions", []) or []:
+            qualifiers = list(getattr(func, "qualifiers", []) or [])
+            qualifier = getattr(func, "qualifier", None)
+            if qualifier:
+                qualifiers.append(qualifier)
+            if any(
+                normalize_stage_name(qualifier) == "geometry"
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_rust_geometry_stream_helpers(self):
+        """Emit compile-oriented placeholders for CrossGL geometry streams."""
+        return (
+            "pub struct CglRustPointStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustPointStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustPointStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+            "pub struct CglRustLineStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustLineStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustLineStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+            "pub struct CglRustTriangleStream<T> {\n"
+            "    _marker: std::marker::PhantomData<T>,\n"
+            "}\n\n"
+            "impl<T> Default for CglRustTriangleStream<T> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { _marker: std::marker::PhantomData }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T> CglRustTriangleStream<T> {\n"
+            "    pub fn Append(&self, value: T) {\n"
+            "        let _ = value;\n"
+            "    }\n\n"
+            "    pub fn RestartStrip(&self) {}\n"
+            "}\n\n"
+        )
+
+    def has_tessellation_stage(self, ast_node, target_stage=None):
+        """Return whether the AST contains a tessellation stage to emit."""
+        tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
+        if not any(
+            stage_matches(target_stage, stage_name)
+            for stage_name in tessellation_stages
+        ):
+            return False
+
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) in tessellation_stages:
+                return True
+
+        for func in getattr(ast_node, "functions", []) or []:
+            qualifiers = list(getattr(func, "qualifiers", []) or [])
+            qualifier = getattr(func, "qualifier", None)
+            if qualifier:
+                qualifiers.append(qualifier)
+            if any(
+                normalize_stage_name(qualifier) in tessellation_stages
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_rust_tessellation_patch_helpers(self):
+        """Emit compile-oriented placeholders for CrossGL tessellation patches."""
+        return (
+            "pub struct CglRustInputPatch<T, const N: usize> {\n"
+            "    control_points: [T; N],\n"
+            "}\n\n"
+            "impl<T: Default, const N: usize> Default for "
+            "CglRustInputPatch<T, N> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { control_points: std::array::from_fn(|_| "
+            "T::default()) }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::Index<usize> for "
+            "CglRustInputPatch<T, N> {\n"
+            "    type Output = T;\n\n"
+            "    fn index(&self, index: usize) -> &Self::Output {\n"
+            "        &self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::IndexMut<usize> for "
+            "CglRustInputPatch<T, N> {\n"
+            "    fn index_mut(&mut self, index: usize) -> &mut Self::Output {\n"
+            "        &mut self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "pub struct CglRustOutputPatch<T, const N: usize> {\n"
+            "    control_points: [T; N],\n"
+            "}\n\n"
+            "impl<T: Default, const N: usize> Default for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    fn default() -> Self {\n"
+            "        Self { control_points: std::array::from_fn(|_| "
+            "T::default()) }\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::Index<usize> for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    type Output = T;\n\n"
+            "    fn index(&self, index: usize) -> &Self::Output {\n"
+            "        &self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+            "impl<T, const N: usize> std::ops::IndexMut<usize> for "
+            "CglRustOutputPatch<T, N> {\n"
+            "    fn index_mut(&mut self, index: usize) -> &mut Self::Output {\n"
+            "        &mut self.control_points[index]\n"
+            "    }\n"
+            "}\n\n"
+        )
 
     def rust_ray_stage_names(self):
         return {
@@ -692,6 +872,539 @@ class RustCodeGen:
             "ray_intersection": "intersection",
             "ray_miss": "miss",
         }.get(shader_type, shader_type)
+
+    def rust_stage_attribute_arguments(self, func, attribute_name):
+        """Return arguments for a Rust-relevant stage control attribute."""
+        expected = str(attribute_name).strip().lower().replace("-", "_")
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized == expected:
+                return self.attribute_arguments(attr)
+        return []
+
+    def rust_geometry_maxvertexcount(self, func):
+        arguments = self.rust_stage_attribute_arguments(func, "maxvertexcount")
+        if not arguments:
+            raise ValueError("Rust geometry stage requires maxvertexcount attribute")
+        if len(arguments) != 1:
+            raise ValueError(
+                "Rust geometry stage maxvertexcount requires exactly one argument"
+            )
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"Rust geometry stage maxvertexcount ({value}) must be positive"
+            )
+        return value_text
+
+    def parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return parameter.param_type
+        if hasattr(parameter, "vtype"):
+            return parameter.vtype
+        return "void"
+
+    def rust_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            primitive = self.attribute_argument_text(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+        return qualifiers
+
+    def rust_geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.rust_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def rust_parameter_is_array(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if getattr(raw_type, "__class__", None).__name__ == "ArrayType":
+            return True
+        type_name = self.type_name_string(raw_type)
+        return bool(type_name and "[" in type_name and "]" in type_name)
+
+    def rust_parameter_array_count(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if getattr(raw_type, "__class__", None).__name__ == "ArrayType":
+            size = getattr(raw_type, "size", None)
+            if size is None:
+                return None
+            return self.literal_int_value(size)
+
+        type_name = self.type_name_string(raw_type)
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return None
+        _base_type, sizes = self.c_array_type_parts(type_name)
+        return sizes[0] if sizes else None
+
+    def validate_rust_geometry_input_primitive_arity(self, parameters):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter in parameters:
+            primitive = self.rust_geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.rust_parameter_is_array(parameter):
+                raise ValueError(
+                    "Rust geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.rust_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "Rust geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def validate_rust_geometry_stage(self, func, parameters):
+        self.rust_geometry_maxvertexcount(func)
+
+        if not any(
+            self.rust_geometry_stream_info(self.parameter_raw_type(param))
+            for param in parameters
+        ):
+            raise ValueError(
+                "Rust geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+
+        if not any(
+            self.rust_geometry_input_primitive_qualifier(param) for param in parameters
+        ):
+            raise ValueError(
+                "Rust geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
+            )
+
+        self.validate_rust_geometry_input_primitive_arity(parameters)
+
+    def generate_rust_geometry_stage_comments(self, func, parameters):
+        maxvertexcount = self.rust_geometry_maxvertexcount(func)
+        input_descriptions = []
+        stream_descriptions = []
+
+        for parameter in parameters:
+            primitive = self.rust_geometry_input_primitive_qualifier(parameter)
+            if primitive is not None:
+                input_descriptions.append(f"{primitive}:{parameter.name}")
+
+            stream_info = self.rust_geometry_stream_info(
+                self.parameter_raw_type(parameter)
+            )
+            if stream_info is not None:
+                stream_name, output_type = stream_info
+                stream_descriptions.append(
+                    f"{stream_name}:{parameter.name}->{output_type}"
+                )
+
+        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
+        if input_descriptions:
+            lines.append(
+                "// CrossGL geometry input primitive: "
+                f"{', '.join(input_descriptions)}\n"
+            )
+        if stream_descriptions:
+            lines.append(
+                "// CrossGL geometry output stream: "
+                f"{', '.join(stream_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def rust_geometry_stream_info(self, type_name):
+        if type_name is None:
+            return None
+
+        stream_names = {"PointStream", "LineStream", "TriangleStream"}
+        if hasattr(type_name, "pointee_type") or hasattr(type_name, "referenced_type"):
+            return None
+
+        name = getattr(type_name, "name", None)
+        generic_args = getattr(type_name, "generic_args", []) or []
+        if name in stream_names and generic_args:
+            return name, self.map_type(generic_args[0])
+
+        type_text = self.type_name_string(type_name)
+        if not type_text or "<" not in type_text or not type_text.endswith(">"):
+            return None
+
+        base_name, args_text = type_text.split("<", 1)
+        base_name = base_name.strip()
+        if base_name not in stream_names:
+            return None
+
+        generic_args = self.split_top_level_generic_args(args_text[:-1])
+        if len(generic_args) != 1:
+            return None
+        output_type = generic_args[0].strip()
+        if not output_type:
+            return None
+        return base_name, self.map_type(output_type)
+
+    def rust_geometry_stream_mapped_type(self, type_name):
+        stream_info = self.rust_geometry_stream_info(type_name)
+        if stream_info is None:
+            return None
+        stream_name, output_type = stream_info
+        return f"CglRust{stream_name}<{output_type}>"
+
+    def rust_stage_entry_function_name(self, stage_name, func):
+        """Return the deterministic Rust entry name for special stages."""
+        name = getattr(func, "name", None)
+        if (
+            normalize_stage_name(stage_name)
+            in {"tessellation_control", "tessellation_evaluation"}
+            and name == "main"
+        ):
+            return f"{normalize_stage_name(stage_name)}_{name}"
+        return name
+
+    def rust_tessellation_stage_attribute_value(self, func, attribute_name, stage_name):
+        arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"Rust {stage_name} stage {attribute_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_argument_text(arguments[0])
+
+    def rust_tessellation_output_control_points(self, func):
+        attribute_name = "outputcontrolpoints"
+        arguments = self.rust_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            arguments = self.rust_stage_attribute_arguments(func, "vertices")
+        if not arguments:
+            raise ValueError(
+                "Rust tessellation_control stage requires outputcontrolpoints "
+                "attribute"
+            )
+        if len(arguments) != 1:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints requires "
+                "exactly one argument"
+            )
+
+        value_text = self.attribute_argument_text(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is None:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"'{value_text}' must be an integer literal"
+            )
+        if value <= 0:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"({value}) must be positive"
+            )
+        if value > 32:
+            raise ValueError(
+                "Rust tessellation_control stage outputcontrolpoints "
+                f"({value}) must be at most 32"
+            )
+        return value_text, value
+
+    def canonical_rust_tessellation_domain(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().strip("\"'").lower()
+        return {
+            "tri": "tri",
+            "triangle": "tri",
+            "triangles": "tri",
+            "quad": "quad",
+            "quads": "quad",
+            "isoline": "isoline",
+            "isolines": "isoline",
+        }.get(normalized)
+
+    def rust_tessellation_domain(self, func, stage_name, required=False):
+        value = self.rust_tessellation_stage_attribute_value(func, "domain", stage_name)
+        if value is None:
+            if required:
+                raise ValueError(f"Rust {stage_name} stage requires domain attribute")
+            return None
+
+        domain = self.canonical_rust_tessellation_domain(value)
+        if domain is None:
+            raise ValueError(
+                f"Rust {stage_name} stage domain '{value}' must be one of: "
+                "isoline, quad, tri"
+            )
+        return domain
+
+    def rust_tessellation_partitioning(self, func, stage_name, required=False):
+        value = self.rust_tessellation_stage_attribute_value(
+            func, "partitioning", stage_name
+        )
+        if value is None:
+            if required:
+                raise ValueError(
+                    f"Rust {stage_name} stage requires partitioning attribute"
+                )
+            return None
+
+        normalized = str(value).strip().strip("\"'").lower()
+        partitioning = {
+            "integer": "integer",
+            "equal": "integer",
+            "equal_spacing": "integer",
+            "fractional_even": "fractional_even",
+            "fractional_even_spacing": "fractional_even",
+            "fractional_odd": "fractional_odd",
+            "fractional_odd_spacing": "fractional_odd",
+            "pow2": "pow2",
+        }.get(normalized)
+        if partitioning is None:
+            raise ValueError(
+                f"Rust {stage_name} stage partitioning '{value}' must be one of: "
+                "fractional_even, fractional_odd, integer, pow2"
+            )
+        return partitioning
+
+    def rust_tessellation_patch_info(self, type_name):
+        base_name, args = self.generic_type_parts(type_name)
+        patch_kinds = {
+            "InputPatch": "InputPatch",
+            "OutputPatch": "OutputPatch",
+            "CglRustInputPatch": "InputPatch",
+            "CglRustOutputPatch": "OutputPatch",
+        }
+        kind = patch_kinds.get(base_name)
+        if kind is None:
+            return None
+
+        info = {
+            "kind": kind,
+            "valid": len(args) == 2,
+            "element_type": None,
+            "mapped_element_type": None,
+            "count_text": None,
+            "count_value": None,
+        }
+        if len(args) >= 1:
+            element_type = args[0].strip()
+            if element_type:
+                info["element_type"] = element_type
+                info["mapped_element_type"] = self.map_type(element_type)
+        if len(args) >= 2:
+            count_text = args[1].strip()
+            info["count_text"] = count_text
+            info["count_value"] = self.literal_int_value(count_text)
+        return info
+
+    def rust_tessellation_patch_parameters(self, parameters, patch_type):
+        for parameter in parameters:
+            info = self.rust_tessellation_patch_info(self.parameter_raw_type(parameter))
+            if info is not None and info["kind"] == patch_type:
+                yield parameter, info
+
+    def validate_rust_tessellation_patch_parameter_signature(
+        self, parameter, info, stage_name
+    ):
+        patch_type = info["kind"]
+        parameter_name = getattr(parameter, "name", None)
+        name_clause = (
+            f" parameter '{parameter_name}'" if parameter_name else " parameter"
+        )
+        type_name = self.type_name_string(self.parameter_raw_type(parameter))
+
+        if not info["valid"]:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} must use "
+                f"{patch_type}<T, N>; found '{type_name or patch_type}'"
+            )
+        if info["element_type"] is None:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} must include "
+                "an element type"
+            )
+
+        control_points = info["count_value"]
+        if control_points is None:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                f"point count '{info['count_text']}' must be an integer literal"
+            )
+        if control_points <= 0:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                f"point count ({control_points}) must be positive"
+            )
+        if control_points > 32:
+            raise ValueError(
+                f"Rust {stage_name} stage {patch_type}{name_clause} control "
+                "point count "
+                f"({control_points}) must be at most 32"
+            )
+
+    def validate_rust_tessellation_patch_parameter_signatures(
+        self, parameters, patch_type, stage_name
+    ):
+        for parameter, info in self.rust_tessellation_patch_parameters(
+            parameters, patch_type
+        ):
+            self.validate_rust_tessellation_patch_parameter_signature(
+                parameter,
+                info,
+                stage_name,
+            )
+
+    def validate_rust_tessellation_control_stage(self, func, parameters):
+        stage_name = "tessellation_control"
+        self.rust_tessellation_domain(func, stage_name, required=True)
+        self.rust_tessellation_partitioning(func, stage_name, required=True)
+        self.rust_tessellation_output_control_points(func)
+
+        input_patch_parameters = list(
+            self.rust_tessellation_patch_parameters(parameters, "InputPatch")
+        )
+        if not input_patch_parameters:
+            raise ValueError(
+                "Rust tessellation_control stage parameters must include an "
+                "InputPatch<T, N> parameter"
+            )
+        self.validate_rust_tessellation_patch_parameter_signatures(
+            parameters,
+            "InputPatch",
+            stage_name,
+        )
+
+    def validate_rust_tessellation_evaluation_stage(self, func, parameters):
+        stage_name = "tessellation_evaluation"
+        self.rust_tessellation_domain(func, stage_name, required=True)
+        self.rust_tessellation_partitioning(func, stage_name)
+
+        output_patch_parameters = list(
+            self.rust_tessellation_patch_parameters(parameters, "OutputPatch")
+        )
+        if not output_patch_parameters:
+            raise ValueError(
+                "Rust tessellation_evaluation stage parameters must include an "
+                "OutputPatch<T, N> parameter"
+            )
+        self.validate_rust_tessellation_patch_parameter_signatures(
+            parameters,
+            "OutputPatch",
+            stage_name,
+        )
+
+    def validate_rust_tessellation_stage(self, func, parameters, shader_type):
+        if shader_type == "tessellation_control":
+            self.validate_rust_tessellation_control_stage(func, parameters)
+        elif shader_type == "tessellation_evaluation":
+            self.validate_rust_tessellation_evaluation_stage(func, parameters)
+
+    def generate_rust_tessellation_stage_comments(self, func, parameters, shader_type):
+        metadata = []
+        domain = self.rust_tessellation_domain(
+            func,
+            shader_type,
+            required=shader_type == "tessellation_evaluation",
+        )
+        if domain is not None:
+            metadata.append(f"domain={domain}")
+        partitioning = self.rust_tessellation_partitioning(func, shader_type)
+        if partitioning is not None:
+            metadata.append(f"partitioning={partitioning}")
+        output_topology = self.rust_tessellation_stage_attribute_value(
+            func,
+            "outputtopology",
+            shader_type,
+        )
+        if output_topology is not None:
+            metadata.append(f"outputtopology={output_topology}")
+        if shader_type == "tessellation_control":
+            output_control_points, _value = (
+                self.rust_tessellation_output_control_points(func)
+            )
+            metadata.append(f"outputcontrolpoints={output_control_points}")
+        patch_constant_function = self.rust_tessellation_stage_attribute_value(
+            func,
+            "patchconstantfunc",
+            shader_type,
+        )
+        if patch_constant_function is not None:
+            metadata.append(f"patchconstantfunc={patch_constant_function}")
+
+        lines = [
+            f"// CrossGL {shader_type} stage"
+            f"{': ' + ', '.join(metadata) if metadata else ''}\n"
+        ]
+
+        patch_descriptions = []
+        for parameter in parameters:
+            info = self.rust_tessellation_patch_info(self.parameter_raw_type(parameter))
+            if info is None or not info["valid"]:
+                continue
+            patch_descriptions.append(
+                f"{info['kind']}:{parameter.name}->{info['mapped_element_type']}"
+                f"[{info['count_text']}]"
+            )
+        if patch_descriptions:
+            lines.append(
+                "// CrossGL tessellation patch parameters: "
+                f"{', '.join(patch_descriptions)}\n"
+            )
+        return "".join(lines)
+
+    def rust_tessellation_patch_mapped_type(self, type_name):
+        info = self.rust_tessellation_patch_info(type_name)
+        if info is None or not info["valid"]:
+            return None
+        helper_name = {
+            "InputPatch": "CglRustInputPatch",
+            "OutputPatch": "CglRustOutputPatch",
+        }[info["kind"]]
+        return f"{helper_name}<{info['mapped_element_type']}, " f"{info['count_text']}>"
 
     def validate_supported_stage_types(self, ast, target_stage=None):
         unsupported_stages = set()
@@ -731,6 +1444,12 @@ class RustCodeGen:
         name = getattr(entry_point, "name", None)
         if not name:
             return name
+        if (
+            normalize_stage_name(stage_name)
+            in {"tessellation_control", "tessellation_evaluation"}
+            and name == "main"
+        ):
+            return f"{normalize_stage_name(stage_name)}_{name}"
         if name_counts.get(name, 0) > 1:
             return f"{stage_name}_{name}"
         return name
@@ -1771,6 +2490,10 @@ class RustCodeGen:
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "value") and getattr(type_node, "name", None) is None:
+            value = type_node.value
+            return str(value).lower() if isinstance(value, bool) else str(value)
+
         type_class = type_node.__class__.__name__
         if type_class == "ReferenceType":
             referenced_type = self.convert_type_node_to_string(
@@ -1795,7 +2518,7 @@ class RustCodeGen:
             return (
                 f"{element_type}[{size}]" if size is not None else f"{element_type}[]"
             )
-        if hasattr(type_node, "name"):
+        if getattr(type_node, "name", None) is not None:
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
                 args = ", ".join(
@@ -2433,6 +3156,10 @@ class RustCodeGen:
             return_type = "void"
         self.current_return_type = return_type
         return_semantic = self.node_semantic(func)
+        if shader_type == "geometry":
+            self.validate_rust_geometry_stage(func, param_list)
+        if shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            self.validate_rust_tessellation_stage(func, param_list, shader_type)
         self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
         self.validate_rust_struct_return_semantics(shader_type, return_type)
         self.validate_rust_stage_parameter_semantics(shader_type, param_list)
@@ -2469,6 +3196,14 @@ class RustCodeGen:
             code += f"#[fragment_shader]\n"
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
+        elif shader_type == "geometry":
+            code += self.generate_rust_geometry_stage_comments(func, param_list)
+        elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
+            code += self.generate_rust_tessellation_stage_comments(
+                func,
+                param_list,
+                shader_type,
+            )
         elif shader_type in self.rust_ray_stage_names():
             code += (
                 "// CrossGL ray stage: "
@@ -9164,6 +9899,36 @@ class RustCodeGen:
                 return name
         return None
 
+    def literal_int_value(self, value):
+        """Return an integer value for literal integer AST nodes/text."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, UnaryOpNode) and not getattr(value, "is_postfix", False):
+            operator = getattr(value, "operator", getattr(value, "op", None))
+            if operator not in {"+", "-"}:
+                return None
+            operand_value = self.literal_int_value(value.operand)
+            if operand_value is None:
+                return None
+            return -operand_value if operator == "-" else operand_value
+        if hasattr(value, "value"):
+            return self.literal_int_value(value.value)
+        if hasattr(value, "name"):
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+        text = re.sub(r"[uUlL]+$", "", text)
+        try:
+            return int(text, 0)
+        except ValueError:
+            return None
+
     def attribute_argument_text(self, argument):
         if hasattr(argument, "value"):
             return str(argument.value)
@@ -9791,6 +10556,9 @@ class RustCodeGen:
         else:
             array_type = str(array_type)
         if "[" not in array_type or "]" not in array_type:
+            patch_info = self.rust_tessellation_patch_info(array_type)
+            if patch_info is not None and patch_info["valid"]:
+                return patch_info["element_type"]
             return None
         element_type, _size = self.c_array_outer_element_type_and_size(array_type)
         return element_type or None
@@ -9963,6 +10731,10 @@ class RustCodeGen:
 
         if self.callable_signature_parts(vtype_str) is not None:
             return vtype_str
+
+        patch_type = self.rust_tessellation_patch_mapped_type(vtype_str)
+        if patch_type is not None:
+            return patch_type
 
         if "[" in vtype_str and "]" in vtype_str:
             base_type, sizes = self.c_array_type_parts(vtype_str)

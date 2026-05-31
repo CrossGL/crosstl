@@ -23705,12 +23705,9 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
     ("stage_name", "normalized_stage"),
     [
         ("amplification", "amplification"),
-        ("geometry", "geometry"),
         ("mesh", "mesh"),
         ("object", "object"),
         ("task", "task"),
-        ("tessellation_control", "tessellation_control"),
-        ("tessellation_evaluation", "tessellation_evaluation"),
     ],
 )
 def test_unsupported_shader_stages_are_rejected_for_rust_codegen(
@@ -23749,12 +23746,271 @@ def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
 
     with pytest.raises(
         ValueError,
-        match=(
-            r"Rust output does not support stage type\(s\): "
-            r"mesh, tessellation_control"
-        ),
+        match=(r"Rust output does not support stage type\(s\): mesh"),
     ):
         generate_code(ast)
+
+
+def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp_path):
+    code = """
+    shader RustTessellationPipeline {
+        struct HSInput {
+            vec3 position;
+        };
+
+        struct HSOutput {
+            vec3 position;
+        };
+
+        struct PatchConstants {
+            float edge;
+        };
+
+        tessellation_control {
+            PatchConstants HSConst(InputPatch<HSInput, 3> patch) {
+                PatchConstants constants;
+                constants.edge = 1.0;
+                return constants;
+            }
+
+            HSOutput main(InputPatch<HSInput, 3> patch, uint id @ SV_OutputControlPointID)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputtopology(triangle_cw)
+                @outputcontrolpoints(3)
+                @patchconstantfunc(HSConst) {
+                HSOutput output;
+                output.position = patch[0].position;
+                return output;
+            }
+        }
+
+        tessellation_evaluation {
+            vec4 main(OutputPatch<HSOutput, 3> patch, vec3 bary @ SV_DomainLocation)
+                @domain(tri) {
+                vec3 position = patch[0].position + bary;
+                return vec4(position, 1.0);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub struct CglRustInputPatch<T, const N: usize>" in generated_code
+    assert "pub struct CglRustOutputPatch<T, const N: usize>" in generated_code
+    assert (
+        "// CrossGL tessellation_control stage: domain=tri, "
+        "partitioning=fractional_odd, outputtopology=triangle_cw, "
+        "outputcontrolpoints=3, patchconstantfunc=HSConst"
+    ) in generated_code
+    assert (
+        "// CrossGL tessellation patch parameters: InputPatch:patch->HSInput[3]"
+        in generated_code
+    )
+    assert "// CrossGL tessellation_evaluation stage: domain=tri" in generated_code
+    assert (
+        "// CrossGL tessellation patch parameters: OutputPatch:patch->HSOutput[3]"
+        in generated_code
+    )
+    assert (
+        "// CrossGL parameter semantic: id: output_control_point_id" in generated_code
+    )
+    assert "// CrossGL parameter semantic: bary: domain_location" in generated_code
+    assert (
+        "pub fn tessellation_control_main("
+        "patch: CglRustInputPatch<HSInput, 3>, id: u32) -> HSOutput" in generated_code
+    )
+    assert (
+        "pub fn tessellation_evaluation_main("
+        "patch: CglRustOutputPatch<HSOutput, 3>, bary: Vec3<f32>) -> Vec4<f32>"
+        in generated_code
+    )
+    assert "output.position = patch[0].position;" in generated_code
+    assert "let position: Vec3<f32> = (patch[0].position + bary);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_tessellation_stages_validate_metadata_and_patch_shapes():
+    missing_output_control_points = """
+    shader MissingRustTessOutputPoints {
+        struct HSInput { vec3 position; };
+
+        tessellation_control {
+            void main(InputPatch<HSInput, 3> patch)
+                @domain(tri)
+                @partitioning(fractional_odd) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires outputcontrolpoints"):
+        generate_code(parse_code(tokenize_code(missing_output_control_points)))
+
+    invalid_output_control_points = """
+    shader BadRustTessOutputPoints {
+        struct HSInput { vec3 position; };
+
+        tessellation_control {
+            void main(InputPatch<HSInput, 3> patch)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputcontrolpoints(0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+        generate_code(parse_code(tokenize_code(invalid_output_control_points)))
+
+    invalid_partitioning = """
+    shader BadRustTessPartitioning {
+        struct HSInput { vec3 position; };
+
+        tessellation_control {
+            void main(InputPatch<HSInput, 3> patch)
+                @domain(tri)
+                @partitioning(centered)
+                @outputcontrolpoints(3) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="partitioning.*must be one of"):
+        generate_code(parse_code(tokenize_code(invalid_partitioning)))
+
+    missing_evaluation_domain = """
+    shader MissingRustTessDomain {
+        struct HSOutput { vec3 position; };
+
+        tessellation_evaluation {
+            void main(OutputPatch<HSOutput, 3> patch) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires domain"):
+        generate_code(parse_code(tokenize_code(missing_evaluation_domain)))
+
+    invalid_patch_shape = """
+    shader BadRustTessPatchShape {
+        struct HSInput { vec3 position; };
+
+        tessellation_control {
+            void main(InputPatch<HSInput> patch)
+                @domain(tri)
+                @partitioning(fractional_odd)
+                @outputcontrolpoints(3) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match=r"InputPatch.*InputPatch<T, N>"):
+        generate_code(parse_code(tokenize_code(invalid_patch_shape)))
+
+
+def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders(tmp_path):
+    code = """
+    shader RustGeometryExpansion {
+        struct GSInput {
+            vec4 position @ gl_Position;
+            vec3 normal @ NORMAL;
+        };
+
+        struct GSOutput {
+            vec4 position @ gl_Position;
+            vec3 color @ COLOR;
+        };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) {
+                GSOutput output;
+                output.position = input[0].position;
+                output.color = input[0].normal;
+                stream.Append(output);
+                stream.RestartStrip();
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "pub struct CglRustPointStream" in generated_code
+    assert "pub struct CglRustLineStream" in generated_code
+    assert "pub struct CglRustTriangleStream" in generated_code
+    assert "// CrossGL geometry stage: maxvertexcount=3" in generated_code
+    assert "// CrossGL geometry input primitive: triangle:input" in generated_code
+    assert (
+        "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
+        in generated_code
+    )
+    assert "pub fn main(" in generated_code
+    assert "input: [GSInput; 3]" in generated_code
+    assert "stream: CglRustTriangleStream<GSOutput>" in generated_code
+    assert "stream.Append(output);" in generated_code
+    assert "stream.RestartStrip();" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_geometry_stage_validates_maxvertexcount_and_input_shape():
+    missing_attribute = """
+    shader MissingRustGeometryMax {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="requires maxvertexcount"):
+        generate_code(parse_code(tokenize_code(missing_attribute)))
+
+    invalid_max = """
+    shader BadRustGeometryMax {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(triangle GSInput input[3], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="maxvertexcount.*positive"):
+        generate_code(parse_code(tokenize_code(invalid_max)))
+
+    wrong_arity = """
+    shader BadRustGeometryInputArity {
+        struct GSInput { vec4 position @ gl_Position; };
+        struct GSOutput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(triangle GSInput input[2], inout TriangleStream<GSOutput> stream)
+                @maxvertexcount(3) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
+        generate_code(parse_code(tokenize_code(wrong_arity)))
+
+    missing_stream = """
+    shader BadRustGeometryStream {
+        struct GSInput { vec4 position @ gl_Position; };
+
+        geometry {
+            void main(triangle GSInput input[3]) @maxvertexcount(3) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="must include a PointStream"):
+        generate_code(parse_code(tokenize_code(missing_stream)))
 
 
 def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):

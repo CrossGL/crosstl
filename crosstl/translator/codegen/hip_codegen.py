@@ -26,9 +26,11 @@ from ..ast import (
     ReturnNode,
     ShaderNode,
     StructNode,
+    UnaryOpNode,
     VariableNode,
     WaveOpNode,
 )
+from .array_utils import parse_array_type
 from .match_utils import (
     generate_match_expression_assignment,
     generate_ordered_conditional_match,
@@ -530,6 +532,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         self.reserve_explicit_hip_resource_bindings(node)
 
         self.add_includes()
+        if self.has_geometry_stage(node):
+            self.add_generated_code(self.generate_hip_geometry_stream_helpers())
+            self.add_line()
+        if self.has_tessellation_stage(node):
+            self.add_generated_code(self.generate_hip_tessellation_patch_helpers())
+            self.add_line()
         self.visit(node)
         self.insert_helper_functions()
 
@@ -538,12 +546,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
     def unsupported_stage_types(self):
         return {
             "amplification",
-            "geometry",
             "mesh",
             "object",
             "task",
-            "tessellation_control",
-            "tessellation_evaluation",
         }
 
     def hip_ray_stage_names(self):
@@ -565,6 +570,76 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             "ray_intersection": "intersection",
             "ray_miss": "miss",
         }.get(stage_name, stage_name)
+
+    def has_geometry_stage(self, ast_node, target_stage=None):
+        if not stage_matches(target_stage, "geometry"):
+            return False
+
+        return self.has_stage(ast_node, "geometry")
+
+    def has_tessellation_stage(self, ast_node, target_stage=None):
+        if not (
+            stage_matches(target_stage, "tessellation_control")
+            or stage_matches(target_stage, "tessellation_evaluation")
+        ):
+            return False
+
+        return self.has_stage(ast_node, "tessellation_control") or self.has_stage(
+            ast_node, "tessellation_evaluation"
+        )
+
+    def has_stage(self, ast_node, stage_name):
+        for stage_type in getattr(ast_node, "stages", {}) or {}:
+            if normalize_stage_name(stage_type) == stage_name:
+                return True
+
+        for func in getattr(ast_node, "functions", []) or []:
+            qualifiers = list(getattr(func, "qualifiers", []) or [])
+            qualifier = getattr(func, "qualifier", None)
+            if qualifier:
+                qualifiers.append(qualifier)
+            if any(
+                normalize_stage_name(qualifier) == stage_name
+                for qualifier in qualifiers
+            ):
+                return True
+
+        return False
+
+    def generate_hip_geometry_stream_helpers(self):
+        return (
+            "template <typename T>\n"
+            "struct CglHipPointStream {\n"
+            "    __device__ void Append(const T& value) { (void)value; }\n"
+            "    __device__ void RestartStrip() { }\n"
+            "};\n\n"
+            "template <typename T>\n"
+            "struct CglHipLineStream {\n"
+            "    __device__ void Append(const T& value) { (void)value; }\n"
+            "    __device__ void RestartStrip() { }\n"
+            "};\n\n"
+            "template <typename T>\n"
+            "struct CglHipTriangleStream {\n"
+            "    __device__ void Append(const T& value) { (void)value; }\n"
+            "    __device__ void RestartStrip() { }\n"
+            "};\n"
+        )
+
+    def generate_hip_tessellation_patch_helpers(self):
+        return (
+            "template <typename T, int N>\n"
+            "struct CglHipInputPatch {\n"
+            "    T data[N];\n"
+            "    __device__ const T& operator[](int index) const { return data[index]; }\n"
+            "    __device__ T& operator[](int index) { return data[index]; }\n"
+            "};\n\n"
+            "template <typename T, int N>\n"
+            "struct CglHipOutputPatch {\n"
+            "    T data[N];\n"
+            "    __device__ const T& operator[](int index) const { return data[index]; }\n"
+            "    __device__ T& operator[](int index) { return data[index]; }\n"
+            "};\n"
+        )
 
     def validate_supported_stage_types(self, ast_node, target_stage=None):
         unsupported_stages = set()
@@ -704,6 +779,12 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             return name
         if stage_name in self.hip_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
+        if (
+            stage_name
+            in {"geometry", "tessellation_control", "tessellation_evaluation"}
+            and name == "main"
+        ):
+            return f"{stage_name}_{name}"
         if name_counts.get(name, 0) > 1:
             return f"{stage_name}_{name}"
         return name
@@ -760,6 +841,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
         param_list = getattr(node, "parameters", getattr(node, "params", []))
         self.validate_hip_stage_parameter_semantics(stage_name, param_list)
+        if stage_name == "geometry":
+            self.validate_hip_geometry_stage(node, param_list)
+        if stage_name in {"tessellation_control", "tessellation_evaluation"}:
+            self.validate_hip_tessellation_stage(node, stage_name)
         param_declarations = []
         for param in param_list:
             param_declarations.append(self.visit_parameter(param))
@@ -793,6 +878,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             self.add_line(
                 "// CrossGL ray stage: "
                 f"{self.hip_ray_stage_metadata_name(stage_name)}"
+            )
+        if stage_name == "geometry":
+            self.add_generated_code(
+                self.generate_hip_geometry_stage_comments(node, param_list)
+            )
+        if stage_name in {"tessellation_control", "tessellation_evaluation"}:
+            self.add_generated_code(
+                self.generate_hip_tessellation_stage_comments(node, stage_name)
             )
         if return_semantic:
             self.add_line(
@@ -850,6 +943,18 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             param_name = getattr(param, "name", "param")
 
         param_type = self.resource_type_with_access(param_type, param)
+        geometry_stream_declaration = self.format_hip_geometry_stream_parameter(
+            param_type,
+            param_name,
+        )
+        if geometry_stream_declaration is not None:
+            self.register_variable_type(
+                param_name,
+                self.hip_geometry_stream_mapped_type(param_type),
+                param,
+            )
+            return geometry_stream_declaration
+
         self.register_variable_type(param_name, param_type, param)
         return self.format_typed_declarator(param_type, param_name)
 
@@ -1084,6 +1189,9 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         supported_stage_names = {
             "compute",
             "fragment",
+            "geometry",
+            "tessellation_control",
+            "tessellation_evaluation",
             "vertex",
         } | self.hip_ray_stage_names()
         for qualifier in qualifiers:
@@ -1091,6 +1199,360 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             if qualifier_name in supported_stage_names:
                 return qualifier_name
         return None
+
+    def hip_stage_attribute_arguments(self, func, attribute_name):
+        requested = str(attribute_name).strip().lower().replace("-", "_")
+        for attr in getattr(func, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if attr_name is None:
+                continue
+            normalized = str(attr_name).strip().lower().replace("-", "_")
+            if normalized == requested:
+                return self.attribute_arguments(attr)
+        return []
+
+    def literal_int_value(self, node):
+        if isinstance(node, LiteralNode):
+            value = node.value
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                literal_type = getattr(
+                    getattr(node, "literal_type", None), "name", None
+                )
+                if literal_type in {"char", "string"}:
+                    return None
+                try:
+                    return int(value, 0)
+                except ValueError:
+                    return None
+            return None
+
+        if isinstance(node, UnaryOpNode) and not getattr(node, "is_postfix", False):
+            operator = getattr(node, "operator", getattr(node, "op", None))
+            if operator not in {"+", "-"}:
+                return None
+            value = self.literal_int_value(node.operand)
+            if value is None:
+                return None
+            if operator == "-":
+                return -value
+            return value
+
+        return None
+
+    def hip_geometry_maxvertexcount(self, func):
+        arguments = self.hip_stage_attribute_arguments(func, "maxvertexcount")
+        if not arguments:
+            raise ValueError("HIP geometry stage requires maxvertexcount attribute")
+        if len(arguments) != 1:
+            raise ValueError(
+                "HIP geometry stage maxvertexcount requires exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"HIP geometry stage maxvertexcount ({value}) must be positive"
+            )
+        return value_text
+
+    def hip_stage_attribute_value(self, func, attribute_name, stage_name):
+        arguments = self.hip_stage_attribute_arguments(func, attribute_name)
+        if not arguments:
+            return None
+        if len(arguments) != 1:
+            raise ValueError(
+                f"HIP {stage_name} stage {attribute_name} requires exactly one "
+                "argument"
+            )
+        return self.attribute_value_to_string(arguments[0])
+
+    def hip_tessellation_output_control_points(self, func):
+        arguments = self.hip_stage_attribute_arguments(func, "outputcontrolpoints")
+        if not arguments:
+            raise ValueError(
+                "HIP tessellation_control stage requires outputcontrolpoints "
+                "attribute"
+            )
+        if len(arguments) != 1:
+            raise ValueError(
+                "HIP tessellation_control stage outputcontrolpoints requires "
+                "exactly one argument"
+            )
+        value_text = self.attribute_value_to_string(arguments[0])
+        value = self.literal_int_value(arguments[0])
+        if value is not None and value <= 0:
+            raise ValueError(
+                "HIP tessellation_control stage outputcontrolpoints "
+                f"({value}) must be positive"
+            )
+        return value_text
+
+    def canonical_hip_tessellation_domain(self, value):
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        return {
+            "tri": "tri",
+            "triangle": "tri",
+            "triangles": "tri",
+            "quad": "quad",
+            "quads": "quad",
+            "isoline": "isoline",
+            "isolines": "isoline",
+        }.get(normalized)
+
+    def hip_tessellation_domain(self, func, stage_name, required=False):
+        value = self.hip_stage_attribute_value(func, "domain", stage_name)
+        if value is None:
+            if required:
+                raise ValueError(f"HIP {stage_name} stage requires domain attribute")
+            return None
+        canonical = self.canonical_hip_tessellation_domain(value)
+        if canonical is None:
+            raise ValueError(
+                f"HIP {stage_name} stage domain '{value}' must be tri, quad, "
+                "or isoline"
+            )
+        return canonical
+
+    def hip_tessellation_partitioning(self, func, stage_name):
+        value = self.hip_stage_attribute_value(func, "partitioning", stage_name)
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        valid_partitioning = {
+            "fractional_even",
+            "fractional_odd",
+            "integer",
+            "pow2",
+        }
+        if normalized not in valid_partitioning:
+            valid = ", ".join(sorted(valid_partitioning))
+            raise ValueError(
+                f"HIP {stage_name} stage partitioning '{value}' must be one of: "
+                f"{valid}"
+            )
+        return normalized
+
+    def validate_hip_tessellation_stage(self, func, stage_name):
+        if stage_name == "tessellation_control":
+            self.hip_tessellation_output_control_points(func)
+            self.hip_tessellation_domain(func, stage_name)
+        elif stage_name == "tessellation_evaluation":
+            self.hip_tessellation_domain(func, stage_name, required=True)
+        self.hip_tessellation_partitioning(func, stage_name)
+
+    def generate_hip_tessellation_stage_comments(self, func, stage_name):
+        lines = []
+        if stage_name == "tessellation_control":
+            output_points = self.hip_tessellation_output_control_points(func)
+            lines.append(
+                "// CrossGL tessellation control stage: "
+                f"outputcontrolpoints={output_points}\n"
+            )
+        else:
+            domain = self.hip_tessellation_domain(func, stage_name, required=True)
+            lines.append(
+                "// CrossGL tessellation evaluation stage: " f"domain={domain}\n"
+            )
+
+        domain = self.hip_tessellation_domain(
+            func, stage_name, required=stage_name == "tessellation_evaluation"
+        )
+        if stage_name == "tessellation_control" and domain is not None:
+            lines.append(f"// CrossGL tessellation domain: {domain}\n")
+
+        partitioning = self.hip_tessellation_partitioning(func, stage_name)
+        if partitioning is not None:
+            lines.append(f"// CrossGL tessellation partitioning: {partitioning}\n")
+
+        output_topology = self.hip_stage_attribute_value(
+            func, "outputtopology", stage_name
+        )
+        if output_topology is not None:
+            lines.append(
+                "// CrossGL tessellation output topology: " f"{output_topology}\n"
+            )
+
+        patch_constant_function = self.hip_stage_attribute_value(
+            func, "patchconstantfunc", stage_name
+        )
+        if patch_constant_function is not None:
+            lines.append(
+                "// CrossGL tessellation patch constant function: "
+                f"{patch_constant_function}\n"
+            )
+
+        return "".join(lines)
+
+    def parameter_raw_type(self, parameter):
+        if hasattr(parameter, "param_type"):
+            return parameter.param_type
+        if hasattr(parameter, "vtype"):
+            return parameter.vtype
+        return "void"
+
+    def hip_parameter_qualifiers(self, parameter):
+        qualifiers = []
+        allowed_qualifiers = {
+            "const",
+            "in",
+            "out",
+            "inout",
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in getattr(parameter, "qualifiers", []) or []:
+            normalized = str(qualifier).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+
+        for attr in getattr(parameter, "attributes", []) or []:
+            if getattr(attr, "name", None) != "primitive":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            primitive = self.attribute_value_to_string(arguments[0])
+            normalized = str(primitive).lower()
+            if normalized in allowed_qualifiers:
+                qualifiers.append(normalized)
+        return qualifiers
+
+    def hip_geometry_input_primitive_qualifier(self, parameter):
+        primitive_qualifiers = {
+            "point",
+            "line",
+            "triangle",
+            "lineadj",
+            "triangleadj",
+        }
+        for qualifier in self.hip_parameter_qualifiers(parameter):
+            if qualifier in primitive_qualifiers:
+                return qualifier
+        return None
+
+    def hip_parameter_is_array(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            return True
+        type_name = self.type_name_string(raw_type)
+        return bool(type_name and "[" in type_name and "]" in type_name)
+
+    def hip_parameter_array_count(self, parameter):
+        raw_type = self.parameter_raw_type(parameter)
+        if (
+            hasattr(raw_type, "element_type")
+            and str(type(raw_type)).find("ArrayType") != -1
+        ):
+            size = getattr(raw_type, "size", None)
+            if size is None:
+                return None
+            if isinstance(size, int):
+                return size
+            return self.literal_int_value(size)
+
+        type_name = self.type_name_string(raw_type)
+        if not type_name or "[" not in type_name or "]" not in type_name:
+            return None
+        _base_type, array_size = parse_array_type(type_name)
+        return array_size
+
+    def validate_hip_geometry_input_primitive_arity(self, parameters):
+        expected_counts = {
+            "point": 1,
+            "line": 2,
+            "triangle": 3,
+            "lineadj": 4,
+            "triangleadj": 6,
+        }
+
+        for parameter in parameters:
+            primitive = self.hip_geometry_input_primitive_qualifier(parameter)
+            if primitive is None:
+                continue
+
+            expected_count = expected_counts[primitive]
+            if not self.hip_parameter_is_array(parameter):
+                raise ValueError(
+                    "HIP geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must be an array with {expected_count} element(s)"
+                )
+
+            array_count = self.hip_parameter_array_count(parameter)
+            if array_count is None:
+                continue
+            if array_count != expected_count:
+                raise ValueError(
+                    "HIP geometry stage "
+                    f"{primitive} input primitive parameter '{parameter.name}' "
+                    f"must have {expected_count} element(s), got {array_count}"
+                )
+
+    def validate_hip_geometry_stage(self, func, parameters):
+        self.hip_geometry_maxvertexcount(func)
+
+        if not any(
+            self.hip_geometry_stream_info(self.parameter_raw_type(param))
+            for param in parameters
+        ):
+            raise ValueError(
+                "HIP geometry stage parameters must include a PointStream, "
+                "LineStream, or TriangleStream output parameter"
+            )
+
+        if not any(
+            self.hip_geometry_input_primitive_qualifier(param) for param in parameters
+        ):
+            raise ValueError(
+                "HIP geometry stage parameters must include an input primitive "
+                "parameter qualified as point, line, triangle, lineadj, or triangleadj"
+            )
+
+        self.validate_hip_geometry_input_primitive_arity(parameters)
+
+    def generate_hip_geometry_stage_comments(self, func, parameters):
+        maxvertexcount = self.hip_geometry_maxvertexcount(func)
+        input_descriptions = []
+        stream_descriptions = []
+
+        for parameter in parameters:
+            primitive = self.hip_geometry_input_primitive_qualifier(parameter)
+            if primitive is not None:
+                input_descriptions.append(f"{primitive}:{parameter.name}")
+
+            stream_info = self.hip_geometry_stream_info(
+                self.parameter_raw_type(parameter)
+            )
+            if stream_info is not None:
+                stream_name, output_type = stream_info
+                stream_descriptions.append(
+                    f"{stream_name}:{parameter.name}->{output_type}"
+                )
+
+        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
+        if input_descriptions:
+            lines.append(
+                "// CrossGL geometry input primitive: "
+                f"{', '.join(input_descriptions)}\n"
+            )
+        if stream_descriptions:
+            lines.append(
+                "// CrossGL geometry output stream: "
+                f"{', '.join(stream_descriptions)}\n"
+            )
+        return "".join(lines)
 
     def validate_hip_return_semantic(self, stage_name, return_type, semantic):
         if semantic is None:
@@ -1763,7 +2225,10 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
             node.function if hasattr(node, "function") else getattr(node, "name", None)
         )
         func_name = None
-        if hasattr(func_expr, "name"):
+        if isinstance(func_expr, MemberAccessNode):
+            callee = self.visit(func_expr)
+            func_name = callee
+        elif hasattr(func_expr, "name") and getattr(func_expr, "name", None):
             func_name = func_expr.name
             callee = func_name
         elif isinstance(func_expr, str):
@@ -4894,12 +5359,39 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
 
     def convert_type_node_to_string(self, type_node) -> str:
         """Convert new AST TypeNode to string representation."""
+        if hasattr(type_node, "pointee_type"):
+            pointee_type = self.convert_type_node_to_string(type_node.pointee_type)
+            prefix = "" if getattr(type_node, "is_mutable", True) else "const "
+            return f"{prefix}{pointee_type}*"
+        if hasattr(type_node, "referenced_type"):
+            referenced_type = self.convert_type_node_to_string(
+                type_node.referenced_type
+            )
+            prefix = "" if getattr(type_node, "is_mutable", False) else "const "
+            return f"{prefix}{referenced_type}&"
         if hasattr(type_node, "name"):
             generic_args = getattr(type_node, "generic_args", [])
             if generic_args:
-                args = ", ".join(
-                    self.convert_type_node_to_string(arg) for arg in generic_args
-                )
+                converted_args = []
+                for arg in generic_args:
+                    if (
+                        hasattr(arg, "name")
+                        or hasattr(arg, "element_type")
+                        or hasattr(arg, "pointee_type")
+                        or hasattr(arg, "referenced_type")
+                    ):
+                        converted = self.convert_type_node_to_string(arg)
+                    elif hasattr(arg, "value"):
+                        converted = str(arg.value)
+                    else:
+                        converted = str(arg)
+                    if converted is None:
+                        if hasattr(arg, "value"):
+                            converted = str(arg.value)
+                        else:
+                            converted = str(arg)
+                    converted_args.append(converted)
+                args = ", ".join(converted_args)
                 return f"{type_node.name}<{args}>"
             return type_node.name
         elif hasattr(type_node, "element_type"):
@@ -4934,6 +5426,14 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         else:
             type_str = str(type_name)
 
+        geometry_stream_type = self.hip_geometry_stream_mapped_type(type_str)
+        if geometry_stream_type is not None:
+            return geometry_stream_type
+
+        tessellation_patch_type = self.hip_tessellation_patch_mapped_type(type_str)
+        if tessellation_patch_type is not None:
+            return tessellation_patch_type
+
         # Handle array types
         if "[" in type_str and "]" in type_str:
             base_type = type_str.split("[")[0]
@@ -4953,6 +5453,69 @@ class HipCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticMi
         canonical_type = self.canonical_resource_type(type_str)
         mapped_type = self.type_map.get(canonical_type or type_str, type_str)
         return self.hip_mapped_type_result(mapped_type)
+
+    def hip_geometry_stream_info(self, type_name):
+        if type_name is None:
+            return None
+
+        stream_names = {"PointStream", "LineStream", "TriangleStream"}
+        if hasattr(type_name, "pointee_type") or hasattr(type_name, "referenced_type"):
+            return None
+
+        name = getattr(type_name, "name", None)
+        generic_args = getattr(type_name, "generic_args", []) or []
+        if name in stream_names and generic_args:
+            return name, self.map_type(generic_args[0])
+
+        type_text = self.type_name_string(type_name)
+        if not type_text or "<" not in type_text or not type_text.endswith(">"):
+            return None
+
+        base_name, generic_arg = type_text.split("<", 1)
+        base_name = base_name.strip()
+        if base_name not in stream_names:
+            return None
+        generic_arg = generic_arg[:-1].strip()
+        if not generic_arg:
+            return None
+        return base_name, self.map_type(generic_arg)
+
+    def hip_geometry_stream_mapped_type(self, type_name):
+        stream_info = self.hip_geometry_stream_info(type_name)
+        if stream_info is None:
+            return None
+        stream_name, output_type = stream_info
+        return f"CglHip{stream_name}<{output_type}>"
+
+    def format_hip_geometry_stream_parameter(self, raw_param_type, name):
+        stream_type = self.hip_geometry_stream_mapped_type(raw_param_type)
+        if stream_type is None:
+            return None
+        return f"{stream_type}& {name}"
+
+    def hip_tessellation_patch_type_info(self, type_name):
+        parts = self.generic_type_parts(type_name)
+        if parts is None:
+            return None
+        base_name, args = parts
+        if base_name not in {"InputPatch", "OutputPatch"} or len(args) != 2:
+            return None
+        element_type, point_count = args
+        if not element_type or not point_count:
+            return None
+        mapped_element_type = self.map_type(element_type)
+        return base_name, mapped_element_type, point_count
+
+    def hip_tessellation_patch_mapped_type(self, type_name):
+        patch_info = self.hip_tessellation_patch_type_info(type_name)
+        if patch_info is None:
+            return None
+        base_name, element_type, point_count = patch_info
+        helper_name = {
+            "InputPatch": "CglHipInputPatch",
+            "OutputPatch": "CglHipOutputPatch",
+        }[base_name]
+        return f"{helper_name}<{element_type}, {point_count}>"
 
     def hip_mapped_type_result(self, mapped_type):
         base_type = str(mapped_type).split("[", 1)[0].strip()

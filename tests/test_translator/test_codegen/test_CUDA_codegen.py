@@ -9,6 +9,7 @@ from crosstl.translator.ast import (
     ArrayAccessNode,
     ArrayType,
     AssignmentNode,
+    AttributeNode,
     BlockNode,
     ExecutionModel,
     FunctionCallNode,
@@ -97,37 +98,319 @@ class TestCudaCodeGen:
         assert "int3 blockDim =" not in cuda_code
         assert "int3 gridDim =" not in cuda_code
 
-    @pytest.mark.parametrize(
-        ("stage_name", "normalized_stage"),
-        [
-            ("amplification", "amplification"),
-            ("geometry", "geometry"),
-            ("mesh", "mesh"),
-            ("object", "object"),
-            ("task", "task"),
-            ("tessellation_control", "tessellation_control"),
-            ("tessellation_evaluation", "tessellation_evaluation"),
-        ],
-    )
-    def test_unsupported_graphics_pipeline_stages_raise_diagnostics(
-        self, stage_name, normalized_stage
+    def test_mesh_task_stages_lower_to_cuda_metadata_and_placeholder_hooks(self):
+        """Mesh/task stages lower to deterministic CUDA helper representation."""
+        source_code = """
+        shader CudaMeshTaskPipeline {
+            struct TaskPayload {
+                uint meshlet;
+            };
+
+            mesh {
+                void main()
+                    @numthreads(4, 2, 1)
+                    @outputtopology(triangle)
+                    @max_vertices(3)
+                    @max_primitives(1) {
+                    SetMeshOutputCounts(3, 1);
+                }
+            }
+
+            task {
+                void main() @numthreads(2, 1, 1) {
+                    TaskPayload payload;
+                    payload.meshlet = 7u;
+                    DispatchMesh(1, 2, 1, payload);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "__device__ inline void cgl_cuda_set_mesh_output_counts" in cuda_code
+        assert "__device__ inline void cgl_cuda_dispatch_mesh" in cuda_code
+        assert "// CrossGL mesh stage" in cuda_code
+        assert "// CrossGL mesh/task numthreads: 4, 2, 1" in cuda_code
+        assert "// CrossGL mesh output topology: triangle" in cuda_code
+        assert "// CrossGL mesh max_vertices: 3" in cuda_code
+        assert "// CrossGL mesh max_primitives: 1" in cuda_code
+        assert "__device__ void mesh_main()" in cuda_code
+        assert "cgl_cuda_set_mesh_output_counts(3, 1);" in cuda_code
+        assert "// CrossGL task stage" in cuda_code
+        assert "// CrossGL mesh/task numthreads: 2, 1, 1" in cuda_code
+        assert "__device__ void task_main()" in cuda_code
+        assert "cgl_cuda_dispatch_mesh(1, 2, 1, payload);" in cuda_code
+
+    def test_mesh_task_stages_validate_cuda_metadata_and_intrinsics(self):
+        invalid_topology = """
+        shader BadCudaMeshTopology {
+            mesh {
+                void main() @outputtopology(strip) { }
+            }
+        }
+        """
+        with pytest.raises(
+            ValueError, match="outputtopology.*point, line, or triangle"
+        ):
+            CudaCodeGen().generate(Parser(Lexer(invalid_topology).tokens).parse())
+
+        invalid_numthreads = """
+        shader BadCudaTaskNumThreads {
+            task {
+                void main() @numthreads(1, 0, 1) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="numthreads y dimension.*positive"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_numthreads).tokens).parse())
+
+        invalid_set_counts = """
+        shader BadCudaMeshCounts {
+            mesh {
+                void main() {
+                    SetMeshOutputCounts(1);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="SetMeshOutputCounts.*two arguments"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_set_counts).tokens).parse())
+
+        wrong_dispatch_stage = """
+        shader BadCudaDispatchStage {
+            compute {
+                void main() {
+                    DispatchMesh(1, 1, 1);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="DispatchMesh.*task, object"):
+            CudaCodeGen().generate(Parser(Lexer(wrong_dispatch_stage).tokens).parse())
+
+    def test_geometry_stage_lowers_to_cuda_metadata_and_stream_placeholders(
+        self, tmp_path
     ):
-        """CUDA rejects CrossGL stages that have no CUDA shader-stage equivalent."""
-        source_code = f"""
-        shader UnsupportedCudaStages {{
-            {stage_name} {{
-                void main() {{ }}
-            }}
-        }}
+        """Geometry stages lower to deterministic CUDA helper representation."""
+        source_code = """
+        shader CudaGeometryExpansion {
+            struct GSInput {
+                vec4 position @ gl_Position;
+                vec3 normal @ NORMAL;
+            };
+
+            struct GSOutput {
+                vec4 position @ gl_Position;
+                vec3 color @ COLOR;
+            };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(3) {
+                    GSOutput output;
+                    output.position = input[0].position;
+                    output.color = input[0].normal;
+                    stream.Append(output);
+                    stream.RestartStrip();
+                }
+            }
+        }
         """
 
         ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
 
-        with pytest.raises(
-            ValueError,
-            match=rf"CUDA output does not support stage type\(s\): {normalized_stage}",
-        ):
-            CudaCodeGen().generate(ast)
+        assert "template <typename T>" in cuda_code
+        assert "struct CglCudaTriangleStream" in cuda_code
+        assert "// CrossGL geometry stage: maxvertexcount=3" in cuda_code
+        assert "// CrossGL geometry input primitive: triangle:input" in cuda_code
+        assert (
+            "// CrossGL geometry output stream: TriangleStream:stream->GSOutput"
+            in cuda_code
+        )
+        assert "__device__ void geometry_main(" in cuda_code
+        assert "GSInput input[3]" in cuda_code
+        assert "CglCudaTriangleStream<GSOutput>& stream" in cuda_code
+        assert "stream.Append(output);" in cuda_code
+        assert "stream.RestartStrip();" in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_geometry_stage_validates_maxvertexcount_and_input_shape(self):
+        missing_attribute = """
+        shader MissingCudaGeometryMax {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires maxvertexcount"):
+            CudaCodeGen().generate(Parser(Lexer(missing_attribute).tokens).parse())
+
+        invalid_max = """
+        shader BadCudaGeometryMax {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[3],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(0) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="maxvertexcount.*positive"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_max).tokens).parse())
+
+        wrong_arity = """
+        shader BadCudaGeometryInputArity {
+            struct GSInput { vec4 position @ gl_Position; };
+            struct GSOutput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(
+                    triangle GSInput input[2],
+                    inout TriangleStream<GSOutput> stream
+                ) @maxvertexcount(3) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="triangle input primitive.*3 element"):
+            CudaCodeGen().generate(Parser(Lexer(wrong_arity).tokens).parse())
+
+        missing_stream = """
+        shader BadCudaGeometryStream {
+            struct GSInput { vec4 position @ gl_Position; };
+
+            geometry {
+                void main(triangle GSInput input[3]) @maxvertexcount(3) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="must include a PointStream"):
+            CudaCodeGen().generate(Parser(Lexer(missing_stream).tokens).parse())
+
+    def test_tessellation_stages_lower_to_cuda_metadata_and_patch_placeholders(
+        self, tmp_path
+    ):
+        """Tessellation stages lower to deterministic CUDA helper representation."""
+        source_code = """
+        shader CudaTessellationPipeline {
+            struct HSInput {
+                vec3 position;
+            };
+
+            struct HSOutput {
+                vec3 position;
+            };
+
+            struct PatchConstants {
+                float edge;
+            };
+
+            tessellation_control {
+                PatchConstants HSConst(InputPatch<HSInput, 3> patch) {
+                    PatchConstants constants;
+                    return constants;
+                }
+
+                HSOutput main(InputPatch<HSInput, 3> patch)
+                    @domain(tri)
+                    @partitioning(fractional_odd)
+                    @outputtopology(triangle_cw)
+                    @outputcontrolpoints(3)
+                    @patchconstantfunc(HSConst) {
+                    HSOutput output;
+                    output.position = patch[0].position;
+                    return output;
+                }
+            }
+
+            tessellation_evaluation {
+                void main(OutputPatch<HSOutput, 3> patch) @domain(tri) {
+                    vec3 position = patch[0].position;
+                }
+            }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "template <typename T, int N>" in cuda_code
+        assert "struct CglCudaInputPatch" in cuda_code
+        assert "struct CglCudaOutputPatch" in cuda_code
+        assert (
+            "// CrossGL tessellation control stage: outputcontrolpoints=3" in cuda_code
+        )
+        assert "// CrossGL tessellation domain: tri" in cuda_code
+        assert "// CrossGL tessellation partitioning: fractional_odd" in cuda_code
+        assert "// CrossGL tessellation output topology: triangle_cw" in cuda_code
+        assert "// CrossGL tessellation patch constant function: HSConst" in cuda_code
+        assert "// CrossGL tessellation evaluation stage: domain=tri" in cuda_code
+        assert (
+            "__device__ HSOutput tessellation_control_main"
+            "(CglCudaInputPatch<HSInput, 3> patch)" in cuda_code
+        )
+        assert (
+            "__device__ void tessellation_evaluation_main"
+            "(CglCudaOutputPatch<HSOutput, 3> patch)" in cuda_code
+        )
+        assert "output.position = patch[0].position;" in cuda_code
+        assert "float3 position = patch[0].position;" in cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+    def test_tessellation_stages_validate_cuda_metadata(self):
+        missing_control_points = """
+        shader MissingCudaTessControlPoints {
+            tessellation_control {
+                void main() @domain(tri) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires outputcontrolpoints"):
+            CudaCodeGen().generate(Parser(Lexer(missing_control_points).tokens).parse())
+
+        invalid_control_points = """
+        shader BadCudaTessControlPoints {
+            tessellation_control {
+                void main() @outputcontrolpoints(0) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="outputcontrolpoints.*positive"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_control_points).tokens).parse())
+
+        missing_domain = """
+        shader MissingCudaTessDomain {
+            tessellation_evaluation {
+                void main() { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="requires domain"):
+            CudaCodeGen().generate(Parser(Lexer(missing_domain).tokens).parse())
+
+        invalid_domain = """
+        shader BadCudaTessDomain {
+            tessellation_evaluation {
+                void main() @domain(hex) { }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="domain.*must be tri"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_domain).tokens).parse())
 
     def test_ray_tracing_stages_emit_cuda_metadata_and_hooks(self, tmp_path):
         source_code = """
@@ -295,9 +578,9 @@ class TestCudaCodeGen:
         assert "__device__ inline bool cgl_ray_query_proceed" in cuda_code
         assert "bool active = cgl_ray_query_proceed(query);" in cuda_code
 
-    def test_unsupported_function_stage_qualifiers_raise_diagnostics(self):
+    def test_mesh_function_stage_qualifier_lowers_cuda_metadata(self):
         ast = ShaderNode(
-            name="UnsupportedQualifiedCudaStage",
+            name="QualifiedCudaMeshStage",
             execution_model=ExecutionModel.GRAPHICS_PIPELINE,
             functions=[
                 FunctionNode(
@@ -305,19 +588,21 @@ class TestCudaCodeGen:
                     return_type=PrimitiveType("void"),
                     parameters=[],
                     body=BlockNode([]),
-                    qualifiers=["hull", ShaderStage.MESH],
+                    attributes=[
+                        AttributeNode("outputtopology", [IdentifierNode("line")]),
+                        AttributeNode("max_vertices", [2]),
+                        AttributeNode("max_primitives", [1]),
+                    ],
+                    qualifiers=[ShaderStage.MESH],
                 )
             ],
         )
 
-        with pytest.raises(
-            ValueError,
-            match=(
-                r"CUDA output does not support stage type\(s\): "
-                r"mesh, tessellation_control"
-            ),
-        ):
-            CudaCodeGen().generate(ast)
+        cuda_code = CudaCodeGen().generate(ast)
+
+        assert "// CrossGL mesh stage" in cuda_code
+        assert "// CrossGL mesh output topology: line" in cuda_code
+        assert "__device__ void main()" in cuda_code
 
     def test_compute_stage_local_helper_functions_emit_before_kernel(self):
         """Test compute-stage helper functions are emitted before kernel calls."""

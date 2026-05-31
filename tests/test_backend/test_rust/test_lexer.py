@@ -232,6 +232,20 @@ def test_attributes_tokenization():
         pytest.fail("Attributes tokenization not implemented.")
 
 
+def test_cfg_attribute_and_use_tokenization():
+    code = """
+    #[cfg(feature = "gpu")]
+    use crate::gpu::*;
+    """
+    tokens = tokenize_code(code)
+
+    assert ("POUND", "#") in tokens
+    assert ("IDENTIFIER", "cfg") in tokens
+    assert ("IDENTIFIER", "feature") in tokens
+    assert ("STRING", '"gpu"') in tokens
+    assert ("USE", "use") in tokens
+
+
 def test_assignment_operators_tokenization():
     code = """
     fn main() {

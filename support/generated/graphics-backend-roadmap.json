@@ -1,24 +1,6 @@
 {
   "backlog": [
     {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Geometry stage",
-      "feature_id": "stage.geometry",
-      "notes": "",
-      "status": "unsupported"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Tessellation stages",
-      "feature_id": "stage.tessellation",
-      "notes": "",
-      "status": "unsupported"
-    },
-    {
       "backend": "DirectX / HLSL",
       "backend_id": "directx",
       "category": "stages",
@@ -34,42 +16,6 @@
       "feature": "Mesh/task/amplification stages",
       "feature_id": "stage.mesh_task",
       "notes": "Entry points and combined-stage names lower with GL_EXT_mesh_shader enablement and local-size layouts for task/mesh stages. Full mesh output layout and payload semantics are not complete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Mesh/task/amplification stages",
-      "feature_id": "stage.mesh_task",
-      "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
-      "status": "partial"
-    },
-    {
-      "backend": "DirectX / HLSL",
-      "backend_id": "directx",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "OpenGL / GLSL",
-      "backend_id": "opengl",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Metal",
-      "backend_id": "metal",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
       "status": "partial"
     },
     {
@@ -387,10 +333,13 @@
         },
         "metal": {
           "evidence": [
-            "crosstl/translator/codegen/metal_codegen.py::does not support stage type"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_lowers_with_metadata_and_stream_placeholders",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_mixed_shader_with_geometry_emits_all_requested_stages"
           ],
-          "notes": "",
-          "status": "unsupported"
+          "notes": "Metal has no traditional native geometry shader stage, so CrossGL geometry entry points lower to deterministic Metal helper functions with CrossGL geometry-stage metadata and compile-oriented PointStream/LineStream/TriangleStream placeholders. The lowering preserves geometry input primitive qualifiers and output stream element types in metadata, emits stream Append/RestartStrip calls against placeholder stream helpers, requires positive maxvertexcount attributes, and validates point/line/triangle/adjacent input primitive array arity.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -416,10 +365,13 @@
         },
         "metal": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_metal_codegen.py::unsupported_geometry_and_tessellation"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_lowers_geometry_and_tessellation_stages",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_control_stage_lowers_with_patch_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_evaluation_stage_lowers_with_domain_metadata",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
           ],
-          "notes": "",
-          "status": "unsupported"
+          "notes": "Metal tessellation control and evaluation stages lower to deterministic helper functions with CrossGL tessellation metadata and compile-oriented InputPatch/OutputPatch placeholders. The lowering preserves domain, partitioning, output topology, outputcontrolpoints, patchconstantfunc, maxtessfactor, patch parameter element/count metadata, and tessellation helper semantics while validating patch signatures and domain-location shapes.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -472,8 +424,8 @@
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_payload_dispatch_compiles_with_metal3",
             "tests/test_translator/test_codegen/test_shader_validation.py::def test_generated_metal_mesh_object_stages_compile_with_metal3"
           ],
-          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. Literal output-count bounds, simple write-after-SetMeshOutputCounts ordering, if/switch branch dominance, and provable loop-exit dominance for post-branch/output writes are validated. Remaining gaps are symbolic loop iteration analysis and multi-payload pipeline shapes.",
-          "status": "partial"
+          "notes": "Entry points lower to valid Metal object/mesh function attributes with deterministic names, max_total_threads_per_threadgroup from local-size layouts or explicit attributes, generated or explicit mesh output signatures/topology, SetMeshOutputCounts primitive counts, whole vertex/index/primitive output writes, single-member output member writes, multi-member partial output writes through accumulators, object/mesh payload parameters, DirectX-style @mesh_payload parameters, and DispatchMesh payload argument forwarding through object_data payloads. The backend validates literal output-count bounds, write ordering, helper ordering, if/switch branch dominance, loop-exit dominance for post-branch/output writes, payload address spaces, dispatch payload source/type shapes, grid arguments, and generated name collisions.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -494,10 +446,27 @@
         "directx": {
           "evidence": [
             "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_payload_semantics",
-            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes"
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_ray_and_mesh_shader_attributes",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_emit_and_validate",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_reject_invalid_stages_and_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_reject_duplicates_order_and_extras",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_stage_semantic_parameters_require_stage_roles",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_stage_and_arity",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_payload_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_trace_ray_expanded_shape",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_intrinsics_validate_callable_and_hit_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_methods_validate_trace_and_infer_results",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_result_methods_infer_all_hlsl_result_types",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_receiver_and_trace_ray_inline_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_commit_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_trace_ray_validates_global_acceleration_structure_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_query_validates_global_acceleration_structure_arguments",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_validates_literal_instance_inclusion_masks",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_validates_literal_ray_flags",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_ray_tracing_multi_stage_pipeline"
           ],
-          "notes": "Ray entry points lower to HLSL library shader attributes with stage-specific names and payload semantics, but full ray pipeline object/signature coverage remains incomplete.",
-          "status": "partial"
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to HLSL library shader attributes with deterministic stage names. Payload, callable-data, and hit-attribute stage parameters map to native HLSL inout/in signatures with role, order, and type validation. RaytracingAccelerationStructure resources and RayDesc operands preserve HLSL ray-tracing types and bindings, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to native HLSL calls with stage, arity, operand, ray-flag, and instance-mask validation, and RayQuery methods lower to native HLSL methods with receiver/argument validation and result type inference.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -541,15 +510,17 @@
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_ray_intersection_stage_accepts_bounding_box_result_struct",
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_raytrace_and_mesh_intrinsics"
           ],
-          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Arrayed Metal ray function table globals and parameters are emitted as compile-safe unsupported diagnostics because Metal rejects arrays of visible_function_table and intersection_function_table buffer parameters. Full Metal ray-pipeline binding and multi-table callable selection semantics remain incomplete.",
-          "status": "partial"
+          "notes": "Ray generation payloads lower to device references; acceleration structures and intersection_function_table resources lower to Metal raytracing buffer parameters; full TraceRay calls lower to ray plus intersector intersection queries with xcrun metal3 coverage for helper-threaded calls, instance masks, primitive_acceleration_structure shape, single compatible intersection_function_table dispatch, and thread-local payload forwarding. Unsupported TraceRay payload forms, such as missing compatible tables or non-thread payload parameters, emit compile-safe diagnostics. CallShader lowers to visible_function_table dispatch for explicit tables or a single global table; visible_function_table and intersection_function_table ray-generation parameters lower with compiler-validated buffer bindings; hit, miss, any-hit, and callable stages lower to visible functions with ray_data payload/callable-data references; intersection stages lower to Metal intersection attributes for triangle and bounding-box functions. Metal-prohibited arrayed visible_function_table and intersection_function_table globals or parameters emit compile-safe diagnostics while scalar table globals, parameters, explicit callable dispatch, and intersection-table TraceRay paths remain compiler validated.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names"
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_stage_entries_use_distinct_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_generation_shader_emits_ray_tracing_extension",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_ray_hit_position_fetch_builtin_emits_extension_only_for_users"
           ],
-          "notes": "Entry points and combined-stage names lower with GL_EXT_ray_tracing enablement, but full GLSL ray tracing layout and payload semantics are not complete.",
-          "status": "partial"
+          "notes": "Ray generation, closest-hit, any-hit, miss, intersection, and callable stages lower with deterministic combined-stage entry names or target-stage main entry points and GL_EXT_ray_tracing enablement. Acceleration-structure resources, shaderRecordEXT buffers, rayPayloadEXT/rayPayloadInEXT, hitAttributeEXT, callableDataEXT/callableDataInEXT, TraceRay, CallShader, IgnoreHit, ReportHit, and ray hit position-fetch extension scoping are covered by GLSL codegen tests.",
+          "status": "supported"
         }
       }
     },
@@ -1683,9 +1654,10 @@
         "metal": {
           "evidence": [
             "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
-            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_raises_with_diagnostic_message"
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_validates_maxvertexcount_and_input_shape",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_tessellation_stage_validates_patch_metadata"
           ],
-          "notes": "",
+          "notes": "Metal codegen validates geometry maxvertexcount/input primitive shapes, tessellation patch metadata and domain-location shapes, and invalid texture, image, resource-array, and resource-query shapes with deterministic errors or compile-safe diagnostics.",
           "status": "supported"
         },
         "opengl": {
@@ -1704,24 +1676,24 @@
   "summary": {
     "backend_count": 3,
     "backlog": {
-      "backlog_count": 18,
+      "backlog_count": 12,
       "by_backend": {
-        "directx": 6,
-        "metal": 7,
-        "opengl": 5
+        "directx": 5,
+        "metal": 3,
+        "opengl": 4
       },
       "by_category": {
         "language": 2,
         "resources": 2,
-        "stages": 8,
+        "stages": 2,
         "textures": 6
       },
       "by_status": {
         "diagnostic": 0,
-        "partial": 16,
+        "partial": 12,
         "supported": 0,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 0,
         "validated_rejection": 0
       }
     },
@@ -1729,24 +1701,24 @@
     "status_counts": {
       "directx": {
         "diagnostic": 0,
-        "partial": 6,
-        "supported": 37,
+        "partial": 5,
+        "supported": 38,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "metal": {
         "diagnostic": 0,
-        "partial": 5,
-        "supported": 36,
+        "partial": 3,
+        "supported": 40,
         "unknown": 0,
-        "unsupported": 2,
+        "unsupported": 0,
         "validated_rejection": 0
       },
       "opengl": {
         "diagnostic": 0,
-        "partial": 5,
-        "supported": 38,
+        "partial": 4,
+        "supported": 39,
         "unknown": 0,
         "unsupported": 0,
         "validated_rejection": 0
