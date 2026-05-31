@@ -92,6 +92,23 @@ def test_support_matrix_generated_artifacts_are_current():
     assert "generated artifacts are current" in result.stdout
 
 
+def test_current_supported_rows_have_evidence():
+    module = load_support_matrix_module()
+    matrix = json.loads(
+        (ROOT / "support" / "generated" / "support-matrix.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    rows = module.filtered_support_rows(
+        matrix,
+        statuses=["supported"],
+        evidence="missing",
+    )
+
+    assert rows == []
+
+
 def test_support_matrix_check_writes_machine_readable_report(tmp_path):
     report_path = tmp_path / "support-matrix-check.json"
 

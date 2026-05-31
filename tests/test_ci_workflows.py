@@ -217,6 +217,9 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
         report["workflows"]["support_matrix"]["evidence_audit_after_validate"] is True
     )
     assert (
+        report["workflows"]["support_matrix"]["evidence_audit_fails_on_missing"] is True
+    )
+    assert (
         report["workflows"]["support_matrix"]["uploads_evidence_report_artifact"]
         is True
     )
@@ -268,6 +271,12 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     )
     assert (
         report["workflows"]["support_issue_sync"]["writes_support_evidence_report"]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "support_evidence_report_fails_on_missing"
+        ]
         is True
     )
     assert (
@@ -657,6 +666,9 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     ] = False
     report["workflows"]["support_issue_sync"]["writes_support_evidence_report"] = False
     report["workflows"]["support_issue_sync"][
+        "support_evidence_report_fails_on_missing"
+    ] = False
+    report["workflows"]["support_issue_sync"][
         "support_evidence_report_after_validate"
     ] = False
     report["workflows"]["support_issue_sync"][
@@ -772,6 +784,10 @@ def test_ci_coverage_reports_missing_support_planner_tests():
     assert "support-issue-sync.yml missing writes_support_matrix_check_report" in errors
     assert "support-issue-sync.yml missing writes_support_evidence_report" in errors
     assert (
+        "support-issue-sync.yml missing support_evidence_report_fails_on_missing"
+        in errors
+    )
+    assert (
         "support-issue-sync.yml missing support_evidence_report_after_validate"
         in errors
     )
@@ -882,6 +898,7 @@ def test_ci_coverage_reports_missing_support_matrix_policy():
     report["workflows"]["support_matrix"]["uploads_check_report_artifact"] = False
     report["workflows"]["support_matrix"]["evidence_audit_on_failure"] = False
     report["workflows"]["support_matrix"]["evidence_audit_after_validate"] = False
+    report["workflows"]["support_matrix"]["evidence_audit_fails_on_missing"] = False
     report["workflows"]["support_matrix"]["uploads_evidence_report_artifact"] = False
     report["workflows"]["support_matrix"][
         "uploads_check_report_artifact_on_failure"
@@ -903,6 +920,7 @@ def test_ci_coverage_reports_missing_support_matrix_policy():
     assert "support-matrix.yml missing check report artifact upload" in errors
     assert "support-matrix.yml evidence audit must run on failure" in errors
     assert "support-matrix.yml evidence audit must run after validation" in errors
+    assert "support-matrix.yml evidence audit must fail on missing evidence" in errors
     assert "support-matrix.yml missing evidence report artifact upload" in errors
     assert "support-matrix.yml check report artifact must upload on failure" in errors
     assert "support-matrix.yml check report artifact must set retention-days" in errors

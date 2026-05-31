@@ -172,6 +172,7 @@ SUPPORT_MATRIX_REQUIRED_POLICIES = {
     "evidence_audit": "python tools/support_matrix.py evidence",
     "evidence_audit_status_filter": "--status supported",
     "evidence_audit_missing_filter": "--evidence missing",
+    "evidence_audit_fail_on_missing": "--fail-on-missing",
     "evidence_audit_report": "--output support/generated/support-evidence-check.json",
     "docs_probe_job": "docs-probe:",
     "docs_probe_on_schedule": "github.event_name == 'schedule'",
@@ -864,8 +865,12 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
             "python tools/support_matrix.py evidence" in support_evidence_step
             and "--status supported" in support_evidence_step
             and "--evidence missing" in support_evidence_step
+            and "--fail-on-missing" in support_evidence_step
             and "--output support/generated/support-evidence-check.json"
             in support_evidence_step
+        ),
+        "support_evidence_report_fails_on_missing": (
+            "--fail-on-missing" in support_evidence_step
         ),
         "support_evidence_report_after_validate": workflow_step_after(
             workflow,
@@ -1091,6 +1096,7 @@ def support_matrix_report(workflow: str) -> dict[str, Any]:
             "Audit support matrix evidence",
             "Validate support matrix",
         ),
+        "evidence_audit_fails_on_missing": "--fail-on-missing" in evidence_step,
         "uploads_evidence_report_artifact": (
             "actions/upload-artifact@v4" in check_upload_step
             and "support/generated/support-evidence-check.json" in check_upload_step
@@ -1424,6 +1430,8 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         errors.append("support-matrix.yml evidence audit must run on failure")
     if not support_matrix["evidence_audit_after_validate"]:
         errors.append("support-matrix.yml evidence audit must run after validation")
+    if not support_matrix["evidence_audit_fails_on_missing"]:
+        errors.append("support-matrix.yml evidence audit must fail on missing evidence")
     if not support_matrix["uploads_evidence_report_artifact"]:
         errors.append("support-matrix.yml missing evidence report artifact upload")
     if not support_matrix["uploads_check_report_artifact_on_failure"]:
@@ -1461,6 +1469,7 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "min_desired_issues",
         "writes_support_matrix_check_report",
         "writes_support_evidence_report",
+        "support_evidence_report_fails_on_missing",
         "support_evidence_report_after_validate",
         "support_evidence_report_on_failure",
         "uploads_support_matrix_check_report",
@@ -1859,6 +1868,12 @@ def build_ci_coverage_comparison(
     )
     add_bool_change(
         "support-matrix.yml",
+        "evidence_audit_fails_on_missing",
+        baseline_matrix["evidence_audit_fails_on_missing"],
+        current_matrix["evidence_audit_fails_on_missing"],
+    )
+    add_bool_change(
+        "support-matrix.yml",
         "uploads_evidence_report_artifact",
         baseline_matrix["uploads_evidence_report_artifact"],
         current_matrix["uploads_evidence_report_artifact"],
@@ -1925,6 +1940,7 @@ def build_ci_coverage_comparison(
         "min_desired_issues",
         "writes_support_matrix_check_report",
         "writes_support_evidence_report",
+        "support_evidence_report_fails_on_missing",
         "support_evidence_report_after_validate",
         "support_evidence_report_on_failure",
         "uploads_support_matrix_check_report",
@@ -2368,6 +2384,10 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(support_matrix["evidence_audit_after_validate"]),
                 ],
                 [
+                    "Support evidence audit fails on missing evidence",
+                    ok_text(support_matrix["evidence_audit_fails_on_missing"]),
+                ],
+                [
                     "Support evidence artifact",
                     ok_text(support_matrix["uploads_evidence_report_artifact"]),
                 ],
@@ -2448,6 +2468,10 @@ def render_markdown(report: dict[str, Any]) -> str:
                 [
                     "Support evidence report",
                     ok_text(support_sync["writes_support_evidence_report"]),
+                ],
+                [
+                    "Support evidence report fails on missing evidence",
+                    ok_text(support_sync["support_evidence_report_fails_on_missing"]),
                 ],
                 [
                     "Support evidence report after validation",

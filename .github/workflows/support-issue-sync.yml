@@ -100,6 +100,7 @@ jobs:
           python tools/support_matrix.py evidence
           --status supported
           --evidence missing
+          --fail-on-missing
           --output support/generated/support-evidence-check.json
 
       - name: Upload support matrix check report
