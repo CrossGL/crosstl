@@ -1508,6 +1508,26 @@ def test_load_signals_reports_invalid_docs_probe_summary(tmp_path):
     }
 
 
+def test_load_signals_reports_invalid_docs_probe_load_error(tmp_path):
+    module = load_sync_module()
+    signals_path = tmp_path / "support-signals.json"
+    signals = sample_signals()
+    signals["summary"]["docs_probe"]["load_error"] = {
+        "path": "support/generated/backend-docs-report.json",
+        "type": "InvalidReportField",
+        "message": 17,
+    }
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    loaded = module.load_signals(signals_path)
+
+    assert loaded["load_error"] == {
+        "path": str(signals_path),
+        "type": "InvalidReportField",
+        "message": "summary.docs_probe.load_error.message must be str, got int",
+    }
+
+
 def test_main_continues_with_invalid_signals_contract(tmp_path, capsys):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
@@ -1898,6 +1918,24 @@ def test_signals_allow_extracted_closure_only_for_clean_docs_probe():
                     "docs_probe": {
                         "provided": True,
                         "failed": 1,
+                    }
+                }
+            }
+        )
+        is False
+    )
+    assert (
+        module.signals_allow_extracted_closure(
+            {
+                "summary": {
+                    "docs_probe": {
+                        "provided": True,
+                        "failed": 0,
+                        "load_error": {
+                            "path": "support/generated/backend-docs-report.json",
+                            "type": "InvalidReportField",
+                            "message": "docs report failed validation",
+                        },
                     }
                 }
             }
