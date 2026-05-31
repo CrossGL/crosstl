@@ -1217,6 +1217,7 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
     event_path = tmp_path / "event.json"
     event_path.write_text(json.dumps(event), encoding="utf-8")
     summary_path = tmp_path / "summary.md"
+    summary_output = tmp_path / "reports" / "pr-issue-link-summary.json"
     client = FakeClient(
         module,
         pull_files=("tests/test_translator/test_codegen/test_metal_codegen.py",),
@@ -1234,6 +1235,8 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
             "--token-env",
             "TOKEN",
             "--check-support-traceability",
+            "--summary-output",
+            str(summary_output),
         ]
     )
 
@@ -1258,6 +1261,13 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
         "- `tests/test_translator/test_codegen/test_metal_codegen.py` "
         "(prefix: `tests/test_translator/test_codegen/`)"
     ) in summary_text
+    summary_json = json.loads(summary_output.read_text(encoding="utf-8"))
+    assert summary_json["schema_version"] == 1
+    assert summary_json["summary"]["traceability_failed"] == 1
+    assert summary_json["summary"]["traceability_audit"]["failure_reason"] == (
+        "missing_issue_or_opt_out"
+    )
+    assert "Wrote" in captured.out
 
 
 def test_traceability_enforcement_cli_fails_when_opted_in(
@@ -1274,6 +1284,7 @@ def test_traceability_enforcement_cli_fails_when_opted_in(
     }
     event_path = tmp_path / "event.json"
     event_path.write_text(json.dumps(event), encoding="utf-8")
+    summary_output = tmp_path / "pr-issue-link-summary.json"
     client = FakeClient(
         module,
         pull_files=("tests/test_translator/test_codegen/test_metal_codegen.py",),
@@ -1290,6 +1301,8 @@ def test_traceability_enforcement_cli_fails_when_opted_in(
             "--token-env",
             "TOKEN",
             "--enforce-support-traceability",
+            "--summary-output",
+            str(summary_output),
         ]
     )
 
@@ -1297,4 +1310,11 @@ def test_traceability_enforcement_cli_fails_when_opted_in(
     assert result == 1
     assert "Support traceability: required=1, satisfied=0, failed=1" in captured.out
     assert "Support traceability audit: status=failed" in captured.out
+    assert summary_output.exists()
+    assert (
+        json.loads(summary_output.read_text(encoding="utf-8"))["summary"][
+            "traceability_failed"
+        ]
+        == 1
+    )
     assert "Support-relevant PR changes must include" in captured.err
