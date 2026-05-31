@@ -292,17 +292,23 @@
       "name": "Vertex stage",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_value_parameter_emits_stage_input_declaration"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -315,17 +321,23 @@
       "name": "Fragment/pixel stage",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_generate_stage_filters_combined_vertex_fragment_units"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_fragment_value_parameter_emits_stage_input_declaration"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -338,17 +350,23 @@
       "name": "Compute stage",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_compute_stage_emits_default_numthreads_attribute"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_compute_builtin_semantics_roundtrip"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_compute_stage_emits_default_local_size_layout"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -361,7 +379,9 @@
       "name": "Geometry stage",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_geometry_stage_lowers_hlsl_stage_attributes"
+          ],
           "notes": "",
           "status": "supported"
         },
@@ -373,7 +393,9 @@
           "status": "unsupported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_geometry_stage_entrypoint"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -386,7 +408,9 @@
       "name": "Tessellation stages",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_tessellation_stages_lower_hlsl_stage_attributes"
+          ],
           "notes": "",
           "status": "supported"
         },
@@ -398,7 +422,9 @@
           "status": "unsupported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_parts"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -534,17 +560,23 @@
       "name": "Stage parameter semantics",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_thread_system_crossgl_semantics_lower_and_validate"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_graphics_builtin_parameter_semantics_roundtrip"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_stage_builtin_parameter_aliases_to_glsl_builtin"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -557,17 +589,23 @@
       "name": "Direct function return semantics",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_output_return_semantics_still_emit"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_return_semantics_lower_to_output_structs_when_required"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_return_semantic_assigns_position_builtin"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -580,17 +618,23 @@
       "name": "Struct member semantics",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_struct_array_member_semantics_are_preserved"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct_builtin_member_semantics_are_validated"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_color_semantic_maps_to_explicit_stage_io_locations"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -603,17 +647,23 @@
       "name": "Explicit and automatic resource bindings",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_global_resource_binding_attributes_drive_registers"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_global_resource_binding_attributes_drive_indices"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_global_resource_binding_attributes_drive_layout_bindings"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -626,17 +676,23 @@
       "name": "Constant/uniform buffers",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_cbuffer_with_register_b0_binding"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_cbuffer_lowers_to_constant_address_space_struct_pointer"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_cbuffer_binding_attributes_drive_layout_bindings"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -845,7 +901,10 @@
           "status": "partial"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_buffer_block_access_allows_compatible_operations",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_buffer_block_nested_and_array_atomically_mutable_members"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -894,17 +953,23 @@
       "name": "Texture sampling",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_texture_resources_and_sampling"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_texture_sampling_capability_descriptors"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_texture_sampling_capability_descriptors"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1307,17 +1372,23 @@
       "name": "Struct declarations and construction",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_struct"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_generic_struct_concrete_constructor_and_member_access"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1330,17 +1401,23 @@
       "name": "Array declarations and access",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_array_handling"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_array_handling"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_array_handling"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1353,17 +1430,23 @@
       "name": "Function declarations and calls",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_function_call"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_call"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_function_call"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1376,17 +1459,23 @@
       "name": "Control flow",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_while_switch_and_void_return_emit_c_style_syntax"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1523,17 +1612,26 @@
       "name": "Vector and matrix expressions",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_vector_constructor_scalar_splats_expand_for_dxc",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_float16_matrix_ir_aliases_map_to_half_matrices"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_vector_type_conversions",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_float16_matrix_ir_aliases_map_to_half_matrices"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_hlsl_matrix_aliases_map_to_glsl_names",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_hlsl_integer_bool_vector_aliases_map_to_glsl_names"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1546,17 +1644,23 @@
       "name": "Bitwise operations",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_bitwise_operators"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_bitwise_operators"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_bitwise_operators"
+          ],
           "notes": "",
           "status": "supported"
         }
@@ -1569,17 +1673,26 @@
       "name": "Invalid shader shape validation",
       "support": {
         "directx": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_rejects_texture_call_with_non_resource_argument",
+            "tests/test_translator/test_codegen/test_directx_codegen.py::def test_directx_geometry_stage_validates_positive_maxvertexcount"
+          ],
           "notes": "",
           "status": "supported"
         },
         "metal": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_rejects_texture_sampling_call_with_too_many_arguments",
+            "tests/test_translator/test_codegen/test_metal_codegen.py::def test_metal_geometry_stage_raises_with_diagnostic_message"
+          ],
           "notes": "",
           "status": "supported"
         },
         "opengl": {
-          "evidence": [],
+          "evidence": [
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_opengl_rejects_texture_sampling_call_with_too_many_arguments",
+            "tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_stage_layout_attributes_reject_conflicting_aliases"
+          ],
           "notes": "",
           "status": "supported"
         }
