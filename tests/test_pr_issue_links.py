@@ -385,7 +385,9 @@ def test_sync_adds_support_matrix_refs_from_changed_backlog_rows(tmp_path, monke
     ]
 
 
-def test_sync_adds_mixed_support_matrix_closures_and_refs(tmp_path, monkeypatch):
+def test_sync_adds_mixed_support_matrix_closures_and_refs(
+    tmp_path, monkeypatch, capsys
+):
     module = load_sync_module()
     base_matrix = {
         "features": [
@@ -506,6 +508,23 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(tmp_path, monkeypatch)
     assert summary["support_closures"] == 1
     assert summary["support_references"] == 1
     assert summary["traceability_satisfied"] == 1
+    assert summary["support_link_audit"] == {
+        "inspection_failed": False,
+        "closure_links": [
+            {
+                "key": "backlog:metal:language.wave_intrinsics",
+                "issues": [498],
+            }
+        ],
+        "reference_links": [
+            {
+                "key": "backlog:metal:texture.projected",
+                "issues": [432],
+            }
+        ],
+        "missing_closure_keys": [],
+        "missing_reference_keys": [],
+    }
     assert client.updated_bodies == [
         (
             5,
@@ -522,6 +541,111 @@ def test_sync_adds_mixed_support_matrix_closures_and_refs(tmp_path, monkeypatch)
         )
     ]
     assert "#353" not in client.updated_bodies[0][1]
+
+    module.emit_support_link_audit(summary)
+    captured = capsys.readouterr()
+    assert "Support link audit: closure_candidates=1" in captured.out
+    assert "reference_candidates=1" in captured.out
+    assert "#498 (backlog:metal:language.wave_intrinsics)" in captured.out
+    assert "#432 (backlog:metal:texture.projected)" in captured.out
+
+
+def test_sync_audit_reports_missing_managed_issue_for_removed_backlog_row(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    base_matrix = {
+        "backlog": [{"backend_id": "metal", "feature_id": "language.wave_intrinsics"}]
+    }
+    head_matrix = {"backlog": []}
+    matrix_path = tmp_path / "support-matrix.json"
+    matrix_path.write_text(json.dumps(base_matrix), encoding="utf-8")
+    monkeypatch.setattr(module, "SUPPORT_MATRIX_PATH", matrix_path)
+    pr = module.PullRequestContext(
+        number=5,
+        title="Improve Metal support",
+        body="Support matrix update.",
+        author="alice",
+        head_repo="CrossGL/crosstl",
+        head_sha="abc123",
+        changed_files=("support/generated/support-matrix.json",),
+    )
+    client = FakeClient(
+        module,
+        json_files={
+            (
+                "CrossGL/crosstl",
+                "support/generated/support-matrix.json",
+                "abc123",
+            ): head_matrix
+        },
+        support_issues=[],
+    )
+
+    summary = module.sync_pr_issue_links(
+        client,
+        pr,
+        "CrossGL/crosstl",
+        sync_support_closures=True,
+        sync_support_references=True,
+        check_support_traceability=True,
+    )
+
+    assert summary["support_closures"] == 0
+    assert summary["support_references"] == 0
+    assert summary["traceability_failed"] == 1
+    assert summary["support_link_audit"] == {
+        "inspection_failed": False,
+        "closure_links": [],
+        "reference_links": [],
+        "missing_closure_keys": ["backlog:metal:language.wave_intrinsics"],
+        "missing_reference_keys": [],
+    }
+
+    module.emit_support_link_audit(summary)
+    captured = capsys.readouterr()
+    assert "missing_closure_links=1" in captured.out
+    assert (
+        "::warning::Support backlog rows were removed without open managed support issues"
+        in captured.out
+    )
+    assert "backlog:metal:language.wave_intrinsics" in captured.out
+
+
+def test_support_link_audit_writes_step_summary(tmp_path, monkeypatch):
+    module = load_sync_module()
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    summary = {
+        "support_link_audit": {
+            "inspection_failed": False,
+            "closure_links": [
+                {
+                    "key": "backlog:metal:language.wave_intrinsics",
+                    "issues": [498],
+                }
+            ],
+            "reference_links": [
+                {
+                    "key": "backlog:metal:texture.projected",
+                    "issues": [432],
+                }
+            ],
+            "missing_closure_keys": ["backlog:metal:texture.gather"],
+            "missing_reference_keys": [],
+        }
+    }
+
+    module.write_support_link_step_summary(summary)
+
+    text = summary_path.read_text(encoding="utf-8")
+    assert "## Support Issue Links" in text
+    assert "- Inspection: succeeded" in text
+    assert "- Closure links: 1/2" in text
+    assert "- Reference links: 1/1" in text
+    assert "#498 (backlog:metal:language.wave_intrinsics)" in text
+    assert "#432 (backlog:metal:texture.projected)" in text
+    assert "backlog:metal:texture.gather" in text
 
 
 def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
@@ -582,6 +706,13 @@ def test_sync_preserves_existing_managed_links_when_support_matrix_unavailable(
     assert "::warning::Could not inspect PR support matrix links" in captured.out
     assert summary["body_updated"] == 0
     assert summary["traceability_failed"] == 1
+    assert summary["support_link_audit"] == {
+        "inspection_failed": True,
+        "closure_links": [],
+        "reference_links": [],
+        "missing_closure_keys": [],
+        "missing_reference_keys": [],
+    }
     assert client.updated_bodies == []
 
 
