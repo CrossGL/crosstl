@@ -1138,6 +1138,71 @@ def test_load_optional_json_reports_invalid_issue_plan_contract(tmp_path):
     }
 
 
+def test_load_optional_json_reports_invalid_planned_action_sample_limit(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    report["planned_action_samples"]["sample_limit"] = "twelve"
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "planned_action_samples.sample_limit must be int, got str",
+    }
+
+
+def test_load_optional_json_reports_invalid_planned_action_sample_contract(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    report["planned_action_samples"]["updated"][0]["reasons"] = ["body", 17]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "planned_action_samples.updated[0].reasons[1] must be str, got int",
+    }
+
+
+def test_load_optional_json_reports_missing_planned_action_sample_fields(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = issue_plan_report()
+    del report["planned_action_samples"]["attached"][0]["child_key"]
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "MissingReportFields",
+        "message": (
+            "planned_action_samples.attached[0] missing required fields: child_key"
+        ),
+    }
+
+
 def test_load_optional_json_reports_invalid_issue_plan_budget_violation_contract(
     tmp_path,
 ):
@@ -1158,6 +1223,108 @@ def test_load_optional_json_reports_invalid_issue_plan_budget_violation_contract
         "path": str(plan_path),
         "type": "InvalidReportField",
         "message": "planned_action_budget.violations[0].actual must be int, got str",
+    }
+
+
+def test_load_optional_json_reports_invalid_managed_issue_audit_bucket(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["managed_issue_audit"] = {
+        "sample_limit": 12,
+        "stale": {
+            "total": "two",
+            "open": 1,
+            "closed": 1,
+            "samples": [],
+        },
+        "duplicates": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+        "preserved_extracted": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+        "ignored_unknown": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "managed_issue_audit.stale.total must be int, got str",
+    }
+
+
+def test_load_optional_json_reports_invalid_managed_issue_audit_sample(tmp_path):
+    module = load_summary_module()
+    plan_path = tmp_path / "support-issue-plan.json"
+    report = clean_issue_plan_report()
+    report["managed_issue_audit"] = {
+        "sample_limit": 12,
+        "stale": {
+            "total": 1,
+            "open": 1,
+            "closed": 0,
+            "samples": [
+                {
+                    "key": "backlog:directx:old.feature",
+                    "number": "18",
+                    "title": "old backlog",
+                    "state": "open",
+                    "reason": "stale_managed_marker",
+                }
+            ],
+        },
+        "duplicates": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+        "preserved_extracted": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+        "ignored_unknown": {
+            "total": 0,
+            "open": 0,
+            "closed": 0,
+            "samples": [],
+        },
+    }
+    plan_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        plan_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.ISSUE_PLAN_REQUIRED_FIELDS,
+        contract_validator=module.validate_issue_plan_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(plan_path),
+        "type": "InvalidReportField",
+        "message": "managed_issue_audit.stale.samples[0].number must be int, got str",
     }
 
 

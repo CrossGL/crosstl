@@ -380,6 +380,222 @@ def validate_budget_contract(
     return None
 
 
+def validate_string_list_value(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_field_error(path, field, list, value)
+    for index, item in enumerate(value):
+        if not value_matches_type(item, str):
+            return invalid_field_error(path, f"{field}[{index}]", str, item)
+    return None
+
+
+def validate_sample_common_fields(
+    sample: dict[str, Any],
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    error = validate_nested_field_types(
+        sample,
+        path,
+        field,
+        {
+            "key": str,
+            "title": str,
+            "state": str,
+            "reason": str,
+            "category": str,
+            "parent_key": str,
+            "child_key": str,
+            "number": int,
+            "parent_number": int,
+            "child_number": int,
+            "reasons": list,
+        },
+    )
+    if error is not None:
+        return error
+    if "reasons" in sample:
+        return validate_string_list_value(sample["reasons"], path, f"{field}.reasons")
+    return None
+
+
+def validate_required_sample_fields(
+    sample: dict[str, Any],
+    path: Path | None,
+    field: str,
+    required_fields: tuple[str, ...],
+) -> dict[str, Any] | None:
+    missing = [required for required in required_fields if required not in sample]
+    if missing:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "{} missing required fields: {}".format(field, ", ".join(missing)),
+        )
+    return None
+
+
+def validate_sample_list(
+    value: Any,
+    path: Path | None,
+    field: str,
+    required_fields: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    if not isinstance(value, list):
+        return invalid_field_error(path, field, list, value)
+    for index, sample in enumerate(value):
+        sample_field = f"{field}[{index}]"
+        if not isinstance(sample, dict):
+            return invalid_field_error(path, sample_field, dict, sample)
+        error = validate_required_sample_fields(
+            sample,
+            path,
+            sample_field,
+            required_fields,
+        )
+        if error is not None:
+            return error
+        error = validate_sample_common_fields(sample, path, sample_field)
+        if error is not None:
+            return error
+    return None
+
+
+def validate_planned_action_samples_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    samples = report.get("planned_action_samples")
+    if samples is None:
+        return None
+    if not isinstance(samples, dict):
+        return invalid_field_error(path, "planned_action_samples", dict, samples)
+    if "sample_limit" not in samples:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "planned_action_samples missing required fields: sample_limit",
+        )
+    if not value_matches_type(samples["sample_limit"], int):
+        return invalid_field_error(
+            path,
+            "planned_action_samples.sample_limit",
+            int,
+            samples["sample_limit"],
+        )
+
+    sample_requirements = {
+        "created": ("key", "title"),
+        "updated": ("key", "number", "title", "state", "reasons"),
+        "closed": ("key", "number", "title", "state", "reason"),
+        "attached": ("parent_key", "child_key", "reason"),
+        "preserved": ("key", "number", "title", "state", "reason"),
+    }
+    missing_actions = [
+        action for action in sample_requirements if action not in samples
+    ]
+    if missing_actions:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "planned_action_samples missing required fields: {}".format(
+                ", ".join(missing_actions)
+            ),
+        )
+    for action, required_fields in sample_requirements.items():
+        error = validate_sample_list(
+            samples[action],
+            path,
+            f"planned_action_samples.{action}",
+            required_fields,
+        )
+        if error is not None:
+            return error
+    return None
+
+
+def validate_audit_bucket(
+    bucket: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if not isinstance(bucket, dict):
+        return invalid_field_error(path, field, dict, bucket)
+    for counter in ("total", "open", "closed"):
+        if counter not in bucket:
+            return load_error(
+                path,
+                "MissingReportFields",
+                f"{field} missing required fields: {counter}",
+            )
+        if not value_matches_type(bucket[counter], int):
+            return invalid_field_error(
+                path,
+                f"{field}.{counter}",
+                int,
+                bucket[counter],
+            )
+    if "samples" not in bucket:
+        return load_error(
+            path,
+            "MissingReportFields",
+            f"{field} missing required fields: samples",
+        )
+    return validate_sample_list(
+        bucket["samples"],
+        path,
+        f"{field}.samples",
+        ("key", "number", "title", "state", "reason"),
+    )
+
+
+def validate_managed_issue_audit_contract(
+    report: dict[str, Any],
+    path: Path | None,
+) -> dict[str, Any] | None:
+    audit = report.get("managed_issue_audit")
+    if audit is None:
+        return None
+    if not isinstance(audit, dict):
+        return invalid_field_error(path, "managed_issue_audit", dict, audit)
+    if "sample_limit" not in audit:
+        return load_error(
+            path,
+            "MissingReportFields",
+            "managed_issue_audit missing required fields: sample_limit",
+        )
+    if not value_matches_type(audit["sample_limit"], int):
+        return invalid_field_error(
+            path,
+            "managed_issue_audit.sample_limit",
+            int,
+            audit["sample_limit"],
+        )
+
+    for bucket in (
+        "stale",
+        "duplicates",
+        "preserved_extracted",
+        "ignored_unknown",
+    ):
+        if bucket not in audit:
+            return load_error(
+                path,
+                "MissingReportFields",
+                f"managed_issue_audit missing required fields: {bucket}",
+            )
+        error = validate_audit_bucket(
+            audit[bucket], path, f"managed_issue_audit.{bucket}"
+        )
+        if error is not None:
+            return error
+    return None
+
+
 def validate_matrix_check_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -550,8 +766,8 @@ def validate_issue_plan_contract(
             ISSUE_CLOSURE_COUNTERS,
             allow_none=True,
         ),
-        lambda: validate_optional_object(report, path, "planned_action_samples"),
-        lambda: validate_optional_object(report, path, "managed_issue_audit"),
+        lambda: validate_planned_action_samples_contract(report, path),
+        lambda: validate_managed_issue_audit_contract(report, path),
         lambda: validate_optional_object_list(report, path, "input_failures"),
         lambda: validate_optional_object(report, path, "preflight_failure"),
         lambda: validate_budget_contract(report, path, "planned_action_budget"),
