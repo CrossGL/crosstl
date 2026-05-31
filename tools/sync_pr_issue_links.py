@@ -22,6 +22,8 @@ from urllib import error, parse, request
 API_VERSION = "2026-03-10"
 ROOT = Path(__file__).resolve().parents[1]
 SUPPORT_MATRIX_PATH = ROOT / "support" / "generated" / "support-matrix.json"
+PR_ISSUE_LINK_SUMMARY_SCHEMA_VERSION = 1
+PR_ISSUE_LINK_SUMMARY_GENERATOR = "sync_pr_issue_links"
 
 SECTION_BEGIN = "<!-- crossgl-pr-issue-links:start -->"
 SECTION_END = "<!-- crossgl-pr-issue-links:end -->"
@@ -104,6 +106,43 @@ SUPPORT_RELEVANT_PATHS = (
     "tests/test_translator/test_translation_pipeline.py",
 )
 SUPPORT_MATRIX_ARTIFACT_PATH = "support/generated/support-matrix.json"
+SUMMARY_COUNTER_FIELDS = (
+    "linked",
+    "support_closures",
+    "support_references",
+    "assigned",
+    "assignment_skipped",
+    "missing_or_pull",
+    "body_updated",
+)
+TRACEABILITY_SUMMARY_FIELDS = (
+    "traceability_required",
+    "traceability_satisfied",
+    "traceability_failed",
+    "support_relevant_files",
+    "traceability_audit",
+)
+TRACEABILITY_AUDIT_FIELDS = (
+    "required",
+    "satisfied",
+    "satisfaction_sources",
+    "failure_reason",
+    "support_relevant_files",
+    "support_relevant_count",
+    "support_matrix_artifact_changed",
+    "closing_issue_numbers",
+    "managed_reference_issue_numbers",
+)
+TRACEABILITY_SOURCE_VALUES = {
+    "same_repo_closing_issue",
+    "managed_support_issue_reference",
+    "explicit_opt_out",
+}
+TRACEABILITY_FAILURE_VALUES = {
+    None,
+    "missing_issue_or_opt_out",
+    "no_support_relevant_files",
+}
 
 
 class GitHubApiError(RuntimeError):
@@ -1030,12 +1069,243 @@ def write_support_traceability_step_summary(summary: dict[str, Any]) -> None:
         handle.write("\n")
 
 
-def write_sync_summary_output(path: Path, summary: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def is_non_negative_int(value: Any) -> bool:
+    return type(value) is int and value >= 0
+
+
+def validate_issue_number_list(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append(f"{path} must be a list")
+        return
+    for index, item in enumerate(value):
+        if not is_non_negative_int(item) or item == 0:
+            errors.append(f"{path}[{index}] must be a positive integer")
+
+
+def validate_string_list(value: Any, path: str, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        errors.append(f"{path} must be a list")
+        return
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            errors.append(f"{path}[{index}] must be a non-empty string")
+
+
+def validate_traceability_audit_contract(
+    summary: dict[str, Any], errors: list[str]
+) -> None:
+    audit = summary.get("traceability_audit")
+    if not isinstance(audit, dict):
+        errors.append("summary.traceability_audit must be an object")
+        return
+    for field in TRACEABILITY_AUDIT_FIELDS:
+        if field not in audit:
+            errors.append(f"summary.traceability_audit.{field} is required")
+
+    if not isinstance(audit.get("required"), bool):
+        errors.append("summary.traceability_audit.required must be a boolean")
+    if not isinstance(audit.get("satisfied"), bool):
+        errors.append("summary.traceability_audit.satisfied must be a boolean")
+    if not isinstance(audit.get("support_matrix_artifact_changed"), bool):
+        errors.append(
+            "summary.traceability_audit.support_matrix_artifact_changed "
+            "must be a boolean"
+        )
+    if not is_non_negative_int(audit.get("support_relevant_count")):
+        errors.append(
+            "summary.traceability_audit.support_relevant_count must be a "
+            "non-negative integer"
+        )
+
+    sources = audit.get("satisfaction_sources")
+    validate_string_list(
+        sources, "summary.traceability_audit.satisfaction_sources", errors
+    )
+    if isinstance(sources, list):
+        unknown_sources = sorted(set(sources) - TRACEABILITY_SOURCE_VALUES)
+        if unknown_sources:
+            errors.append(
+                "summary.traceability_audit.satisfaction_sources has unknown "
+                "values: " + ", ".join(unknown_sources)
+            )
+
+    failure_reason = audit.get("failure_reason")
+    if failure_reason not in TRACEABILITY_FAILURE_VALUES:
+        errors.append(
+            "summary.traceability_audit.failure_reason must be one of: "
+            + ", ".join(
+                "null" if value is None else value
+                for value in sorted(
+                    TRACEABILITY_FAILURE_VALUES,
+                    key=lambda item: "" if item is None else item,
+                )
+            )
+        )
+
+    relevant_files = audit.get("support_relevant_files")
+    if not isinstance(relevant_files, list):
+        errors.append(
+            "summary.traceability_audit.support_relevant_files must be a list"
+        )
+    else:
+        for index, entry in enumerate(relevant_files):
+            entry_path = f"summary.traceability_audit.support_relevant_files[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_path} must be an object")
+                continue
+            for field in ("path", "reason", "matched"):
+                if not isinstance(entry.get(field), str) or not entry.get(field):
+                    errors.append(f"{entry_path}.{field} must be a non-empty string")
+            if entry.get("reason") not in {"exact_path", "prefix"}:
+                errors.append(f"{entry_path}.reason must be exact_path or prefix")
+        if (
+            is_non_negative_int(audit.get("support_relevant_count"))
+            and len(relevant_files) != audit["support_relevant_count"]
+        ):
+            errors.append(
+                "summary.traceability_audit.support_relevant_count must match "
+                "support_relevant_files length"
+            )
+
+    validate_issue_number_list(
+        audit.get("closing_issue_numbers"),
+        "summary.traceability_audit.closing_issue_numbers",
+        errors,
+    )
+    validate_issue_number_list(
+        audit.get("managed_reference_issue_numbers"),
+        "summary.traceability_audit.managed_reference_issue_numbers",
+        errors,
+    )
+
+    if "traceability_required" in summary and isinstance(audit.get("required"), bool):
+        if int(audit["required"]) != summary.get("traceability_required"):
+            errors.append(
+                "summary.traceability_required must match traceability_audit.required"
+            )
+    if "traceability_satisfied" in summary and isinstance(audit.get("required"), bool):
+        expected_satisfied = int(bool(audit["required"] and sources))
+        if summary.get("traceability_satisfied") != expected_satisfied:
+            errors.append(
+                "summary.traceability_satisfied must match traceability audit sources"
+            )
+    if "traceability_failed" in summary and isinstance(audit.get("required"), bool):
+        expected_failed = int(bool(audit["required"] and not sources))
+        if summary.get("traceability_failed") != expected_failed:
+            errors.append(
+                "summary.traceability_failed must match traceability audit sources"
+            )
+    if "support_relevant_files" in summary and is_non_negative_int(
+        audit.get("support_relevant_count")
+    ):
+        if summary.get("support_relevant_files") != audit["support_relevant_count"]:
+            errors.append(
+                "summary.support_relevant_files must match "
+                "traceability_audit.support_relevant_count"
+            )
+
+
+def validate_support_link_audit_contract(
+    summary: dict[str, Any], errors: list[str]
+) -> None:
+    audit = summary.get("support_link_audit")
+    if audit is None:
+        return
+    if not isinstance(audit, dict):
+        errors.append("summary.support_link_audit must be an object")
+        return
+    for field in (
+        "inspection_failed",
+        "closure_links",
+        "reference_links",
+        "missing_closure_keys",
+        "missing_reference_keys",
+    ):
+        if field not in audit:
+            errors.append(f"summary.support_link_audit.{field} is required")
+    if not isinstance(audit.get("inspection_failed"), bool):
+        errors.append("summary.support_link_audit.inspection_failed must be a boolean")
+    for field in ("missing_closure_keys", "missing_reference_keys"):
+        validate_string_list(
+            audit.get(field), f"summary.support_link_audit.{field}", errors
+        )
+    for field in ("closure_links", "reference_links"):
+        entries = audit.get(field)
+        if not isinstance(entries, list):
+            errors.append(f"summary.support_link_audit.{field} must be a list")
+            continue
+        for index, entry in enumerate(entries):
+            entry_path = f"summary.support_link_audit.{field}[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{entry_path} must be an object")
+                continue
+            if not isinstance(entry.get("key"), str) or not entry.get("key"):
+                errors.append(f"{entry_path}.key must be a non-empty string")
+            validate_issue_number_list(
+                entry.get("issues"), f"{entry_path}.issues", errors
+            )
+            if "reason" in entry and (
+                not isinstance(entry.get("reason"), str) or not entry.get("reason")
+            ):
+                errors.append(f"{entry_path}.reason must be a non-empty string")
+
+
+def validate_sync_summary_payload(payload: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return ["payload must be an object"]
+    if payload.get("schema_version") != PR_ISSUE_LINK_SUMMARY_SCHEMA_VERSION:
+        errors.append(f"schema_version must be {PR_ISSUE_LINK_SUMMARY_SCHEMA_VERSION}")
+    if payload.get("generator") != PR_ISSUE_LINK_SUMMARY_GENERATOR:
+        errors.append(f"generator must be {PR_ISSUE_LINK_SUMMARY_GENERATOR}")
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        errors.append("summary must be an object")
+        return errors
+
+    for field in SUMMARY_COUNTER_FIELDS:
+        if not is_non_negative_int(summary.get(field)):
+            errors.append(f"summary.{field} must be a non-negative integer")
+
+    traceability_present = any(
+        field in summary for field in TRACEABILITY_SUMMARY_FIELDS
+    )
+    if traceability_present:
+        for field in TRACEABILITY_SUMMARY_FIELDS:
+            if field not in summary:
+                errors.append(f"summary.{field} is required")
+        for field in (
+            "traceability_required",
+            "traceability_satisfied",
+            "traceability_failed",
+        ):
+            if summary.get(field) not in {0, 1}:
+                errors.append(f"summary.{field} must be 0 or 1")
+        if not is_non_negative_int(summary.get("support_relevant_files")):
+            errors.append(
+                "summary.support_relevant_files must be a non-negative integer"
+            )
+        validate_traceability_audit_contract(summary, errors)
+
+    validate_support_link_audit_contract(summary, errors)
+    return errors
+
+
+def build_sync_summary_payload(summary: dict[str, Any]) -> dict[str, Any]:
     payload = {
-        "schema_version": 1,
+        "schema_version": PR_ISSUE_LINK_SUMMARY_SCHEMA_VERSION,
+        "generator": PR_ISSUE_LINK_SUMMARY_GENERATOR,
         "summary": summary,
     }
+    errors = validate_sync_summary_payload(payload)
+    if errors:
+        raise ValueError("Invalid PR issue link summary payload: " + "; ".join(errors))
+    return payload
+
+
+def write_sync_summary_output(path: Path, summary: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_sync_summary_payload(summary)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 

@@ -1204,6 +1204,97 @@ def test_traceability_policy_ignores_non_support_paths():
     }
 
 
+def pr_issue_link_summary_fixture():
+    return {
+        "linked": 1,
+        "support_closures": 1,
+        "support_references": 0,
+        "assigned": 0,
+        "assignment_skipped": 0,
+        "missing_or_pull": 0,
+        "body_updated": 1,
+        "support_link_audit": {
+            "inspection_failed": False,
+            "closure_links": [
+                {
+                    "key": "backlog:metal:language.wave_intrinsics",
+                    "issues": [498],
+                    "reason": "removed_from_backlog",
+                }
+            ],
+            "reference_links": [],
+            "missing_closure_keys": [],
+            "missing_reference_keys": [],
+            "changed_files": {
+                "support_relevant": 1,
+                "support_matrix_artifact": 1,
+            },
+        },
+        "traceability_required": 1,
+        "traceability_satisfied": 1,
+        "traceability_failed": 0,
+        "support_relevant_files": 1,
+        "traceability_audit": {
+            "required": True,
+            "satisfied": True,
+            "satisfaction_sources": ["same_repo_closing_issue"],
+            "failure_reason": None,
+            "support_relevant_files": [
+                {
+                    "path": "support/generated/support-matrix.json",
+                    "reason": "exact_path",
+                    "matched": "support/generated/support-matrix.json",
+                }
+            ],
+            "support_relevant_count": 1,
+            "support_matrix_artifact_changed": True,
+            "closing_issue_numbers": [498],
+            "managed_reference_issue_numbers": [],
+        },
+    }
+
+
+def test_sync_summary_output_uses_stable_schema_contract(tmp_path):
+    module = load_sync_module()
+    summary = pr_issue_link_summary_fixture()
+    output_path = tmp_path / "pr-issue-link-summary.json"
+
+    module.write_sync_summary_output(output_path, summary)
+
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["generator"] == "sync_pr_issue_links"
+    assert payload["summary"] == summary
+    assert module.validate_sync_summary_payload(payload) == []
+
+
+def test_sync_summary_payload_validator_rejects_contract_drift():
+    module = load_sync_module()
+    payload = module.build_sync_summary_payload(pr_issue_link_summary_fixture())
+
+    missing_generator = dict(payload)
+    missing_generator.pop("generator")
+    assert module.validate_sync_summary_payload(missing_generator) == [
+        "generator must be sync_pr_issue_links"
+    ]
+
+    wrong_count = json.loads(json.dumps(payload))
+    wrong_count["summary"]["traceability_audit"]["support_relevant_count"] = 2
+    assert (
+        "summary.traceability_audit.support_relevant_count must match "
+        "support_relevant_files length"
+    ) in module.validate_sync_summary_payload(wrong_count)
+
+    wrong_source = json.loads(json.dumps(payload))
+    wrong_source["summary"]["traceability_audit"]["satisfaction_sources"] = [
+        "manual_override"
+    ]
+    assert (
+        "summary.traceability_audit.satisfaction_sources has unknown values: "
+        "manual_override"
+    ) in module.validate_sync_summary_payload(wrong_source)
+
+
 def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, capsys):
     module = load_sync_module()
     event = {
@@ -1263,6 +1354,7 @@ def test_traceability_advisory_cli_warns_without_failing(tmp_path, monkeypatch, 
     ) in summary_text
     summary_json = json.loads(summary_output.read_text(encoding="utf-8"))
     assert summary_json["schema_version"] == 1
+    assert summary_json["generator"] == "sync_pr_issue_links"
     assert summary_json["summary"]["traceability_failed"] == 1
     assert summary_json["summary"]["traceability_audit"]["failure_reason"] == (
         "missing_issue_or_opt_out"
