@@ -91,13 +91,28 @@ def sample_signals():
         "schema_version": 1,
         "generator": "tools/support_signals.py",
         "summary": {
+            "backend_count": 1,
+            "feature_count": 2,
+            "state_counts": {
+                "not_detected": 1,
+                "tested": 1,
+            },
+            "issue_count": 2,
             "docs_probe": {
                 "provided": True,
                 "total": 1,
                 "ok": 1,
                 "failed": 0,
                 "linked_documents": 0,
-            }
+            },
+            "pytest_failures": {
+                "provided": False,
+                "report_count": 0,
+                "load_error_count": 0,
+                "failed_testcase_count": 0,
+                "categories": {},
+                "backends": {},
+            },
         },
         "features": [
             {
@@ -1424,6 +1439,113 @@ def test_main_continues_with_malformed_signals_input(tmp_path, capsys):
     assert report["input_failures"][0]["input"] == "signals"
     assert report["input_failures"][0]["path"] == str(signals_path)
     assert report["input_failures"][0]["error"]["type"] == "JSONDecodeError"
+    captured = capsys.readouterr()
+    assert "Dry run: would manage 3 desired issues" in captured.out
+    assert "continuing without signals" in captured.err
+
+
+def test_load_signals_reports_missing_nested_issue_fields(tmp_path):
+    module = load_sync_module()
+    signals_path = tmp_path / "support-signals.json"
+    signals = sample_signals()
+    del signals["issues"][0]["backend_id"]
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    loaded = module.load_signals(signals_path)
+
+    assert loaded["load_error"] == {
+        "path": str(signals_path),
+        "type": "MissingReportFields",
+        "message": "issues[0] missing required fields: backend_id",
+    }
+
+
+def test_load_signals_reports_invalid_nested_issue_field_type(tmp_path):
+    module = load_sync_module()
+    signals_path = tmp_path / "support-signals.json"
+    signals = sample_signals()
+    signals["issues"][0]["backend_id"] = 17
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    loaded = module.load_signals(signals_path)
+
+    assert loaded["load_error"] == {
+        "path": str(signals_path),
+        "type": "InvalidReportField",
+        "message": "issues[0].backend_id must be str, got int",
+    }
+
+
+def test_load_signals_reports_invalid_feature_support_hit(tmp_path):
+    module = load_sync_module()
+    signals_path = tmp_path / "support-signals.json"
+    signals = sample_signals()
+    signals["features"][1]["support"]["directx"]["tests"] = [17]
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    loaded = module.load_signals(signals_path)
+
+    assert loaded["load_error"] == {
+        "path": str(signals_path),
+        "type": "InvalidReportField",
+        "message": "features[1].support.directx.tests[0] must be object, got int",
+    }
+
+
+def test_load_signals_reports_invalid_docs_probe_summary(tmp_path):
+    module = load_sync_module()
+    signals_path = tmp_path / "support-signals.json"
+    signals = sample_signals()
+    signals["summary"]["docs_probe"]["failed"] = "zero"
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    loaded = module.load_signals(signals_path)
+
+    assert loaded["load_error"] == {
+        "path": str(signals_path),
+        "type": "InvalidReportField",
+        "message": "summary.docs_probe.failed must be int, got str",
+    }
+
+
+def test_main_continues_with_invalid_signals_contract(tmp_path, capsys):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    matrix_check_path = tmp_path / "missing-matrix-check.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    signals = sample_signals()
+    signals["issues"][0]["key"] = "directx:target.codegen:bad"
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--matrix-check-report",
+            str(matrix_check_path),
+            "--repo",
+            "owner/repo",
+            "--dry-run",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["desired"]["total"] == 3
+    assert report["desired"]["extracted"] == 0
+    assert report["close_extracted_issues"] is False
+    assert report["input_failures"][0]["input"] == "signals"
+    assert report["input_failures"][0]["error"] == {
+        "path": str(signals_path),
+        "type": "InvalidReportField",
+        "message": "issues[0].key must start with extracted:",
+    }
     captured = capsys.readouterr()
     assert "Dry run: would manage 3 desired issues" in captured.out
     assert "continuing without signals" in captured.err
