@@ -593,15 +593,19 @@ def test_sync_issues_updates_existing_creates_missing_closes_stale_and_attaches(
         "closed",
     ]
     assert operation_ledger[0]["key"] == "parent:directx"
+    assert operation_ledger[0]["reason"] == "desired_issue_drift"
     assert operation_ledger[0]["reasons"] == ["title", "body", "labels"]
     assert operation_ledger[1]["key"] == "parent:frontend"
+    assert operation_ledger[1]["reason"] == "missing_parent_issue"
     assert operation_ledger[2]["key"] == "backlog:directx:textures.gather"
+    assert operation_ledger[2]["reason"] == "missing_backlog_issue"
     assert operation_ledger[3] == {
         "action": "attached",
         "parent_key": "parent:directx",
         "parent_number": existing_parent["number"],
         "child_key": "backlog:directx:textures.gather",
         "child_number": client.created[1]["number"],
+        "reason": "missing_sub_issue_relationship",
     }
     assert operation_ledger[4]["key"] == "backlog:directx:old.feature"
     assert operation_ledger[4]["reason"] == "stale_managed_marker"
@@ -648,6 +652,7 @@ def test_sync_issues_reports_partial_summary_on_mutation_failure():
                 "number": 1,
                 "title": "[Support Matrix] DirectX / HLSL coverage",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["title", "body", "labels"],
             }
         ]
@@ -698,10 +703,12 @@ def test_planned_issue_action_samples_explain_mutation_plan():
         {
             "key": "parent:frontend",
             "title": "[Support Matrix] Frontend / IR / Parser coverage",
+            "reason": "missing_parent_issue",
         },
         {
             "key": "backlog:directx:textures.gather",
             "title": "[Support Matrix][DirectX / HLSL] Texture gather (partial)",
+            "reason": "missing_backlog_issue",
             "parent_key": "parent:directx",
         },
     ]
@@ -1156,16 +1163,19 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
                 "action": "created",
                 "key": "parent:directx",
                 "number": 1,
+                "reason": "missing_parent_issue",
             },
             {
                 "action": "created",
                 "key": "parent:frontend",
                 "number": 2,
+                "reason": "missing_parent_issue",
             },
             {
                 "action": "created",
                 "key": "backlog:directx:textures.gather",
                 "number": 3,
+                "reason": "missing_backlog_issue",
             },
             {
                 "action": "attached",
@@ -1173,6 +1183,7 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
                 "parent_number": 1,
                 "child_key": "backlog:directx:textures.gather",
                 "child_number": 3,
+                "reason": "missing_sub_issue_relationship",
             },
         ],
     )
@@ -1186,6 +1197,17 @@ def test_issue_sync_report_reconciles_operation_ledger_with_plan():
         "updated": 0,
         "closed": 0,
         "attached": 1,
+    }
+    assert reconciliation["actual_action_reasons"] == {
+        "created": {
+            "missing_backlog_issue": 1,
+            "missing_parent_issue": 2,
+        },
+        "updated": {},
+        "closed": {},
+        "attached": {
+            "missing_sub_issue_relationship": 1,
+        },
     }
     assert reconciliation["actual_closures"] == {
         "total": 0,
@@ -1768,6 +1790,7 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
             "number": 1,
             "title": "[Support Matrix] DirectX / HLSL coverage",
             "state": "open",
+            "reason": "desired_issue_drift",
             "reasons": ["title", "body", "labels"],
         }
     ]
@@ -1791,6 +1814,7 @@ def test_main_writes_sync_failure_summary_on_mutation_failure(
                 "number": 1,
                 "title": "[Support Matrix] DirectX / HLSL coverage",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["title", "body", "labels"],
             }
         ],

@@ -158,6 +158,7 @@ def issue_plan_report():
                 {
                     "key": "parent:frontend",
                     "title": "[Support Matrix] Frontend / IR / Parser coverage",
+                    "reason": "missing_parent_issue",
                 }
             ],
             "updated": [
@@ -293,6 +294,7 @@ def sync_summary_report():
                 "number": 17,
                 "title": "DirectX parent",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["body", "labels"],
             },
             {
@@ -301,6 +303,7 @@ def sync_summary_report():
                 "number": 18,
                 "title": "Metal parent",
                 "state": "open",
+                "reason": "desired_issue_drift",
                 "reasons": ["body"],
             },
             {
@@ -309,6 +312,7 @@ def sync_summary_report():
                 "parent_number": 17,
                 "child_key": "backlog:directx:textures.gather",
                 "child_number": 22,
+                "reason": "missing_sub_issue_relationship",
             },
             {
                 "action": "attached",
@@ -316,6 +320,7 @@ def sync_summary_report():
                 "parent_number": 17,
                 "child_key": "backlog:directx:resources.buffers",
                 "child_number": 23,
+                "reason": "missing_sub_issue_relationship",
             },
             {
                 "action": "attached",
@@ -323,6 +328,7 @@ def sync_summary_report():
                 "parent_number": 18,
                 "child_key": "backlog:metal:resources.buffers",
                 "child_number": 24,
+                "reason": "missing_sub_issue_relationship",
             },
         ],
         "operation_reconciliation": {
@@ -340,6 +346,16 @@ def sync_summary_report():
                 "updated": 2,
                 "closed": 0,
                 "attached": 3,
+            },
+            "actual_action_reasons": {
+                "created": {},
+                "updated": {
+                    "desired_issue_drift": 2,
+                },
+                "closed": {},
+                "attached": {
+                    "missing_sub_issue_relationship": 3,
+                },
             },
             "action_overruns": [
                 {
@@ -397,6 +413,7 @@ def sync_summary_report():
                     "number": 17,
                     "title": "DirectX parent",
                     "state": "open",
+                    "reason": "desired_issue_drift",
                     "reasons": ["body", "labels"],
                 }
             ],
@@ -547,9 +564,15 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     assert "| Operation closure overruns | 0 |" in text
     assert "| Operation closure shortfalls | 0 |" in text
     assert "Operation reconciliation differences:" in text
-    assert "- action attached: 3 > planned 2" in text
-    assert "- action updated: 2 > planned 1" in text
-    assert "- action created: 0 < planned 1" in text
+    assert (
+        "- action attached: 3 > planned 2 (actual reasons: "
+        "missing_sub_issue_relationship=3)"
+    ) in text
+    assert (
+        "- action updated: 2 > planned 1 (actual reasons: desired_issue_drift=2)"
+        in text
+    )
+    assert "- action created: 0 < planned 1 (actual reasons: none)" in text
     assert "| Sync failure phase | create_issue |" in text
     assert "| Sync failure error | RuntimeError |" in text
     assert "| Sync recovery rerun safe | True |" in text
@@ -559,10 +582,14 @@ def test_render_summary_includes_stale_matrix_plan_and_sync_counts():
     )
     assert "- key: `parent:frontend`" in text
     assert "Operation ledger:" in text
-    assert "- updated: `parent:directx` (#17) (reasons=body,labels)" in text
+    assert (
+        "- updated: `parent:directx` (#17) "
+        "(reason=desired_issue_drift, reasons=body,labels)"
+    ) in text
     assert (
         "- attached: `backlog:directx:textures.gather` (#22) "
-        "(parent=parent:directx, parent_number=17)"
+        "(reason=missing_sub_issue_relationship, parent=parent:directx, "
+        "parent_number=17)"
     ) in text
 
 
@@ -2113,6 +2140,27 @@ def test_load_optional_json_reports_invalid_operation_ledger_contract(tmp_path):
     }
 
 
+def test_load_optional_json_rejects_operation_ledger_missing_reason(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    del report["operation_ledger"][0]["reason"]
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "MissingReportFields",
+        "message": "operation_ledger[0] missing required fields: reason",
+    }
+
+
 def test_load_optional_json_rejects_sync_summary_ledger_mismatch(tmp_path):
     module = load_summary_module()
     sync_path = tmp_path / "support-issue-sync-summary.json"
@@ -2308,6 +2356,32 @@ def test_load_optional_json_rejects_reconciliation_ledger_mismatch(tmp_path):
             "operation_reconciliation.actual_actions must match operation ledger: "
             "{'created': 0, 'updated': 99, 'closed': 0, 'attached': 3} != "
             "{'created': 0, 'updated': 2, 'closed': 0, 'attached': 3}"
+        ),
+    }
+
+
+def test_load_optional_json_rejects_reconciliation_reason_mismatch(tmp_path):
+    module = load_summary_module()
+    sync_path = tmp_path / "support-issue-sync-summary.json"
+    report = sync_summary_report()
+    report["operation_reconciliation"]["actual_action_reasons"]["updated"] = {
+        "unexpected_reason": 2,
+    }
+    sync_path.write_text(json.dumps(report), encoding="utf-8")
+
+    loaded = module.load_optional_json(
+        sync_path,
+        expected_generator=module.ISSUE_SYNC_GENERATOR,
+        required_fields=module.SYNC_SUMMARY_REQUIRED_FIELDS,
+        contract_validator=module.validate_sync_summary_contract,
+    )
+
+    assert loaded["load_error"] == {
+        "path": str(sync_path),
+        "type": "InvalidReportField",
+        "message": (
+            "operation_reconciliation.actual_action_reasons must match "
+            "operation ledger"
         ),
     }
 

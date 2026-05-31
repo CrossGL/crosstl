@@ -488,7 +488,7 @@ def validate_planned_action_samples_contract(
         )
 
     sample_requirements = {
-        "created": ("key", "title"),
+        "created": ("key", "title", "reason"),
         "updated": ("key", "number", "title", "state", "reasons"),
         "closed": ("key", "number", "title", "state", "reason"),
         "attached": ("parent_key", "child_key", "reason"),
@@ -1334,6 +1334,12 @@ def validate_operation_ledger_value(
         entry_field = f"{field}[{index}]"
         if not isinstance(entry, dict):
             return invalid_field_error(path, entry_field, dict, entry)
+        if "action" not in entry:
+            return load_error(
+                path,
+                "MissingReportFields",
+                f"{entry_field} missing required fields: action",
+            )
         error = validate_nested_field_types(
             entry,
             path,
@@ -1354,6 +1360,33 @@ def validate_operation_ledger_value(
         )
         if error is not None:
             return error
+        action = entry.get("action")
+        action_requirements = {
+            "created": ("key", "number", "title", "state", "reason"),
+            "updated": ("key", "number", "title", "state", "reason", "reasons"),
+            "closed": ("key", "number", "title", "state", "reason"),
+            "attached": (
+                "parent_key",
+                "parent_number",
+                "child_key",
+                "child_number",
+                "reason",
+            ),
+        }
+        required_fields = action_requirements.get(action)
+        if required_fields is not None:
+            missing = [
+                required for required in required_fields if required not in entry
+            ]
+            if missing:
+                return load_error(
+                    path,
+                    "MissingReportFields",
+                    "{} missing required fields: {}".format(
+                        entry_field,
+                        ", ".join(missing),
+                    ),
+                )
         reasons = entry.get("reasons")
         if reasons is None:
             continue
@@ -1386,6 +1419,21 @@ def operation_ledger_action_counts(
         action = entry.get("action")
         if action in counts:
             counts[action] += 1
+    return counts
+
+
+def operation_ledger_action_reason_counts(
+    entries: list[dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {
+        action: {} for action in ISSUE_ACTION_COUNTERS[:-1]
+    }
+    for entry in entries:
+        action = entry.get("action")
+        if action not in counts:
+            continue
+        reason = entry.get("reason") or "unspecified"
+        counts[action][reason] = counts[action].get(reason, 0) + 1
     return counts
 
 
@@ -1631,6 +1679,44 @@ def validate_reconciliation_differences(
     return None
 
 
+def validate_action_reason_counts(
+    value: Any,
+    path: Path | None,
+    field: str,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return invalid_field_error(path, field, dict, value)
+    for action, reasons in value.items():
+        if not value_matches_type(action, str):
+            return invalid_field_error(path, f"{field} key", str, action)
+        if action not in ISSUE_ACTION_COUNTERS[:-1]:
+            return load_error(
+                path,
+                "InvalidReportField",
+                f"{field} contains unknown action: {action}",
+            )
+        if not isinstance(reasons, dict):
+            return invalid_field_error(path, f"{field}.{action}", dict, reasons)
+        for reason, count in reasons.items():
+            if not value_matches_type(reason, str):
+                return invalid_field_error(
+                    path,
+                    f"{field}.{action} key",
+                    str,
+                    reason,
+                )
+            if not value_matches_type(count, int):
+                return invalid_field_error(
+                    path,
+                    f"{field}.{action}.{reason}",
+                    int,
+                    count,
+                )
+    return None
+
+
 def validate_operation_reconciliation_contract(
     report: dict[str, Any],
     path: Path | None,
@@ -1651,6 +1737,7 @@ def validate_operation_reconciliation_contract(
             "evaluated",
             "planned_actions",
             "actual_actions",
+            "actual_action_reasons",
             "action_overruns",
             "action_shortfalls",
             "planned_closures",
@@ -1716,6 +1803,14 @@ def validate_operation_reconciliation_contract(
         if error is not None:
             return error
 
+    error = validate_action_reason_counts(
+        reconciliation.get("actual_action_reasons"),
+        path,
+        "operation_reconciliation.actual_action_reasons",
+    )
+    if error is not None:
+        return error
+
     for field in ("action_overruns", "action_shortfalls"):
         error = validate_reconciliation_differences(
             reconciliation,
@@ -1745,6 +1840,20 @@ def validate_operation_reconciliation_contract(
                 "operation_reconciliation.actual_actions",
                 actual_actions,
                 expected_actual_actions,
+            )
+
+        expected_action_reasons = operation_ledger_action_reason_counts(
+            operation_ledger
+        )
+        actual_action_reasons = reconciliation.get("actual_action_reasons")
+        if (
+            actual_action_reasons is not None
+            and actual_action_reasons != expected_action_reasons
+        ):
+            return load_error(
+                path,
+                "InvalidReportField",
+                "operation_reconciliation.actual_action_reasons must match operation ledger",
             )
 
         expected_actual_closures = operation_ledger_closure_counts(operation_ledger)
@@ -2077,6 +2186,22 @@ def operation_ledger_details(entry: dict[str, Any]) -> str:
     if entry.get("parent_number"):
         details.append("parent_number={}".format(entry["parent_number"]))
     return ", ".join(details)
+
+
+def action_reason_summary(
+    action_reasons: dict[str, dict[str, int]] | None,
+    action: str,
+) -> str:
+    reasons = (action_reasons or {}).get(action) or {}
+    if not reasons:
+        return "none"
+    return ", ".join(
+        f"{reason}={count}"
+        for reason, count in sorted(
+            reasons.items(),
+            key=lambda item: (-int(item[1]), item[0]),
+        )
+    )
 
 
 def render_operation_ledger(entries: list[dict[str, Any]] | None) -> list[str]:
@@ -2611,20 +2736,29 @@ def render_sync_summary(report: dict[str, Any] | None, path: Path | None) -> lis
     closure_shortfalls = reconciliation.get("closure_shortfalls", [])
     if action_overruns or action_shortfalls or closure_overruns or closure_shortfalls:
         lines.extend(["", "Operation reconciliation differences:"])
+        action_reasons = reconciliation.get("actual_action_reasons") or {}
         for overrun in action_overruns:
             lines.append(
-                "- action {action}: {actual} > planned {planned}".format(
+                "- action {action}: {actual} > planned {planned} (actual reasons: {reasons})".format(
                     action=overrun.get("action", "unknown"),
                     actual=overrun.get("actual", 0),
                     planned=overrun.get("planned", 0),
+                    reasons=action_reason_summary(
+                        action_reasons,
+                        overrun.get("action", "unknown"),
+                    ),
                 )
             )
         for shortfall in action_shortfalls:
             lines.append(
-                "- action {action}: {actual} < planned {planned}".format(
+                "- action {action}: {actual} < planned {planned} (actual reasons: {reasons})".format(
                     action=shortfall.get("action", "unknown"),
                     actual=shortfall.get("actual", 0),
                     planned=shortfall.get("planned", 0),
+                    reasons=action_reason_summary(
+                        action_reasons,
+                        shortfall.get("action", "unknown"),
+                    ),
                 )
             )
         for overrun in closure_overruns:
@@ -2892,14 +3026,19 @@ def github_annotation_lines(
             )
         reconciliation = sync_summary.get("operation_reconciliation") or {}
         if reconciliation.get("evaluated"):
+            action_reasons = reconciliation.get("actual_action_reasons") or {}
             for overrun in reconciliation.get("action_overruns", []):
                 lines.append(
                     github_annotation(
                         "Support issue sync exceeded planned actions",
-                        "{action}: {actual} > planned {planned}".format(
+                        "{action}: {actual} > planned {planned}; actual reasons: {reasons}".format(
                             action=overrun.get("action", "unknown"),
                             actual=overrun.get("actual", 0),
                             planned=overrun.get("planned", 0),
+                            reasons=action_reason_summary(
+                                action_reasons,
+                                overrun.get("action", "unknown"),
+                            ),
                         ),
                         file=display_path(sync_summary_path),
                     )
@@ -2908,10 +3047,14 @@ def github_annotation_lines(
                 lines.append(
                     github_annotation(
                         "Support issue sync missed planned actions",
-                        "{action}: {actual} < planned {planned}".format(
+                        "{action}: {actual} < planned {planned}; actual reasons: {reasons}".format(
                             action=shortfall.get("action", "unknown"),
                             actual=shortfall.get("actual", 0),
                             planned=shortfall.get("planned", 0),
+                            reasons=action_reason_summary(
+                                action_reasons,
+                                shortfall.get("action", "unknown"),
+                            ),
                         ),
                         file=display_path(sync_summary_path),
                     )

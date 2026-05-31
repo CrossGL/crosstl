@@ -1559,6 +1559,16 @@ def issue_update_reasons(issue: dict[str, Any], desired: DesiredIssue) -> list[s
     return reasons
 
 
+def issue_create_reason(key: str) -> str:
+    if key.startswith("parent:"):
+        return "missing_parent_issue"
+    if key.startswith("backlog:"):
+        return "missing_backlog_issue"
+    if key.startswith("extracted:"):
+        return "missing_extracted_issue"
+    return "missing_managed_issue"
+
+
 def issue_reference(issue: dict[str, Any], key: str | None = None) -> dict[str, Any]:
     reference = {
         "key": key or marker_key(issue.get("body")),
@@ -1614,6 +1624,7 @@ def desired_issue_reference(key: str, desired: DesiredIssue) -> dict[str, Any]:
     reference = {
         "key": key,
         "title": desired.title,
+        "reason": issue_create_reason(key),
     }
     if desired.parent_key:
         reference["parent_key"] = desired.parent_key
@@ -2063,6 +2074,21 @@ def operation_ledger_action_counts(
     return counts
 
 
+def operation_ledger_action_reason_counts(
+    operation_ledger: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {
+        action: {} for action in ("created", "updated", "closed", "attached")
+    }
+    for entry in operation_ledger or []:
+        action = entry.get("action")
+        if action not in counts:
+            continue
+        reason = entry.get("reason") or "unspecified"
+        counts[action][reason] = counts[action].get(reason, 0) + 1
+    return counts
+
+
 def operation_ledger_closure_counts(
     operation_ledger: list[dict[str, Any]] | None,
 ) -> dict[str, int]:
@@ -2091,6 +2117,7 @@ def operation_reconciliation_report(
         "ok": None,
         "planned_actions": planned_actions,
         "actual_actions": None,
+        "actual_action_reasons": None,
         "action_overruns": [],
         "action_shortfalls": [],
         "planned_closures": planned_closures,
@@ -2102,6 +2129,7 @@ def operation_reconciliation_report(
         return report
 
     actual_actions = operation_ledger_action_counts(operation_ledger)
+    actual_action_reasons = operation_ledger_action_reason_counts(operation_ledger)
     action_overruns = []
     action_shortfalls = []
     for action in sorted(actual_actions):
@@ -2157,6 +2185,7 @@ def operation_reconciliation_report(
                 or closure_shortfalls
             ),
             "actual_actions": actual_actions,
+            "actual_action_reasons": actual_action_reasons,
             "action_overruns": action_overruns,
             "action_shortfalls": action_shortfalls,
             "actual_closures": actual_closures,
@@ -2536,7 +2565,15 @@ def sync_issues(
                     operation_ledger=ledger,
                 )
             summary["created"] += 1
-            ledger.append(issue_operation_ledger_entry("created", key, issue, target))
+            ledger.append(
+                issue_operation_ledger_entry(
+                    "created",
+                    key,
+                    issue,
+                    target,
+                    reason=issue_create_reason(key),
+                )
+            )
             time.sleep(throttle_seconds)
         else:
             update_reasons = issue_update_reasons(issue, target)
@@ -2572,6 +2609,7 @@ def sync_issues(
                         key,
                         issue,
                         target,
+                        reason="desired_issue_drift",
                         reasons=update_reasons,
                     )
                 )
@@ -2631,6 +2669,7 @@ def sync_issues(
                     "parent_number": parent_number,
                     "child_key": key,
                     "child_number": child.get("number"),
+                    "reason": "missing_sub_issue_relationship",
                 }
             )
             time.sleep(throttle_seconds)
