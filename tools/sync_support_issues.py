@@ -2883,6 +2883,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=int,
         help="Maximum allowed planned closures for duplicate managed markers",
     )
+    parser.add_argument(
+        "--preserve-pytest-failure-issues",
+        action="store_true",
+        help=(
+            "Do not close stale pytest-failure support issues even when pytest "
+            "failure summaries were provided. This is used for workflow-specific "
+            "matrix runs that can create/update failures but are not authoritative "
+            "for every pytest-failure issue."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -3007,7 +3017,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     close_extracted_issues = signals_allow_extracted_closure(signals)
-    close_pytest_failure_issues = signals_allow_pytest_failure_closure(signals)
+    close_pytest_failure_issues = (
+        signals_allow_pytest_failure_closure(signals)
+        and not args.preserve_pytest_failure_issues
+    )
     existing_issues = None
     existing_sub_issue_ids_by_parent = None
     if args.inspect_existing:

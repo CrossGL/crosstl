@@ -961,8 +961,14 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
     download_test_failure_step = workflow_step_section(
         workflow, "Download test failure summaries"
     )
+    clean_failure_step = workflow_step_section(
+        workflow, "Write clean Complete Test Suite failure summary"
+    )
     extract_signal_step = workflow_step_section(
         workflow, "Extract generated support signals"
+    )
+    pytest_failure_closure_step = workflow_step_section(
+        workflow, "Choose pytest failure closure mode"
     )
     dry_run_step = workflow_step_section(workflow, "Dry-run issue sync")
     plan_step = workflow_step_section(workflow, "Plan GitHub issue sync")
@@ -1164,9 +1170,42 @@ def support_issue_sync_report(workflow: str) -> dict[str, Any]:
         "test_failure_summary_download_non_blocking": (
             "continue-on-error: true" in download_test_failure_step
         ),
+        "writes_clean_complete_test_pytest_summary": (
+            "python tools/pytest_failure_summary.py" in clean_failure_step
+            and "--clean-workflow" in clean_failure_step
+            and "--clean-run-id" in clean_failure_step
+            and "--clean-conclusion" in clean_failure_step
+            and "--clean-head-sha" in clean_failure_step
+            and "support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.json"
+            in clean_failure_step
+            and "support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.md"
+            in clean_failure_step
+        ),
+        "clean_complete_test_pytest_summary_on_success": (
+            "github.event_name == 'workflow_run'" in clean_failure_step
+            and "github.event.workflow_run.name == 'Complete Test Suite'"
+            in clean_failure_step
+            and "github.event.workflow_run.conclusion == 'success'"
+            in clean_failure_step
+        ),
+        "clean_complete_test_pytest_summary_after_download": workflow_step_after(
+            workflow,
+            "Write clean Complete Test Suite failure summary",
+            "Download test failure summaries",
+        ),
         "support_signals_uses_pytest_failure_summaries": (
             "--pytest-failure-summary" in extract_signal_step
             and "support/generated/pytest-failures" in extract_signal_step
+        ),
+        "chooses_pytest_failure_closure_mode": (
+            "id: pytest_failure_closure" in pytest_failure_closure_step
+            and "github.event.workflow_run.name" in pytest_failure_closure_step
+            and "Complete Test Suite" in pytest_failure_closure_step
+            and "--preserve-pytest-failure-issues" in pytest_failure_closure_step
+        ),
+        "issue_sync_uses_pytest_failure_closure_mode": (
+            "${{ steps.pytest_failure_closure.outputs.args }}" in plan_step
+            and "${{ steps.pytest_failure_closure.outputs.args }}" in sync_step
         ),
         "uploads_pytest_failure_summary_inputs": (
             "support/generated/pytest-failures/**" in support_signal_upload_step
@@ -1664,7 +1703,12 @@ def validation_errors(report: dict[str, Any]) -> list[str]:
         "downloads_test_failure_summaries",
         "downloads_test_failure_summaries_on_workflow_run",
         "test_failure_summary_download_non_blocking",
+        "writes_clean_complete_test_pytest_summary",
+        "clean_complete_test_pytest_summary_on_success",
+        "clean_complete_test_pytest_summary_after_download",
         "support_signals_uses_pytest_failure_summaries",
+        "chooses_pytest_failure_closure_mode",
+        "issue_sync_uses_pytest_failure_closure_mode",
         "uploads_pytest_failure_summary_inputs",
         "uploads_issue_sync_report_artifact",
         "uploads_issue_sync_report_artifact_on_failure",
@@ -2154,7 +2198,12 @@ def build_ci_coverage_comparison(
         "downloads_test_failure_summaries",
         "downloads_test_failure_summaries_on_workflow_run",
         "test_failure_summary_download_non_blocking",
+        "writes_clean_complete_test_pytest_summary",
+        "clean_complete_test_pytest_summary_on_success",
+        "clean_complete_test_pytest_summary_after_download",
         "support_signals_uses_pytest_failure_summaries",
+        "chooses_pytest_failure_closure_mode",
+        "issue_sync_uses_pytest_failure_closure_mode",
         "uploads_pytest_failure_summary_inputs",
         "uploads_issue_sync_report_artifact",
         "uploads_issue_sync_report_artifact_on_failure",
@@ -2817,9 +2866,37 @@ def render_markdown(report: dict[str, Any]) -> str:
                     ok_text(support_sync["test_failure_summary_download_non_blocking"]),
                 ],
                 [
+                    "Clean Complete Test Suite pytest summary",
+                    ok_text(support_sync["writes_clean_complete_test_pytest_summary"]),
+                ],
+                [
+                    "Clean pytest summary only on Complete Test Suite success",
+                    ok_text(
+                        support_sync["clean_complete_test_pytest_summary_on_success"]
+                    ),
+                ],
+                [
+                    "Clean pytest summary after artifact download",
+                    ok_text(
+                        support_sync[
+                            "clean_complete_test_pytest_summary_after_download"
+                        ]
+                    ),
+                ],
+                [
                     "Support signals consume pytest failures",
                     ok_text(
                         support_sync["support_signals_uses_pytest_failure_summaries"]
+                    ),
+                ],
+                [
+                    "Pytest failure closure mode",
+                    ok_text(support_sync["chooses_pytest_failure_closure_mode"]),
+                ],
+                [
+                    "Issue sync uses pytest closure mode",
+                    ok_text(
+                        support_sync["issue_sync_uses_pytest_failure_closure_mode"]
                     ),
                 ],
                 [

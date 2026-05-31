@@ -167,6 +167,18 @@ jobs:
           path: support/generated/pytest-failures
           merge-multiple: false
 
+      - name: Write clean Complete Test Suite failure summary
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Complete Test Suite' && github.event.workflow_run.conclusion == 'success'
+        run: |
+          mkdir -p support/generated/pytest-failures/clean-workflow
+          python tools/pytest_failure_summary.py \
+            --clean-workflow "${{ github.event.workflow_run.name }}" \
+            --clean-run-id "${{ github.event.workflow_run.id }}" \
+            --clean-conclusion "${{ github.event.workflow_run.conclusion }}" \
+            --clean-head-sha "${{ github.event.workflow_run.head_sha }}" \
+            --json-output support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.json \
+            --markdown-output support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.md
+
       - name: Probe backend documentation signals
         if: github.event_name != 'pull_request'
         run: python tools/support_signals.py docs --output support/generated/backend-docs-report.json
@@ -187,6 +199,16 @@ jobs:
             "${docs_args[@]}" \
             "${failure_args[@]}" \
             --output support/generated/support-signals.json
+
+      - name: Choose pytest failure closure mode
+        id: pytest_failure_closure
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ "${{ github.event.workflow_run.name }}" != "Complete Test Suite" ]; then
+            echo "args=--preserve-pytest-failure-issues" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload support signal reports
         if: always()
@@ -253,6 +275,7 @@ jobs:
           --max-planned-stale-backlog-closures 250
           --max-planned-stale-extracted-closures 250
           --max-planned-duplicate-marker-closures 25
+          ${{ steps.pytest_failure_closure.outputs.args }}
           --plan-output support/generated/support-issue-plan.json
           --dry-run
 
@@ -281,6 +304,7 @@ jobs:
           --max-planned-stale-backlog-closures 250
           --max-planned-stale-extracted-closures 250
           --max-planned-duplicate-marker-closures 25
+          ${{ steps.pytest_failure_closure.outputs.args }}
           --plan-output support/generated/support-issue-plan.json
           --sync-summary-output support/generated/support-issue-sync-summary.json
 

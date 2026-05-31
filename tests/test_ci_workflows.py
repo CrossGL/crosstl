@@ -441,7 +441,35 @@ def test_ci_coverage_report_summarizes_required_workflow_dimensions():
     )
     assert (
         report["workflows"]["support_issue_sync"][
+            "writes_clean_complete_test_pytest_summary"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "clean_complete_test_pytest_summary_on_success"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "clean_complete_test_pytest_summary_after_download"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
             "support_signals_uses_pytest_failure_summaries"
+        ]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"]["chooses_pytest_failure_closure_mode"]
+        is True
+    )
+    assert (
+        report["workflows"]["support_issue_sync"][
+            "issue_sync_uses_pytest_failure_closure_mode"
         ]
         is True
     )
@@ -615,6 +643,8 @@ def test_ci_coverage_summary_command_writes_markdown(tmp_path):
     assert "Sync replans before mutation" in text
     assert "Sync planned action budget guard" in text
     assert "Support signal artifact" in text
+    assert "Clean Complete Test Suite pytest summary" in text
+    assert "Pytest failure closure mode" in text
     assert "Issue sync report artifact" in text
     assert "PR path filters" in text
 
@@ -844,7 +874,22 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         "test_failure_summary_download_non_blocking"
     ] = False
     report["workflows"]["support_issue_sync"][
+        "writes_clean_complete_test_pytest_summary"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "clean_complete_test_pytest_summary_on_success"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "clean_complete_test_pytest_summary_after_download"
+    ] = False
+    report["workflows"]["support_issue_sync"][
         "support_signals_uses_pytest_failure_summaries"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "chooses_pytest_failure_closure_mode"
+    ] = False
+    report["workflows"]["support_issue_sync"][
+        "issue_sync_uses_pytest_failure_closure_mode"
     ] = False
     report["workflows"]["support_issue_sync"][
         "uploads_pytest_failure_summary_inputs"
@@ -966,7 +1011,26 @@ def test_ci_coverage_reports_missing_support_planner_tests():
         in errors
     )
     assert (
+        "support-issue-sync.yml missing writes_clean_complete_test_pytest_summary"
+        in errors
+    )
+    assert (
+        "support-issue-sync.yml missing clean_complete_test_pytest_summary_on_success"
+        in errors
+    )
+    assert (
+        "support-issue-sync.yml missing clean_complete_test_pytest_summary_after_download"
+        in errors
+    )
+    assert (
         "support-issue-sync.yml missing support_signals_uses_pytest_failure_summaries"
+        in errors
+    )
+    assert (
+        "support-issue-sync.yml missing chooses_pytest_failure_closure_mode" in errors
+    )
+    assert (
+        "support-issue-sync.yml missing issue_sync_uses_pytest_failure_closure_mode"
         in errors
     )
     assert (
@@ -1793,7 +1857,22 @@ def test_support_issue_sync_workflow_validates_and_creates_managed_issues():
     assert "run-id: ${{ github.event.workflow_run.id }}" in issue_sync
     assert 'pattern: "*failure-summary*"' in issue_sync
     assert "support/generated/pytest-failures" in issue_sync
+    assert "name: Write clean Complete Test Suite failure summary" in issue_sync
+    assert "github.event.workflow_run.name == 'Complete Test Suite'" in issue_sync
+    assert "github.event.workflow_run.conclusion == 'success'" in issue_sync
+    assert "--clean-workflow" in issue_sync
+    assert "--clean-run-id" in issue_sync
+    assert "--clean-conclusion" in issue_sync
+    assert "--clean-head-sha" in issue_sync
+    assert (
+        "support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.json"
+        in issue_sync
+    )
     assert "--pytest-failure-summary" in issue_sync
+    assert "name: Choose pytest failure closure mode" in issue_sync
+    assert "id: pytest_failure_closure" in issue_sync
+    assert "--preserve-pytest-failure-issues" in issue_sync
+    assert "${{ steps.pytest_failure_closure.outputs.args }}" in issue_sync
     assert "name: Upload support signal reports" in issue_sync
     assert "name: support-signal-reports" in issue_sync
     assert "support/generated/backend-docs-report.json" in issue_sync

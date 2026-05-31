@@ -1269,6 +1269,61 @@ def test_build_report_creates_issues_from_pytest_failure_summary():
     assert failure_issues[1]["signal"]["failures"][0]["message"] == "parser failed"
 
 
+def test_build_report_treats_clean_pytest_summary_as_authoritative_input():
+    module = load_signals_module()
+    backends = {
+        "backends": [
+            {
+                "id": "directx",
+                "name": "DirectX / HLSL",
+                "translator_codegen": "tools/support_signals.py",
+                "native_backend": "tools",
+                "tests": ["tests/test_support_signals.py"],
+            }
+        ]
+    }
+    features = {"features": []}
+    clean_report = {
+        "path": (
+            "support/generated/pytest-failures/clean-workflow/clean-workflow-failure-summary.json"
+        ),
+        "generator": "tools/pytest_failure_summary.py",
+        "clean_workflow_runs": [
+            {
+                "workflow": "Complete Test Suite",
+                "run_id": "123",
+                "conclusion": "success",
+                "head_sha": "abc",
+            }
+        ],
+        "failures": [],
+    }
+
+    report = module.build_report(
+        backends,
+        features,
+        pytest_failure_reports=[clean_report],
+    )
+
+    assert report["summary"]["pytest_failures"] == {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    assert report["source"]["pytest_failure_summaries"] == [
+        (
+            "support/generated/pytest-failures/clean-workflow/"
+            "clean-workflow-failure-summary.json"
+        )
+    ]
+    assert [
+        issue for issue in report["issues"] if issue["kind"] == "pytest_failure_summary"
+    ] == []
+
+
 def test_load_pytest_failure_report_validates_generator_and_missing_files(tmp_path):
     module = load_signals_module()
     missing = tmp_path / "missing.json"

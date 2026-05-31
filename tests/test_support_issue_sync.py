@@ -1475,6 +1475,65 @@ def test_main_dry_run_with_inspection_warns_for_existing_pytest_failures(
     )
 
 
+def test_main_preserves_pytest_failures_when_closure_is_explicitly_disabled(
+    tmp_path, monkeypatch, capsys
+):
+    module = load_sync_module()
+    matrix_path = tmp_path / "support-matrix.json"
+    signals_path = tmp_path / "support-signals.json"
+    plan_path = tmp_path / "support-issue-plan.json"
+    signals = sample_signals()
+    signals["summary"]["pytest_failures"] = {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+    matrix_path.write_text(json.dumps(sample_matrix()), encoding="utf-8")
+    signals_path.write_text(json.dumps(signals), encoding="utf-8")
+    stale_pytest = issue(
+        77,
+        "extracted:directx:ci.pytest.backend-codegen:pytest_failure_summary",
+        labels=[module.LABEL_MANAGED, module.LABEL_EXTRACTED],
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+
+    class InspectClient(FakeClient):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__(existing=[stale_pytest])
+
+    monkeypatch.setattr(module, "GitHubClient", InspectClient)
+
+    result = module.main(
+        [
+            "--matrix",
+            str(matrix_path),
+            "--signals",
+            str(signals_path),
+            "--repo",
+            "owner/repo",
+            "--inspect-existing",
+            "--dry-run",
+            "--preserve-pytest-failure-issues",
+            "--plan-output",
+            str(plan_path),
+        ]
+    )
+
+    assert result == 0
+    report = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert report["close_pytest_failure_issues"] is False
+    assert report["planned_actions"]["closed"] == 0
+    assert report["planned_action_samples"]["preserved"][0]["reason"] == (
+        "stale_pytest_failure_preserved"
+    )
+    assert (
+        "Preserving existing pytest-failure support issues" in capsys.readouterr().out
+    )
+
+
 def test_main_writes_dry_run_plan_with_malformed_matrix_check_report(tmp_path, capsys):
     module = load_sync_module()
     matrix_path = tmp_path / "support-matrix.json"
@@ -2097,6 +2156,21 @@ def test_signals_allow_extracted_closure_only_for_clean_docs_probe():
     )
 
 
+def test_signals_allow_pytest_failure_closure_for_clean_summary_input():
+    module = load_sync_module()
+    signals = sample_signals()
+    signals["summary"]["pytest_failures"] = {
+        "provided": True,
+        "report_count": 1,
+        "load_error_count": 0,
+        "failed_testcase_count": 0,
+        "categories": {},
+        "backends": {},
+    }
+
+    assert module.signals_allow_pytest_failure_closure(signals) is True
+
+
 def test_dry_run_does_not_touch_client():
     module = load_sync_module()
     desired = module.build_desired_issues(sample_matrix())
@@ -2214,6 +2288,7 @@ def test_parse_args_exposes_rate_limit_controls():
             "support/generated/support-issue-plan.json",
             "--sync-summary-output",
             "support/generated/support-issue-sync-summary.json",
+            "--preserve-pytest-failure-issues",
         ]
     )
 
@@ -2240,3 +2315,4 @@ def test_parse_args_exposes_rate_limit_controls():
     assert args.sync_summary_output == Path(
         "support/generated/support-issue-sync-summary.json"
     )
+    assert args.preserve_pytest_failure_issues is True

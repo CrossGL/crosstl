@@ -83,6 +83,34 @@ def test_missing_report_is_recorded_as_load_error(tmp_path):
     assert summary["reports"][0]["load_error"]["type"] == "FileNotFoundError"
 
 
+def test_clean_workflow_summary_records_authoritative_clean_run():
+    module = _load_module()
+
+    summary = module.build_summary(
+        [],
+        clean_workflow_runs=[
+            {
+                "workflow": "Complete Test Suite",
+                "run_id": "123",
+                "conclusion": "success",
+                "head_sha": "abc",
+            }
+        ],
+    )
+
+    assert summary["summary"]["report_count"] == 0
+    assert summary["summary"]["failed_testcase_count"] == 0
+    assert summary["clean_workflow_runs"] == [
+        {
+            "workflow": "Complete Test Suite",
+            "run_id": "123",
+            "conclusion": "success",
+            "head_sha": "abc",
+        }
+    ]
+    assert summary["failures"] == []
+
+
 def test_cli_writes_json_and_markdown_outputs(tmp_path):
     junit = tmp_path / "pytest.xml"
     json_output = tmp_path / "summary.json"
@@ -112,3 +140,39 @@ def test_cli_writes_json_and_markdown_outputs(tmp_path):
     assert "# Pytest Failure Summary" in markdown
     assert "backend_compiler_validation" in markdown
     assert "support_automation" in markdown
+
+
+def test_cli_writes_clean_workflow_summary_without_junit_input(tmp_path):
+    json_output = tmp_path / "clean-summary.json"
+    markdown_output = tmp_path / "clean-summary.md"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--clean-workflow",
+            "Complete Test Suite",
+            "--clean-run-id",
+            "123",
+            "--clean-conclusion",
+            "success",
+            "--clean-head-sha",
+            "abc",
+            "--json-output",
+            str(json_output),
+            "--markdown-output",
+            str(markdown_output),
+        ],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(json_output.read_text(encoding="utf-8"))
+    markdown = markdown_output.read_text(encoding="utf-8")
+    assert payload["summary"]["report_count"] == 0
+    assert payload["summary"]["failed_testcase_count"] == 0
+    assert payload["clean_workflow_runs"][0]["workflow"] == "Complete Test Suite"
+    assert "Clean workflow runs" in markdown

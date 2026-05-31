@@ -190,7 +190,11 @@ def counter_map(counter: Counter[str]) -> dict[str, int]:
     return dict(sorted(counter.items()))
 
 
-def build_summary(paths: list[Path]) -> dict[str, Any]:
+def build_summary(
+    paths: list[Path],
+    clean_workflow_runs: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    clean_workflow_runs = clean_workflow_runs or []
     reports = [parse_junit_report(path) for path in paths]
     failures = [
         failure for report in reports for failure in report.get("failed_testcases", [])
@@ -214,6 +218,7 @@ def build_summary(paths: list[Path]) -> dict[str, Any]:
             "backends": counter_map(by_backend),
         },
         "reports": reports,
+        "clean_workflow_runs": clean_workflow_runs,
         "failures": failures,
     }
 
@@ -236,6 +241,7 @@ def render_markdown(summary: dict[str, Any], sample_limit: int = 20) -> str:
         ["Reports", summary["summary"]["report_count"]],
         ["Load errors", summary["summary"]["load_error_count"]],
         ["Failed testcases", summary["summary"]["failed_testcase_count"]],
+        ["Clean workflow runs", len(summary.get("clean_workflow_runs", []))],
     ]
     lines = ["# Pytest Failure Summary", "", markdown_table(["Field", "Value"], rows)]
     if summary["summary"]["categories"]:
@@ -294,16 +300,36 @@ def write_output(path: Path | None, text: str) -> None:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("junit_xml", nargs="+", type=Path)
+    parser.add_argument("junit_xml", nargs="*", type=Path)
+    parser.add_argument(
+        "--clean-workflow",
+        help="Record a completed workflow with no pytest failures.",
+    )
+    parser.add_argument("--clean-run-id", default="")
+    parser.add_argument("--clean-conclusion", default="success")
+    parser.add_argument("--clean-head-sha", default="")
     parser.add_argument("--json-output", type=Path)
     parser.add_argument("--markdown-output", type=Path)
     parser.add_argument("--sample-limit", type=int, default=20)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.junit_xml and not args.clean_workflow:
+        parser.error("at least one junit_xml path or --clean-workflow is required")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    summary = build_summary(args.junit_xml)
+    clean_workflow_runs = []
+    if args.clean_workflow:
+        clean_workflow_runs.append(
+            {
+                "workflow": args.clean_workflow,
+                "run_id": args.clean_run_id,
+                "conclusion": args.clean_conclusion,
+                "head_sha": args.clean_head_sha,
+            }
+        )
+    summary = build_summary(args.junit_xml, clean_workflow_runs=clean_workflow_runs)
     json_text = stable_json(summary)
     markdown_text = render_markdown(summary, sample_limit=args.sample_limit)
     if args.json_output is None and args.markdown_output is None:
