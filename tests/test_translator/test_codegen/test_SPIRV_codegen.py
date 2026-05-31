@@ -23679,6 +23679,140 @@ class TestSpirvShaderValidation:
         assert_spirv_stores_use_matching_value_types(spv_code)
         assert_spirv_module_validates(spv_code, tmp_path)
 
+    def test_direct_return_semantics_lower_position_to_builtin_output(self, tmp_path):
+        source_code = """
+        shader DirectReturnPosition {
+            vertex {
+                vec4 main() @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        position_id = spirv_named_variable(
+            spv_code, "gl_Position", storage_class="Output"
+        )
+        void_type = re.search(r"(%\d+) = OpTypeVoid", spv_code).group(1)
+
+        assert re.search(rf"OpEntryPoint Vertex %\d+ \"main\" {position_id}", spv_code)
+        assert f"OpDecorate {position_id} BuiltIn Position" in spv_code
+        assert re.search(rf"%\d+ = OpFunction {void_type} None %\d+", spv_code)
+        assert re.search(rf"OpStore {position_id} %\d+", spv_code)
+        assert "OpReturnValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_direct_return_semantics_lower_fragment_color_to_location_output(
+        self, tmp_path
+    ):
+        source_code = """
+        shader DirectReturnColor {
+            fragment {
+                vec4 main() @ SV_Target1 {
+                    return vec4(1.0, 0.5, 0.25, 1.0);
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        color_id = spirv_named_variable(
+            spv_code, "main_return_SV_Target1", storage_class="Output"
+        )
+        void_type = re.search(r"(%\d+) = OpTypeVoid", spv_code).group(1)
+
+        assert re.search(rf"OpEntryPoint Fragment %\d+ \"main\" {color_id}", spv_code)
+        assert f"OpDecorate {color_id} Location 1" in spv_code
+        assert re.search(rf"%\d+ = OpFunction {void_type} None %\d+", spv_code)
+        assert re.search(rf"OpStore {color_id} %\d+", spv_code)
+        assert "OpReturnValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_direct_return_semantics_lower_fragment_depth_to_builtin_output(
+        self, tmp_path
+    ):
+        source_code = """
+        shader DirectReturnDepth {
+            fragment {
+                float main() @ gl_FragDepth {
+                    return 0.5;
+                }
+            }
+        }
+        """
+
+        spv_code = VulkanSPIRVCodeGen().generate(
+            Parser(Lexer(source_code).tokens).parse()
+        )
+
+        depth_id = spirv_named_variable(
+            spv_code, "gl_FragDepth", storage_class="Output"
+        )
+        void_type = re.search(r"(%\d+) = OpTypeVoid", spv_code).group(1)
+
+        assert re.search(rf"OpEntryPoint Fragment %\d+ \"main\" {depth_id}", spv_code)
+        assert f"OpDecorate {depth_id} BuiltIn FragDepth" in spv_code
+        assert re.search(rf"%\d+ = OpFunction {void_type} None %\d+", spv_code)
+        assert re.search(rf"OpStore {depth_id} %\d+", spv_code)
+        assert "OpReturnValue" not in spv_code
+        assert "WARNING" not in spv_code
+        assert_spirv_stores_use_matching_value_types(spv_code)
+        assert_spirv_module_validates(spv_code, tmp_path)
+
+    def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv(
+        self,
+    ):
+        invalid_depth_type = """
+        shader BadSpirvDepthType {
+            fragment {
+                vec4 main() @ gl_FragDepth {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+            VulkanSPIRVCodeGen().generate(
+                Parser(Lexer(invalid_depth_type).tokens).parse()
+            )
+
+        invalid_stage = """
+        shader BadSpirvStage {
+            vertex {
+                vec4 main() @ gl_FragColor {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            VulkanSPIRVCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadSpirvInputOnlyReturn {
+            vertex {
+                uint main() @ gl_VertexID {
+                    return uint(0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            VulkanSPIRVCodeGen().generate(
+                Parser(Lexer(invalid_input_only).tokens).parse()
+            )
+
     def test_multiple_struct_members_get_sequential_location_decorations(
         self, tmp_path
     ):

@@ -379,7 +379,7 @@
         "path": "crosstl/backend/SPIRV"
       },
       "signals": {
-        "unsupported_marker_count": 25,
+        "unsupported_marker_count": 30,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
@@ -443,23 +443,23 @@
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}\""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(f\"; WARNING: Unsupported compound assignment operator {operator}\")"
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "self.emit(\"; WARNING: Compound array literal assignment is unsupported\")"
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V codegen; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "f\"; WARNING: Unsupported LHS type in assignment: {type(target).__name__}\""
+            "text": "f\"Unsupported {semantic} {context} for SPIR-V {stage_name} stage; \""
           },
           {
             "path": "crosstl/translator/codegen/SPIRV_codegen.py",
-            "text": "raise ValueError(f\"SPIR-V match pattern unsupported: {detail}\")"
+            "text": "f\"Unsupported {semantic} return semantic for SPIR-V codegen; \""
           }
         ]
       },
@@ -469,7 +469,7 @@
           "tests/test_translator/test_codegen/test_SPIRV_codegen.py",
           "tests/test_backend/test_SPIRV"
         ],
-        "test_count": 640
+        "test_count": 644
       },
       "translator_codegen": {
         "exists": true,
@@ -493,7 +493,7 @@
         "path": "crosstl/backend/CUDA"
       },
       "signals": {
-        "unsupported_marker_count": 114,
+        "unsupported_marker_count": 122,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
@@ -533,6 +533,38 @@
           },
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for CUDA codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for CUDA codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for CUDA codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for CUDA {stage_name} stage; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} return semantic for CUDA codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for CUDA \""
+          },
+          {
+            "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "raise ValueError(f\"Unsupported CUDA wave intrinsic {operation}\")"
           },
           {
@@ -542,38 +574,6 @@
           {
             "path": "crosstl/translator/codegen/cuda_codegen.py",
             "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_structured_buffer_atomic_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/cuda_codegen.py",
-            "text": "return self.unsupported_plain_atomic_call("
           }
         ]
       },
@@ -583,7 +583,7 @@
           "tests/test_translator/test_codegen/test_CUDA_codegen.py",
           "tests/test_backend/test_CUDA"
         ],
-        "test_count": 435
+        "test_count": 440
       },
       "translator_codegen": {
         "exists": true,
@@ -607,7 +607,7 @@
         "path": "crosstl/backend/HIP"
       },
       "signals": {
-        "unsupported_marker_count": 71,
+        "unsupported_marker_count": 79,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
@@ -655,39 +655,39 @@
           },
           {
             "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} {context} for HIP {stage_name} stage; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} return semantic for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for HIP \""
+          },
+          {
+            "path": "crosstl/translator/codegen/hip_codegen.py",
             "text": "\"Unsupported match expression for HIP codegen; return context \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "raise ValueError(f\"Unsupported HIP wave intrinsic {operation}\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_sampled_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_sampled_resource_call("
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "def unsupported_image_coordinate_rank_call(self, func_name, image_type):"
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} image resource call: \""
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "return self.unsupported_image_coordinate_rank_call(func_name, image_type)"
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "def unsupported_image_access_call(self, func_name, image_type, reason):"
-          },
-          {
-            "path": "crosstl/translator/codegen/hip_codegen.py",
-            "text": "f\"/* unsupported {self.resource_backend_name()} image access: \""
           }
         ]
       },
@@ -697,7 +697,7 @@
           "tests/test_translator/test_codegen/test_hip_codegen.py",
           "tests/test_backend/test_HIP"
         ],
-        "test_count": 484
+        "test_count": 492
       },
       "translator_codegen": {
         "exists": true,
@@ -721,7 +721,7 @@
         "path": "crosstl/backend/Mojo"
       },
       "signals": {
-        "unsupported_marker_count": 95,
+        "unsupported_marker_count": 93,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/mojo_codegen.py",
@@ -811,7 +811,7 @@
           "tests/test_translator/test_codegen/test_mojo_codegen.py",
           "tests/test_backend/test_mojo"
         ],
-        "test_count": 568
+        "test_count": 570
       },
       "translator_codegen": {
         "exists": true,
@@ -835,7 +835,7 @@
         "path": "crosstl/backend/Rust"
       },
       "signals": {
-        "unsupported_marker_count": 58,
+        "unsupported_marker_count": 61,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
@@ -895,6 +895,18 @@
           },
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Rust codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Rust \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Rust \""
+          },
+          {
+            "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "return f\"{indent_str}/* unsupported sync: {sync_type} */\\n\""
           },
           {
@@ -904,18 +916,6 @@
           {
             "path": "crosstl/translator/codegen/rust_codegen.py",
             "text": "raise ValueError(\"Unsupported match arm for Rust codegen\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "raise ValueError(f\"Unsupported match pattern for Rust codegen: {pattern!r}\")"
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "return self.unsupported_glsl_buffer_block_statement("
-          },
-          {
-            "path": "crosstl/translator/codegen/rust_codegen.py",
-            "text": "return self.unsupported_glsl_buffer_block_statement("
           }
         ]
       },
@@ -925,7 +925,7 @@
           "tests/test_translator/test_codegen/test_rust_codegen.py",
           "tests/test_backend/test_rust"
         ],
-        "test_count": 644
+        "test_count": 649
       },
       "translator_codegen": {
         "exists": true,
@@ -949,7 +949,7 @@
         "path": "crosstl/backend/slang"
       },
       "signals": {
-        "unsupported_marker_count": 356,
+        "unsupported_marker_count": 359,
         "unsupported_marker_samples": [
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
@@ -993,6 +993,18 @@
           },
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Slang codegen; \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Slang \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
+            "text": "f\"Unsupported {semantic} stage parameter semantic for Slang \""
+          },
+          {
+            "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"/* unsupported Slang ray tracing intrinsic: {operation} {reason} */ \""
           },
           {
@@ -1018,18 +1030,6 @@
           {
             "path": "crosstl/translator/codegen/slang_codegen.py",
             "text": "f\"/* unsupported Slang wave intrinsic: {operation} {reason} */ \""
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_slang_mesh_op_expression("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_slang_mesh_op_expression("
-          },
-          {
-            "path": "crosstl/translator/codegen/slang_codegen.py",
-            "text": "return self.unsupported_slang_mesh_op_expression("
           }
         ]
       },
@@ -1039,7 +1039,7 @@
           "tests/test_translator/test_codegen/test_slang_codegen.py",
           "tests/test_backend/test_slang"
         ],
-        "test_count": 479
+        "test_count": 484
       },
       "translator_codegen": {
         "exists": true,
@@ -1425,168 +1425,6 @@
       "feature_id": "stage.ray_tracing",
       "notes": "CUDA codegen rejects ray tracing stages explicitly; no CUDA ray pipeline ABI is implemented in this repo.",
       "status": "unsupported"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "HIP codegen rejects ray tracing stages explicitly; no HIP ray pipeline ABI is implemented in this repo.",
-      "status": "unsupported"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
-      "status": "unsupported"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Rust codegen rejects ray tracing stages explicitly; no Rust ray pipeline ABI is implemented in this repo.",
-      "status": "unsupported"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
-      "category": "stages",
-      "feature": "Ray tracing stages",
-      "feature_id": "stage.ray_tracing",
-      "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "stage I/O",
-      "feature": "Stage parameter semantics",
-      "feature_id": "io.stage_parameters",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "stage I/O",
-      "feature": "Stage parameter semantics",
-      "feature_id": "io.stage_parameters",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "stage I/O",
-      "feature": "Stage parameter semantics",
-      "feature_id": "io.stage_parameters",
-      "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "stage I/O",
-      "feature": "Stage parameter semantics",
-      "feature_id": "io.stage_parameters",
-      "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
-      "category": "stage I/O",
-      "feature": "Stage parameter semantics",
-      "feature_id": "io.stage_parameters",
-      "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "",
-      "status": "unknown"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "",
-      "status": "unknown"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "",
-      "status": "unknown"
-    },
-    {
-      "backend": "Mojo",
-      "backend_id": "mojo",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Rust",
-      "backend_id": "rust",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Slang",
-      "backend_id": "slang",
-      "category": "stage I/O",
-      "feature": "Direct function return semantics",
-      "feature_id": "io.return_semantics",
-      "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
-      "status": "partial"
-    },
-    {
-      "backend": "Vulkan SPIR-V",
-      "backend_id": "vulkan",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "CUDA",
-      "backend_id": "cuda",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "",
-      "status": "partial"
-    },
-    {
-      "backend": "HIP",
-      "backend_id": "hip",
-      "category": "stage I/O",
-      "feature": "Struct member semantics",
-      "feature_id": "io.struct_semantics",
-      "notes": "",
-      "status": "partial"
     },
     {
       "backend": "CUDA",
@@ -3501,10 +3339,12 @@
         },
         "hip": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_ray_tracing_stages_emit_hip_metadata_and_hooks",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_ray_query_methods_lower_to_hip_hooks"
           ],
-          "notes": "HIP codegen rejects ray tracing stages explicitly; no HIP ray pipeline ABI is implemented in this repo.",
-          "status": "unsupported"
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to HIP device entry functions with deterministic CrossGL ray-stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or placeholder hooks, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to HIP hook calls, and RayQuery methods lower to deterministic HIP query hooks with optional hipcc smoke coverage.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -3553,12 +3393,13 @@
         },
         "mojo": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_tracing_stages_emit_mojo_metadata_and_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mojo_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr"
           ],
-          "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
-          "status": "unsupported"
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to Mojo entry functions with deterministic CrossGL stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or placeholder hooks, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to Mojo hook calls, and RayQuery methods lower to deterministic Mojo query hooks with package compile-smoke coverage.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -3569,10 +3410,11 @@
         },
         "rust": {
           "evidence": [
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_ray_tracing_stages_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates"
           ],
-          "notes": "Rust codegen rejects ray tracing stages explicitly; no Rust ray pipeline ABI is implemented in this repo.",
-          "status": "unsupported"
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to compileable Rust entry functions with deterministic CrossGL ray-stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata comments, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or runtime hooks, and TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to Rust hook calls with rustc smoke coverage.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
@@ -3581,10 +3423,13 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available"
           ],
-          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
-          "status": "partial"
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, RaytracingAccelerationStructure resources preserve deterministic vk/register bindings, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Optional slangc smoke coverage validates generated ray interfaces and a bound TraceRay/CallShader pipeline path when slangc is available.",
+          "status": "supported"
         },
         "vulkan": {
           "evidence": [
@@ -3620,9 +3465,13 @@
       "name": "Stage parameter semantics",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_compute_shader_to_kernel"
+          ],
+          "notes": "CUDA preserves builtin stage parameter semantics as deterministic CrossGL comments, maps common vertex/fragment/compute system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically. Optional nvcc smoke coverage runs when available.",
+          "status": "supported"
         },
         "directx": {
           "evidence": [
@@ -3632,9 +3481,13 @@
           "status": "supported"
         },
         "hip": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_thread_position_in_grid"
+          ],
+          "notes": "HIP preserves builtin stage parameter semantics as deterministic CrossGL comments, maps common vertex/fragment/compute system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically. Optional hipcc smoke coverage runs when available.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -3646,10 +3499,11 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
           ],
-          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete.",
-          "status": "partial"
+          "notes": "Stage parameter semantics are preserved as deterministic stage-aware Mojo parameter comments for compile-smoke output, common vertex/fragment/compute builtin and generic semantics are mapped, duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches are rejected deterministically.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -3661,19 +3515,29 @@
         "rust": {
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_all_mappings",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
           ],
-          "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
-          "status": "partial"
+          "notes": "Rust preserves struct, direct return, and builtin stage parameter semantics as deterministic generated comments for compile-smoke output, maps compute/vertex/fragment system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_cover_tessellation_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_and_type",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_reject_duplicate_system_values",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
           ],
-          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
-          "status": "partial"
+          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, compute, geometry, tessellation, mesh, amplification, and ray interfaces; builtin stage input parameters validate stage, type, duplicate system values, and output-only misuse deterministically.",
+          "status": "supported"
         },
         "vulkan": {
           "evidence": [
@@ -3693,9 +3557,13 @@
       "name": "Direct function return semantics",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_direct_return_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda"
+          ],
+          "notes": "Direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, and builtin direct and struct return semantics validate stage and type compatibility. Optional nvcc smoke coverage runs when available.",
+          "status": "supported"
         },
         "directx": {
           "evidence": [
@@ -3705,9 +3573,13 @@
           "status": "supported"
         },
         "hip": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_direct_return_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip"
+          ],
+          "notes": "Direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, and builtin direct and struct return semantics validate stage and type compatibility. Optional hipcc smoke coverage runs when available.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -3719,10 +3591,13 @@
         "mojo": {
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_function_return_semantic_sv_target_produces_output_annotation"
           ],
-          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
-          "status": "partial"
+          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, returned struct members preserve semantic comments, builtin direct and struct return semantics validate stage and type compatibility, and optional Mojo package coverage verifies generated stage entry signatures remain valid.",
+          "status": "supported"
         },
         "opengl": {
           "evidence": [
@@ -3734,10 +3609,12 @@
         "rust": {
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_output_semantic",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
           ],
-          "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
-          "status": "partial"
+          "notes": "Rust direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, builtin direct and struct return semantics validate stage and type compatibility, and rustc smoke coverage verifies the generated Rust remains valid.",
+          "status": "supported"
         },
         "slang": {
           "evidence": [
@@ -3746,15 +3623,21 @@
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available"
           ],
-          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
-          "status": "partial"
+          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid return semantics are rejected, stage/execution marker metadata is filtered so it does not become a return semantic, and optional slangc smoke coverage verifies the generated direct-return ABI.",
+          "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "unknown"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_position_to_builtin_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_fragment_color_to_location_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_fragment_depth_to_builtin_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv"
+          ],
+          "notes": "Direct entry-point return semantics lower to SPIR-V Output variables or BuiltIn Position/FragDepth outputs, fragment color returns use deterministic Location decorations, invalid builtin type/stage/input-only return semantics are rejected, and generated modules validate through spirv-as/spirv-val when available.",
+          "status": "supported"
         }
       }
     },
@@ -3765,9 +3648,15 @@
       "name": "Struct member semantics",
       "support": {
         "cuda": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_generation",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_member_array_resource_assignments_emit_cuda_metadata_arguments",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_nested_array_and_struct_member_params_emit_cuda_updates"
+          ],
+          "notes": "Struct member semantics are preserved as deterministic CUDA field comments, GLSL builtins and HLSL SV aliases map to CUDA semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "status": "supported"
         },
         "directx": {
           "evidence": [
@@ -3777,9 +3666,14 @@
           "status": "supported"
         },
         "hip": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_members_with_semantics_produce_hip_struct_fields",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_member_array_resource_assignments_emit_hip_metadata_arguments"
+          ],
+          "notes": "Struct member semantics are preserved as deterministic HIP field comments, GLSL builtins and HLSL SV aliases map to HIP semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "status": "supported"
         },
         "metal": {
           "evidence": [
@@ -3827,9 +3721,15 @@
           "status": "supported"
         },
         "vulkan": {
-          "evidence": [],
-          "notes": "",
-          "status": "partial"
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_struct_members_with_semantics_get_location_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_position_semantic_maps_to_builtin_position",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_sv_position_semantic_maps_to_builtin_position",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multiple_struct_members_get_sequential_location_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_duplicate_semantics_produce_diagnostics"
+          ],
+          "notes": "Struct member semantics lower to SPIR-V member BuiltIn decorations for Position and SV_Position aliases, mesh-output struct members receive deterministic Location decorations, duplicate input/output locations are rejected, and generated modules validate through the SPIR-V tools smoke checks when available.",
+          "status": "supported"
         }
       }
     },
@@ -6136,8 +6036,8 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen"
           ],
@@ -6230,14 +6130,14 @@
   },
   "summary": {
     "backend_count": 9,
-    "backlog_count": 188,
+    "backlog_count": 170,
     "feature_count": 43,
     "status_counts": {
       "cuda": {
         "diagnostic": 0,
-        "partial": 10,
-        "supported": 13,
-        "unknown": 16,
+        "partial": 8,
+        "supported": 16,
+        "unknown": 15,
         "unsupported": 4,
         "validated_rejection": 0
       },
@@ -6251,10 +6151,10 @@
       },
       "hip": {
         "diagnostic": 0,
-        "partial": 10,
-        "supported": 12,
-        "unknown": 17,
-        "unsupported": 4,
+        "partial": 8,
+        "supported": 16,
+        "unknown": 16,
+        "unsupported": 3,
         "validated_rejection": 0
       },
       "metal": {
@@ -6267,10 +6167,10 @@
       },
       "mojo": {
         "diagnostic": 0,
-        "partial": 25,
-        "supported": 13,
+        "partial": 23,
+        "supported": 16,
         "unknown": 0,
-        "unsupported": 5,
+        "unsupported": 4,
         "validated_rejection": 0
       },
       "opengl": {
@@ -6283,25 +6183,25 @@
       },
       "rust": {
         "diagnostic": 0,
-        "partial": 5,
-        "supported": 14,
+        "partial": 3,
+        "supported": 17,
         "unknown": 20,
-        "unsupported": 4,
+        "unsupported": 3,
         "validated_rejection": 0
       },
       "slang": {
         "diagnostic": 0,
-        "partial": 19,
-        "supported": 16,
+        "partial": 16,
+        "supported": 19,
         "unknown": 8,
         "unsupported": 0,
         "validated_rejection": 0
       },
       "vulkan": {
         "diagnostic": 1,
-        "partial": 14,
-        "supported": 20,
-        "unknown": 8,
+        "partial": 13,
+        "supported": 22,
+        "unknown": 7,
         "unsupported": 0,
         "validated_rejection": 0
       }

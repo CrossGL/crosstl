@@ -461,34 +461,45 @@
           "evidence": ["tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_unsupported_graphics_pipeline_stages_raise_diagnostics"]
         },
         "hip": {
-          "status": "unsupported",
-          "notes": "HIP codegen rejects ray tracing stages explicitly; no HIP ray pipeline ABI is implemented in this repo.",
-          "evidence": ["tests/test_translator/test_codegen/test_hip_codegen.py::def test_unsupported_shader_stages_are_rejected_for_hip_codegen"]
+          "status": "supported",
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to HIP device entry functions with deterministic CrossGL ray-stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or placeholder hooks, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to HIP hook calls, and RayQuery methods lower to deterministic HIP query hooks with optional hipcc smoke coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_ray_tracing_stages_emit_hip_metadata_and_hooks",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_hip_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_ray_query_methods_lower_to_hip_hooks"
+          ]
         },
         "mojo": {
-          "status": "unsupported",
-          "notes": "Mojo codegen rejects ray tracing stages, ray tracing intrinsics, and ray query methods explicitly; no Mojo ray pipeline ABI is implemented in this repo.",
+          "status": "supported",
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to Mojo entry functions with deterministic CrossGL stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or placeholder hooks, TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to Mojo hook calls, and RayQuery methods lower to deterministic Mojo query hooks with package compile-smoke coverage.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_unsupported_shader_stages_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_tracing_stages_emit_mojo_metadata_and_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_mojo_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr"
           ]
         },
         "rust": {
-          "status": "unsupported",
-          "notes": "Rust codegen rejects ray tracing stages explicitly; no Rust ray pipeline ABI is implemented in this repo.",
-          "evidence": ["tests/test_translator/test_codegen/test_rust_codegen.py::def test_unsupported_shader_stages_are_rejected_for_rust_codegen"]
+          "status": "supported",
+          "notes": "Ray generation, closest-hit, any-hit, miss, callable, and intersection stages lower to compileable Rust entry functions with deterministic CrossGL ray-stage metadata comments. RaytracingAccelerationStructure resources preserve resource metadata comments, ray payload, hit attribute, callable data, launch, hit-t, and hit-kind semantics are preserved as deterministic comments or runtime hooks, and TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch lower to Rust hook calls with rustc smoke coverage.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_ray_tracing_stages_emit_metadata_and_compile",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates"
+          ]
         },
         "slang": {
-          "status": "partial",
-          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Full ray pipeline object/resource binding and slangc-backed coverage remain incomplete.",
+          "status": "supported",
+          "notes": "Ray entry points lower to Slang shader stage attributes with deterministic stage names, ray built-ins lower to Slang intrinsics, payload, hit attribute, and callable data stage interfaces lower to Slang parameter directions, native TraceRay, CallShader, ReportHit, IgnoreHit, and AcceptHitAndEndSearch calls are stage/shape/type validated, RaytracingAccelerationStructure resources preserve deterministic vk/register bindings, and RayQuery methods emit native Slang calls with receiver/argument validation and result type inference. Optional slangc smoke coverage validates generated ray interfaces and a bound TraceRay/CallShader pipeline path when slangc is available.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_advanced_stage_attributes_emit_slang_shader_names",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_builtins_lower_to_slang_intrinsics",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_local_interface_variables_become_slang_parameters",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slang_ray_query_methods_emit_native_calls_and_infer_results",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_resource_binding_metadata_emits_slang_vk_and_register_decorations",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available"
           ]
         }
       }
@@ -511,35 +522,62 @@
             "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_cbuffer_globals_reject_duplicate_spirv_bindings"
           ]
         },
-        "cuda": {"status": "partial"},
-        "hip": {"status": "partial"},
-        "mojo": {
-          "status": "partial",
-          "notes": "Stage parameter semantics are preserved as Mojo field/parameter comments for compile-smoke output, with duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches rejected deterministically. Target-native builtin ABI mapping remains incomplete.",
+        "cuda": {
+          "status": "supported",
+          "notes": "CUDA preserves builtin stage parameter semantics as deterministic CrossGL comments, maps common vertex/fragment/compute system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically. Optional nvcc smoke coverage runs when available.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_compute_shader_to_kernel"
           ]
         },
-        "rust": {
-          "status": "partial",
-          "notes": "Rust preserves common stage input/output semantics as generated field comments for compile-smoke output. Target-native shader interface ABI validation remains incomplete.",
+        "hip": {
+          "status": "supported",
+          "notes": "HIP preserves builtin stage parameter semantics as deterministic CrossGL comments, maps common vertex/fragment/compute system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically. Optional hipcc smoke coverage runs when available.",
           "evidence": [
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct"
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_stage_parameter_semantics_thread_position_in_grid"
           ]
         },
-        "slang": {
-          "status": "partial",
-          "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values for common vertex, fragment, compute, tessellation, and ray interfaces. Complete target ABI validation for every stage input remains incomplete.",
-          "evidence": [
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations"
-          ]
-        }
-      }
+    "mojo": {
+      "status": "supported",
+      "notes": "Stage parameter semantics are preserved as deterministic stage-aware Mojo parameter comments for compile-smoke output, common vertex/fragment/compute builtin and generic semantics are mapped, duplicate parameter semantics, output-only input misuse, builtin stage misuse, and builtin parameter type mismatches are rejected deterministically.",
+      "evidence": [
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+        "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_stage_parameter_semantic_validation_for_mojo_codegen"
+      ]
     },
+    "rust": {
+      "status": "supported",
+      "notes": "Rust preserves struct, direct return, and builtin stage parameter semantics as deterministic generated comments for compile-smoke output, maps compute/vertex/fragment system-value aliases, and validates builtin parameter stage, type, duplicate system values, and output-only misuse deterministically.",
+      "evidence": [
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_io_semantics_sv_position_sv_target",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_input_struct",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_all_mappings",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates",
+        "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
+      ]
+    },
+    "slang": {
+      "status": "supported",
+      "notes": "Stage parameter semantics map CrossGL/GLSL builtins and HLSL SV semantics to Slang system values across vertex, fragment, compute, geometry, tessellation, mesh, amplification, and ray interfaces; builtin stage input parameters validate stage, type, duplicate system values, and output-only misuse deterministically.",
+      "evidence": [
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_ray_stage_semantic_parameters_emit_slang_directions",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_input_parameter_semantic_annotations",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_cover_tessellation_system_values",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_validate_builtin_stage_and_type",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_parameter_semantics_reject_duplicate_system_values",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_geometry_stage_builtins_emit_stage_specific_slang_parameters",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_invalid_slang_ray_stage_semantic_parameters_raise",
+        "tests/test_translator/test_codegen/test_slang_codegen.py::def test_mesh_output_entry_parameters_reject_non_mesh_stages"
+      ]
+    }
+  }
+},
     {
       "id": "io.return_semantics",
       "category": "stage I/O",
@@ -549,35 +587,66 @@
         "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_output_return_semantics_still_emit"]},
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_vertex_return_semantic_assigns_position_builtin"]},
         "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_function_return_semantics_lower_to_output_structs_when_required"]},
-        "vulkan": {"status": "unknown"},
-        "cuda": {"status": "unknown"},
-        "hip": {"status": "unknown"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Direct entry-point return semantics lower to SPIR-V Output variables or BuiltIn Position/FragDepth outputs, fragment color returns use deterministic Location decorations, invalid builtin type/stage/input-only return semantics are rejected, and generated modules validate through spirv-as/spirv-val when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_position_to_builtin_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_fragment_color_to_location_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_direct_return_semantics_lower_fragment_depth_to_builtin_output",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_spirv"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "Direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, and builtin direct and struct return semantics validate stage and type compatibility. Optional nvcc smoke coverage runs when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_direct_return_semantics_emit_metadata_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "Direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, and builtin direct and struct return semantics validate stage and type compatibility. Optional hipcc smoke coverage runs when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_direct_return_semantics_emit_metadata_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip"
+          ]
+        },
         "mojo": {
-          "status": "partial",
-          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, and builtin return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "status": "supported",
+          "notes": "Direct staged function return semantics are preserved as deterministic Mojo metadata comments, returned struct members preserve semantic comments, builtin direct and struct return semantics validate stage and type compatibility, and optional Mojo package coverage verifies generated stage entry signatures remain valid.",
           "evidence": [
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_basic_shader",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen"
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_vertex_fragment_shader_entries_compile_as_mojo_package",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_return_semantic_metadata_and_validation_for_mojo_codegen",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_mojo",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_function_return_semantic_sv_target_produces_output_annotation"
           ]
         },
         "rust": {
-          "status": "partial",
-          "notes": "Rust direct return semantics are preserved as generated signatures/comments, and builtin direct return semantics validate stage and type compatibility. Real target-native wrapper/ABI behavior remains incomplete.",
+          "status": "supported",
+          "notes": "Rust direct return semantics are preserved as deterministic CrossGL return-semantic comments, returned struct members preserve semantic comments, builtin direct and struct return semantics validate stage and type compatibility, and rustc smoke coverage verifies the generated Rust remains valid.",
           "evidence": [
             "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_stage_parameter_output_semantic",
-            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context"
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_return_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_struct_semantics_validate_builtin_types_and_stage_context",
+            "tests/test_translator/test_codegen/test_rust_codegen.py::def test_rust_direct_return_semantics_emit_metadata_and_compile"
           ]
         },
         "slang": {
-          "status": "partial",
-          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid void-return semantics are rejected, and stage/execution marker metadata is filtered so it does not become a return semantic. Full target ABI and slangc-backed return-semantics coverage remain incomplete.",
+          "status": "supported",
+          "notes": "Direct return semantics map to Slang system values, fragment color/depth returns can be rewritten through output structs, invalid return semantics are rejected, stage/execution marker metadata is filtered so it does not become a return semantic, and optional slangc smoke coverage verifies the generated direct-return ABI.",
           "evidence": [
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_semantics_map_to_slang_system_values",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_void_return_semantics_raise_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_slang",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_stage_marker_metadata_is_not_treated_as_slang_return_semantic",
             "tests/test_translator/test_codegen/test_slang_codegen.py::def test_fragment_color_and_depth_outputs_rewrite_to_slang_output_struct",
-            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected"
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_tessellation_control_return_semantics_are_rejected",
+            "tests/test_translator/test_codegen/test_slang_codegen.py::def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available"
           ]
         }
       }
@@ -591,9 +660,38 @@
         "directx": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_directx_codegen.py::def test_hlsl_struct_array_member_semantics_are_preserved"]},
         "opengl": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_GLSL_codegen.py::def test_glsl_color_semantic_maps_to_explicit_stage_io_locations"]},
         "metal": {"status": "supported", "evidence": ["tests/test_translator/test_codegen/test_metal_codegen.py::def test_struct_builtin_member_semantics_are_validated"]},
-        "vulkan": {"status": "partial"},
-        "cuda": {"status": "partial"},
-        "hip": {"status": "partial"},
+        "vulkan": {
+          "status": "supported",
+          "notes": "Struct member semantics lower to SPIR-V member BuiltIn decorations for Position and SV_Position aliases, mesh-output struct members receive deterministic Location decorations, duplicate input/output locations are rejected, and generated modules validate through the SPIR-V tools smoke checks when available.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_struct_members_with_semantics_get_location_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_position_semantic_maps_to_builtin_position",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_sv_position_semantic_maps_to_builtin_position",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_multiple_struct_members_get_sequential_location_decorations",
+            "tests/test_translator/test_codegen/test_SPIRV_codegen.py::def test_invalid_duplicate_semantics_produce_diagnostics"
+          ]
+        },
+        "cuda": {
+          "status": "supported",
+          "notes": "Struct member semantics are preserved as deterministic CUDA field comments, GLSL builtins and HLSL SV aliases map to CUDA semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_generation",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_struct_member_array_resource_assignments_emit_cuda_metadata_arguments",
+            "tests/test_translator/test_codegen/test_CUDA_codegen.py::def test_nested_array_and_struct_member_params_emit_cuda_updates"
+          ]
+        },
+        "hip": {
+          "status": "supported",
+          "notes": "Struct member semantics are preserved as deterministic HIP field comments, GLSL builtins and HLSL SV aliases map to HIP semantic comments, builtin output semantic types are validated on struct members and direct returns, returned struct semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
+          "evidence": [
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_members_with_semantics_produce_hip_struct_fields",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_return_semantics_validate_builtin_types_and_stage_context_for_hip",
+            "tests/test_translator/test_codegen/test_hip_codegen.py::def test_struct_member_array_resource_assignments_emit_hip_metadata_arguments"
+          ]
+        },
         "mojo": {
           "status": "supported",
           "notes": "Struct member semantics are preserved as deterministic Mojo field comments, HLSL SV aliases map to Mojo semantic comments, builtin output semantic types are validated, struct-return builtin semantics validate stage compatibility, and input-only builtins are rejected for outputs.",
@@ -2291,8 +2389,8 @@
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_advanced_texture_builtins_reject_invalid_mojo_resources",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_float_image_atomics_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_are_rejected_for_mojo_codegen",
-            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_ray_query_methods_lower_to_mojo_hooks",
+            "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_expression_unsupported_patterns_are_rejected_for_mojo_codegen",
             "tests/test_translator/test_codegen/test_mojo_codegen.py::def test_match_statement_nonfinal_wildcard_is_rejected_for_mojo_codegen"
           ]

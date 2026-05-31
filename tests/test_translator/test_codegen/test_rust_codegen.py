@@ -2182,6 +2182,25 @@ mod gpu {
     use super::math::{Vec2, Vec3, Vec4};
     use std::marker::PhantomData;
 
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayTracingAccelerationStructure;
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayDesc {
+        pub origin: Vec3<f32>,
+        pub t_min: f32,
+        pub direction: Vec3<f32>,
+        pub t_max: f32,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct BuiltInTriangleIntersectionAttributes {
+        pub barycentrics: Vec2<f32>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct RayQuery;
+
     #[derive(Debug, Clone, Copy)]
     pub struct Texture1D<T>(PhantomData<T>);
 
@@ -3782,6 +3801,84 @@ mod gpu {
     }
 
     pub fn buffer_dimensions<Resource, Size>(_resource: Resource, _size: Size) {}
+
+    pub fn ray_launch_id() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn ray_launch_size() -> Vec3<u32> {
+        Vec3::default()
+    }
+
+    pub fn ray_hit_t() -> f32 {
+        0.0
+    }
+
+    pub fn ray_hit_kind() -> u32 {
+        0
+    }
+
+    pub fn ray_world_origin() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_world_direction() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_object_origin() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_object_direction() -> Vec3<f32> {
+        Vec3::default()
+    }
+
+    pub fn ray_t_min() -> f32 {
+        0.0
+    }
+
+    pub fn ray_incoming_flags() -> u32 {
+        0
+    }
+
+    pub fn ray_instance_custom_index() -> u32 {
+        0
+    }
+
+    pub fn ray_geometry_index() -> u32 {
+        0
+    }
+
+    pub fn trace_ray<AccelerationStructure, Flags, Mask, HitGroup, Multiplier, Miss, Ray, Payload>(
+        _acceleration_structure: AccelerationStructure,
+        _flags: Flags,
+        _mask: Mask,
+        _hit_group: HitGroup,
+        _multiplier: Multiplier,
+        _miss: Miss,
+        _ray: Ray,
+        _payload: Payload,
+    ) {
+    }
+
+    pub fn call_shader<ShaderIndex, CallableData>(
+        _shader_index: ShaderIndex,
+        _data: CallableData,
+    ) {
+    }
+
+    pub fn report_hit<Distance, Kind, Attributes>(
+        _distance: Distance,
+        _kind: Kind,
+        _attributes: Attributes,
+    ) -> bool {
+        false
+    }
+
+    pub fn ignore_hit() {}
+
+    pub fn accept_hit_and_end_search() {}
 }
 """
 
@@ -23308,6 +23405,50 @@ def test_rust_return_semantics_validate_builtin_types_and_stage_context():
         generate_code(parse_code(tokenize_code(invalid_input_only)))
 
 
+def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
+    """Rust direct return semantics are preserved as deterministic comments."""
+    color_code = """
+    shader RustDirectReturnSemantics {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                return vec4(position, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main() @ gl_FragColor {
+                return vec4(1.0, 0.5, 0.25, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(color_code)))
+
+    assert "#[vertex_shader]" in generated_code
+    assert "// CrossGL return semantic: position" in generated_code
+    assert "pub fn vertex_main(position: Vec3<f32>) -> Vec4<f32>" in generated_code
+    assert "#[fragment_shader]" in generated_code
+    assert "// CrossGL return semantic: target(0)" in generated_code
+    assert "pub fn fragment_main() -> Vec4<f32>" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+    depth_code = """
+    shader RustDepthReturnSemantics {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
+
+    assert "#[fragment_shader]" in depth_generated_code
+    assert "// CrossGL return semantic: depth(any)" in depth_generated_code
+    assert "pub fn main() -> f32" in depth_generated_code
+    assert_generated_rust_smoke_compiles(depth_generated_code, tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 
@@ -23570,12 +23711,6 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
         ("task", "task"),
         ("tessellation_control", "tessellation_control"),
         ("tessellation_evaluation", "tessellation_evaluation"),
-        ("ray_any_hit", "ray_any_hit"),
-        ("ray_callable", "ray_callable"),
-        ("ray_closest_hit", "ray_closest_hit"),
-        ("ray_generation", "ray_generation"),
-        ("ray_intersection", "ray_intersection"),
-        ("ray_miss", "ray_miss"),
     ],
 )
 def test_unsupported_shader_stages_are_rejected_for_rust_codegen(
@@ -23620,6 +23755,148 @@ def test_unsupported_function_stage_qualifiers_are_rejected_for_rust_codegen():
         ),
     ):
         generate_code(ast)
+
+
+def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
+    code = """
+    shader RustRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(3) @set(2);
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchWidth = gl_LaunchSizeEXT.x;
+                RayDesc ray;
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                float hitT @ gl_HitTEXT
+            ) {
+                payload.color = vec3(attributes.barycentrics, hitT);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                uint hitKind @ gl_HitKindEXT
+            ) {
+                payload.color = vec3(attributes.barycentrics, float(hitKind));
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = ReportHit(1.0, 0, attributes);
+                bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+        "set=2 binding=3 binding_source=explicit" in generated_code
+    )
+    assert "static SCENE: std::sync::LazyLock<RayTracingAccelerationStructure>" in (
+        generated_code
+    )
+    assert "// CrossGL ray stage: ray_generation" in generated_code
+    assert "// CrossGL ray stage: closest_hit" in generated_code
+    assert "// CrossGL ray stage: any_hit" in generated_code
+    assert "// CrossGL ray stage: miss" in generated_code
+    assert "// CrossGL ray stage: callable" in generated_code
+    assert "// CrossGL ray stage: intersection" in generated_code
+    assert "// CrossGL parameter semantic: payload: ray_payload" in generated_code
+    assert "// CrossGL parameter semantic: attributes: hit_attribute" in generated_code
+    assert "// CrossGL parameter semantic: data: callable_data" in generated_code
+    assert "let launch: Vec3<u32> = ray_launch_id();" in generated_code
+    assert "let launchWidth: u32 = ray_launch_size().x;" in generated_code
+    assert "trace_ray(*SCENE, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert "call_shader(0, data);" in generated_code
+    assert "ignore_hit();" in generated_code
+    assert "accept_hit_and_end_search();" in generated_code
+    assert "let accepted: bool = report_hit(1.0, 0, attributes);" in generated_code
+    assert "let acceptedWithoutAttributes: bool = report_hit(2.0, 1, ());" in (
+        generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_type = """
+    shader InvalidRustRayBuiltinType {
+        ray_generation {
+            void main(float launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*Vec3<u32>"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader InvalidRustRayBuiltinStage {
+        fragment {
+            void main(uvec3 launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    duplicate = """
+    shader DuplicateRustRayBuiltin {
+        ray_generation {
+            void main(
+                uvec3 launch @ gl_LaunchIDEXT,
+                uvec3 launchAgain @ SV_DispatchRaysIndex
+            ) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Rust stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(duplicate)))
 
 
 def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
@@ -23672,6 +23949,106 @@ def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
     assert "input: FullInput" in generated_code
     assert "-> FullOutput" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_path):
+    """Builtin stage parameter semantics are preserved as Rust comments."""
+    code = """
+    shader RustBuiltinStageParameters {
+        vertex {
+            vec4 main(uint vertexId @ gl_VertexID, uint instanceId @ SV_InstanceID)
+                @ gl_Position {
+                return vec4(0.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 fragCoord @ gl_FragCoord, bool front @ gl_FrontFacing)
+                @ gl_FragColor {
+                return vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        }
+
+        compute {
+            void main(
+                uvec3 globalId @ gl_GlobalInvocationID,
+                uvec3 localId @ SV_GroupThreadID,
+                uint lane @ gl_LocalInvocationIndex
+            ) {
+                uint copy = lane;
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "// CrossGL parameter semantic: vertexId: vertex_id" in generated_code
+    assert "// CrossGL parameter semantic: instanceId: instance_id" in generated_code
+    assert "// CrossGL parameter semantic: fragCoord: position" in generated_code
+    assert "// CrossGL parameter semantic: front: front_facing" in generated_code
+    assert (
+        "// CrossGL parameter semantic: globalId: global_invocation_id"
+        in generated_code
+    )
+    assert (
+        "// CrossGL parameter semantic: localId: local_invocation_id" in generated_code
+    )
+    assert (
+        "// CrossGL parameter semantic: lane: local_invocation_index" in generated_code
+    )
+    assert "pub fn vertex_main(vertexId: u32, instanceId: u32)" in generated_code
+    assert "pub fn fragment_main(fragCoord: Vec4<f32>, front: bool)" in generated_code
+    assert (
+        "pub fn compute_main(globalId: Vec3<u32>, localId: Vec3<u32>, lane: u32)"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_stage = """
+    shader BadRustStageParameterStage {
+        fragment {
+            void main(uint vertexId @ gl_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_type = """
+    shader BadRustStageParameterType {
+        fragment {
+            void main(vec3 fragCoord @ gl_FragCoord) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragCoord.*expected Vec4<f32> type"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    output_only = """
+    shader BadRustStageParameterOutputOnly {
+        vertex {
+            void main(vec4 color @ SV_Target0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+        generate_code(parse_code(tokenize_code(output_only)))
+
+    duplicate_system_value = """
+    shader BadRustStageParameterDuplicate {
+        vertex {
+            void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Rust stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(duplicate_system_value)))
 
 
 def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):

@@ -32,6 +32,8 @@ from ..ast import (
     MemberAccessNode,
     PointerAccessNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     StructNode,
     StructPatternNode,
@@ -173,18 +175,34 @@ class RustCodeGen:
             "ConsumeStructuredBuffer": "ConsumeStructuredBuffer",
             "ByteAddressBuffer": "ByteAddressBuffer",
             "RWByteAddressBuffer": "RwByteAddressBuffer",
+            "accelerationStructureEXT": "RayTracingAccelerationStructure",
+            "AccelerationStructure": "RayTracingAccelerationStructure",
+            "acceleration_structure": "RayTracingAccelerationStructure",
+            "RaytracingAccelerationStructure": "RayTracingAccelerationStructure",
+            "RayTracingAccelerationStructure": "RayTracingAccelerationStructure",
+            "RayDesc": "RayDesc",
+            "RayQuery": "RayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "BuiltInTriangleIntersectionAttributes"
+            ),
         }
 
         self.semantic_map = {
             # Vertex attributes
             "gl_VertexID": "vertex_id",
             "gl_InstanceID": "instance_id",
+            "gl_BaseVertex": "start_vertex_location",
+            "gl_BaseInstance": "start_instance_location",
+            "gl_DrawID": "draw_id",
             "gl_Position": "position",
             "gl_PointSize": "point_size",
             "gl_ClipDistance": "clip_distance",
             "SV_Position": "position",
             "SV_VertexID": "vertex_id",
             "SV_InstanceID": "instance_id",
+            "SV_StartVertexLocation": "start_vertex_location",
+            "SV_StartInstanceLocation": "start_instance_location",
+            "SV_DrawID": "draw_id",
             # Fragment attributes
             "gl_FragColor": "target(0)",
             "gl_FragColor0": "target(0)",
@@ -195,6 +213,8 @@ class RustCodeGen:
             "gl_FragCoord": "position",
             "gl_FrontFacing": "front_facing",
             "gl_PointCoord": "point_coord",
+            "gl_PrimitiveID": "primitive_id",
+            "gl_SampleID": "sample_index",
             "SV_Target": "target(0)",
             "SV_Target0": "target(0)",
             "SV_Target1": "target(1)",
@@ -206,6 +226,32 @@ class RustCodeGen:
             "SV_Target7": "target(7)",
             "SV_Depth": "depth(any)",
             "SV_IsFrontFace": "front_facing",
+            "SV_PrimitiveID": "primitive_id",
+            "SV_SampleIndex": "sample_index",
+            # Compute attributes
+            "gl_WorkGroupID": "workgroup_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_GroupIndex": "local_invocation_index",
+            # Ray tracing attributes
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
             # Standard vertex semantics
             "POSITION": "position",
             "NORMAL": "normal",
@@ -252,6 +298,11 @@ class RustCodeGen:
             "imageAtomicXor": "image_atomic_xor",
             "imageAtomicExchange": "image_atomic_exchange",
             "imageAtomicCompSwap": "image_atomic_comp_swap",
+            "TraceRay": "trace_ray",
+            "CallShader": "call_shader",
+            "ReportHit": "report_hit",
+            "IgnoreHit": "ignore_hit",
+            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
             "textureCompare": "texture_compare",
             "textureCompareOffset": "texture_compare_offset",
             "textureCompareLod": "texture_compare_lod",
@@ -617,16 +668,30 @@ class RustCodeGen:
             "geometry",
             "mesh",
             "object",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+        }
+
+    def rust_ray_stage_names(self):
+        return {
             "ray_any_hit",
             "ray_callable",
             "ray_closest_hit",
             "ray_generation",
             "ray_intersection",
             "ray_miss",
-            "task",
-            "tessellation_control",
-            "tessellation_evaluation",
         }
+
+    def rust_ray_stage_metadata_name(self, shader_type):
+        return {
+            "ray_any_hit": "any_hit",
+            "ray_callable": "callable",
+            "ray_closest_hit": "closest_hit",
+            "ray_generation": "ray_generation",
+            "ray_intersection": "intersection",
+            "ray_miss": "miss",
+        }.get(shader_type, shader_type)
 
     def validate_supported_stage_types(self, ast, target_stage=None):
         unsupported_stages = set()
@@ -1897,6 +1962,125 @@ class RustCodeGen:
                 semantic, member_types.get(member_name, "float"), context
             )
 
+    def rust_stage_parameter_semantic_key(self, semantic):
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        if lower_name.startswith("gl_"):
+            return lower_name
+        return semantic_name.upper()
+
+    def rust_stage_parameter_semantic_rules(self):
+        ray_stages = self.rust_ray_stage_names()
+        ray_hit_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        return {
+            "gl_vertexid": ("vertex_id", "u32", {"vertex"}),
+            "gl_instanceid": ("instance_id", "u32", {"vertex"}),
+            "gl_basevertex": ("start_vertex_location", "i32", {"vertex"}),
+            "gl_baseinstance": ("start_instance_location", "u32", {"vertex"}),
+            "gl_drawid": ("draw_id", "u32", {"vertex"}),
+            "SV_VERTEXID": ("vertex_id", "u32", {"vertex"}),
+            "SV_INSTANCEID": ("instance_id", "u32", {"vertex"}),
+            "SV_STARTVERTEXLOCATION": ("start_vertex_location", "i32", {"vertex"}),
+            "SV_STARTINSTANCELOCATION": ("start_instance_location", "u32", {"vertex"}),
+            "SV_DRAWID": ("draw_id", "u32", {"vertex"}),
+            "gl_position": ("position", "Vec4<f32>", {"fragment"}),
+            "gl_fragcoord": ("position", "Vec4<f32>", {"fragment"}),
+            "gl_frontfacing": ("front_facing", "bool", {"fragment"}),
+            "gl_pointcoord": ("point_coord", "Vec2<f32>", {"fragment"}),
+            "gl_primitiveid": ("primitive_id", "u32", {"fragment"} | ray_hit_stages),
+            "gl_sampleid": ("sample_index", "u32", {"fragment"}),
+            "SV_POSITION": ("position", "Vec4<f32>", {"fragment"}),
+            "SV_ISFRONTFACE": ("front_facing", "bool", {"fragment"}),
+            "SV_PRIMITIVEID": ("primitive_id", "u32", {"fragment"} | ray_hit_stages),
+            "SV_SAMPLEINDEX": ("sample_index", "u32", {"fragment"}),
+            "gl_workgroupid": ("workgroup_id", "Vec3<u32>", {"compute"}),
+            "gl_localinvocationid": (
+                "local_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "gl_globalinvocationid": (
+                "global_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "gl_localinvocationindex": (
+                "local_invocation_index",
+                "u32",
+                {"compute"},
+            ),
+            "SV_GROUPID": ("workgroup_id", "Vec3<u32>", {"compute"}),
+            "SV_GROUPTHREADID": ("local_invocation_id", "Vec3<u32>", {"compute"}),
+            "SV_DISPATCHTHREADID": (
+                "global_invocation_id",
+                "Vec3<u32>",
+                {"compute"},
+            ),
+            "SV_GROUPINDEX": ("local_invocation_index", "u32", {"compute"}),
+            "gl_launchidext": ("launch_id", "Vec3<u32>", ray_stages),
+            "gl_launchsizeext": ("launch_size", "Vec3<u32>", ray_stages),
+            "gl_hittext": ("hit_t", "f32", ray_hit_stages),
+            "gl_hitkindext": ("hit_kind", "u32", {"ray_any_hit"}),
+            "SV_DISPATCHRAYSINDEX": ("launch_id", "Vec3<u32>", ray_stages),
+            "SV_DISPATCHRAYSDIMENSIONS": (
+                "launch_size",
+                "Vec3<u32>",
+                ray_stages,
+            ),
+        }
+
+    def validate_rust_stage_parameter_semantic_type(
+        self, parameter, semantic, expected_type
+    ):
+        actual_type = self.map_type(self.function_parameter_type(parameter))
+        if actual_type == expected_type:
+            return
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for Rust codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_rust_stage_parameter_semantics(self, shader_type, parameters):
+        if shader_type is None:
+            return
+
+        rules = self.rust_stage_parameter_semantic_rules()
+        seen_system_semantics = {}
+        for parameter in parameters or []:
+            semantic = self.node_semantic(parameter)
+            if semantic is None:
+                continue
+
+            semantic_key = self.rust_stage_parameter_semantic_key(semantic)
+            rule = rules.get(semantic_key)
+            if rule is not None:
+                mapped_semantic, expected_type, allowed_stages = rule
+                if shader_type not in allowed_stages:
+                    allowed = ", ".join(sorted(allowed_stages))
+                    raise ValueError(
+                        f"Unsupported {semantic} stage parameter semantic for Rust "
+                        f"{shader_type} stage; valid stage is {allowed}"
+                    )
+                previous_name = seen_system_semantics.get(mapped_semantic)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate Rust stage parameter semantic {mapped_semantic} "
+                        f"on '{previous_name}' and '{parameter.name}'"
+                    )
+                seen_system_semantics[mapped_semantic] = parameter.name
+                self.validate_rust_stage_parameter_semantic_type(
+                    parameter, semantic, expected_type
+                )
+                continue
+
+            kind = self.rust_semantic_output_kind(semantic)
+            if kind in {"color", "depth"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Rust "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def get_member_type(self, member):
         if hasattr(member, "member_type"):
             member_type = self.convert_type_node_to_string(member.member_type)
@@ -2251,6 +2435,7 @@ class RustCodeGen:
         return_semantic = self.node_semantic(func)
         self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
         self.validate_rust_struct_return_semantics(shader_type, return_type)
+        self.validate_rust_stage_parameter_semantics(shader_type, param_list)
 
         param_types = [self.function_parameter_type(p) for p in param_list]
         reference_lifetime = self.function_reference_return_lifetime(
@@ -2284,6 +2469,23 @@ class RustCodeGen:
             code += f"#[fragment_shader]\n"
         elif shader_type == "compute":
             code += f"#[compute_shader]\n"
+        elif shader_type in self.rust_ray_stage_names():
+            code += (
+                "// CrossGL ray stage: "
+                f"{self.rust_ray_stage_metadata_name(shader_type)}\n"
+            )
+        if return_semantic:
+            code += (
+                f"// CrossGL return semantic: {self.map_semantic(return_semantic)}\n"
+            )
+        if shader_type:
+            for param in param_list:
+                param_semantic = self.node_semantic(param)
+                if param_semantic:
+                    code += (
+                        f"// CrossGL parameter semantic: {param.name}: "
+                        f"{self.map_semantic(param_semantic)}\n"
+                    )
 
         generic_params = self.format_function_generic_params(
             func,
@@ -3099,6 +3301,8 @@ class RustCodeGen:
                     init_expr = self.indent_multiline_expression(init_expr, indent)
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {init_expr};\n"
             elif self.is_generated_struct_type(vtype):
+                return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
+            elif self.is_default_constructible_ray_runtime_type(rust_type):
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = Default::default();\n"
             elif default_array_initializer is not None:
                 return f"{indent_str}{binding_keyword} {stmt.name}: {rust_type} = {default_array_initializer};\n"
@@ -6173,6 +6377,10 @@ class RustCodeGen:
             return self.generate_constructor_expression(expr)
         elif isinstance(expr, BlockNode):
             return self.generate_block_expression(expr)
+        elif isinstance(expr, RayTracingOpNode):
+            return self.generate_ray_tracing_op_expression(expr)
+        elif isinstance(expr, RayQueryOpNode):
+            return self.generate_ray_query_op_expression(expr)
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
@@ -6232,6 +6440,13 @@ class RustCodeGen:
                     self.generate_user_function_call_args(func_name, args)
                 )
                 return f"{callee}({args_str})"
+
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name,
+                args,
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
 
             enum_variant = self.generate_enum_variant_call_with_typed_args(
                 func_name,
@@ -6313,6 +6528,67 @@ class RustCodeGen:
 
         self.required_generic_math_traits.add("CglSqrt")
         return f"CglSqrt::cgl_sqrt({self.generate_expression(args[0])})"
+
+    def generate_ray_tracing_op_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        if operation in self.user_function_names:
+            args = ", ".join(
+                self.generate_user_function_call_args(
+                    operation,
+                    getattr(expr, "arguments", []),
+                )
+            )
+            return f"{operation}({args})"
+
+        return self.generate_ray_tracing_call_expression(
+            operation,
+            getattr(expr, "arguments", []),
+        )
+
+    def generate_ray_tracing_call_expression(self, operation, arguments):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        func_name = self.function_map.get(operation, operation)
+        args = ", ".join(self.generate_expression(arg) for arg in arguments or [])
+        if operation == "TraceRay" and len(arguments or []) == 11:
+            generated_args = [self.generate_expression(arg) for arg in arguments]
+            ray_desc = (
+                "RayDesc { "
+                f"origin: {generated_args[6]}, "
+                f"t_min: {generated_args[7]}, "
+                f"direction: {generated_args[8]}, "
+                f"t_max: {generated_args[9]} "
+                "}"
+            )
+            args = ", ".join(generated_args[:6] + [ray_desc, generated_args[10]])
+        elif operation == "ReportHit" and len(arguments or []) == 2:
+            generated_args = [self.generate_expression(arg) for arg in arguments]
+            args = ", ".join(generated_args + ["()"])
+        return f"{func_name}({args})"
+
+    def generate_ray_query_op_expression(self, expr):
+        operation = getattr(expr, "operation", "")
+        receiver = self.generate_expression(getattr(expr, "query_expr", None))
+        args = [receiver]
+        args.extend(
+            self.generate_expression(arg)
+            for arg in getattr(expr, "arguments", []) or []
+        )
+        func_name = f"ray_query_{self.rust_snake_case_name(operation)}"
+        return f"{func_name}({', '.join(args)})"
+
+    def rust_snake_case_name(self, name):
+        name = str(name)
+        name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        return name.replace("__", "_").strip("_").lower()
 
     def mapped_function_name(self, func_name, arg_count=None, arguments=None):
         if not isinstance(func_name, str):
@@ -7457,10 +7733,37 @@ class RustCodeGen:
 
     def generate_identifier_value_expression(self, name):
         name = self.lambda_capture_alias_name(name) or name
+        builtin_value = self.rust_builtin_value_expression(name)
+        if builtin_value is not None and name not in self.variable_types:
+            return builtin_value
         value = self.lazy_static_identifier_expression(name)
         if self.should_clone_identifier_value(name):
             return self.clone_value_expression(value)
         return value
+
+    def rust_builtin_value_expression(self, name):
+        return {
+            "gl_LaunchIDEXT": "ray_launch_id()",
+            "gl_LaunchSizeEXT": "ray_launch_size()",
+            "gl_HitTEXT": "ray_hit_t()",
+            "gl_HitKindEXT": "ray_hit_kind()",
+            "gl_WorldRayOriginEXT": "ray_world_origin()",
+            "gl_WorldRayDirectionEXT": "ray_world_direction()",
+            "gl_ObjectRayOriginEXT": "ray_object_origin()",
+            "gl_ObjectRayDirectionEXT": "ray_object_direction()",
+            "gl_RayTminEXT": "ray_t_min()",
+            "gl_IncomingRayFlagsEXT": "ray_incoming_flags()",
+            "gl_InstanceCustomIndexEXT": "ray_instance_custom_index()",
+            "gl_GeometryIndexEXT": "ray_geometry_index()",
+        }.get(name)
+
+    def is_default_constructible_ray_runtime_type(self, rust_type):
+        return str(rust_type) in {
+            "BuiltInTriangleIntersectionAttributes",
+            "RayDesc",
+            "RayQuery",
+            "RayTracingAccelerationStructure",
+        }
 
     def should_clone_identifier_value(self, name):
         if (
@@ -8983,6 +9286,8 @@ class RustCodeGen:
 
         mapped_type = self.type_mapping.get(base_name, base_name)
         mapped_base = mapped_type.split("<", 1)[0].rsplit("::", 1)[-1]
+        if mapped_base == "RayTracingAccelerationStructure":
+            return "acceleration_structure"
         if mapped_base == "Sampler":
             return "sampler"
         if mapped_base.startswith(("Image", "IImage", "UImage")):
@@ -9149,7 +9454,12 @@ class RustCodeGen:
         element_base, element_args = self.generic_type_parts(element_type)
         if element_args:
             component = element_args[0]
-            lane_count = element_base.rsplit("::", 1)[-1].removeprefix("Vec")
+            vector_type_name = element_base.rsplit("::", 1)[-1]
+            lane_count = (
+                vector_type_name[3:]
+                if vector_type_name.startswith("Vec")
+                else vector_type_name
+            )
             if component == "u32":
                 return f"uvec{lane_count}"
             if component == "i32":

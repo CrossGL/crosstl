@@ -177,6 +177,7 @@ class VulkanSPIRVCodeGen:
         self.current_stage = None
         self.current_return_type = None
         self.current_return_type_source = None
+        self.current_return_semantic_output = None
         self.current_expression_expected_type = None
         self.mesh_output_counts_by_function = {}
         self.mesh_vertex_output_variable = None
@@ -8491,6 +8492,14 @@ class VulkanSPIRVCodeGen:
 
     def create_return_value(self, value: SpirvId):
         """Create a return value instruction."""
+        if self.current_return_semantic_output is not None:
+            target_type = self.pointer_pointee_type(self.current_return_semantic_output)
+            if target_type is not None:
+                value = self.convert_value_to_type(value, target_type)
+            self.store_to_variable(self.current_return_semantic_output, value)
+            self.create_return()
+            return
+
         if self.current_return_type is not None:
             value = self.convert_value_to_type(value, self.current_return_type)
         self.emit(f"OpReturnValue %{value.id}")
@@ -9020,17 +9029,51 @@ class VulkanSPIRVCodeGen:
         ignored = {
             "binding",
             "component",
+            "domain",
             "format",
             "group",
             "index",
             "input",
+            "input_primitive",
+            "inputprimitive",
+            "invocations",
             "location",
+            "local_size",
+            "local_size_x",
+            "local_size_y",
+            "local_size_z",
+            "localsizex",
+            "localsizey",
+            "localsizez",
+            "max_primitives",
+            "max_vertices",
+            "maxprimitives",
+            "maxvertices",
+            "numthreads",
             "output",
+            "output_control_points",
+            "output_topology",
+            "outputcontrolpoints",
+            "outputtopology",
+            "partitioning",
+            "patch_constant_func",
+            "patchconstantfunc",
             "readonly",
             "set",
+            "compute",
+            "fragment",
+            "geometry",
+            "mesh",
+            "object",
+            "primitive",
             "vertices",
+            "workgroup_size",
             "indices",
             "primitives",
+            "task",
+            "tessellation_control",
+            "tessellation_evaluation",
+            "vertex",
             "writeonly",
         }
         for attr in getattr(node, "attributes", []) or []:
@@ -9042,6 +9085,232 @@ class VulkanSPIRVCodeGen:
                 continue
             return str(attr_name)
         return None
+
+    def spirv_semantic_output_kind(self, semantic) -> Optional[str]:
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        input_only_sources = {
+            "gl_baseinstance",
+            "gl_basevertex",
+            "gl_drawid",
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_invocationid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_sampleid",
+            "gl_tesscoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        }
+        if lower_name in input_only_sources or upper_name in {
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if lower_name == "gl_fragdata":
+            return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("COLOR"):
+            suffix = upper_name[len("COLOR") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def spirv_return_semantic_builtin_info(
+        self, semantic, return_type: SpirvId
+    ) -> Optional[Tuple[str, str, SpirvId]]:
+        kind = self.spirv_semantic_output_kind(semantic)
+        if kind == "position":
+            return ("gl_Position", "Position", return_type)
+        if kind == "depth":
+            return ("gl_FragDepth", "FragDepth", return_type)
+        return None
+
+    def spirv_color_semantic_location(self, semantic, node=None) -> Optional[int]:
+        if semantic is None:
+            return None
+
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+
+        if lower_name == "gl_fragdata" and node is not None:
+            for attr in getattr(node, "attributes", []) or []:
+                if str(getattr(attr, "name", "")).lower() != "gl_fragdata":
+                    continue
+                arguments = getattr(attr, "arguments", None) or getattr(
+                    attr, "args", []
+                )
+                if arguments:
+                    return self.literal_int_argument(arguments[0])
+            return 0
+
+        for prefix in ("gl_fragcolor",):
+            if lower_name.startswith(prefix):
+                suffix = lower_name[len(prefix) :]
+                if suffix == "":
+                    return 0
+                if suffix.isdigit():
+                    return int(suffix)
+
+        for prefix in ("SV_TARGET", "COLOR"):
+            if upper_name.startswith(prefix):
+                suffix = upper_name[len(prefix) :]
+                if suffix == "":
+                    return 0
+                if suffix.isdigit():
+                    return int(suffix)
+
+        return None
+
+    def is_spirv_float_vector_width(self, type_name, width: int) -> bool:
+        vector_info = self.vector_component_type_and_count(
+            self.type_name_string(type_name)
+        )
+        return vector_info == ("float", width)
+
+    def is_spirv_float_scalar_type(self, type_name) -> bool:
+        return (
+            self.normalize_primitive_name(self.type_name_string(type_name)) == "float"
+        )
+
+    def validate_spirv_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.spirv_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+
+        if kind in {"position", "color"}:
+            if self.is_spirv_float_vector_width(type_name, 4):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for SPIR-V codegen; "
+                "expected vec4-compatible type"
+            )
+
+        if kind == "depth" and not self.is_spirv_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for SPIR-V codegen; "
+                "expected float type"
+            )
+
+    def validate_spirv_output_semantic_stage(
+        self, execution_model: Optional[str], semantic, context
+    ):
+        kind = self.spirv_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for SPIR-V codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if execution_model is None:
+            return
+
+        allowed_models = {
+            "position": {"TessellationEvaluation", "Vertex"},
+            "color": {"Fragment"},
+            "depth": {"Fragment"},
+        }[kind]
+        if execution_model in allowed_models:
+            return
+
+        stage_name = {
+            "GLCompute": "compute",
+            "MeshEXT": "mesh",
+            "TaskEXT": "task",
+        }.get(execution_model, execution_model.lower())
+        allowed = ", ".join(
+            {
+                "GLCompute": "compute",
+                "MeshEXT": "mesh",
+                "TaskEXT": "task",
+            }.get(model, model.lower())
+            for model in sorted(allowed_models)
+        )
+        raise ValueError(
+            f"Unsupported {semantic} {context} for SPIR-V {stage_name} stage; "
+            f"valid stage is {allowed}"
+        )
+
+    def validate_spirv_return_semantic(
+        self, execution_model: Optional[str], return_type, semantic
+    ):
+        if semantic is None:
+            return
+        if self.type_name_string(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for SPIR-V codegen; "
+                "void return type"
+            )
+        self.validate_spirv_output_semantic_stage(
+            execution_model, semantic, "return semantic"
+        )
+        self.validate_spirv_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def direct_return_output_name(self, function_name: str, semantic) -> str:
+        normalized = re.sub(r"[^0-9A-Za-z_]+", "_", str(semantic)).strip("_")
+        return f"{function_name}_return_{normalized or 'semantic'}"
+
+    def register_direct_return_output(
+        self, function_node, semantic, return_type: SpirvId
+    ) -> Optional[SpirvId]:
+        builtin_info = self.spirv_return_semantic_builtin_info(semantic, return_type)
+        if builtin_info is not None:
+            name, builtin_name, builtin_type = builtin_info
+            cache_key = f"__return_semantic_builtin::{name}"
+            if cache_key in self.global_variables:
+                variable = self.global_variables[cache_key]
+                self.mark_function_interface_variable(variable)
+                return variable
+
+            variable = self.register_builtin_variable(
+                name, builtin_type, builtin_name, "Output"
+            )
+            self.global_variables[cache_key] = variable
+            self.mark_function_interface_variable(variable)
+            return variable
+
+        output_node = VariableNode(
+            self.direct_return_output_name(function_node.name, semantic),
+            function_node.return_type,
+            attributes=list(getattr(function_node, "attributes", []) or []),
+        )
+        location = self.global_interface_location(
+            output_node,
+            "Output",
+            preferred_location=self.spirv_color_semantic_location(
+                semantic, function_node
+            ),
+        )
+        variable = self.create_variable(return_type, "Output", output_node.name)
+        self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
+        self.decorate_global_interface_variable(output_node, variable)
+        self.mark_function_interface_variable(variable)
+        return variable
 
     def max_optional_int(self, first: Optional[int], second: Optional[int]):
         if first is None:
@@ -10676,18 +10945,36 @@ class VulkanSPIRVCodeGen:
         self.function_nodes[function_node.name] = function_node
         previous_return_type = self.current_return_type
         previous_return_type_source = self.current_return_type_source
+        previous_return_semantic_output = self.current_return_semantic_output
         previous_stage = self.current_stage
         previous_function_name = self.current_function_name
         self.current_return_type = return_type
         self.current_return_type_source = self.type_name_from_value(
             function_node.return_type
         )
+        self.current_return_semantic_output = None
         self.current_function_name = function_node.name
         if stage is not None:
             self.current_stage = stage
 
         execution_model_hint = self.execution_model_hint_for_function(
             function_node, stage
+        )
+        is_entry_point = self.function_is_entry_point(function_node, stage)
+        if execution_model_hint is None and is_entry_point and stage is None:
+            execution_model_hint = self.spirv_execution_model(
+                self.get_function_qualifier(function_node)
+            )
+        return_semantic = self.semantic_from_node(function_node)
+        has_direct_return_semantic = is_entry_point and return_semantic is not None
+        if return_semantic is not None:
+            self.validate_spirv_return_semantic(
+                execution_model_hint, function_node.return_type, return_semantic
+            )
+        function_return_type = (
+            self.register_primitive_type("void")
+            if has_direct_return_semantic
+            else return_type
         )
         mesh_output_parameters = {}
         runtime_parameters = []
@@ -10710,7 +10997,6 @@ class VulkanSPIRVCodeGen:
         mesh_parameter_execution_model = execution_model_hint
         if mesh_parameter_execution_model is None and has_mesh_output_parameters:
             mesh_parameter_execution_model = "MeshEXT"
-        is_entry_point = self.function_is_entry_point(function_node, stage)
         mesh_output_parameter_indices = set()
 
         for source_param_index, param in enumerate(parameters):
@@ -10759,10 +11045,16 @@ class VulkanSPIRVCodeGen:
         had_global_function = function_node.name in self.functions
         previous_global_function = self.functions.get(function_node.name)
         previous_global_signature = self.function_signatures.get(function_node.name)
-        function_id = self.create_function(function_node.name, return_type, param_types)
+        function_id = self.create_function(
+            function_node.name, function_return_type, param_types
+        )
         if stage is not None:
             self.register_stage_local_function(
-                stage, function_node.name, function_id, return_type, param_types
+                stage,
+                function_node.name,
+                function_id,
+                function_return_type,
+                param_types,
             )
             if had_global_function:
                 self.functions[function_node.name] = previous_global_function
@@ -10812,6 +11104,10 @@ class VulkanSPIRVCodeGen:
                 function_node
             )
         self.current_mesh_output_parameters = mesh_output_parameters
+        if has_direct_return_semantic:
+            self.current_return_semantic_output = self.register_direct_return_output(
+                function_node, return_semantic, return_type
+            )
         for param, patch_info in patch_interface_parameters:
             patch_variable = self.register_patch_parameter_interface_variable(
                 param, patch_info
@@ -10837,6 +11133,7 @@ class VulkanSPIRVCodeGen:
         self.current_stage = previous_stage
         self.current_return_type = previous_return_type
         self.current_return_type_source = previous_return_type_source
+        self.current_return_semantic_output = previous_return_semantic_output
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()

@@ -2389,6 +2389,136 @@ class SlangCodeGen:
                 f"valid stage is {allowed}"
             )
 
+    def slang_stage_input_semantic_rules(self):
+        return {
+            "vertex": {
+                "SV_VERTEXID": "uint",
+                "SV_INSTANCEID": "uint",
+                "SV_STARTVERTEXLOCATION": "int",
+                "SV_STARTINSTANCELOCATION": "uint",
+                "SV_DRAWID": "uint",
+            },
+            "fragment": {
+                "SV_POSITION": "float4",
+                "SV_ISFRONTFACE": "bool",
+                "SV_PRIMITIVEID": "uint",
+                "SV_SAMPLEINDEX": "uint",
+                "SV_RENDERTARGETARRAYINDEX": "uint",
+                "SV_VIEWPORTARRAYINDEX": "uint",
+            },
+            "compute": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "mesh": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "amplification": {
+                "SV_GROUPID": "uint3",
+                "SV_GROUPTHREADID": "uint3",
+                "SV_DISPATCHTHREADID": "uint3",
+                "SV_GROUPINDEX": "uint",
+            },
+            "geometry": {
+                "SV_PRIMITIVEID": "uint",
+                "SV_GSINSTANCEID": "uint",
+            },
+            "hull": {
+                "SV_OUTPUTCONTROLPOINTID": "uint",
+                "SV_PRIMITIVEID": "uint",
+            },
+            "domain": {
+                "SV_DOMAINLOCATION": "float3",
+                "SV_PRIMITIVEID": "uint",
+            },
+        }
+
+    def slang_stage_input_semantic_stages(self, mapped_semantic: str) -> set:
+        mapped_upper = str(mapped_semantic).upper()
+        return {
+            stage
+            for stage, rules in self.slang_stage_input_semantic_rules().items()
+            if mapped_upper in rules
+        }
+
+    def slang_parameter_semantic_type_matches(self, type_name, expected_type) -> bool:
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == expected_type
+
+    def validate_slang_stage_parameter_semantic_type(
+        self, parameter, semantic, expected_type
+    ):
+        type_name = self.slang_parameter_type_name(parameter)
+        if self.slang_parameter_semantic_type_matches(type_name, expected_type):
+            return
+
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for Slang codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_slang_stage_parameter_semantics(
+        self, shader_type, parameters, stage_role=None
+    ):
+        if shader_type is None:
+            return
+
+        shader_stage = self.slang_shader_stage_name(shader_type)
+        rules = self.slang_stage_input_semantic_rules().get(shader_stage, {})
+        seen_system_semantics = {}
+
+        for parameter in parameters or []:
+            semantic = self.semantic_from_node(parameter)
+            if semantic is None:
+                continue
+            if (
+                self.slang_ray_semantic_role(parameter, shader_type)
+                or self.is_slang_mesh_payload_parameter(parameter)
+                or self.slang_mesh_output_role_from_parameter(parameter)
+            ):
+                continue
+
+            mapped_semantic = self.map_semantic(semantic, shader_type)
+            mapped_upper = str(mapped_semantic).upper()
+            expected_type = rules.get(mapped_upper)
+            if expected_type is not None:
+                previous_name = seen_system_semantics.get(mapped_upper)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate Slang stage parameter semantic "
+                        f"{mapped_semantic} on '{previous_name}' and "
+                        f"'{parameter.name}'"
+                    )
+                seen_system_semantics[mapped_upper] = parameter.name
+                self.validate_slang_stage_parameter_semantic_type(
+                    parameter, semantic, expected_type
+                )
+                continue
+
+            valid_stages = self.slang_stage_input_semantic_stages(mapped_semantic)
+            if valid_stages:
+                valid = ", ".join(sorted(valid_stages))
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; valid stage is {valid}"
+                )
+
+            kind = self.slang_semantic_output_kind(semantic)
+            if kind in {"color", "depth", "inside_tess_factor", "tess_factor"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for Slang "
+                    f"{shader_type} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
+
     def semantic_suffix(self, semantic, shader_type=None):
         mapped_semantic = self.map_semantic(semantic, shader_type)
         return f" : {mapped_semantic}" if mapped_semantic else ""
@@ -3580,6 +3710,9 @@ class SlangCodeGen:
             )
             self.validate_slang_mesh_output_parameters(
                 node, shader_type, effective_param_list
+            )
+            self.validate_slang_stage_parameter_semantics(
+                shader_type, effective_param_list, stage_role=stage_role
             )
             self.validate_slang_stage_body_builtins(
                 body_statements,

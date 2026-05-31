@@ -105,12 +105,6 @@ class TestHipCodeGen:
             ("task", "task"),
             ("tessellation_control", "tessellation_control"),
             ("tessellation_evaluation", "tessellation_evaluation"),
-            ("ray_any_hit", "ray_any_hit"),
-            ("ray_callable", "ray_callable"),
-            ("ray_closest_hit", "ray_closest_hit"),
-            ("ray_generation", "ray_generation"),
-            ("ray_intersection", "ray_intersection"),
-            ("ray_miss", "ray_miss"),
         ],
     )
     def test_unsupported_shader_stages_are_rejected_for_hip_codegen(
@@ -154,6 +148,172 @@ class TestHipCodeGen:
             ),
         ):
             HipCodeGen().generate(ast)
+
+    def test_ray_tracing_stages_emit_hip_metadata_and_hooks(self, tmp_path):
+        source_code = """
+        shader HipRayTracingStages {
+            struct RayPayload {
+                vec3 color;
+            };
+
+            struct HitAttributes {
+                vec2 barycentrics;
+            };
+
+            struct CallableData {
+                uint value;
+            };
+
+            accelerationStructureEXT scene @binding(3) @set(2);
+
+            ray_generation {
+                void main() {
+                    uvec3 launch = gl_LaunchIDEXT;
+                    uint launchWidth = gl_LaunchSizeEXT.x;
+                    RayDesc ray = RayDesc(
+                        vec3(0.0, 0.0, 0.0),
+                        0.001,
+                        vec3(0.0, 0.0, 1.0),
+                        100.0
+                    );
+                    RayPayload payload;
+                    CallableData data;
+                    TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                    CallShader(0, data);
+                }
+            }
+
+            ray_closest_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    float hitT @ gl_HitTEXT
+                ) {
+                    payload.color = vec3(1.0, 0.0, hitT);
+                }
+            }
+
+            ray_any_hit {
+                void main(
+                    RayPayload payload @ payload,
+                    HitAttributes attributes @ hit_attribute,
+                    uint hitKind @ gl_HitKindEXT
+                ) {
+                    payload.color = vec3(0.5, 0.0, float(hitKind));
+                    IgnoreHit();
+                    AcceptHitAndEndSearch();
+                }
+            }
+
+            ray_miss {
+                void main(RayPayload payload @ rayPayloadInEXT) {
+                    payload.color = vec3(0.0, 0.0, 0.0);
+                }
+            }
+
+            ray_callable {
+                void main(CallableData data @ callableDataInEXT) {
+                    data.value = data.value + 1u;
+                }
+            }
+
+            ray_intersection {
+                void main() {
+                    HitAttributes attributes;
+                    bool accepted = ReportHit(1.0, 0, attributes);
+                    bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+                }
+            }
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "// CrossGL resource metadata: name=scene kind=acceleration_structure "
+            "set=2 binding=3 binding_source=explicit" in hip_code
+        )
+        assert "struct CglRayTracingAccelerationStructure" in hip_code
+        assert "struct CglRayDesc" in hip_code
+        assert "// CrossGL ray stage: ray_generation" in hip_code
+        assert "// CrossGL ray stage: closest_hit" in hip_code
+        assert "// CrossGL ray stage: any_hit" in hip_code
+        assert "// CrossGL ray stage: miss" in hip_code
+        assert "// CrossGL ray stage: callable" in hip_code
+        assert "// CrossGL ray stage: intersection" in hip_code
+        assert "__device__ void ray_generation_main()" in hip_code
+        assert "__device__ void ray_closest_hit_main(" in hip_code
+        assert "// CrossGL parameter semantic: payload: ray_payload" in hip_code
+        assert "// CrossGL parameter semantic: attributes: hit_attribute" in hip_code
+        assert "// CrossGL parameter semantic: data: callable_data" in hip_code
+        assert "uint3 launch = cgl_ray_launch_id();" in hip_code
+        assert "unsigned int launchWidth = cgl_ray_launch_size().x;" in hip_code
+        assert "cgl_trace_ray(scene, 0, 255, 0, 1, 0, ray, payload);" in hip_code
+        assert "cgl_call_shader(0, data);" in hip_code
+        assert "cgl_ignore_hit();" in hip_code
+        assert "cgl_accept_hit_and_end_search();" in hip_code
+        assert "bool accepted = cgl_report_hit(1.0, 0, attributes);" in hip_code
+        assert (
+            "bool acceptedWithoutAttributes = cgl_report_hit"
+            "(2.0, 1, CglBuiltInTriangleIntersectionAttributes{});" in hip_code
+        )
+
+        compile_hip_if_hipcc_available(hip_code, tmp_path)
+
+    def test_hip_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates(
+        self,
+    ):
+        invalid_type = """
+        shader InvalidHipRayBuiltinType {
+            ray_generation {
+                void main(float launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*expected uint3 type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader InvalidHipRayBuiltinStage {
+            fragment {
+                void main(uvec3 launch @ gl_LaunchIDEXT) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        duplicate = """
+        shader DuplicateHipRayBuiltin {
+            ray_generation {
+                void main(
+                    uvec3 launch @ gl_LaunchIDEXT,
+                    uvec3 launchAgain @ SV_DispatchRaysIndex
+                ) {
+                }
+            }
+        }
+        """
+        with pytest.raises(
+            ValueError, match="Duplicate HIP stage parameter semantic launch_id"
+        ):
+            HipCodeGen().generate(Parser(Lexer(duplicate).tokens).parse())
+
+    def test_ray_query_methods_lower_to_hip_hooks(self):
+        source_code = """
+        void queryRay(RayQuery query) {
+            bool active = query.Proceed();
+        }
+        """
+
+        hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "struct CglRayQuery" in hip_code
+        assert "__device__ void queryRay(CglRayQuery query)" in hip_code
+        assert "__device__ inline bool cgl_ray_query_proceed" in hip_code
+        assert "bool active = cgl_ray_query_proceed(query);" in hip_code
 
     def test_generated_basic_compute_kernel_smoke_compiles_with_hipcc(self, tmp_path):
         """Smoke compile a generated HIP kernel when hipcc is available."""
@@ -10011,6 +10171,273 @@ class TestHipCodeGen:
         assert "output.uv = input.texCoord;" in hip_code
         assert "VertexInput input;" in hip_code
         assert "VertexOutput output;" in hip_code
+
+    def test_struct_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+        """Test HIP preserves and validates struct member builtin semantics."""
+        valid_code = """
+        shader HipStructSemantics {
+            struct FSOutput {
+                vec4 color @ SV_Target1;
+                float depth @ gl_FragDepth;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            fragment {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        hip_code = HipCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
+
+        assert "float4 color; // CrossGL semantic: target(1)" in hip_code
+        assert "float depth; // CrossGL semantic: depth(any)" in hip_code
+        assert "float2 uv; // CrossGL semantic: texcoord(0)" in hip_code
+
+        invalid_type = """
+        shader BadHipStructSemanticType {
+            struct FSOutput {
+                vec3 color @ gl_FragColor;
+            };
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadHipStructSemanticStage {
+            struct FSOutput {
+                vec4 color @ gl_FragColor;
+            };
+
+            vertex {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadHipStructInputOnlySemantic {
+            struct VSOutput {
+                uint vertexId @ gl_VertexID;
+            };
+
+            vertex {
+                VSOutput main() {
+                    VSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_return_semantics_validate_builtin_types_and_stage_context_for_hip(self):
+        """Test HIP validates direct builtin return semantics."""
+        invalid_depth_type = """
+        shader BadHipDepthType {
+            fragment {
+                vec4 main() @ gl_FragDepth {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadHipStage {
+            vertex {
+                vec4 main() @ gl_FragColor {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadHipInputOnlyReturn {
+            vertex {
+                uint main() @ gl_VertexID {
+                    return uint(0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            HipCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_direct_return_semantics_emit_metadata_for_hip(self, tmp_path):
+        """Test HIP preserves direct return semantics as comments."""
+        color_code = """
+        shader HipDirectReturnSemantics {
+            vertex {
+                vec4 vertexMain() @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            fragment {
+                vec4 fragmentMain() @ gl_FragColor {
+                    return vec4(1.0, 0.5, 0.25, 1.0);
+                }
+            }
+        }
+        """
+        hip_code = HipCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
+
+        assert "// CrossGL return semantic: position" in hip_code
+        assert "__device__ float4 vertexMain()" in hip_code
+        assert "// CrossGL return semantic: target(0)" in hip_code
+        assert "__device__ float4 fragmentMain()" in hip_code
+
+        depth_code = """
+        shader HipDepthReturnSemantics {
+            fragment {
+                float depthMain() @ gl_FragDepth {
+                    return 0.5;
+                }
+            }
+        }
+        """
+        depth_hip_code = HipCodeGen().generate(Parser(Lexer(depth_code).tokens).parse())
+
+        assert "// CrossGL return semantic: depth(any)" in depth_hip_code
+        assert "__device__ float depthMain()" in depth_hip_code
+
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(hip_code, tmp_path)
+            compile_hip_if_hipcc_available(depth_hip_code, tmp_path)
+
+    def test_stage_parameter_semantics_emit_metadata_for_hip(self, tmp_path):
+        """Test HIP preserves builtin stage parameter semantics as comments."""
+        vertex_code = """
+        shader HipVertexStageParameterSemantics {
+            vertex {
+                vec4 main(
+                    uint vertexId @ gl_VertexID,
+                    uint instanceId @ SV_InstanceID
+                ) @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        vertex_hip = HipCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
+
+        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_hip
+        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_hip
+        assert "__device__ float4 main(unsigned int vertexId" in vertex_hip
+
+        fragment_code = """
+        shader HipFragmentStageParameterSemantics {
+
+            fragment {
+                vec4 main(
+                    vec4 fragCoord @ gl_FragCoord,
+                    bool front @ gl_FrontFacing
+                ) @ gl_FragColor {
+                    return vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        fragment_hip = HipCodeGen().generate(
+            Parser(Lexer(fragment_code).tokens).parse()
+        )
+
+        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_hip
+        assert "// CrossGL parameter semantic: front: front_facing" in fragment_hip
+        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_hip
+
+        compute_code = """
+        shader HipComputeStageParameterSemantics {
+
+            compute {
+                void main(
+                    uvec3 globalId @ gl_GlobalInvocationID,
+                    uvec3 localId @ SV_GroupThreadID,
+                    uint lane @ gl_LocalInvocationIndex
+                ) {
+                    uint copy = lane;
+                }
+            }
+        }
+        """
+        compute_hip = HipCodeGen().generate(Parser(Lexer(compute_code).tokens).parse())
+
+        assert (
+            "// CrossGL parameter semantic: globalId: global_invocation_id"
+            in compute_hip
+        )
+        assert (
+            "// CrossGL parameter semantic: localId: local_invocation_id" in compute_hip
+        )
+        assert (
+            "// CrossGL parameter semantic: lane: local_invocation_index" in compute_hip
+        )
+        assert "__global__ void main(uint3 globalId" in compute_hip
+        if shutil.which("hipcc") is not None:
+            compile_hip_if_hipcc_available(vertex_hip, tmp_path)
+            compile_hip_if_hipcc_available(fragment_hip, tmp_path)
+            compile_hip_if_hipcc_available(compute_hip, tmp_path)
+
+    def test_stage_parameter_semantics_validate_builtin_stage_type_for_hip(self):
+        """Test HIP rejects invalid builtin stage parameter semantics."""
+        invalid_stage = """
+        shader BadHipStageParameterStage {
+            fragment {
+                void main(uint vertexId @ gl_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+            HipCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_type = """
+        shader BadHipStageParameterType {
+            fragment {
+                void main(vec3 fragCoord @ gl_FragCoord) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+            HipCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        output_only = """
+        shader BadHipStageParameterOutputOnly {
+            vertex {
+                void main(vec4 color @ SV_Target0) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+            HipCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
+
+        duplicate_system_value = """
+        shader BadHipStageParameterDuplicate {
+            vertex {
+                void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="Duplicate HIP stage parameter semantic"):
+            HipCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
 
     def test_stage_parameter_semantics_thread_position_in_grid(self):
         """Test HIP maps compute stage builtins to threadIdx/blockIdx/blockDim."""

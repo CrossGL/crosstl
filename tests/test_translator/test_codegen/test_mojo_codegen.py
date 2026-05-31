@@ -1524,12 +1524,6 @@ def test_stage_local_resources_are_visible_to_mojo_stage_helpers():
         "amplification",
         "object",
         "mesh",
-        "ray_generation",
-        "ray_intersection",
-        "ray_closest_hit",
-        "ray_any_hit",
-        "ray_miss",
-        "ray_callable",
     ],
 )
 def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
@@ -1546,6 +1540,170 @@ def test_unsupported_shader_stages_are_rejected_for_mojo_codegen(stage_name):
         match=rf"Unsupported {stage_name} shader stage for Mojo codegen",
     ):
         generate_code(parse_code(tokenize_code(code)))
+
+
+def test_ray_tracing_stages_emit_mojo_metadata_and_hooks(tmp_path):
+    mojo = find_mojo_compiler()
+
+    code = """
+    shader MojoRayTracingStages {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(3) @set(2);
+
+        ray_generation {
+            void main() {
+                uvec3 launch = gl_LaunchIDEXT;
+                uint launchWidth = gl_LaunchSizeEXT.x;
+                RayDesc ray = RayDesc(
+                    vec3(0.0, 0.0, 0.0),
+                    0.001,
+                    vec3(0.0, 0.0, 1.0),
+                    100.0
+                );
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                float hitT @ gl_HitTEXT
+            ) {
+                payload.color = vec3(1.0, 0.0, hitT);
+            }
+        }
+
+        ray_any_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute,
+                uint hitKind @ gl_HitKindEXT
+            ) {
+                payload.color = vec3(0.5, 0.0, float(hitKind));
+                IgnoreHit();
+                AcceptHitAndEndSearch();
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ rayPayloadInEXT) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+
+        ray_intersection {
+            void main() {
+                HitAttributes attributes;
+                bool accepted = ReportHit(1.0, 0, attributes);
+                bool acceptedWithoutAttributes = ReportHit(2.0, 1);
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "# CrossGL resource metadata: name=scene kind=acceleration_structure "
+        "set=2 binding=3 binding_source=explicit" in generated_code
+    )
+    assert "struct RayTracingAccelerationStructure" in generated_code
+    assert "struct RayDesc" in generated_code
+    assert "# CrossGL shader stage: ray_generation" in generated_code
+    assert "# CrossGL shader stage: ray_closest_hit" in generated_code
+    assert "# CrossGL shader stage: ray_any_hit" in generated_code
+    assert "# CrossGL shader stage: ray_miss" in generated_code
+    assert "# CrossGL shader stage: ray_callable" in generated_code
+    assert "# CrossGL shader stage: ray_intersection" in generated_code
+    assert "fn ray_generation_main() -> None:" in generated_code
+    assert "fn ray_closest_hit_main(" in generated_code
+    assert "semantic=ray_payload source=payload" in generated_code
+    assert "semantic=hit_attribute source=hit_attribute" in generated_code
+    assert "semantic=callable_data source=callableDataInEXT" in generated_code
+    assert "var launch: SIMD[DType.uint32, 4] = ray_launch_id()" in generated_code
+    assert "var launchWidth: UInt32 = ray_launch_size()[0]" in generated_code
+    assert "trace_ray(scene, 0, 255, 0, 1, 0, ray, payload)" in generated_code
+    assert "call_shader(0, data)" in generated_code
+    assert "ignore_hit()" in generated_code
+    assert "accept_hit_and_end_search()" in generated_code
+    assert "var accepted: Bool = report_hit(1.0, 0, attributes)" in generated_code
+    assert (
+        "var acceptedWithoutAttributes: Bool = report_hit(2.0, 1, False)"
+        in generated_code
+    )
+
+    package_dir = tmp_path / "mojo_ray_stages_pkg"
+    package_dir.mkdir()
+    (package_dir / "__init__.mojo").write_text(generated_code)
+    output_path = tmp_path / "mojo_ray_stages_pkg.mojopkg"
+    result = subprocess.run(
+        [mojo, "package", str(package_dir), "-o", str(output_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + "\n\n" + generated_code
+    assert output_path.exists()
+
+
+def test_mojo_ray_stage_parameter_semantics_validate_builtin_stage_type_and_duplicates():
+    invalid_type = """
+    shader InvalidMojoRayBuiltinType {
+        ray_generation {
+            void main(float launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*integer vec3-compatible"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    invalid_stage = """
+    shader InvalidMojoRayBuiltinStage {
+        fragment {
+            void main(uvec3 launch @ gl_LaunchIDEXT) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_LaunchIDEXT.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    duplicate = """
+    shader DuplicateMojoRayBuiltin {
+        ray_generation {
+            void main(
+                uvec3 launch @ gl_LaunchIDEXT,
+                uvec3 launchAgain @ SV_DispatchRaysIndex
+            ) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Conflicting Mojo ray_generation"):
+        generate_code(parse_code(tokenize_code(duplicate)))
 
 
 def test_synchronization_builtins_lower_to_compile_smoke_helpers(tmp_path):
@@ -14517,8 +14675,6 @@ def test_wave_intrinsic_helpers_compile_with_mojo_if_available(tmp_path):
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
-        ("TraceRay(1, 2, 3, 4, 5, 6, 7, 8);", "ray tracing intrinsic TraceRay"),
-        ("ReportHit(1.0, 0);", "ray tracing intrinsic ReportHit"),
         ("SetMeshOutputCounts(1, 1);", "mesh intrinsic SetMeshOutputCounts"),
         ("DispatchMesh(1, 1, 1);", "mesh intrinsic DispatchMesh"),
     ],
@@ -14538,51 +14694,57 @@ def test_ray_and_mesh_intrinsics_are_rejected_for_mojo_codegen(statement, messag
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_ray_query_methods_are_rejected_for_mojo_codegen():
+def test_ray_query_methods_lower_to_mojo_hooks():
     code = """
     void queryRay(RayQuery query) {
         bool active = query.Proceed();
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported Mojo ray query method Proceed"):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "struct RayQuery" in generated_code
+    assert "fn ray_query_proceed" in generated_code
+    assert "var active: Bool = ray_query_proceed(query)" in generated_code
 
 
-def test_direct_pipeline_ir_nodes_are_rejected_for_mojo_codegen_without_ast_repr():
+def test_direct_pipeline_ir_nodes_lower_ray_and_reject_mesh_without_ast_repr():
     codegen = MojoCodeGen()
     query = VariableNode("query", PrimitiveType("RayQuery"))
     scene = VariableNode("scene", PrimitiveType("RaytracingAccelerationStructure"))
     ray = VariableNode("ray", PrimitiveType("RayDesc"))
 
+    trace_expr = codegen.generate_expression(
+        RayTracingOpNode(
+            "TraceRay",
+            [
+                scene,
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(255, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                LiteralNode(0, PrimitiveType("uint")),
+                ray,
+                LiteralNode(0, PrimitiveType("uint")),
+            ],
+        )
+    )
+    assert trace_expr == "trace_ray(scene, 0, 255, 0, 0, 0, ray, 0)"
+    assert "trace_ray" in codegen.required_ray_helpers
+
+    inline_expr = codegen.generate_expression(
+        RayQueryOpNode("TraceRayInline", query, [scene, 0, 255, ray])
+    )
+    assert inline_expr == "ray_query_trace_ray_inline(query, scene, 0, 255, ray)"
+    assert "ray_query_trace_ray_inline" in codegen.required_ray_helpers
+
+    candidate_expr = codegen.generate_expression(
+        RayQueryOpNode("CandidateRayT", query, [])
+    )
+    assert candidate_expr == "ray_query_candidate_ray_t(query)"
+    assert "ray_query_candidate_ray_t" in codegen.required_ray_helpers
+
     cases = [
-        (
-            RayTracingOpNode(
-                "TraceRay",
-                [
-                    scene,
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(255, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    LiteralNode(0, PrimitiveType("uint")),
-                    ray,
-                    LiteralNode(0, PrimitiveType("uint")),
-                ],
-            ),
-            "Unsupported Mojo ray tracing intrinsic TraceRay",
-            "RayTracingOpNode(",
-        ),
-        (
-            RayQueryOpNode("TraceRayInline", query, [scene, 0, 255, ray]),
-            "Unsupported Mojo ray query method TraceRayInline",
-            "RayQueryOpNode(",
-        ),
-        (
-            RayQueryOpNode("CandidateRayT", query, []),
-            "Unsupported Mojo ray query method CandidateRayT",
-            "RayQueryOpNode(",
-        ),
         (
             MeshOpNode("SetMeshOutputCounts", [1, 1]),
             "Unsupported Mojo mesh intrinsic SetMeshOutputCounts",

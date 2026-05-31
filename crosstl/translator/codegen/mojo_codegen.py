@@ -349,6 +349,11 @@ MOJO_RESOURCE_TYPE_MAPPING = {
     "uimage2DMS": "UImage2DMS",
     "uimage2DMSArray": "UImage2DMSArray",
     "uimage3D": "UImage3D",
+    "accelerationStructureEXT": "RayTracingAccelerationStructure",
+    "AccelerationStructure": "RayTracingAccelerationStructure",
+    "acceleration_structure": "RayTracingAccelerationStructure",
+    "RaytracingAccelerationStructure": "RayTracingAccelerationStructure",
+    "RayTracingAccelerationStructure": "RayTracingAccelerationStructure",
 }
 
 MOJO_HLSL_WRITABLE_TEXTURE_TYPE_MAPPING = {
@@ -832,7 +837,16 @@ MOJO_MAPPED_INTEGER_TYPES = {
     "UInt64",
 }
 
-MOJO_SUPPORTED_STAGE_TYPES = {"vertex", "fragment", "compute"}
+MOJO_RAY_STAGE_TYPES = {
+    "ray_any_hit",
+    "ray_callable",
+    "ray_closest_hit",
+    "ray_generation",
+    "ray_intersection",
+    "ray_miss",
+}
+
+MOJO_SUPPORTED_STAGE_TYPES = {"vertex", "fragment", "compute"} | MOJO_RAY_STAGE_TYPES
 
 MOJO_SYNC_BUILTINS = {
     "barrier": "_crossgl_workgroup_barrier",
@@ -1071,6 +1085,7 @@ class MojoCodeGen:
         self.required_reinterpret_helpers = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
+        self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -1135,6 +1150,11 @@ class MojoCodeGen:
             },
             # Texture/resource placeholders for Mojo compile-smoke support.
             **MOJO_RESOURCE_TYPE_MAPPING,
+            "RayDesc": "RayDesc",
+            "RayQuery": "RayQuery",
+            "BuiltInTriangleIntersectionAttributes": (
+                "BuiltInTriangleIntersectionAttributes"
+            ),
         }
         self.scalar_constructor_map = {
             name: mapped
@@ -1196,6 +1216,20 @@ class MojoCodeGen:
             "SV_GroupThreadID": "local_invocation_id",
             "SV_InstanceID": "instance_id",
             "SV_IsFrontFace": "front_facing",
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
             "SV_Target": "color(0)",
             "SV_Target0": "color(0)",
             "SV_Target1": "color(1)",
@@ -1226,6 +1260,11 @@ class MojoCodeGen:
             "mix": "lerp",
             "smoothstep": "smoothstep",
             "step": "step",
+            "TraceRay": "trace_ray",
+            "CallShader": "call_shader",
+            "ReportHit": "report_hit",
+            "IgnoreHit": "ignore_hit",
+            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
         }
 
     def generate(self, ast):
@@ -1284,6 +1323,7 @@ class MojoCodeGen:
         self.required_reinterpret_helpers = set()
         self.required_sync_helpers = set()
         self.required_wave_helpers = set()
+        self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
         self.required_swizzle_helpers = set()
@@ -2920,6 +2960,8 @@ class MojoCodeGen:
         mapped_type = self.resource_type_alias(base_type) or self.type_mapping.get(
             str(base_type), str(base_type)
         )
+        if mapped_type == "RayTracingAccelerationStructure":
+            return "acceleration_structure"
         if mapped_type == "Sampler":
             return "sampler"
         if mapped_type.startswith(("Image", "IImage", "UImage")):
@@ -3879,6 +3921,15 @@ class MojoCodeGen:
         if upper == "SV_GROUPINDEX":
             return ("compute", "integer_scalar")
 
+        if lower == "gl_launchidext" or upper == "SV_DISPATCHRAYSINDEX":
+            return ("ray", "integer_vec3")
+        if lower == "gl_launchsizeext" or upper == "SV_DISPATCHRAYSDIMENSIONS":
+            return ("ray", "integer_vec3")
+        if lower == "gl_hittext":
+            return ("ray_hit", "float_scalar")
+        if lower == "gl_hitkindext":
+            return ("ray_any_hit", "integer_scalar")
+
         if re.fullmatch(r"(COLOR|TEXCOORD|NORMAL|TANGENT|BINORMAL)\d*", upper):
             return ("vertex_fragment", None)
         if upper == "POSITION":
@@ -3915,9 +3966,14 @@ class MojoCodeGen:
             )
 
         stage_kind, expected_type = kind
-        allowed_stages = (
-            {"vertex", "fragment"} if stage_kind == "vertex_fragment" else {stage_kind}
-        )
+        if stage_kind == "vertex_fragment":
+            allowed_stages = {"vertex", "fragment"}
+        elif stage_kind == "ray":
+            allowed_stages = MOJO_RAY_STAGE_TYPES
+        elif stage_kind == "ray_hit":
+            allowed_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        else:
+            allowed_stages = {stage_kind}
         if shader_type is not None and shader_type not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
             raise ValueError(
@@ -3944,6 +4000,8 @@ class MojoCodeGen:
             return self.is_float_vector_width(param_type, 2)
         if expected_type == "float_vec4":
             return self.is_float_vector_width(param_type, 4)
+        if expected_type == "float_scalar":
+            return self.is_float_scalar_type(param_type)
         if expected_type == "integer_scalar":
             return self.is_scalar_integer_type(param_type)
         if expected_type == "integer_vec3":
@@ -3955,6 +4013,7 @@ class MojoCodeGen:
             "bool_scalar": "bool",
             "float_vec2": "vec2-compatible type",
             "float_vec4": "vec4-compatible type",
+            "float_scalar": "float scalar type",
             "integer_scalar": "integer scalar type",
             "integer_vec3": "integer vec3-compatible type",
         }.get(expected_type, "compatible type")
@@ -4490,6 +4549,8 @@ class MojoCodeGen:
             param_infos, return_type
         ):
             return "compute_main"
+        if shader_type in MOJO_RAY_STAGE_TYPES:
+            return f"{shader_type}_main"
         return name
 
     def compute_entry_can_remain_main(self, param_infos, return_type):
@@ -6750,6 +6811,9 @@ class MojoCodeGen:
         if isinstance(expr, str):
             if expr in self.expression_identifier_replacements:
                 return self.expression_identifier_replacements[expr]
+            ray_builtin = self.mojo_ray_builtin_expression(expr)
+            if ray_builtin is not None and expr not in self.variable_types:
+                return ray_builtin
             return self.map_enum_variant_reference(expr, target_type)
         elif isinstance(expr, (int, float, bool)):
             return self.format_literal(expr)
@@ -6757,10 +6821,16 @@ class MojoCodeGen:
             if hasattr(expr, "vtype") and expr.vtype and expr.name:
                 if expr.name in self.expression_identifier_replacements:
                     return self.expression_identifier_replacements[expr.name]
+                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
+                if ray_builtin is not None and expr.name not in self.variable_types:
+                    return ray_builtin
                 return f"{expr.name}"
             elif hasattr(expr, "name"):
                 if expr.name in self.expression_identifier_replacements:
                     return self.expression_identifier_replacements[expr.name]
+                ray_builtin = self.mojo_ray_builtin_expression(expr.name)
+                if ray_builtin is not None and expr.name not in self.variable_types:
+                    return ray_builtin
                 return expr.name
             else:
                 return str(expr)
@@ -6857,6 +6927,12 @@ class MojoCodeGen:
             if self.is_user_defined_function(func_name):
                 args = self.generate_user_function_call_arguments(func_name, expr.args)
                 return f"{callee}({args})"
+
+            ray_tracing_call = self.generate_ray_tracing_call_expression(
+                func_name, expr.args
+            )
+            if ray_tracing_call is not None:
+                return ray_tracing_call
 
             if func_name in {"fract", "frac"}:
                 return self.generate_fract_call(expr.args)
@@ -7010,6 +7086,9 @@ class MojoCodeGen:
             name = getattr(expr, "name", str(expr))
             if name in self.expression_identifier_replacements:
                 return self.expression_identifier_replacements[name]
+            ray_builtin = self.mojo_ray_builtin_expression(name)
+            if ray_builtin is not None and name not in self.variable_types:
+                return ray_builtin
             return self.map_enum_variant_reference(name, target_type)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
             expr.__class__
@@ -7304,6 +7383,9 @@ class MojoCodeGen:
         )
 
     def generate_builtin_variable_node(self, expr):
+        ray_builtin = self.mojo_ray_builtin_expression(expr.builtin_name)
+        if ray_builtin is not None:
+            return ray_builtin
         name = self.map_semantic(expr.builtin_name)
         component = getattr(expr, "component", None)
         if not component:
@@ -7314,6 +7396,26 @@ class MojoCodeGen:
             return f"{name}.{component}"
         obj_type = self.variable_types.get(name, "vec4")
         return self.generate_swizzle(expr, name, obj_type, component, swizzle_indices)
+
+    def mojo_ray_builtin_expression(self, name):
+        helper = {
+            "gl_LaunchIDEXT": "ray_launch_id",
+            "gl_LaunchSizeEXT": "ray_launch_size",
+            "gl_HitTEXT": "ray_hit_t",
+            "gl_HitKindEXT": "ray_hit_kind",
+            "gl_WorldRayOriginEXT": "ray_world_origin",
+            "gl_WorldRayDirectionEXT": "ray_world_direction",
+            "gl_ObjectRayOriginEXT": "ray_object_origin",
+            "gl_ObjectRayDirectionEXT": "ray_object_direction",
+            "gl_RayTminEXT": "ray_t_min",
+            "gl_IncomingRayFlagsEXT": "ray_incoming_flags",
+            "gl_InstanceCustomIndexEXT": "ray_instance_custom_index",
+            "gl_GeometryIndexEXT": "ray_geometry_index",
+        }.get(str(name))
+        if helper is None:
+            return None
+        self.required_ray_helpers.add(helper)
+        return f"{helper}()"
 
     def generate_texture_node(self, expr):
         args = [expr.texture_expr]
@@ -7705,18 +7807,52 @@ class MojoCodeGen:
         return self.map_type(self.expression_result_type(arg) or "uint")
 
     def generate_ray_tracing_op(self, expr):
-        operation = getattr(expr, "operation", "ray tracing intrinsic")
-        raise ValueError(
-            "Unsupported Mojo ray tracing intrinsic "
-            f"{operation}; Mojo backend does not model ray tracing pipelines"
+        return self.generate_ray_tracing_call_expression(
+            getattr(expr, "operation", "ray tracing intrinsic"),
+            getattr(expr, "arguments", []),
         )
+
+    def generate_ray_tracing_call_expression(self, operation, args):
+        if operation not in {
+            "TraceRay",
+            "CallShader",
+            "ReportHit",
+            "IgnoreHit",
+            "AcceptHitAndEndSearch",
+        }:
+            return None
+
+        helper_name = self.function_map.get(operation, operation)
+        self.required_ray_helpers.add(helper_name)
+        generated_args = [self.generate_expression(arg) for arg in args or []]
+        if operation == "TraceRay" and len(generated_args) == 11:
+            ray_desc = (
+                "RayDesc("
+                f"{generated_args[6]}, {generated_args[7]}, "
+                f"{generated_args[8]}, {generated_args[9]}"
+                ")"
+            )
+            generated_args = generated_args[:6] + [ray_desc, generated_args[10]]
+        elif operation == "ReportHit" and len(generated_args) == 2:
+            generated_args.append("False")
+        return f"{helper_name}({', '.join(generated_args)})"
 
     def generate_ray_query_op(self, expr):
         operation = getattr(expr, "operation", "ray query method")
-        raise ValueError(
-            "Unsupported Mojo ray query method "
-            f"{operation}; Mojo backend does not model ray queries"
+        helper_name = f"ray_query_{self.mojo_snake_case_name(operation)}"
+        self.required_ray_helpers.add(helper_name)
+        args = [self.generate_expression(getattr(expr, "query_expr", None))]
+        args.extend(
+            self.generate_expression(arg)
+            for arg in getattr(expr, "arguments", []) or []
         )
+        return f"{helper_name}({', '.join(args)})"
+
+    def mojo_snake_case_name(self, name):
+        name = str(name)
+        name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+        name = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name)
+        return name.replace("__", "_").strip("_").lower()
 
     def generate_mesh_op(self, expr):
         operation = getattr(expr, "operation", "mesh intrinsic")
@@ -10004,6 +10140,7 @@ class MojoCodeGen:
             and not self.required_reinterpret_helpers
             and not self.required_sync_helpers
             and not self.required_wave_helpers
+            and not self.required_ray_helpers
         ):
             return ""
 
@@ -10128,6 +10265,9 @@ class MojoCodeGen:
                 code += self.generate_wave_helper(helper)
             code += "\n"
 
+        if self.required_ray_helpers:
+            code += self.generate_ray_helpers()
+
         if self.required_fract_helpers or self.required_saturate_helpers:
             code += "# CrossGL math helpers\n"
             for key in sorted(self.required_fract_helpers):
@@ -10170,6 +10310,94 @@ class MojoCodeGen:
             )
         for key in sorted(self.required_matrix_diagonal_helpers):
             code += self.generate_matrix_diagonal_helper(*key)
+        return code + "\n"
+
+    def generate_ray_helpers(self):
+        code = "# CrossGL ray tracing placeholders\n"
+        if "RayDesc" not in self.struct_types:
+            code += (
+                "@value\n"
+                "struct RayDesc:\n"
+                "    var origin: SIMD[DType.float32, 4]\n"
+                "    var t_min: Float32\n"
+                "    var direction: SIMD[DType.float32, 4]\n"
+                "    var t_max: Float32\n\n"
+            )
+        if "RayQuery" not in self.struct_types:
+            code += "@value\nstruct RayQuery:\n    pass\n\n"
+        if "BuiltInTriangleIntersectionAttributes" not in self.struct_types:
+            code += (
+                "@value\n"
+                "struct BuiltInTriangleIntersectionAttributes:\n"
+                "    var barycentrics: SIMD[DType.float32, 2]\n\n"
+            )
+
+        if "ray_launch_id" in self.required_ray_helpers:
+            code += (
+                "fn ray_launch_id() -> SIMD[DType.uint32, 4]:\n"
+                "    return SIMD[DType.uint32, 4](0, 0, 0, 0)\n\n"
+            )
+        if "ray_launch_size" in self.required_ray_helpers:
+            code += (
+                "fn ray_launch_size() -> SIMD[DType.uint32, 4]:\n"
+                "    return SIMD[DType.uint32, 4](0, 0, 0, 0)\n\n"
+            )
+        for helper_name, return_type, return_value in [
+            ("ray_hit_t", "Float32", "0.0"),
+            ("ray_hit_kind", "UInt32", "0"),
+            ("ray_t_min", "Float32", "0.0"),
+            ("ray_incoming_flags", "UInt32", "0"),
+            ("ray_instance_custom_index", "UInt32", "0"),
+            ("ray_geometry_index", "UInt32", "0"),
+        ]:
+            if helper_name in self.required_ray_helpers:
+                code += f"fn {helper_name}() -> {return_type}:\n"
+                code += f"    return {return_value}\n\n"
+        for helper_name in [
+            "ray_world_origin",
+            "ray_world_direction",
+            "ray_object_origin",
+            "ray_object_direction",
+        ]:
+            if helper_name in self.required_ray_helpers:
+                code += f"fn {helper_name}() -> SIMD[DType.float32, 4]:\n"
+                code += "    return SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)\n\n"
+
+        if "trace_ray" in self.required_ray_helpers:
+            code += (
+                "fn trace_ray[AS: AnyType, Flags: AnyType, Mask: AnyType, "
+                "HitGroup: AnyType, Multiplier: AnyType, Miss: AnyType, "
+                "Ray: AnyType, Payload: AnyType](scene: AS, flags: Flags, "
+                "mask: Mask, hit_group: HitGroup, multiplier: Multiplier, "
+                "miss: Miss, ray: Ray, payload: Payload):\n"
+                "    pass\n\n"
+            )
+        if "call_shader" in self.required_ray_helpers:
+            code += (
+                "fn call_shader[Index: AnyType, Data: AnyType](index: Index, "
+                "data: Data):\n"
+                "    pass\n\n"
+            )
+        if "report_hit" in self.required_ray_helpers:
+            code += (
+                "fn report_hit[Distance: AnyType, Kind: AnyType, Attributes: AnyType]"
+                "(distance: Distance, kind: Kind, attributes: Attributes) -> Bool:\n"
+                "    return False\n\n"
+            )
+        if "ignore_hit" in self.required_ray_helpers:
+            code += "fn ignore_hit():\n    pass\n\n"
+        if "accept_hit_and_end_search" in self.required_ray_helpers:
+            code += "fn accept_hit_and_end_search():\n    pass\n\n"
+
+        for helper_name in sorted(self.required_ray_helpers):
+            if not helper_name.startswith("ray_query_"):
+                continue
+            return_type = "Bool" if helper_name == "ray_query_proceed" else "UInt32"
+            return_value = "False" if return_type == "Bool" else "0"
+            code += (
+                f"fn {helper_name}[Query: AnyType](query: Query) -> {return_type}:\n"
+                f"    return {return_value}\n\n"
+            )
         return code + "\n"
 
     def generate_sync_helper(self, helper_name):

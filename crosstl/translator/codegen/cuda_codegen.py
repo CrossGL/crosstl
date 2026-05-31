@@ -15,6 +15,8 @@ from ..ast import (
     MemberAccessNode,
     PointerAccessNode,
     RangeNode,
+    RayQueryOpNode,
+    RayTracingOpNode,
     ReturnNode,
     TernaryOpNode,
     UnaryOpNode,
@@ -148,6 +150,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
+        self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
         self.helper_functions = {}
@@ -163,6 +166,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
         self.current_function_name = None
+        self.current_stage_name = None
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
         self.builtin_map = {
@@ -200,6 +204,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.struct_member_types,
             self.struct_member_image_accesses,
         ) = self.collect_struct_member_metadata(ast_node)
+        self.struct_member_semantics = {}
         self.function_return_types = self.collect_function_return_types(ast_node)
         self.helper_functions = {}
         self.query_metadata_aliases = {}
@@ -211,6 +216,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         )
         self.resource_query_info_required = False
         self.assignment_lhs_depth = 0
+        self.current_stage_name = None
         (
             self.query_resource_names,
             self.query_metadata_function_params,
@@ -240,6 +246,10 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "task",
             "object",
             "amplification",
+        }
+
+    def cuda_ray_stage_names(self):
+        return {
             "ray_any_hit",
             "ray_callable",
             "ray_closest_hit",
@@ -247,6 +257,16 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             "ray_intersection",
             "ray_miss",
         }
+
+    def cuda_ray_stage_metadata_name(self, stage_name):
+        return {
+            "ray_any_hit": "any_hit",
+            "ray_callable": "callable",
+            "ray_closest_hit": "closest_hit",
+            "ray_generation": "ray_generation",
+            "ray_intersection": "intersection",
+            "ray_miss": "miss",
+        }.get(stage_name, stage_name)
 
     def validate_supported_stage_types(self, ast_node, target_stage=None):
         unsupported_stages = set()
@@ -419,6 +439,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         # Handle legacy shader structure
         if hasattr(node, "stages") and node.stages:
             emitted_local_functions = set()
+            stage_entry_name_counts = self.stage_entry_name_counts(node.stages)
             for stage_type, stage in node.stages.items():
                 if hasattr(stage, "entry_point"):
                     # Set the stage type context for proper qualifier handling
@@ -444,8 +465,39 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                         self.emit("")
                         emitted_local_functions.add(id(func))
 
+                    saved_stage_name = self.current_stage_name
+                    self.current_stage_name = stage_name
+                    saved_override = getattr(
+                        self, "current_stage_entry_function_name", None
+                    )
+                    self.current_stage_entry_function_name = (
+                        self.stage_entry_function_name(
+                            stage_name, stage.entry_point, stage_entry_name_counts
+                        )
+                    )
                     self.visit(stage.entry_point)
+                    self.current_stage_entry_function_name = saved_override
+                    self.current_stage_name = saved_stage_name
                     self.emit("")
+
+    def stage_entry_name_counts(self, stages):
+        counts = {}
+        for stage in stages.values():
+            entry_point = getattr(stage, "entry_point", None)
+            name = getattr(entry_point, "name", None)
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+
+    def stage_entry_function_name(self, stage_name, entry_point, name_counts):
+        name = getattr(entry_point, "name", None)
+        if not name:
+            return name
+        if stage_name in self.cuda_ray_stage_names() and name == "main":
+            return f"{stage_name}_{name}"
+        if name_counts.get(name, 0) > 1:
+            return f"{stage_name}_{name}"
+        return name
 
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
@@ -489,10 +541,20 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             self.current_function_return_type = "void"
             return_type = "void"
 
+        stage_name = self.function_stage_name(node)
+        return_semantic = self.semantic_from_node(node)
+        self.validate_cuda_return_semantic(
+            stage_name, self.current_function_return_type, return_semantic
+        )
+        self.validate_cuda_struct_return_semantics(
+            stage_name, self.current_function_return_type
+        )
+
         qualifier_str = " ".join(qualifiers)
 
         params = []
         param_list = getattr(node, "parameters", getattr(node, "params", []))
+        self.validate_cuda_stage_parameter_semantics(stage_name, param_list)
 
         for param in param_list:
             if hasattr(param, "param_type"):
@@ -523,7 +585,27 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 params.append(counter_param)
 
         param_str = ", ".join(params)
-        self.emit(f"{qualifier_str} {return_type} {node.name}({param_str}) {{")
+        if stage_name in self.cuda_ray_stage_names():
+            self.emit(
+                "// CrossGL ray stage: "
+                f"{self.cuda_ray_stage_metadata_name(stage_name)}"
+            )
+        if return_semantic:
+            self.emit(
+                f"// CrossGL return semantic: {self.map_semantic(return_semantic)}"
+            )
+        if stage_name:
+            for param in param_list:
+                param_semantic = self.semantic_from_node(param)
+                if param_semantic:
+                    self.emit(
+                        f"// CrossGL parameter semantic: {param.name}: "
+                        f"{self.map_semantic(param_semantic)}"
+                    )
+        function_name = getattr(self, "current_stage_entry_function_name", None)
+        if not function_name:
+            function_name = node.name
+        self.emit(f"{qualifier_str} {return_type} {function_name}({param_str}) {{")
 
         self.indent_level += 1
 
@@ -549,6 +631,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
 
         members = getattr(node, "members", [])
         member_types = {}
+        member_semantics = {}
         member_image_accesses = {}
         query_metadata_members = self.struct_query_metadata_members.get(
             node.name, set()
@@ -566,7 +649,21 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
             member_access = self.explicit_resource_access(member)
             if member_access is not None and self.is_storage_image_type(member_type):
                 member_image_accesses[member.name] = member_access
-            self.emit(f"{self.format_typed_declarator(member_type, member.name)};")
+            semantic = self.semantic_from_node(member)
+            if semantic:
+                member_semantics[member.name] = semantic
+                self.validate_cuda_builtin_semantic_type(
+                    semantic, member_type, "struct member semantic"
+                )
+            semantic_comment = (
+                f" // CrossGL semantic: {self.map_semantic(semantic)}"
+                if semantic
+                else ""
+            )
+            self.emit(
+                f"{self.format_typed_declarator(member_type, member.name)};"
+                f"{semantic_comment}"
+            )
             if member.name in query_metadata_members:
                 self.resource_query_info_required = True
                 metadata_declarator = self.format_typed_declarator(
@@ -577,6 +674,7 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
                 self.emit(f"{metadata_declarator};")
 
         self.struct_member_types[node.name] = member_types
+        self.struct_member_semantics[node.name] = member_semantics
         self.struct_member_image_accesses[node.name] = member_image_accesses
         self.indent_level -= 1
         self.emit("};")
@@ -690,6 +788,387 @@ class CudaCodeGen(VectorArithmeticMixin, ResourceQueryMixin, ResourceDiagnosticM
         if isinstance(size, int):
             return str(size)
         return self.visit(size)
+
+    def semantic_from_node(self, node):
+        semantic = getattr(node, "semantic", None)
+        if semantic:
+            return semantic
+        for attr in getattr(node, "attributes", []) or []:
+            attr_name = getattr(attr, "name", None)
+            if self.is_semantic_name(attr_name):
+                return attr_name
+        return None
+
+    def is_semantic_name(self, name):
+        if name is None:
+            return False
+        name = str(name)
+        upper_name = name.upper()
+        if name.startswith("gl_"):
+            return True
+        if upper_name in {
+            "BINORMAL",
+            "CALLABLE_DATA",
+            "CALLABLEDATAEXT",
+            "CALLABLEDATAINEXT",
+            "COLOR",
+            "HIT_ATTRIBUTE",
+            "HITATTRIBUTEEXT",
+            "NORMAL",
+            "PAYLOAD",
+            "POSITION",
+            "RAYPAYLOADEXT",
+            "RAYPAYLOADINEXT",
+            "SV_DEPTH",
+            "SV_DISPATCHRAYSDIMENSIONS",
+            "SV_DISPATCHRAYSINDEX",
+            "SV_DISPATCHTHREADID",
+            "SV_DRAWID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_POSITION",
+            "SV_PRIMITIVEID",
+            "SV_SAMPLEINDEX",
+            "SV_STARTINSTANCELOCATION",
+            "SV_STARTVERTEXLOCATION",
+            "SV_TARGET",
+            "SV_VERTEXID",
+            "TANGENT",
+            "TEXCOORD",
+        }:
+            return True
+        for prefix in ("COLOR", "SV_TARGET", "TEXCOORD"):
+            if upper_name.startswith(prefix) and upper_name[len(prefix) :].isdigit():
+                return True
+        return False
+
+    def map_semantic(self, semantic):
+        if semantic is None:
+            return ""
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth(any)"
+        if lower_name == "gl_fragcolor":
+            return "target(0)"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "SV_TARGET":
+            return "target(0)"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix.isdigit():
+                return f"target({suffix})"
+        if upper_name == "TEXCOORD":
+            return "texcoord"
+        if (
+            upper_name.startswith("TEXCOORD")
+            and upper_name[len("TEXCOORD") :].isdigit()
+        ):
+            return f"texcoord({upper_name[len('TEXCOORD'):]})"
+        if upper_name == "COLOR":
+            return "color"
+        if upper_name.startswith("COLOR") and upper_name[len("COLOR") :].isdigit():
+            return f"color({upper_name[len('COLOR'):]})"
+        generic_semantics = {
+            "BINORMAL": "binormal",
+            "NORMAL": "normal",
+            "POSITION": "position",
+            "TANGENT": "tangent",
+            "gl_FragCoord": "position",
+            "gl_FrontFacing": "front_facing",
+            "gl_PointCoord": "point_coord",
+            "gl_VertexID": "vertex_id",
+            "gl_InstanceID": "instance_id",
+            "gl_BaseVertex": "start_vertex_location",
+            "gl_BaseInstance": "start_instance_location",
+            "gl_DrawID": "draw_id",
+            "gl_WorkGroupID": "workgroup_id",
+            "gl_LocalInvocationID": "local_invocation_id",
+            "gl_GlobalInvocationID": "global_invocation_id",
+            "gl_LocalInvocationIndex": "local_invocation_index",
+            "payload": "ray_payload",
+            "rayPayloadEXT": "ray_payload",
+            "rayPayloadInEXT": "ray_payload",
+            "hit_attribute": "hit_attribute",
+            "hitAttributeEXT": "hit_attribute",
+            "callable_data": "callable_data",
+            "callableDataEXT": "callable_data",
+            "callableDataInEXT": "callable_data",
+            "gl_LaunchIDEXT": "launch_id",
+            "gl_LaunchSizeEXT": "launch_size",
+            "gl_HitTEXT": "hit_t",
+            "gl_HitKindEXT": "hit_kind",
+            "SV_DispatchRaysIndex": "launch_id",
+            "SV_DispatchRaysDimensions": "launch_size",
+            "SV_DispatchThreadID": "global_invocation_id",
+            "SV_DrawID": "draw_id",
+            "SV_GroupID": "workgroup_id",
+            "SV_GroupIndex": "local_invocation_index",
+            "SV_GroupThreadID": "local_invocation_id",
+            "SV_InstanceID": "instance_id",
+            "SV_IsFrontFace": "front_facing",
+            "SV_PrimitiveID": "primitive_id",
+            "SV_SampleIndex": "sample_index",
+            "SV_StartInstanceLocation": "start_instance_location",
+            "SV_StartVertexLocation": "start_vertex_location",
+            "SV_VertexID": "vertex_id",
+        }
+        return generic_semantics.get(semantic_name, semantic_name)
+
+    def cuda_semantic_output_kind(self, semantic):
+        if semantic is None:
+            return None
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        upper_name = semantic_name.upper()
+        if lower_name in {
+            "gl_fragcoord",
+            "gl_frontfacing",
+            "gl_globalinvocationid",
+            "gl_instanceid",
+            "gl_localinvocationid",
+            "gl_localinvocationindex",
+            "gl_pointcoord",
+            "gl_vertexid",
+            "gl_workgroupid",
+        } or upper_name in {
+            "SV_DISPATCHTHREADID",
+            "SV_GROUPID",
+            "SV_GROUPINDEX",
+            "SV_GROUPTHREADID",
+            "SV_INSTANCEID",
+            "SV_ISFRONTFACE",
+            "SV_VERTEXID",
+        }:
+            return "input_only"
+        if lower_name == "gl_position" or upper_name == "SV_POSITION":
+            return "position"
+        if lower_name == "gl_fragdepth" or upper_name == "SV_DEPTH":
+            return "depth"
+        if lower_name.startswith("gl_fragcolor"):
+            suffix = lower_name[len("gl_fragcolor") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        if upper_name.startswith("SV_TARGET"):
+            suffix = upper_name[len("SV_TARGET") :]
+            if suffix == "" or suffix.isdigit():
+                return "color"
+        return None
+
+    def is_cuda_float4_type(self, type_name):
+        return self.map_type(type_name) == "float4"
+
+    def is_cuda_float_scalar_type(self, type_name):
+        return self.map_type(type_name) == "float"
+
+    def validate_cuda_builtin_semantic_type(self, semantic, type_name, context):
+        kind = self.cuda_semantic_output_kind(semantic)
+        if kind is None or kind == "input_only":
+            return
+        if kind in {"position", "color"}:
+            if self.is_cuda_float4_type(type_name):
+                return
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "expected vec4-compatible type"
+            )
+        if kind == "depth" and not self.is_cuda_float_scalar_type(type_name):
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "expected float type"
+            )
+
+    def validate_cuda_output_semantic_stage(self, stage_name, semantic, context):
+        kind = self.cuda_semantic_output_kind(semantic)
+        if kind is None:
+            return
+        if kind == "input_only":
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA codegen; "
+                "input-only builtin semantics cannot be used as outputs"
+            )
+        if stage_name is None:
+            return
+        allowed_stages = {
+            "position": {"vertex"},
+            "color": {"fragment"},
+            "depth": {"fragment"},
+        }[kind]
+        if stage_name not in allowed_stages:
+            allowed = ", ".join(sorted(allowed_stages))
+            raise ValueError(
+                f"Unsupported {semantic} {context} for CUDA {stage_name} stage; "
+                f"valid stage is {allowed}"
+            )
+
+    def function_stage_name(self, node):
+        if self.current_stage_name:
+            return self.current_stage_name
+        qualifiers = list(getattr(node, "qualifiers", []) or [])
+        qualifier = getattr(node, "qualifier", None)
+        if qualifier:
+            qualifiers.append(qualifier)
+        supported_stage_names = {
+            "compute",
+            "fragment",
+            "vertex",
+        } | self.cuda_ray_stage_names()
+        for qualifier in qualifiers:
+            qualifier_name = str(qualifier).lower()
+            if qualifier_name in supported_stage_names:
+                return qualifier_name
+        return None
+
+    def validate_cuda_return_semantic(self, stage_name, return_type, semantic):
+        if semantic is None:
+            return
+        if self.map_type(return_type) == "void":
+            raise ValueError(
+                f"Unsupported {semantic} return semantic for CUDA codegen; "
+                "void return type"
+            )
+        self.validate_cuda_output_semantic_stage(
+            stage_name, semantic, "return semantic"
+        )
+        self.validate_cuda_builtin_semantic_type(
+            semantic, return_type, "return semantic"
+        )
+
+    def validate_cuda_struct_return_semantics(self, stage_name, return_type):
+        if stage_name is None:
+            return
+        base_type = self.type_name_string(return_type)
+        if not base_type:
+            return
+        base_type = base_type.split("<", 1)[0].split("[", 1)[0].strip()
+        member_semantics = self.struct_member_semantics.get(base_type, {})
+        member_types = self.struct_member_types.get(base_type, {})
+        for member_name, semantic in member_semantics.items():
+            context = f"struct return semantic '{base_type}.{member_name}'"
+            self.validate_cuda_output_semantic_stage(stage_name, semantic, context)
+            self.validate_cuda_builtin_semantic_type(
+                semantic, member_types.get(member_name, "float"), context
+            )
+
+    def cuda_stage_parameter_semantic_key(self, semantic):
+        semantic_name = str(semantic)
+        lower_name = semantic_name.lower()
+        if lower_name.startswith("gl_"):
+            return lower_name
+        return semantic_name.upper()
+
+    def cuda_stage_parameter_semantic_rules(self):
+        ray_stages = self.cuda_ray_stage_names()
+        ray_hit_stages = {"ray_any_hit", "ray_closest_hit", "ray_intersection"}
+        return {
+            "gl_vertexid": ("vertex_id", "uint", {"vertex"}),
+            "gl_instanceid": ("instance_id", "uint", {"vertex"}),
+            "gl_basevertex": ("start_vertex_location", "int", {"vertex"}),
+            "gl_baseinstance": ("start_instance_location", "uint", {"vertex"}),
+            "gl_drawid": ("draw_id", "uint", {"vertex"}),
+            "SV_VERTEXID": ("vertex_id", "uint", {"vertex"}),
+            "SV_INSTANCEID": ("instance_id", "uint", {"vertex"}),
+            "SV_STARTVERTEXLOCATION": ("start_vertex_location", "int", {"vertex"}),
+            "SV_STARTINSTANCELOCATION": ("start_instance_location", "uint", {"vertex"}),
+            "SV_DRAWID": ("draw_id", "uint", {"vertex"}),
+            "gl_position": ("position", "float4", {"fragment"}),
+            "gl_fragcoord": ("position", "float4", {"fragment"}),
+            "gl_frontfacing": ("front_facing", "bool", {"fragment"}),
+            "gl_pointcoord": ("point_coord", "float2", {"fragment"}),
+            "gl_primitiveid": (
+                "primitive_id",
+                "uint",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "gl_sampleid": ("sample_index", "uint", {"fragment"}),
+            "SV_POSITION": ("position", "float4", {"fragment"}),
+            "SV_ISFRONTFACE": ("front_facing", "bool", {"fragment"}),
+            "SV_PRIMITIVEID": (
+                "primitive_id",
+                "uint",
+                {"fragment"} | ray_hit_stages,
+            ),
+            "SV_SAMPLEINDEX": ("sample_index", "uint", {"fragment"}),
+            "gl_workgroupid": ("workgroup_id", "uint3", {"compute"}),
+            "gl_localinvocationid": ("local_invocation_id", "uint3", {"compute"}),
+            "gl_globalinvocationid": ("global_invocation_id", "uint3", {"compute"}),
+            "gl_localinvocationindex": ("local_invocation_index", "uint", {"compute"}),
+            "SV_GROUPID": ("workgroup_id", "uint3", {"compute"}),
+            "SV_GROUPTHREADID": ("local_invocation_id", "uint3", {"compute"}),
+            "SV_DISPATCHTHREADID": ("global_invocation_id", "uint3", {"compute"}),
+            "SV_GROUPINDEX": ("local_invocation_index", "uint", {"compute"}),
+            "gl_launchidext": ("launch_id", "uint3", ray_stages),
+            "gl_launchsizeext": ("launch_size", "uint3", ray_stages),
+            "gl_hittext": ("hit_t", "float", ray_hit_stages),
+            "gl_hitkindext": ("hit_kind", "uint", {"ray_any_hit"}),
+            "SV_DISPATCHRAYSINDEX": ("launch_id", "uint3", ray_stages),
+            "SV_DISPATCHRAYSDIMENSIONS": ("launch_size", "uint3", ray_stages),
+        }
+
+    def validate_cuda_stage_parameter_semantic_type(
+        self, param, semantic, expected_type
+    ):
+        param_type = self.resource_type_with_access(
+            self.get_parameter_type(param), param
+        )
+        actual_type = self.convert_crossgl_type_to_cuda(param_type)
+        if actual_type == expected_type:
+            return
+        raise ValueError(
+            f"Unsupported {semantic} stage parameter semantic for CUDA codegen; "
+            f"expected {expected_type} type"
+        )
+
+    def validate_cuda_stage_parameter_semantics(self, stage_name, parameters):
+        if stage_name is None:
+            return
+
+        rules = self.cuda_stage_parameter_semantic_rules()
+        seen_system_semantics = {}
+        for param in parameters or []:
+            semantic = self.semantic_from_node(param)
+            if semantic is None:
+                continue
+
+            semantic_key = self.cuda_stage_parameter_semantic_key(semantic)
+            rule = rules.get(semantic_key)
+            if rule is not None:
+                mapped_semantic, expected_type, allowed_stages = rule
+                if stage_name not in allowed_stages:
+                    allowed = ", ".join(sorted(allowed_stages))
+                    raise ValueError(
+                        f"Unsupported {semantic} stage parameter semantic for CUDA "
+                        f"{stage_name} stage; valid stage is {allowed}"
+                    )
+                param_name = getattr(param, "name", getattr(param, "param_name", None))
+                previous_name = seen_system_semantics.get(mapped_semantic)
+                if previous_name is not None:
+                    raise ValueError(
+                        f"Duplicate CUDA stage parameter semantic {mapped_semantic} "
+                        f"on '{previous_name}' and '{param_name}'"
+                    )
+                seen_system_semantics[mapped_semantic] = param_name
+                self.validate_cuda_stage_parameter_semantic_type(
+                    param, semantic, expected_type
+                )
+                continue
+
+            kind = self.cuda_semantic_output_kind(semantic)
+            if kind in {"color", "depth"}:
+                raise ValueError(
+                    f"Unsupported {semantic} stage parameter semantic for CUDA "
+                    f"{stage_name} stage; output-only builtin semantics cannot "
+                    "be used as inputs"
+                )
 
     def visit_VariableNode(self, node):
         var_type = self.get_variable_node_type(node)

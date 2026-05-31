@@ -1002,6 +1002,275 @@ class TestCudaCodeGen:
         assert "float3 position;" in cuda_code
         assert "float3 normal;" in cuda_code
 
+    def test_struct_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+        """Test CUDA preserves and validates struct member builtin semantics."""
+        valid_code = """
+        shader CudaStructSemantics {
+            struct FSOutput {
+                vec4 color @ SV_Target1;
+                float depth @ gl_FragDepth;
+                vec2 uv @ TEXCOORD0;
+            };
+
+            fragment {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(valid_code).tokens).parse())
+
+        assert "float4 color; // CrossGL semantic: target(1)" in cuda_code
+        assert "float depth; // CrossGL semantic: depth(any)" in cuda_code
+        assert "float2 uv; // CrossGL semantic: texcoord(0)" in cuda_code
+
+        invalid_type = """
+        shader BadCudaStructSemanticType {
+            struct FSOutput {
+                vec3 color @ gl_FragColor;
+            };
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vec4-compatible"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadCudaStructSemanticStage {
+            struct FSOutput {
+                vec4 color @ gl_FragColor;
+            };
+
+            vertex {
+                FSOutput main() {
+                    FSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadCudaStructInputOnlySemantic {
+            struct VSOutput {
+                uint vertexId @ gl_VertexID;
+            };
+
+            vertex {
+                VSOutput main() {
+                    VSOutput output;
+                    return output;
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_return_semantics_validate_builtin_types_and_stage_context_for_cuda(self):
+        """Test CUDA validates direct builtin return semantics."""
+        invalid_depth_type = """
+        shader BadCudaDepthType {
+            fragment {
+                vec4 main() @ gl_FragDepth {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragDepth.*float type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_depth_type).tokens).parse())
+
+        invalid_stage = """
+        shader BadCudaStage {
+            vertex {
+                vec4 main() @ gl_FragColor {
+                    return vec4(0.0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragColor.*vertex stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_input_only = """
+        shader BadCudaInputOnlyReturn {
+            vertex {
+                uint main() @ gl_VertexID {
+                    return uint(0);
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*input-only"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_input_only).tokens).parse())
+
+    def test_direct_return_semantics_emit_metadata_for_cuda(self, tmp_path):
+        """Test CUDA preserves direct return semantics as comments."""
+        color_code = """
+        shader CudaDirectReturnSemantics {
+            vertex {
+                vec4 vertexMain() @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+
+            fragment {
+                vec4 fragmentMain() @ gl_FragColor {
+                    return vec4(1.0, 0.5, 0.25, 1.0);
+                }
+            }
+        }
+        """
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(color_code).tokens).parse())
+
+        assert "// CrossGL return semantic: position" in cuda_code
+        assert "__device__ float4 vertexMain()" in cuda_code
+        assert "// CrossGL return semantic: target(0)" in cuda_code
+        assert "__device__ float4 fragmentMain()" in cuda_code
+
+        depth_code = """
+        shader CudaDepthReturnSemantics {
+            fragment {
+                float depthMain() @ gl_FragDepth {
+                    return 0.5;
+                }
+            }
+        }
+        """
+        depth_cuda_code = CudaCodeGen().generate(
+            Parser(Lexer(depth_code).tokens).parse()
+        )
+
+        assert "// CrossGL return semantic: depth(any)" in depth_cuda_code
+        assert "__device__ float depthMain()" in depth_cuda_code
+
+        compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+        compile_cuda_if_nvcc_available(depth_cuda_code, tmp_path)
+
+    def test_stage_parameter_semantics_emit_metadata_for_cuda(self, tmp_path):
+        """Test CUDA preserves builtin stage parameter semantics as comments."""
+        vertex_code = """
+        shader CudaVertexStageParameterSemantics {
+            vertex {
+                vec4 main(
+                    uint vertexId @ gl_VertexID,
+                    uint instanceId @ SV_InstanceID
+                ) @ gl_Position {
+                    return vec4(0.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        vertex_cuda = CudaCodeGen().generate(Parser(Lexer(vertex_code).tokens).parse())
+
+        assert "// CrossGL parameter semantic: vertexId: vertex_id" in vertex_cuda
+        assert "// CrossGL parameter semantic: instanceId: instance_id" in vertex_cuda
+        assert "__device__ float4 main(uint vertexId" in vertex_cuda
+
+        fragment_code = """
+        shader CudaFragmentStageParameterSemantics {
+            fragment {
+                vec4 main(
+                    vec4 fragCoord @ gl_FragCoord,
+                    bool front @ gl_FrontFacing
+                ) @ gl_FragColor {
+                    return vec4(1.0, 0.0, 0.0, 1.0);
+                }
+            }
+        }
+        """
+        fragment_cuda = CudaCodeGen().generate(
+            Parser(Lexer(fragment_code).tokens).parse()
+        )
+
+        assert "// CrossGL parameter semantic: fragCoord: position" in fragment_cuda
+        assert "// CrossGL parameter semantic: front: front_facing" in fragment_cuda
+        assert "__device__ float4 main(float4 fragCoord, bool front)" in fragment_cuda
+
+        compute_code = """
+        shader CudaComputeStageParameterSemantics {
+            compute {
+                void main(
+                    uvec3 globalId @ gl_GlobalInvocationID,
+                    uvec3 localId @ SV_GroupThreadID,
+                    uint lane @ gl_LocalInvocationIndex
+                ) {
+                    uint copy = lane;
+                }
+            }
+        }
+        """
+        compute_cuda = CudaCodeGen().generate(
+            Parser(Lexer(compute_code).tokens).parse()
+        )
+
+        assert (
+            "// CrossGL parameter semantic: globalId: global_invocation_id"
+            in compute_cuda
+        )
+        assert (
+            "// CrossGL parameter semantic: localId: local_invocation_id"
+            in compute_cuda
+        )
+        assert (
+            "// CrossGL parameter semantic: lane: local_invocation_index"
+            in compute_cuda
+        )
+        assert "__global__ void main(uint3 globalId" in compute_cuda
+        compile_cuda_if_nvcc_available(vertex_cuda, tmp_path)
+        compile_cuda_if_nvcc_available(fragment_cuda, tmp_path)
+        compile_cuda_if_nvcc_available(compute_cuda, tmp_path)
+
+    def test_stage_parameter_semantics_validate_builtin_stage_type_for_cuda(self):
+        """Test CUDA rejects invalid builtin stage parameter semantics."""
+        invalid_stage = """
+        shader BadCudaStageParameterStage {
+            fragment {
+                void main(uint vertexId @ gl_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_stage).tokens).parse())
+
+        invalid_type = """
+        shader BadCudaStageParameterType {
+            fragment {
+                void main(vec3 fragCoord @ gl_FragCoord) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+            CudaCodeGen().generate(Parser(Lexer(invalid_type).tokens).parse())
+
+        output_only = """
+        shader BadCudaStageParameterOutputOnly {
+            vertex {
+                void main(vec4 color @ SV_Target0) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+            CudaCodeGen().generate(Parser(Lexer(output_only).tokens).parse())
+
+        duplicate_system_value = """
+        shader BadCudaStageParameterDuplicate {
+            vertex {
+                void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+                }
+            }
+        }
+        """
+        with pytest.raises(ValueError, match="Duplicate CUDA stage parameter semantic"):
+            CudaCodeGen().generate(Parser(Lexer(duplicate_system_value).tokens).parse())
+
     def test_enum_generation_and_compute_use(self):
         """Test CUDA emits top-level enums before kernels that use them."""
         source_code = """

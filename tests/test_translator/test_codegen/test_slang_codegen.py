@@ -4990,6 +4990,69 @@ def test_slangc_smoke_compiles_generated_stage_interfaces_if_available(tmp_path)
     )
 
 
+def test_slangc_smoke_compiles_generated_direct_return_semantics_if_available(
+    tmp_path,
+):
+    color_code = """
+    shader SlangDirectReturnSemanticsCompileSmoke {
+        vertex {
+            vec4 main(vec3 position @ POSITION) @ gl_Position {
+                return vec4(position, 1.0);
+            }
+        }
+
+        fragment {
+            vec4 main(vec4 fragCoord @ gl_FragCoord) @ gl_FragColor {
+                return vec4(fragCoord.xy, 0.25, 1.0);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(color_code)))
+
+    assert "float4 VSMain(float3 position : POSITION) : SV_Position" in generated_code
+    assert "return float4(position, 1.0);" in generated_code
+    assert "float4 PSMain(float4 fragCoord : SV_Position) : SV_Target" in generated_code
+    assert "return float4(fragCoord.xy, 0.25, 1.0);" in generated_code
+
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "vertex",
+        profile="vs_6_0",
+        entry="VSMain",
+    )
+    compile_generated_slang(
+        generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
+
+    depth_code = """
+    shader SlangDepthReturnSemanticsCompileSmoke {
+        fragment {
+            float main() @ gl_FragDepth {
+                return 0.5;
+            }
+        }
+    }
+    """
+    depth_generated_code = generate_code(parse_code(tokenize_code(depth_code)))
+
+    assert "float PSMain() : SV_Depth" in depth_generated_code
+    assert "return 0.5;" in depth_generated_code
+
+    compile_generated_slang(
+        depth_generated_code,
+        tmp_path,
+        "fragment",
+        profile="ps_6_0",
+        entry="PSMain",
+    )
+
+
 def test_slangc_smoke_compiles_generated_mesh_task_interfaces_if_available(
     tmp_path,
 ):
@@ -5309,6 +5372,89 @@ def test_slangc_smoke_compiles_generated_ray_stage_interfaces_if_available(
         ("miss", "MissMain"),
         ("callable", "CallableMain"),
         ("intersection", "IntersectionMain"),
+    ]:
+        compile_generated_slang(
+            generated_code,
+            tmp_path,
+            stage,
+            profile="sm_6_3",
+            entry=entry,
+        )
+
+
+def test_slangc_smoke_compiles_generated_ray_tracing_pipeline_if_available(
+    tmp_path,
+):
+    code = """
+    shader SlangRayPipelineCompileSmoke {
+        struct RayPayload {
+            vec3 color;
+        };
+
+        struct HitAttributes {
+            vec2 barycentrics;
+        };
+
+        struct CallableData {
+            uint value;
+        };
+
+        accelerationStructureEXT scene @binding(0) @set(0);
+
+        ray_generation {
+            void main() {
+                RayDesc ray;
+                RayPayload payload;
+                CallableData data;
+                TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
+                CallShader(0, data);
+            }
+        }
+
+        ray_closest_hit {
+            void main(
+                RayPayload payload @ payload,
+                HitAttributes attributes @ hit_attribute
+            ) {
+                payload.color = vec3(attributes.barycentrics, 1.0);
+            }
+        }
+
+        ray_miss {
+            void main(RayPayload payload @ payload) {
+                payload.color = vec3(0.0, 0.0, 0.0);
+            }
+        }
+
+        ray_callable {
+            void main(CallableData data @ callableDataInEXT) {
+                data.value = data.value + 1u;
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert (
+        "[[vk::binding(0, 0)]] RaytracingAccelerationStructure scene "
+        ": register(t0, space0);" in generated_code
+    )
+    assert "TraceRay(scene, 0, 255, 0, 1, 0, ray, payload);" in generated_code
+    assert "CallShader(0, data);" in generated_code
+    assert (
+        "void ClosestHitMain(inout RayPayload payload, "
+        "in HitAttributes attributes)" in generated_code
+    )
+    assert "void MissMain(inout RayPayload payload)" in generated_code
+    assert "void CallableMain(inout CallableData data)" in generated_code
+    assert "accelerationStructureEXT" not in generated_code
+
+    for stage, entry in [
+        ("raygeneration", "RayGenMain"),
+        ("closesthit", "ClosestHitMain"),
+        ("miss", "MissMain"),
+        ("callable", "CallableMain"),
     ]:
         compile_generated_slang(
             generated_code,
@@ -20726,6 +20872,94 @@ def test_stage_input_parameter_semantic_annotations():
     assert "uint3 globalId : SV_DispatchThreadID" in generated_code
     assert "uint3 localId : SV_GroupThreadID" in generated_code
     assert "uint3 groupId : SV_GroupID" in generated_code
+
+
+def test_stage_parameter_semantics_cover_tessellation_system_values():
+    code = """
+    shader TessellationInputSemantics {
+        tessellation_control {
+            void main(
+                uint invocation @ gl_InvocationID,
+                uint primitive @ gl_PrimitiveID
+            ) @domain(tri) @outputcontrolpoints(3) {
+            }
+        }
+
+        tessellation_evaluation {
+            void main(
+                vec3 tessCoord @ gl_TessCoord,
+                uint primitive @ gl_PrimitiveID
+            ) @domain(tri) {
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "uint invocation : SV_OutputControlPointID" in generated_code
+    assert "uint primitive : SV_PrimitiveID" in generated_code
+    assert "float3 tessCoord : SV_DomainLocation" in generated_code
+    assert ": gl_InvocationID" not in generated_code
+    assert ": gl_TessCoord" not in generated_code
+
+
+def test_stage_parameter_semantics_validate_builtin_stage_and_type():
+    invalid_stage = """
+    shader BadSlangStageParameterStage {
+        fragment {
+            void main(uint vertexId @ gl_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_VertexID.*fragment stage"):
+        generate_code(parse_code(tokenize_code(invalid_stage)))
+
+    invalid_type = """
+    shader BadSlangStageParameterType {
+        fragment {
+            void main(vec3 fragCoord @ gl_FragCoord) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="gl_FragCoord.*expected float4 type"):
+        generate_code(parse_code(tokenize_code(invalid_type)))
+
+    output_only = """
+    shader BadSlangStageParameterOutputOnly {
+        vertex {
+            void main(vec4 color @ SV_Target0) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="SV_Target0.*output-only"):
+        generate_code(parse_code(tokenize_code(output_only)))
+
+    gl_position_input = """
+    shader SlangStageParameterGlPosition {
+        fragment {
+            void main(vec4 position @ gl_Position) {
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(gl_position_input)))
+    assert "float4 position : SV_Position" in generated
+
+
+def test_stage_parameter_semantics_reject_duplicate_system_values():
+    code = """
+    shader DuplicateSlangStageParameterSemantic {
+        vertex {
+            void main(uint vertexId @ gl_VertexID, uint alsoVertexId @ SV_VertexID) {
+            }
+        }
+    }
+    """
+    with pytest.raises(ValueError, match="Duplicate Slang stage parameter semantic"):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_match_with_literal_patterns_lowers_to_switch():
