@@ -1,5 +1,3 @@
-"""Test HIP Parser"""
-
 import pytest
 
 from crosstl.backend.HIP.HipAst import (
@@ -43,7 +41,6 @@ class TestHipParser:
         return parser.parse()
 
     def test_missing_semicolon_after_expression_statement_errors(self):
-        """Test expression statements require semicolons."""
         code = """
         void host() {
             sink()
@@ -54,7 +51,6 @@ class TestHipParser:
             self.parse_code(code)
 
     def test_missing_semicolon_between_assignments_errors(self):
-        """Test adjacent assignments cannot parse without separators."""
         code = """
         void host() {
             x = 1 y = 2;
@@ -65,7 +61,6 @@ class TestHipParser:
             self.parse_code(code)
 
     def test_missing_semicolon_between_declarations_errors(self):
-        """Test adjacent declarations cannot parse without separators."""
         code = """
         void host() {
             int x = 1 float y = 2;
@@ -76,7 +71,6 @@ class TestHipParser:
             self.parse_code(code)
 
     def test_for_initializer_declaration_keeps_internal_semicolon_parsing(self):
-        """Test for-loop declarations still leave semicolons to the for parser."""
         code = """
         void host(int n) {
             for (int i = 0; i < n; i++) {
@@ -93,7 +87,6 @@ class TestHipParser:
         assert isinstance(loop.body[0], FunctionCallNode)
 
     def test_hip_flat_builtin_alias_parsing(self):
-        """Test HIP flat builtin aliases normalize to dotted builtin nodes."""
         code = """
         __global__ void kernel(float* out) {
             out[hipThreadIdx_x] = hipBlockDim_y + warpSize;
@@ -120,7 +113,6 @@ class TestHipParser:
         assert right_value.component is None
 
     def test_hip_device_property_member_names_can_match_builtin_tokens(self):
-        """Test HIP property names still parse after member-access operators."""
         code = """
         void host(hipDeviceProp_t* props_ptr) {
             hipDeviceProp_t props;
@@ -144,7 +136,6 @@ class TestHipParser:
         assert pointer_warp_value.is_pointer
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
-        """Test fixed arrays and brace initializer lists"""
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};
 
@@ -172,7 +163,6 @@ class TestHipParser:
         assert isinstance(ast.statements[2].body[0].value, InitializerListNode)
 
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
-        """Test user-defined atomic names shadow HIP atomic parsing."""
         code = """
         int hipAtomicExch(int value) {
             return value + 1;
@@ -230,7 +220,6 @@ class TestHipParser:
         assert isinstance(builtin_call, AtomicOperationNode)
 
     def test_multiline_initializer_lists_parsing(self):
-        """Test multiline brace initializer lists"""
         code = """
         void host(float* data, int n) {
             void* packedArgs[] = {
@@ -266,7 +255,6 @@ class TestHipParser:
         assert matrix.value.elements[1].elements == ["3.0f", "4.0f"]
 
     def test_designated_initializer_lists_parsing(self):
-        """Test C99 designated initializer lists"""
         code = """
         struct Pair {
             float x;
@@ -308,7 +296,6 @@ class TestHipParser:
         assert points[1].value == "3.0f"
 
     def test_constructor_style_vector_declarations_parsing(self):
-        """Test HIP constructor-style local vector declarations"""
         code = """
         void launch() {
             dim3 grid(16, 8, 1);
@@ -338,7 +325,6 @@ class TestHipParser:
         assert body[4].value.name == "uchar2"
 
     def test_kernel_launch_parsing(self):
-        """Test HIP kernel launch configuration parsing"""
         code = """
         void host(float* data, int stream) {
             dim3 grid(16);
@@ -361,7 +347,6 @@ class TestHipParser:
         assert launch.args == ["data", "1"]
 
     def test_templated_kernel_launch_parsing(self):
-        """Test HIP template-id kernel launch parsing"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -394,7 +379,6 @@ class TestHipParser:
         assert launch.args == ["data", "2.0f"]
 
     def test_computed_kernel_launch_config_parsing(self):
-        """Test HIP computed kernel launch configuration parsing"""
         code = """
         void host(float* data, int n, int stream) {
             int blockSize = 128;
@@ -423,7 +407,6 @@ class TestHipParser:
         assert launch.args == ["data", "n"]
 
     def test_hip_launch_kernel_ggl_parsing(self):
-        """Test hipLaunchKernelGGL parses as a kernel launch"""
         code = """
         void host(float* data, int n) {
             dim3 grid(16);
@@ -454,7 +437,6 @@ class TestHipParser:
         assert launch.args == ["packedArgs"]
 
     def test_hip_launch_kernel_api_parsing(self):
-        """Test hipLaunchKernel parses as a kernel launch"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -488,7 +470,6 @@ class TestHipParser:
         assert ast.statements[0].body[4].name == "hipLaunchKernel"
 
     def test_templated_hip_launch_kernel_ggl_parsing(self):
-        """Test hipLaunchKernelGGL accepts a template-id kernel argument"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -523,7 +504,6 @@ class TestHipParser:
         assert launch.args == ["data", "2.0f"]
 
     def test_hip_launch_kernel_casted_packed_args_parsing(self):
-        """Test casted packed args parse in hipLaunchKernelGGL"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -550,7 +530,6 @@ class TestHipParser:
         assert launch.args[0].expression == "packedArgs"
 
     def test_hip_launch_kernel_compound_literal_args_parsing(self):
-        """Test compound literal packed args parse in hipLaunchKernelGGL"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -575,7 +554,6 @@ class TestHipParser:
         assert launch.args[0].expression.elements[1].operand == "n"
 
     def test_runtime_error_status_parsing(self):
-        """Test HIP runtime status types and literals parse"""
         code = """
         void host(float* data, int n) {
             hipError_t err = hipMalloc((void**)&data, n * sizeof(float));
@@ -599,7 +577,6 @@ class TestHipParser:
         assert body[2].right.name == "hipDeviceSynchronize"
 
     def test_std_chrono_benchmark_expressions_parsing(self):
-        """Test namespace-qualified chrono timing expressions"""
         code = """
         void bench() {
             auto start = std::chrono::high_resolution_clock::now();
@@ -632,7 +609,6 @@ class TestHipParser:
         assert body[4].value.op == "<"
 
     def test_device_lambda_expression_parsing(self):
-        """Test HIP device lambdas parse into CrossGL pseudo-lambda calls."""
         code = """
         void host() {
             auto folded = fold(values, 0,
@@ -668,7 +644,6 @@ class TestHipParser:
         assert mapped_lambda.args[-1] == "{ prepare(color); return color; }"
 
     def test_std_vector_host_buffer_parsing(self):
-        """Test scoped template host vector declarations and methods"""
         code = """
         void host(float* d, int n) {
             std::vector<float> h(n);
@@ -700,7 +675,6 @@ class TestHipParser:
         assert body[3].name == "std::chrono::high_resolution_clock::now"
 
     def test_std_array_host_buffer_parsing(self):
-        """Test scoped template host array declarations and methods"""
         code = """
         void host(float* d) {
             std::array<float, 4> h{1.0f, 2.0f, 3.0f, 4.0f};
@@ -738,7 +712,6 @@ class TestHipParser:
         assert copy_call.args[2].left.name.member == "size"
 
     def test_host_index_fill_scalar_constructor_parsing(self):
-        """Test benchmark-style host fills with scalar type constructors"""
         code = """
         void host(int n) {
             std::vector<float> h(n);
@@ -761,7 +734,6 @@ class TestHipParser:
         assert assignment.right.args == ["i"]
 
     def test_reference_host_helper_parameters_parsing(self):
-        """Test STL host helper parameters with lvalue references"""
         code = """
         void prepare(std::vector<float>& h) {
             std::fill(h.begin(), h.end(), 1.0f);
@@ -780,7 +752,6 @@ class TestHipParser:
         assert ast.statements[1].params[0]["type"] == "const std::vector<float> &"
 
     def test_restrict_pointer_qualifier_parsing(self):
-        """Test __restrict__ pointer qualifiers in parameters and locals"""
         code = """
         __global__ void kernel(const float* __restrict__ input,
                                float __restrict__* output) {
@@ -812,7 +783,6 @@ class TestHipParser:
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
 
     def test_multiline_parameter_lists_parsing(self):
-        """Test parameter lists accept newlines before the closing parenthesis."""
         code = """
         void resource_lifecycle(
             hipResourceDesc* resourceDesc,
@@ -850,7 +820,6 @@ class TestHipParser:
         ]
 
     def test_rvalue_reference_declarations_parsing(self):
-        """Test rvalue references in parameters, locals, and range loops"""
         code = """
         void consume(float&& value, const float&& other) {
             sink(value);
@@ -887,7 +856,6 @@ class TestHipParser:
         assert body[4].vtype == "auto &&"
 
     def test_cpp_named_casts_parse_as_cast_nodes(self):
-        """Test C++ named casts parse into CastNode"""
         code = """
         void host(const float* input, float* data, int i, int n) {
             float x = static_cast<float>(i);
@@ -913,7 +881,6 @@ class TestHipParser:
         assert body[2].args[0].expression.operand == "data"
 
     def test_new_delete_host_allocation_parsing(self):
-        """Test C++ new/delete host allocation syntax"""
         code = """
         void host(int n) {
             float* h = new float[n];
@@ -948,7 +915,6 @@ class TestHipParser:
         assert body[5].is_array is False
 
     def test_unique_ptr_host_allocation_parsing(self):
-        """Test common std::unique_ptr host allocation syntax"""
         code = """
         void host(int n) {
             std::unique_ptr<float[]> h = std::make_unique<float[]>(n);
@@ -978,7 +944,6 @@ class TestHipParser:
         assert body[3].value.name.member == "get"
 
     def test_qualified_template_argument_spacing_parsing(self):
-        """Test template arguments preserve spaces between type tokens"""
         code = """
         void host(int n) {
             std::unique_ptr<const float[]> h =
@@ -1007,7 +972,6 @@ class TestHipParser:
         )
 
     def test_nested_template_argument_parsing(self):
-        """Test nested template arguments that close with >>"""
         code = """
         void host(int n) {
             std::vector<std::array<unsigned int, 4>> table;
@@ -1033,7 +997,6 @@ class TestHipParser:
         assert isinstance(body[3].value.args[0], NewNode)
 
     def test_type_alias_parsing(self):
-        """Test typedef and using aliases for host helper types"""
         code = """
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
@@ -1073,7 +1036,6 @@ class TestHipParser:
         assert body[5].name == "consume"
 
     def test_typedef_multi_declarator_alias_parsing(self):
-        """Test multi-declarator typedef aliases with pointers and arrays"""
         code = """
         typedef float Real, *RealPtr;
         typedef float Tile[16];
@@ -1113,7 +1075,6 @@ class TestHipParser:
         assert function.body[5].name == "consume"
 
     def test_type_alias_c_style_cast_parsing(self):
-        """Test C-style casts to typedef aliases parse as cast nodes"""
         code = """
         typedef unsigned int LaneMask;
 
@@ -1134,7 +1095,6 @@ class TestHipParser:
         assert body[0].value.expression == "x"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
-        """Test auto pointer and reference local declarations"""
         code = """
         void host(std::vector<float>& h, float* data) {
             int value = 2;
@@ -1166,7 +1126,6 @@ class TestHipParser:
         assert [var.value for var in body[4:]] == ["data", "data", "data", "data"]
 
     def test_multi_declarator_host_setup_parsing(self):
-        """Test comma-separated host setup declarations"""
         code = """
         void host(int n) {
             std::vector<float> a(n), b(n), c(n);
@@ -1207,7 +1166,6 @@ class TestHipParser:
         assert body[9].value == "3.0f"
 
     def test_multi_declarator_for_initializer_parsing(self):
-        """Test comma-separated declarations in for initializers"""
         code = """
         void host(float* a, float* b, int n) {
             for (int i = 0, j = n; i < j; ++i) {
@@ -1237,7 +1195,6 @@ class TestHipParser:
         assert second_loop.init[1].value == "b"
 
     def test_multi_expression_for_update_parsing(self):
-        """Test comma-separated expressions in for updates"""
         code = """
         void host(int n) {
             for (int i = 0, j = n; i < j; ++i, --j) {
@@ -1262,7 +1219,6 @@ class TestHipParser:
         assert loop.update[1].operand == "j"
 
     def test_range_based_for_loop_parsing(self):
-        """Test C++ range-based for declarations"""
         code = """
         void host(std::vector<float>& h) {
             for (auto& x : h) {
@@ -1290,7 +1246,6 @@ class TestHipParser:
         ]
 
     def test_qualified_declarations_parsing(self):
-        """Test const, unsigned, and static declarations"""
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
@@ -1330,7 +1285,6 @@ class TestHipParser:
         assert ast.statements[6].body[4].vtype == "float"
 
     def test_qualified_and_pointer_return_functions_parsing(self):
-        """Test qualified scalar and pointer return types"""
         code = """
         unsigned int lane_mask() { return 3u; }
         float* get_data(float* data) { return data; }
@@ -1365,7 +1319,6 @@ class TestHipParser:
         assert ast.statements[6].attributes == ["__launch_bounds__(256, 2)"]
 
     def test_hip_opaque_and_declared_type_pointer_declarations_parsing(self):
-        """Test HIP handle and declared struct pointer declarations parse."""
         code = """
         struct Pair {
             float x;
@@ -1423,7 +1376,6 @@ class TestHipParser:
         assert expression.right == "bar"
 
     def test_template_prefixed_kernel_parsing(self):
-        """Test C++ template-prefixed HIP kernels"""
         code = """
         template <typename T>
         __global__ void fill(T* data, T value) {
@@ -1449,7 +1401,6 @@ class TestHipParser:
         assert assignment.left.array == "data"
 
     def test_template_prefixed_host_function_parsing(self):
-        """Test C++ template-prefixed HIP host functions"""
         code = """
         template <class T>
         __host__ T clampValue(T x) {
@@ -1472,7 +1423,6 @@ class TestHipParser:
         assert function.body[0].value == "x"
 
     def test_braced_for_body_and_sync_statement_parsing(self):
-        """Test braced for bodies and sync calls parse as statements"""
         code = """
         void helper(int n) {
             for (int j = 0; j < n; j++) {
@@ -1494,7 +1444,6 @@ class TestHipParser:
         assert isinstance(body[1], SyncNode)
 
     def test_masked_syncwarp_parsing(self):
-        """Test parsing masked and unmasked HIP warp synchronization."""
         code = """
         __global__ void kernel(unsigned int mask) {
             __syncwarp(mask);
@@ -1519,7 +1468,6 @@ class TestHipParser:
         assert unmasked_sync.args == []
 
     def test_c_style_for_structured_assignment_updates_parsing(self):
-        """Test array and member assignment targets in for updates"""
         code = """
         void helper(float* values, int n) {
             int value = 1;
@@ -1553,7 +1501,6 @@ class TestHipParser:
         assert member_loop.update.left.member == "field"
 
     def test_assignment_expression_is_right_associative(self):
-        """Test assignments parse inside expressions and associate to the right"""
         code = """
         void f() {
             int a = 0;
@@ -1590,7 +1537,6 @@ class TestHipParser:
         assert call.args[0].right == "1"
 
     def test_local_pointer_declarations_and_unary_pointer_expressions(self):
-        """Test local pointer declarations, address-of, and dereference"""
         code = """
         void helper(float* data, unsigned int* ids) {
             float* p = data;
@@ -1622,7 +1568,6 @@ class TestHipParser:
         assert isinstance(body[7], BinaryOpNode)
 
     def test_pointer_member_access_operator_parsing(self):
-        """Test pointer and value member access preserve their operators"""
         code = """
         struct Item { int value; };
         void helper(Item* p, Item v) {
@@ -1655,7 +1600,6 @@ class TestHipParser:
         assert pointer_write.is_pointer is True
 
     def test_bitwise_logical_and_shift_expression_parsing(self):
-        """Test bitwise, shift, logical, and compound shift expressions"""
         code = """
         unsigned int helper(unsigned int a, unsigned int b) {
             unsigned int x = (a & b) | (a ^ b);
@@ -1686,7 +1630,6 @@ class TestHipParser:
         assert body[3].if_body[1].operator == ">>="
 
     def test_numeric_literal_parsing(self):
-        """Test integer mask and float suffix literals parse intact"""
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
@@ -1710,7 +1653,6 @@ class TestHipParser:
         assert body[4].value == ".5f"
 
     def test_boolean_null_and_character_literal_parsing(self):
-        """Test bool, null, nullptr, and character literals parse intact"""
         code = r"""
         bool helper(int* ptr) {
             bool yes = true;
@@ -1737,7 +1679,6 @@ class TestHipParser:
         assert body[6].value.op == "&&"
 
     def test_control_flow_and_cast_expression_parsing(self):
-        """Test HIP control-flow nodes and cast expressions"""
         code = """
         int helper(float x, int n) {
             int i = 0;
@@ -1773,7 +1714,6 @@ class TestHipParser:
         assert isinstance(body[4].value.true_expr, CastNode)
 
     def test_empty_default_switch_parsing_preserves_default_case(self):
-        """Test empty default labels remain distinguishable from no default"""
         code = """
         void f(int value) {
             switch (value) {
@@ -1794,7 +1734,6 @@ class TestHipParser:
         assert switch.default_case == []
 
     def test_switch_parsing_preserves_default_before_later_case_order(self):
-        """Test source switch label order is retained when default is first."""
         code = """
         void f(int value) {
             switch (value) {
@@ -1817,7 +1756,6 @@ class TestHipParser:
         assert len(switch.default_case) == 1
 
     def test_switch_parsing_rejects_duplicate_default_labels(self):
-        """Test duplicate switch default labels are rejected."""
         code = """
         void f(int value) {
             switch (value) {

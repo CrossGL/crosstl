@@ -1,5 +1,3 @@
-"""Test HIP Code Generation"""
-
 from crosstl import translate
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
@@ -8,7 +6,6 @@ from crosstl.backend.HIP.HipParser import HipParser
 
 class TestHipCodeGen:
     def test_hip_flat_builtin_alias_conversion(self):
-        """Test HIP flat builtin aliases convert to CrossGL builtins."""
         code = """
         __global__ void kernel(float* out) {
             out[hipThreadIdx_x] = hipBlockDim_y + warpSize;
@@ -28,7 +25,6 @@ class TestHipCodeGen:
         assert "warpSize" not in result
 
     def test_basic_kernel_conversion(self):
-        """Test basic kernel to CrossGL conversion"""
         code = """
         #include <hip/hip_runtime.h>
         #define HIP_SCALE 2
@@ -63,7 +59,6 @@ class TestHipCodeGen:
         assert "__shared__" not in result
 
     def test_device_function_conversion(self):
-        """Test device function conversion"""
         code = """
         __device__ float add(float a, float b) {
             return a + b;
@@ -91,7 +86,6 @@ class TestHipCodeGen:
         assert "f32 slow_sub(f32 a, f32 b)" in result
 
     def test_device_function_body_emitted_when_kernel_calls_it(self):
-        """Test device helpers are emitted when kernels call them."""
         code = """
         __device__ float add(float a, float b) {
             return a + b;
@@ -114,7 +108,6 @@ class TestHipCodeGen:
         assert "out[0] = add(1.0f, 2.0f);" in result
 
     def test_multiple_kernels_conversion(self):
-        """Test multiple kernels conversion"""
         code = """
         __global__ void kernel1() {
             int x = 1;
@@ -136,10 +129,8 @@ class TestHipCodeGen:
         assert "// Kernel: kernel2" in result
 
     def test_type_conversion(self):
-        """Test HIP type to CrossGL type conversion"""
         codegen = HipToCrossGLConverter()
 
-        # Test basic types
         assert codegen.convert_hip_type_to_crossgl("int") == "i32"
         assert codegen.convert_hip_type_to_crossgl("float") == "f32"
         assert codegen.convert_hip_type_to_crossgl("double") == "f64"
@@ -184,10 +175,8 @@ class TestHipCodeGen:
         )
 
     def test_function_conversion(self):
-        """Test HIP function to CrossGL function conversion"""
         codegen = HipToCrossGLConverter()
 
-        # Test math functions
         assert codegen.convert_hip_builtin_function("sqrtf") == "sqrt"
         assert codegen.convert_hip_builtin_function("sinf") == "sin"
         assert codegen.convert_hip_builtin_function("cosf") == "cos"
@@ -208,7 +197,6 @@ class TestHipCodeGen:
         )
 
     def test_fmod_builtins_convert_to_crossgl_mod(self):
-        """Test HIP fmod functions convert back to CrossGL mod."""
         code = """
         __global__ void wrap(float* out, float x) {
             out[0] = fmodf(x, 1.0f);
@@ -228,7 +216,6 @@ class TestHipCodeGen:
         assert "fmod" not in result
 
     def test_atan2_builtins_convert_to_crossgl_atan2(self):
-        """Test HIP atan2f converts back to CrossGL atan2."""
         code = """
         __global__ void angle(float* out, float y, float x) {
             out[0] = atan2f(y, x);
@@ -248,7 +235,6 @@ class TestHipCodeGen:
         assert "atan2f" not in result
 
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
-        """Test HIP thread fence variants convert back to CrossGL memoryBarrier."""
         code = """
         __global__ void fence(float* out) {
             __threadfence();
@@ -269,7 +255,6 @@ class TestHipCodeGen:
         assert "__threadfence" not in result
 
     def test_syncwarp_mask_emits_explicit_diagnostic(self):
-        """Test HIP warp synchronization emits an explicit CrossGL diagnostic."""
         code = """
         __global__ void sync(unsigned int mask) {
             __syncwarp(mask);
@@ -289,7 +274,6 @@ class TestHipCodeGen:
         assert "None" not in result
 
     def test_atomic_builtins_parse_and_convert_to_crossgl(self):
-        """Test HIP atomic builtins parse and convert back to CrossGL names."""
         code = """
         __global__ void atomics(int* out, int* expected) {
             atomicAdd(out, 1);
@@ -325,7 +309,6 @@ class TestHipCodeGen:
         assert "atomicCAS(" not in result
 
     def test_user_defined_atomic_name_call_does_not_convert_to_builtin(self):
-        """Test user-defined HIP atomic names shadow builtin conversion."""
         code = """
         int hipAtomicExch(int value) {
             return value + 1;
@@ -377,7 +360,6 @@ class TestHipCodeGen:
         assert "atomicExchange(7)" not in result
 
     def test_lerp_builtin_converts_to_crossgl_mix(self):
-        """Test HIP lerp converts back to CrossGL mix."""
         code = """
         __global__ void blend(float* out, float a, float b, float t) {
             out[0] = lerp(a, b, t);
@@ -395,7 +377,6 @@ class TestHipCodeGen:
         assert "out[0] = lerp(a, b, t);" not in result
 
     def test_lerp_with_bool_selector_converts_to_crossgl_mix(self):
-        """Test HIP lerp conversion preserves selector-shaped mix calls."""
         code = """
         __global__ void blend(float* out, float a, float b, bool choose_b) {
             out[0] = lerp(a, b, choose_b);
@@ -413,7 +394,6 @@ class TestHipCodeGen:
         assert "out[0] = lerp(a, b, choose_b);" not in result
 
     def test_scalar_bool_ternary_selector_is_preserved(self):
-        """Test HIP scalar bool ternaries round-trip as CrossGL ternaries."""
         code = """
         __global__ void choose(float* out, bool choose_b, float a, float b) {
             out[0] = choose_b ? b : a;
@@ -430,7 +410,6 @@ class TestHipCodeGen:
         assert "out[0] = (choose_b ? b : a);" in result
 
     def test_user_defined_lerp_call_does_not_convert_to_mix(self):
-        """Test user-defined HIP functions shadow builtin call conversion."""
         code = """
         float lerp(float x) {
             return x;
@@ -461,7 +440,6 @@ class TestHipCodeGen:
         assert "out[1] = texture(x);" not in result
 
     def test_hyperbolic_builtins_convert_to_crossgl(self):
-        """Test HIP hyperbolic functions convert back to CrossGL names."""
         code = """
         __global__ void hyper(float* out, float x) {
             out[0] = sinhf(x);
@@ -485,7 +463,6 @@ class TestHipCodeGen:
         assert "tanhf" not in result
 
     def test_inverse_hyperbolic_builtins_convert_to_crossgl(self):
-        """Test HIP inverse hyperbolic functions convert back to CrossGL names."""
         code = """
         __global__ void invhyper(float* out, float x) {
             out[0] = asinhf(x);
@@ -509,7 +486,6 @@ class TestHipCodeGen:
         assert "atanhf" not in result
 
     def test_inverse_trig_builtins_convert_to_crossgl(self):
-        """Test HIP inverse trig functions convert back to CrossGL names."""
         code = """
         __global__ void inverse(float* out, float x) {
             out[0] = asinf(x);
@@ -533,7 +509,6 @@ class TestHipCodeGen:
         assert "atanf" not in result
 
     def test_extended_math_builtins_convert_to_crossgl(self):
-        """Test HIP extended math functions convert back to CrossGL names."""
         code = """
         __global__ void math(float* out, double* precise, float x, double d) {
             out[0] = rsqrtf(x);
@@ -566,7 +541,6 @@ class TestHipCodeGen:
         assert "log2f" not in result
 
     def test_struct_conversion(self):
-        """Test struct conversion"""
         code = """
         struct Point {
             float x;
@@ -585,7 +559,6 @@ class TestHipCodeGen:
         assert "struct Point" in result
 
     def test_empty_program(self):
-        """Test empty program conversion"""
         code = ""
         lexer = HipLexer(code)
         tokens = lexer.tokenize()
@@ -598,10 +571,8 @@ class TestHipCodeGen:
         assert "// HIP to CrossGL conversion" in result
 
     def test_vector_type_conversion(self):
-        """Test HIP vector type conversion"""
         codegen = HipToCrossGLConverter()
 
-        # Test vector type mappings
         assert codegen.convert_hip_type_to_crossgl("float2") == "vec2<f32>"
         assert codegen.convert_hip_type_to_crossgl("float3") == "vec3<f32>"
         assert codegen.convert_hip_type_to_crossgl("float4") == "vec4<f32>"
@@ -610,7 +581,6 @@ class TestHipCodeGen:
         assert codegen.convert_hip_type_to_crossgl("int4") == "vec4<i32>"
 
     def test_constructor_style_vector_declaration_conversion(self):
-        """Test HIP constructor-style vector declarations convert"""
         code = """
         hipTextureObject_t globalTex;
         hipSurfaceObject_t globalSurf;
@@ -851,7 +821,6 @@ class TestHipCodeGen:
         assert "surf1D" not in result
 
     def test_hip_sparse_texture_fetch_helpers_emit_diagnostics(self):
-        """Test sparse HIP texture fetches import as explicit diagnostics."""
         code = """
         void sparseTextureOps(
             hipTextureObject_t lineTex,
@@ -921,7 +890,6 @@ class TestHipCodeGen:
             assert f"{helper}<float4>(" not in result
 
     def test_hip_sparse_texture_layered_cube_helpers_emit_diagnostics(self):
-        """Test sparse HIP layered/cube texture forms emit diagnostics."""
         code = """
         void sparseTextureFamilyOps(
             hipTextureObject_t lineLayerTex,
@@ -1061,7 +1029,6 @@ class TestHipCodeGen:
             assert f"{helper}<float4>(" not in result
 
     def test_hip_texture_scalar_coordinates_emit_rank_diagnostics(self):
-        """Test malformed scalar texture coordinates emit explicit diagnostics."""
         code = """
         void textureCoordinateRankOps(
             hipTextureObject_t lineLayerTex,
@@ -1155,7 +1122,6 @@ class TestHipCodeGen:
         )
 
     def test_hip_surface_malformed_coordinates_emit_rank_diagnostics(self):
-        """Test malformed surface coordinates emit explicit diagnostics."""
         code = """
         void surfaceCoordinateRankOps(
             hipSurfaceObject_t lineLayerSurface,
@@ -1288,7 +1254,6 @@ class TestHipCodeGen:
         )
 
     def test_kernel_launch_conversion(self):
-        """Test HIP kernel launch configuration conversion"""
         code = """
         void host(float* data, int stream) {
             dim3 grid(16);
@@ -1308,7 +1273,6 @@ class TestHipCodeGen:
         assert "// Arguments: data, 1" in result
 
     def test_templated_kernel_launch_conversion(self):
-        """Test HIP template-id kernel launch conversion"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -1334,7 +1298,6 @@ class TestHipCodeGen:
         assert "// Arguments: data, 2.0f" in result
 
     def test_computed_kernel_launch_config_conversion(self):
-        """Test HIP computed kernel launch configuration conversion"""
         code = """
         void host(float* data, int n, int stream) {
             int blockSize = 128;
@@ -1359,7 +1322,6 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
 
     def test_hip_launch_kernel_ggl_conversion(self):
-        """Test hipLaunchKernelGGL converts through kernel launch metadata"""
         code = """
         void host(float* data, int n) {
             dim3 grid(16);
@@ -1382,7 +1344,6 @@ class TestHipCodeGen:
         assert "hipLaunchKernelGGL" not in result
 
     def test_hip_launch_kernel_api_conversion(self):
-        """Test hipLaunchKernel converts through kernel launch metadata"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1404,7 +1365,6 @@ class TestHipCodeGen:
         assert "hipLaunchKernel(" not in result
 
     def test_hip_runtime_launch_support_api_conversion(self):
-        """Test lower-level HIP launch support APIs emit metadata comments."""
         code = """
         void host(void* kernel, hipFunction_t function, hipStream_t stream, void** args, const hipLaunchConfig_t* config, const HIP_LAUNCH_CONFIG* driverConfig) {
             dim3 grid(16);
@@ -1558,7 +1518,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_runtime_handle_launch_array_outputs_clear_stale_metadata(self):
-        """Test runtime handle/launch outputs clear stale array/member metadata."""
         code = """
         struct LaunchOutputs {
             dim3 grid;
@@ -1662,7 +1621,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_user_defined_hip_launch_kernel_call_is_not_kernel_launch(self):
-        """Test user-defined hipLaunchKernel shadows launch lowering."""
         code = """
         void hipLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
             return;
@@ -1688,7 +1646,6 @@ class TestHipCodeGen:
         assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_user_defined_hip_launch_kernel_ggl_call_is_not_kernel_launch(self):
-        """Test user-defined hipLaunchKernelGGL shadows launch lowering."""
         code = """
         void hipLaunchKernelGGL(float* out, int grid, int block, int shared, int stream) {
             return;
@@ -1742,7 +1699,6 @@ class TestHipCodeGen:
         assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_templated_hip_launch_kernel_ggl_conversion(self):
-        """Test hipLaunchKernelGGL converts a template-id kernel argument"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -1771,7 +1727,6 @@ class TestHipCodeGen:
         assert "hipLaunchKernelGGL" not in result
 
     def test_hip_launch_kernel_casted_packed_args_conversion(self):
-        """Test casted packed args still expand in hipLaunchKernelGGL"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1794,7 +1749,6 @@ class TestHipCodeGen:
         assert "ptr<ptr<void>>(packedArgs)" not in result
 
     def test_hip_launch_kernel_compound_literal_args_conversion(self):
-        """Test compound literal packed args expand in hipLaunchKernelGGL"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1816,7 +1770,6 @@ class TestHipCodeGen:
         assert "array<ptr<void>>({(&data), (&n)})" not in result
 
     def test_compound_literal_packed_args_declaration_conversion(self):
-        """Test local compound literal packed args can be reused"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1840,7 +1793,6 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
 
     def test_initializer_arrays_do_not_expand_as_launch_args(self):
-        """Test only void pointer packed args expand in kernel launches"""
         code = """
         void host() {
             dim3 grid(16);
@@ -1862,7 +1814,6 @@ class TestHipCodeGen:
         assert "// Arguments: 1.0f, 2.0f" not in result
 
     def test_hip_runtime_memory_api_conversion(self):
-        """Test HIP runtime memory API calls emit metadata comments"""
         code = """
         void host(float* h, int n) {
             float* d;
@@ -3139,7 +3090,6 @@ class TestHipCodeGen:
         assert "err = hipDeviceSynchronize();" not in result
 
     def test_hip_memory_pointer_occupancy_expression_contexts_emit_status(self):
-        """Test memory, pointer, and occupancy expressions emit status metadata."""
         code = """
         hipError_t memoryExpressions(
             size_t bytes,
@@ -3400,7 +3350,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_array_mipmapped_expression_contexts_emit_status(self):
-        """Test array and mipmapped-array expressions emit status metadata."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -3518,7 +3467,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_allocation_array_outputs_clear_stale_metadata(self):
-        """Test HIP allocation outputs clear stale array/member metadata."""
         code = """
         struct AllocOutputs {
             void* ptr;
@@ -3823,7 +3771,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_copy_memset_symbol_expression_contexts_emit_status(self):
-        """Test HIP copy/memset/symbol expressions emit status metadata."""
         code = """
         hipError_t copyExpressions(
             float* dst,
@@ -4115,7 +4062,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_batch_symbol_array_outputs_clear_stale_metadata(self):
-        """Test HIP batched copy and symbol outputs clear stale metadata."""
         code = """
         struct BatchOutputs {
             size_t failIndex;
@@ -4244,7 +4190,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_surface_object_descriptor_query_is_explicitly_unsupported(self):
-        """Test CUDA-parity surface descriptor queries stay explicit for HIP."""
         code = """
         void querySurfaceObject(hipSurfaceObject_t surfaceObj) {
             hipResourceDesc resourceDesc;
@@ -4274,7 +4219,6 @@ class TestHipCodeGen:
         assert "hipGetSurfaceObjectResourceDesc(" not in result
 
     def test_hip_object_descriptor_query_expression_contexts_emit_status(self):
-        """Test object descriptor queries in expressions stay explicit."""
         code = """
         hipError_t queryObjectExpressions(
             hipTextureObject_t texObj,
@@ -4341,7 +4285,6 @@ class TestHipCodeGen:
         assert "hipTexObjectGetTextureDesc(" not in result
 
     def test_hip_object_descriptor_alias_expression_contexts_emit_status(self):
-        """Test texture/surface descriptor aliases stay explicit in expressions."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -4658,7 +4601,6 @@ class TestHipCodeGen:
         assert "var manualAliasAddress: i32 = (/* HIP device query:" not in result
 
     def test_hip_texture_object_descriptor_unmapped_fields_remain_raw(self):
-        """Test unsupported descriptor member paths are not pseudo-queried."""
         code = """
         void host(
             hipTextureObject_t texObj,
@@ -4749,7 +4691,6 @@ class TestHipCodeGen:
         assert "var manualAliasBorder: f32 = (/* HIP device query:" not in result
 
     def test_hip_channel_descriptor_expression_contexts_emit_status(self):
-        """Test channel and array descriptor queries in expressions stay explicit."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -4982,7 +4923,6 @@ class TestHipCodeGen:
         assert "var manualDepth: u32 = (/* HIP device query:" not in result
 
     def test_hip_descriptor_array_outputs_clear_stale_metadata(self):
-        """Test descriptor array outputs clear prior query metadata."""
         code = """
         void queryDescriptorArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -5080,7 +5020,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_object_lifecycle_expression_contexts_emit_status(self):
-        """Test object lifecycle calls in expressions stay explicit."""
         code = """
         hipError_t lifecycleObjectExpressions(
             hipResourceDesc* resourceDesc,
@@ -5158,7 +5097,6 @@ class TestHipCodeGen:
         assert "hipDestroyTextureObject(" not in result
 
     def test_hip_stream_event_graph_expression_contexts_emit_status(self):
-        """Test stream/event/graph calls in expressions stay explicit."""
         code = """
         hipError_t streamEventGraphExpressions(
             hipStream_t stream,
@@ -5252,7 +5190,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_graph_lifecycle_expression_contexts_emit_status(self):
-        """Test core graph lifecycle calls in expressions stay explicit."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5382,7 +5319,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_user_object_expression_contexts_emit_status(self):
-        """Test HIP user object calls in expressions emit status metadata."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5454,7 +5390,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_user_object_array_outputs_clear_stale_metadata(self):
-        """Test user-object array and member outputs clear stale metadata."""
         code = """
         struct UserObjectOutputs {
             hipUserObject_t object;
@@ -5511,7 +5446,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_memory_memcpy_expression_contexts_emit_status(self):
-        """Test HIP graph memory/memcpy calls in expressions emit status."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5662,7 +5596,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_driver_graph_memcpy_node_emits_metadata_and_status(self):
-        """Test HIP driver graph memcpy node calls emit metadata/status."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5709,7 +5642,6 @@ class TestHipCodeGen:
         assert "hipDrvGraphAddMemcpyNode(" not in result
 
     def test_hip_driver_graph_memory_node_apis_emit_metadata_and_status(self):
-        """Test HIP driver graph memory node calls emit metadata/status."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5791,7 +5723,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_graph_external_semaphore_expression_contexts_emit_status(self):
-        """Test HIP graph external semaphore calls in expressions emit status."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5885,7 +5816,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_extended_graph_expression_contexts_emit_status(self):
-        """Test extended HIP graph calls in expressions emit status metadata."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -5996,7 +5926,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_interop_ipc_launch_expression_contexts_emit_status(self):
-        """Test interop, IPC, profiler, and launch support expressions."""
         code = """
         hipError_t interopIpcLaunchExpressions(
             hipStream_t stream,
@@ -6308,7 +6237,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_external_memory_semaphore_expression_contexts_emit_status(self):
-        """Test external memory and semaphore expressions emit status metadata."""
         code = """
         hipError_t externalInteropExpressions(
             hipStream_t stream,
@@ -6417,7 +6345,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_interop_handle_array_outputs_clear_stale_metadata(self):
-        """Test HIP interop and handle array outputs clear stale metadata."""
         code = """
         void host(
             void* devicePtr,
@@ -6753,7 +6680,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_runtime_memset_async_conversion(self):
-        """Test hipMemsetAsync emits metadata comments and status success"""
         code = """
         void host(float* d, int n, hipStream_t stream) {
             hipMemsetAsync(d, 0, n * sizeof(float), stream);
@@ -6780,7 +6706,6 @@ class TestHipCodeGen:
         assert "hipMemsetAsync(" not in result
 
     def test_hip_runtime_last_error_query_conversion(self):
-        """Test HIP runtime error query calls emit metadata comments"""
         code = """
         void host() {
             hipGetLastError();
@@ -6810,7 +6735,6 @@ class TestHipCodeGen:
         assert "hipGetErrorName(" not in result
 
     def test_hip_runtime_last_error_expression_contexts_emit_status(self):
-        """Test HIP last-error calls in expressions stay explicit."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -6855,7 +6779,6 @@ class TestHipCodeGen:
         assert "hipPeekAtLastError(" not in result
 
     def test_hip_device_property_member_reads_emit_metadata_expressions(self):
-        """Test hipDeviceProp_t member reads lower to explicit metadata."""
         code = """
         void host(int device, hipDeviceProp_t* propsPtr) {
             hipDeviceProp_t props;
@@ -6891,7 +6814,6 @@ class TestHipCodeGen:
         assert "var total: u32 = propsPtr->totalGlobalMem;" not in result
 
     def test_hip_device_property_string_array_outputs_clear_stale_metadata(self):
-        """Test device property/string array outputs clear prior query metadata."""
         code = """
         void queryDeviceInfoArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -6951,7 +6873,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_device_attribute_reads_emit_metadata_expressions(self):
-        """Test hipDeviceGetAttribute output reads lower to explicit metadata."""
         code = """
         void host(int device, int* out) {
             int attr = 0;
@@ -7003,7 +6924,6 @@ class TestHipCodeGen:
         assert "var cleared: i32 = (/* HIP device attribute:" not in result
 
     def test_hip_device_scalar_query_reads_emit_metadata_expressions(self):
-        """Test scalar HIP device-query outputs lower to explicit metadata."""
         code = """
         void host(int device, size_t* out) {
             size_t total = 0;
@@ -7068,7 +6988,6 @@ class TestHipCodeGen:
         assert "var fromStatus: u32 = statusTotal;" not in result
 
     def test_hip_device_current_and_count_reads_emit_metadata_expressions(self):
-        """Test hipGetDevice and hipGetDeviceCount outputs lower to metadata."""
         code = """
         void host(int* out) {
             int current = -1;
@@ -7315,7 +7234,6 @@ class TestHipCodeGen:
         )
 
     def test_hip_context_scalar_output_reads_emit_metadata_expressions(self):
-        """Test HIP context scalar outputs lower to explicit metadata."""
         code = """
         void host(hipCtx_t ctx, int* out) {
             hipDevice_t device;
@@ -7423,7 +7341,6 @@ class TestHipCodeGen:
         assert "var manualPrimaryActive: i32 = (/* HIP device query:" not in result
 
     def test_hip_driver_device_output_reads_emit_metadata_expressions(self):
-        """Test HIP driver/device scalar outputs lower to explicit metadata."""
         code = """
         void host(int ordinal, hipDevice_t peerDevice, int* out) {
             hipDevice_t device;
@@ -7580,7 +7497,6 @@ class TestHipCodeGen:
         assert "var manualHopCount: u32 = (/* HIP device query:" not in result
 
     def test_hip_device_context_array_outputs_clear_stale_metadata(self):
-        """Test device/context array outputs clear prior query metadata."""
         code = """
         void queryDeviceContextArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -7744,7 +7660,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_runtime_version_output_reads_emit_metadata_expressions(self):
-        """Test HIP runtime version outputs lower to explicit metadata."""
         code = """
         void host(int* out) {
             int driverVersion = 0;
@@ -7809,7 +7724,6 @@ class TestHipCodeGen:
         assert "var manualRuntimeVersion: i32 = (/* HIP device query:" not in result
 
     def test_hip_runtime_version_proc_array_outputs_clear_stale_metadata(self):
-        """Test version/proc-address array outputs clear prior query metadata."""
         code = """
         void queryVersionProcArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -7861,7 +7775,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_stream_scalar_output_reads_emit_metadata_expressions(self):
-        """Test HIP stream scalar outputs lower to explicit metadata."""
         code = """
         void host(hipStream_t stream, int* out) {
             int leastPriority = 0;
@@ -8052,7 +7965,6 @@ class TestHipCodeGen:
         assert "var manualNumDeps: u32 = (/* HIP device query:" not in result
 
     def test_hip_stream_capture_outputs_clear_stale_metadata(self):
-        """Test stream-capture outputs clear prior address-range metadata."""
         code = """
         void inspectCapture(
             hipDeviceptr_t devicePtr,
@@ -8129,7 +8041,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_stream_event_array_outputs_clear_stale_metadata(self):
-        """Test stream/event scalar array outputs clear prior query metadata."""
         code = """
         void queryStreamEventArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -8187,7 +8098,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_occupancy_output_reads_emit_metadata_expressions(self):
-        """Test HIP occupancy scalar outputs lower to explicit metadata."""
         code = """
         void host(void* kernel, void* dynamicSmem, int* out) {
             int gridSize = 0;
@@ -8379,7 +8289,6 @@ class TestHipCodeGen:
         assert "var manualActiveBlocks: i32 = (/* HIP device query:" not in result
 
     def test_hip_occupancy_function_array_outputs_clear_stale_metadata(self):
-        """Test occupancy/function array outputs clear prior query metadata."""
         code = """
         void queryOccupancyFunctionArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -8464,7 +8373,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_memory_event_output_reads_emit_metadata_expressions(self):
-        """Test HIP memory and event outputs lower to explicit metadata."""
         code = """
         void host(
             hipEvent_t start,
@@ -8691,7 +8599,6 @@ class TestHipCodeGen:
         assert "var manualAccessFlags: u64 = (/* HIP device query:" not in result
 
     def test_hip_memory_pointer_array_outputs_clear_stale_metadata(self):
-        """Test HIP memory and pointer array outputs clear stale metadata."""
         code = """
         void host(
             void* devicePtr,
@@ -8825,7 +8732,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_memory_pool_member_outputs_clear_stale_metadata(self):
-        """Test HIP memory-pool member outputs clear stale metadata."""
         code = """
         struct PoolOutputs {
             hipMemPool_t pool;
@@ -8945,7 +8851,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_symbol_range_function_output_reads_emit_metadata_expressions(self):
-        """Test HIP symbol, range, function, and array scalar outputs."""
         code = """
         void host(
             void* symbol,
@@ -9081,7 +8986,6 @@ class TestHipCodeGen:
         assert "var manualArrayFlags: u32 = (/* HIP device query:" not in result
 
     def test_hip_function_attribute_member_reads_emit_metadata_expressions(self):
-        """Test hipFuncAttributes member reads lower to explicit metadata."""
         code = """
         void host(hipFunction_t function, int* out) {
             hipFuncAttributes attrs;
@@ -9165,7 +9069,6 @@ class TestHipCodeGen:
         assert "var manualShared: i32 = (/* HIP device query:" not in result
 
     def test_user_defined_hip_runtime_call_does_not_emit_runtime_comment(self):
-        """Test user-defined HIP runtime names shadow runtime call comments."""
         code = """
         void hipMemcpy(float* dst, float* src, int bytes, int kind) {
             return;
@@ -9190,7 +9093,6 @@ class TestHipCodeGen:
         assert "// HIP memory copy: h -> d, bytes: n, kind: 7" not in result
 
     def test_hip_runtime_event_api_conversion(self):
-        """Test HIP stream and event API calls emit metadata comments"""
         code = """
         void bench() {
             hipStream_t stream;
@@ -9515,7 +9417,6 @@ class TestHipCodeGen:
         assert "hipOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(" not in result
 
     def test_hip_runtime_stream_create_with_flags_status_conversion(self):
-        """Test hipStreamCreateWithFlags status expressions lower to success"""
         code = """
         void bench() {
             hipStream_t stream;
@@ -9535,7 +9436,6 @@ class TestHipCodeGen:
         assert "hipStreamCreateWithFlags(" not in result
 
     def test_hip_stream_memory_operations_emit_metadata_and_status(self):
-        """Test HIP stream memory operation APIs emit metadata comments."""
         code = """
         void stream_memory_ops(
             hipStream_t stream,
@@ -9606,7 +9506,6 @@ class TestHipCodeGen:
         assert "hipStreamBatchMemOp(" not in result
 
     def test_hip_runtime_module_api_conversion(self):
-        """Test HIP module and function APIs emit metadata comments."""
         code = """
         void load_module(hipStream_t stream) {
             hipModule_t module;
@@ -10093,7 +9992,6 @@ class TestHipCodeGen:
         assert "hiprtcLinkDestroy(" not in result
 
     def test_hip_module_library_link_rtc_expression_contexts_emit_status(self):
-        """Test module, library, link, and HIPRTC expressions emit status metadata."""
         code = """
         hipError_t moduleLibraryLinkExpressions(hipStream_t stream, bool retry) {
             hipModule_t module;
@@ -10471,7 +10369,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_module_library_handle_outputs_clear_stale_metadata(self):
-        """Test raw module/library handle outputs clear prior query metadata."""
         code = """
         void queryModuleHandles(
             hipModule_t module,
@@ -10542,7 +10439,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_hip_module_library_kernel_array_outputs_clear_stale_metadata(self):
-        """Test module/library/kernel array and member outputs clear stale metadata."""
         code = """
         struct ModuleHandleOutputs {
             hipFunction_t function;
@@ -10678,7 +10574,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_module_library_kernel_scalar_outputs_replace_stale_metadata(self):
-        """Test scalar module/library/kernel outputs replace prior query metadata."""
         code = """
         void queryModuleKernelScalars(
             hipModule_t module,
@@ -10900,7 +10795,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_hip_module_library_load_array_outputs_clear_stale_metadata(self):
-        """Test module/library/link load outputs clear stale array/member metadata."""
         code = """
         struct RuntimeHandles {
             hipModule_t module;
@@ -11058,7 +10952,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_hip_link_complete_outputs_replace_stale_metadata(self):
-        """Test link-complete outputs clear handles and retain size metadata."""
         code = """
         void queryLinkOutputs(
             hipLibrary_t library,
@@ -11150,7 +11043,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hiprtc_size_outputs_replace_stale_metadata(self):
-        """Test HIPRTC artifact size outputs replace prior scalar metadata."""
         code = """
         void queryRtcArtifactSizes(
             hiprtcProgram program,
@@ -11246,7 +11138,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.base(devicePtr)" not in result
 
     def test_hiprtc_version_outputs_replace_stale_metadata(self):
-        """Test HIPRTC version outputs replace prior scalar metadata."""
         code = """
         void queryRtcVersion(hipDeviceptr_t devicePtr, int* values) {
             int major = 0;
@@ -11302,7 +11193,6 @@ class TestHipCodeGen:
         assert "values[3] = statusMinor;" not in result
 
     def test_hiprtc_raw_outputs_clear_stale_metadata(self):
-        """Test HIPRTC raw handle/string outputs clear prior query metadata."""
         code = """
         void queryRtcRawOutputs(
             hipDeviceptr_t devicePtr,
@@ -11398,7 +11288,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hiprtc_array_member_outputs_clear_stale_metadata(self):
-        """Test HIPRTC array/member outputs clear prior query metadata."""
         code = """
         struct RtcOutputs {
             hiprtcProgram program;
@@ -11524,7 +11413,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_module_global_size_output_metadata_replaces_symbol_size(self):
-        """Test module global size outputs replace stale symbol-size metadata."""
         code = """
         void queryModuleGlobals(
             hipModule_t module,
@@ -11598,7 +11486,6 @@ class TestHipCodeGen:
         assert "textureReference.symbolRef" not in result
 
     def test_hip_texture_reference_expression_contexts_emit_status(self):
-        """Test deprecated texture-reference helpers in expressions stay explicit."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -11695,7 +11582,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_texture_reference_get_set_expression_contexts_emit_status(self):
-        """Test deprecated texture-reference getter/setters stay explicit."""
         code = """
         hipError_t acceptStatus(hipError_t status) {
             return status;
@@ -11913,7 +11799,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_texture_reference_output_reads_emit_metadata_expressions(self):
-        """Test texture-reference scalar getter outputs lower to metadata."""
         code = """
         void queryTextureReference(
             textureReference* texRef,
@@ -12077,7 +11962,6 @@ class TestHipCodeGen:
         assert "var manualFlags: u32 = (/* HIP device query:" not in result
 
     def test_hip_texture_reference_pointer_outputs_and_border_color_metadata(self):
-        """Test raw texture-reference outputs clear stale metadata."""
         code = """
         void queryTextureReferencePointerOutputs(
             textureReference* texRef,
@@ -12153,7 +12037,6 @@ class TestHipCodeGen:
         assert "textureReference.mipmappedArray(texRef)" not in result
 
     def test_hip_texture_reference_array_outputs_clear_stale_metadata(self):
-        """Test texture-reference array-element outputs clear stale metadata."""
         code = """
         void queryTextureReferenceArrayOutputs(
             hipDeviceptr_t devicePtr,
@@ -12277,7 +12160,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_texture_reference_member_outputs_clear_stale_metadata(self):
-        """Test texture-reference member outputs clear stale metadata."""
         code = """
         struct TextureRefOutputs {
             size_t alignment;
@@ -12426,7 +12308,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_runtime_callback_activity_expression_conversion(self):
-        """Test HIP callback/activity helper expressions lower to stable metadata."""
         code = """
         void inspect(hipFunction_t function, hipStream_t stream, void* hostFunction) {
             const char* apiName = hipApiName(1);
@@ -12464,7 +12345,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_runtime_callback_activity_nested_expressions_convert(self):
-        """Test HIP callback/activity helpers convert in nested expressions."""
         code = """
         const char* chooseName(const char* a, const char* b, bool useA) {
             return useA ? a : b;
@@ -12528,7 +12408,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_runtime_driver_context_api_conversion(self):
-        """Test HIP initialization, context, and peer APIs emit metadata comments."""
         code = """
         void configure_context(int ordinal) {
             hipDevice_t device;
@@ -12695,7 +12574,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_driver_device_context_expression_contexts_emit_status(self):
-        """Test driver, device, and context calls in expressions stay explicit."""
         code = """
         hipError_t driverDeviceContextExpressions(int ordinal, bool reuse) {
             hipDevice_t device;
@@ -12955,7 +12833,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_context_raw_outputs_clear_stale_metadata(self):
-        """Test raw context handle outputs clear prior query metadata."""
         code = """
         void queryContextHandles(
             hipDeviceptr_t devicePtr,
@@ -13033,7 +12910,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_context_array_member_outputs_clear_stale_metadata(self):
-        """Test context array/member outputs clear prior query metadata."""
         code = """
         struct ContextOutputs {
             hipCtx_t ctx;
@@ -13128,7 +13004,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_raw_outputs_clear_stale_metadata(self):
-        """Test graph handle outputs clear prior query metadata."""
         code = """
         void queryGraphHandles(
             hipDeviceptr_t devicePtr,
@@ -13390,7 +13265,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_scalar_outputs_clear_stale_metadata(self):
-        """Test graph scalar outputs clear prior query metadata."""
         code = """
         void queryGraphScalars(
             hipDeviceptr_t devicePtr,
@@ -13517,7 +13391,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_struct_outputs_clear_stale_metadata(self):
-        """Test graph struct outputs clear prior query metadata."""
         code = """
         void queryGraphStructs(
             hipDeviceptr_t devicePtr,
@@ -13681,7 +13554,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_graph_array_member_param_outputs_clear_stale_metadata(self):
-        """Test graph get-param array/member outputs clear prior metadata."""
         code = """
         struct GraphParamOutputs {
             hipHostNodeParams host;
@@ -13850,7 +13722,6 @@ class TestHipCodeGen:
         assert "memory.addressRange.size(devicePtr)" not in result
 
     def test_hip_runtime_graph_api_conversion(self):
-        """Test HIP graph APIs emit metadata comments."""
         code = """
         void build_graph(hipStream_t stream, hipEvent_t event) {
             hipGraph_t graph;
@@ -14160,7 +14031,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_runtime_extended_graph_api_conversion(self):
-        """Test extended HIP graph APIs emit metadata comments."""
         code = """
         void tune_graph(hipStream_t stream) {
             hipGraph_t graph;
@@ -14516,7 +14386,6 @@ class TestHipCodeGen:
             assert f"{function_name}(" not in result
 
     def test_hip_runtime_stream_create_with_priority_status_conversion(self):
-        """Test hipStreamCreateWithPriority emits priority metadata"""
         code = """
         void bench() {
             hipStream_t stream;
@@ -14545,7 +14414,6 @@ class TestHipCodeGen:
         assert "hipStreamCreateWithPriority(" not in result
 
     def test_std_chrono_benchmark_expression_conversion(self):
-        """Test std::chrono benchmark expressions convert"""
         code = """
         void bench() {
             auto start = std::chrono::high_resolution_clock::now();
@@ -14575,7 +14443,6 @@ class TestHipCodeGen:
         assert "var ordered: bool = (1 < 2);" in result
 
     def test_std_vector_host_buffer_conversion(self):
-        """Test std::vector host buffers convert in memory copy metadata"""
         code = """
         void host(float* d, int n) {
             std::vector<float> h(n);
@@ -14602,7 +14469,6 @@ class TestHipCodeGen:
         assert "std::chrono::high_resolution_clock::now();" in result
 
     def test_std_array_host_buffer_conversion(self):
-        """Test std::array host buffers convert in memory copy metadata"""
         code = """
         void host(float* d) {
             std::array<float, 4> h{1.0f, 2.0f, 3.0f, 4.0f};
@@ -14627,7 +14493,6 @@ class TestHipCodeGen:
         ) in result
 
     def test_host_index_fill_scalar_constructor_conversion(self):
-        """Test host-side scalar type constructors convert to CrossGL types"""
         code = """
         void host(int n) {
             std::vector<float> h(n);
@@ -14648,7 +14513,6 @@ class TestHipCodeGen:
         assert "h[i] = f32(i);" in result
 
     def test_reference_host_helper_parameters_conversion(self):
-        """Test host helper reference parameters lower to value types"""
         code = """
         void prepare(std::vector<float>& h) {
             std::fill(h.begin(), h.end(), 1.0f);
@@ -14671,7 +14535,6 @@ class TestHipCodeGen:
         assert "return h.size();" in result
 
     def test_multi_declarator_host_setup_conversion(self):
-        """Test comma-separated host setup declarations convert separately"""
         code = """
         void host(int n) {
             std::vector<float> a(n), b(n), c(n);
@@ -14700,7 +14563,6 @@ class TestHipCodeGen:
         assert "var bias: f32 = 3.0f;" in result
 
     def test_multi_declarator_for_initializer_conversion(self):
-        """Test comma-separated for initializers lower into scoped declarations"""
         code = """
         void host(float* a, float* b, int n) {
             for (int i = 0, j = n; i < j; ++i) {
@@ -14728,7 +14590,6 @@ class TestHipCodeGen:
         assert "for (var i: i32 = 0, var j:" not in result
 
     def test_multi_expression_for_update_conversion(self):
-        """Test comma-separated for updates lower into one header"""
         code = """
         void host(int n) {
             for (int i = 0, j = n; i < j; ++i, --j) {
@@ -14748,7 +14609,6 @@ class TestHipCodeGen:
         assert "sink(i);" in result
 
     def test_auto_pointer_reference_local_declarations_conversion(self):
-        """Test auto pointer and reference declarations convert"""
         code = """
         void host(std::vector<float>& h, float* data) {
             int value = 2;
@@ -14776,7 +14636,6 @@ class TestHipCodeGen:
         assert "var r: ptr<auto> = data;" in result
 
     def test_device_lambda_expression_conversion(self):
-        """Test HIP device lambdas convert to CrossGL pseudo-lambda calls."""
         code = """
         void host() {
             auto folded = fold(values, 0,
@@ -14806,7 +14665,6 @@ class TestHipCodeGen:
         )
 
     def test_restrict_pointer_qualifier_conversion(self):
-        """Test __restrict__ pointer qualifiers are stripped during conversion"""
         code = """
         __global__ void kernel(const float* __restrict__ input,
                                float __restrict__* output) {
@@ -14835,7 +14693,6 @@ class TestHipCodeGen:
         assert "__restrict__" not in result
 
     def test_rvalue_reference_declarations_conversion(self):
-        """Test rvalue references are stripped during conversion"""
         code = """
         void consume(float&& value, const float&& other) {
             sink(value);
@@ -14867,7 +14724,6 @@ class TestHipCodeGen:
         assert "&&" not in result.replace("(true && false)", "")
 
     def test_cpp_named_casts_conversion(self):
-        """Test C++ named casts lower through CastNode conversion"""
         code = """
         void host(const float* input, float* data, int i, int n) {
             float x = static_cast<float>(i);
@@ -14891,7 +14747,6 @@ class TestHipCodeGen:
         assert "reinterpret_cast" not in result
 
     def test_new_delete_host_allocation_conversion(self):
-        """Test C++ new/delete host allocation conversion"""
         code = """
         void host(int n) {
             float* h = new float[n];
@@ -14919,7 +14774,6 @@ class TestHipCodeGen:
         assert "array<delete>" not in result
 
     def test_unique_ptr_host_allocation_conversion(self):
-        """Test common std::unique_ptr host allocation conversion"""
         code = """
         void host(int n) {
             std::unique_ptr<float[]> h = std::make_unique<float[]>(n);
@@ -14957,7 +14811,6 @@ class TestHipCodeGen:
         assert "std::make_unique" not in result
 
     def test_non_std_unique_ptr_helpers_do_not_lower_to_host_allocation(self):
-        """Test non-std unique_ptr helpers remain ordinary qualified calls."""
         code = """
         void host(int n) {
             auto p = my::make_unique<float[]>(n);
@@ -14982,7 +14835,6 @@ class TestHipCodeGen:
         assert "var q: ptr<f32>" not in result
 
     def test_qualified_template_argument_spacing_conversion(self):
-        """Test template arguments keep spaces during conversion"""
         code = """
         void host() {
             std::array<unsigned int, 4> ids{};
@@ -15003,7 +14855,6 @@ class TestHipCodeGen:
         assert "constunsigned" not in result
 
     def test_nested_template_argument_conversion(self):
-        """Test nested template and pointer-qualified unique_ptr conversion"""
         code = """
         void host(int n) {
             std::vector<std::array<unsigned int, 4>> table;
@@ -15030,7 +14881,6 @@ class TestHipCodeGen:
         assert "unsignedint" not in result
 
     def test_type_alias_conversion(self):
-        """Test typedef and using aliases survive host conversion"""
         code = """
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
@@ -15064,7 +14914,6 @@ class TestHipCodeGen:
         assert "using namespace" not in result
 
     def test_typedef_multi_declarator_alias_conversion(self):
-        """Test multi-declarator typedef aliases with pointers and arrays"""
         code = """
         typedef float Real, *RealPtr;
         typedef float Tile[16];
@@ -15102,7 +14951,6 @@ class TestHipCodeGen:
         assert "array<std::unique_ptr" not in result
 
     def test_type_alias_c_style_cast_conversion(self):
-        """Test C-style casts to typedef aliases convert without stray statements"""
         code = """
         typedef unsigned int LaneMask;
 
@@ -15124,7 +14972,6 @@ class TestHipCodeGen:
         assert "x;" not in result
 
     def test_range_based_for_loop_conversion(self):
-        """Test C++ range-based for loops lower to CrossGL for-in loops"""
         code = """
         void host(std::vector<float>& h) {
             for (auto& x : h) {
@@ -15155,7 +15002,6 @@ class TestHipCodeGen:
         assert "sink(y);" in result
 
     def test_multiline_initializer_and_packed_launch_conversion(self):
-        """Test multiline brace initializers and packed launch args convert"""
         code = """
         void host(float* data, int n) {
             dim3 grid(16);
@@ -15187,7 +15033,6 @@ class TestHipCodeGen:
         assert "// Arguments: data, n" in result
 
     def test_fixed_array_initializer_conversion(self):
-        """Test fixed arrays and brace initializer conversion"""
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};
 
@@ -15215,7 +15060,6 @@ class TestHipCodeGen:
         assert "var local: array<f32, 2> = {1.0f, 2.0f};" in result
 
     def test_designated_initializer_conversion(self):
-        """Test C99 designated initializer conversion"""
         code = """
         struct Pair {
             float x;
@@ -15246,7 +15090,6 @@ class TestHipCodeGen:
         ) in result
 
     def test_kernel_pointer_parameters_lower_to_storage_arrays(self):
-        """Test pointer kernel params lower to storage arrays of element type"""
         code = """
         __global__ void kernel(float* data, const int* indices, float value) {
             data[indices[0]] = value;
@@ -15281,7 +15124,6 @@ class TestHipCodeGen:
         assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):
-        """Test const, unsigned, and static declaration conversion"""
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
@@ -15321,7 +15163,6 @@ class TestHipCodeGen:
         assert "var tmp: f32 = 0.0f;" in result
 
     def test_qualified_and_pointer_return_function_conversion(self):
-        """Test qualified scalar and pointer return conversion"""
         code = """
         unsigned int lane_mask() { return 3u; }
         float* get_data(float* data) { return data; }
@@ -15342,7 +15183,6 @@ class TestHipCodeGen:
         assert "u32 helper(u32 x)" in result
 
     def test_expression_statements_and_for_header_conversion(self):
-        """Test expression statements and for headers are preserved"""
         code = """
         void helper(float* data, int n) {
             int i = 0;
@@ -15376,7 +15216,6 @@ class TestHipCodeGen:
         assert "None" not in result
 
     def test_c_style_for_structured_assignment_updates_conversion(self):
-        """Test array and member assignment targets survive for updates"""
         code = """
         void helper(float* values, int n) {
             int value = 1;
@@ -15402,7 +15241,6 @@ class TestHipCodeGen:
         assert "sink(j);" in result
 
     def test_assignment_expression_conversion(self):
-        """Test nested HIP assignment expressions convert without stray output"""
         code = """
         void f() {
             int a = 0;
@@ -15427,7 +15265,6 @@ class TestHipCodeGen:
         assert "None" not in result
 
     def test_local_pointer_declarations_and_unary_pointer_conversion(self):
-        """Test local pointer declarations, address-of, and dereference"""
         code = """
         void helper(float* data, unsigned int* ids) {
             float* p = data;
@@ -15457,7 +15294,6 @@ class TestHipCodeGen:
         assert "UnaryOpNode" not in result
 
     def test_pointer_member_access_operator_conversion(self):
-        """Test pointer and value member access preserve their operators"""
         code = """
         struct Item { int value; };
         void helper(Item* p, Item v) {
@@ -15479,7 +15315,6 @@ class TestHipCodeGen:
         assert "p->value = b;" in result
 
     def test_bitwise_logical_and_shift_expression_conversion(self):
-        """Test bitwise, shift, logical, and compound shift conversion"""
         code = """
         unsigned int helper(unsigned int a, unsigned int b) {
             unsigned int x = (a & b) | (a ^ b);
@@ -15509,7 +15344,6 @@ class TestHipCodeGen:
         assert "BinaryOpNode" not in result
 
     def test_numeric_literal_conversion(self):
-        """Test integer mask and float suffix literals are preserved"""
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
@@ -15536,7 +15370,6 @@ class TestHipCodeGen:
         assert "return ((mask | bits) | oct);" in result
 
     def test_boolean_null_and_character_literal_conversion(self):
-        """Test bool, null, nullptr, and character literals are preserved"""
         code = r"""
         bool helper(int* ptr) {
             bool yes = true;
@@ -15565,7 +15398,6 @@ class TestHipCodeGen:
         assert "return (yes && (!no));" in result
 
     def test_control_flow_and_cast_expression_conversion(self):
-        """Test while, do-while, switch, ternary, and casts are emitted"""
         code = """
         int helper(float x, int n) {
             int i = 0;
@@ -15608,7 +15440,6 @@ class TestHipCodeGen:
         assert "CastNode" not in result
 
     def test_empty_default_switch_codegen_emits_default_label(self):
-        """Test empty default labels are emitted instead of dropped."""
         code = """
         void f(int value) {
             switch (value) {
@@ -15632,7 +15463,6 @@ class TestHipCodeGen:
         assert result.index("case 0:") < result.index("default:")
 
     def test_switch_codegen_preserves_default_before_later_case_order(self):
-        """Test default labels are not reordered behind later case labels."""
         code = """
         void f(int value) {
             switch (value) {

@@ -1,5 +1,3 @@
-"""Test CUDA Code Generation"""
-
 from crosstl import translate
 from crosstl.backend.CUDA.CudaCrossGLCodeGen import CudaToCrossGLConverter
 from crosstl.backend.CUDA.CudaLexer import CudaLexer
@@ -8,7 +6,6 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 
 class TestCudaCodeGen:
     def test_basic_kernel_conversion(self):
-        """Test basic kernel to CrossGL conversion"""
         code = """
         __global__ void simple_kernel(float* data) {
             int idx = threadIdx.x;
@@ -27,7 +24,6 @@ class TestCudaCodeGen:
         assert "// Kernel: simple_kernel" in result
 
     def test_device_function_conversion(self):
-        """Test device function conversion"""
         code = """
         __device__ float add(float a, float b) {
             return a + b;
@@ -45,7 +41,6 @@ class TestCudaCodeGen:
         assert "// Function: add" in result
 
     def test_device_function_body_emitted_when_kernel_calls_it(self):
-        """Test device helpers are emitted when kernels call them."""
         code = """
         __device__ float add(float a, float b) {
             return a + b;
@@ -68,7 +63,6 @@ class TestCudaCodeGen:
         assert "out[0] = add(1.0f, 2.0f);" in result
 
     def test_multiple_kernels_conversion(self):
-        """Test multiple kernels conversion"""
         code = """
         __global__ void kernel1(float* data) {
             data[threadIdx.x] = 1.0f;
@@ -90,7 +84,6 @@ class TestCudaCodeGen:
         assert "// Kernel: kernel2" in result
 
     def test_type_conversion(self):
-        """Test CUDA type to CrossGL type conversion"""
         codegen = CudaToCrossGLConverter()
 
         # Test basic types
@@ -109,7 +102,6 @@ class TestCudaCodeGen:
         assert codegen.convert_cuda_type_to_crossgl("void * []") == "array<ptr<void>>"
 
     def test_constructor_style_vector_declaration_conversion(self):
-        """Test CUDA constructor-style vector declarations convert"""
         code = """
         void launch() {
             dim3 grid(16, 8, 1);
@@ -136,7 +128,6 @@ class TestCudaCodeGen:
         assert "var bytes: vec2<u8> = vec2<u8>(1, 2);" in result
 
     def test_fmod_builtins_convert_to_crossgl_mod(self):
-        """Test CUDA fmod functions convert back to CrossGL mod."""
         code = """
         __global__ void wrap(float* out, float x) {
             out[0] = fmodf(x, 1.0f);
@@ -156,7 +147,6 @@ class TestCudaCodeGen:
         assert "fmod" not in result
 
     def test_atan2_builtins_convert_to_crossgl_atan2(self):
-        """Test CUDA atan2f converts back to CrossGL atan2."""
         code = """
         __global__ void angle(float* out, float y, float x) {
             out[0] = atan2f(y, x);
@@ -176,7 +166,6 @@ class TestCudaCodeGen:
         assert "atan2f" not in result
 
     def test_lerp_builtin_converts_to_crossgl_mix(self):
-        """Test CUDA lerp converts back to CrossGL mix."""
         code = """
         __global__ void blend(float* out, float a, float b, float t) {
             out[0] = lerp(a, b, t);
@@ -194,7 +183,6 @@ class TestCudaCodeGen:
         assert "out[0] = lerp(a, b, t);" not in result
 
     def test_lerp_with_bool_selector_converts_to_crossgl_mix(self):
-        """Test CUDA lerp conversion preserves selector-shaped mix calls."""
         code = """
         __global__ void blend(float* out, float a, float b, bool choose_b) {
             out[0] = lerp(a, b, choose_b);
@@ -212,7 +200,6 @@ class TestCudaCodeGen:
         assert "out[0] = lerp(a, b, choose_b);" not in result
 
     def test_scalar_bool_ternary_selector_is_preserved(self):
-        """Test CUDA scalar bool ternaries round-trip as CrossGL ternaries."""
         code = """
         __global__ void choose(float* out, bool choose_b, float a, float b) {
             out[0] = choose_b ? b : a;
@@ -229,7 +216,6 @@ class TestCudaCodeGen:
         assert "out[0] = (choose_b ? b : a);" in result
 
     def test_user_defined_lerp_call_does_not_convert_to_mix(self):
-        """Test user-defined CUDA functions shadow builtin call conversion."""
         code = """
         float lerp(float x) {
             return x;
@@ -260,7 +246,6 @@ class TestCudaCodeGen:
         assert "out[1] = texture(x);" not in result
 
     def test_user_defined_cuda_atomic_name_call_does_not_convert_to_builtin(self):
-        """Test user-defined CUDA atomic names shadow builtin conversion."""
         code = """
         int atomicExch(int value) {
             return value + 1;
@@ -312,7 +297,6 @@ class TestCudaCodeGen:
         assert "atomicExchange(7)" not in result
 
     def test_address_taken_pointer_array_and_shared_atomics_lower_to_lvalues(self):
-        """Test CUDA pointer atomics convert address-taken targets to CrossGL lvalues."""
         code = """
         __global__ void kernel(int* values, int* expected, int* desired, int index) {
             __shared__ int sharedCounts[32];
@@ -342,7 +326,6 @@ class TestCudaCodeGen:
         assert "(&sharedCounts[gl_LocalInvocationID.x])" not in result
 
     def test_bitwise_atomics_lower_to_crossgl_lvalue_targets(self):
-        """Test CUDA bitwise atomics convert to CrossGL atomic calls."""
         code = """
         __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
             __shared__ unsigned int sharedMasks[32];
@@ -370,7 +353,6 @@ class TestCudaCodeGen:
         assert "(&sharedMasks[gl_LocalInvocationID.x])" not in result
 
     def test_bounded_wrap_atomics_preserve_cuda_semantics(self):
-        """Test CUDA atomicInc/atomicDec preserve bounded wrap intrinsics."""
         code = """
         __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
             __shared__ unsigned int sharedCounters[32];
@@ -399,7 +381,6 @@ class TestCudaCodeGen:
         assert "(&sharedCounters[gl_LocalInvocationID.x])" not in result
 
     def test_user_defined_cuda_runtime_call_does_not_emit_runtime_comment(self):
-        """Test user-defined CUDA runtime names shadow runtime call comments."""
         code = """
         void cudaFree(float* p) {
             p[0] = 1.0f;
@@ -422,7 +403,6 @@ class TestCudaCodeGen:
         assert "// CUDA memory free: out" not in result
 
     def test_threadfence_converts_to_crossgl_memory_barrier(self):
-        """Test CUDA thread fence variants convert back to CrossGL memoryBarrier."""
         code = """
         __global__ void fence(float* out) {
             __threadfence();
@@ -444,7 +424,6 @@ class TestCudaCodeGen:
         assert "__threadfence" not in result
 
     def test_syncwarp_mask_emits_explicit_diagnostic(self):
-        """Test CUDA warp synchronization emits an explicit CrossGL diagnostic."""
         code = """
         __global__ void sync(unsigned int mask) {
             __syncwarp(mask);
@@ -464,7 +443,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_cooperative_groups_thread_block_sync_converts(self):
-        """Test CUDA cooperative-groups thread-block sync converts to CrossGL."""
         code = """
         #include <cooperative_groups.h>
         namespace cg = cooperative_groups;
@@ -499,7 +477,6 @@ class TestCudaCodeGen:
         assert "cooperative_groups::this_thread_block" not in result
 
     def test_cooperative_groups_thread_block_rank_and_size_converts(self):
-        """Test CUDA cooperative-groups thread-block rank helpers convert."""
         code = """
         __global__ void ranks(unsigned int* out) {
             auto block = cooperative_groups::this_thread_block();
@@ -530,7 +507,6 @@ class TestCudaCodeGen:
         assert "cooperative_groups::this_thread_block" not in result
 
     def test_cooperative_groups_tiled_partition_rank_and_size_converts(self):
-        """Test tiled partitions from thread blocks lower rank and size."""
         code = """
         namespace cg = cooperative_groups;
 
@@ -561,7 +537,6 @@ class TestCudaCodeGen:
         assert "tile.size" not in result
 
     def test_cooperative_groups_sync_factory_and_member_aliases_convert(self):
-        """Test cooperative-groups sync and current member aliases convert."""
         code = """
         namespace cg = cooperative_groups;
 
@@ -600,7 +575,6 @@ class TestCudaCodeGen:
         assert "dim_threads" not in result
 
     def test_unsupported_cooperative_group_rank_is_expression_safe(self):
-        """Test unsupported cooperative rank helpers remain expression-safe."""
         code = """
         __global__ void unsupported(unsigned int* out) {
             auto group = cooperative_groups::coalesced_threads();
@@ -643,7 +617,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_unsupported_cooperative_groups_emit_diagnostics(self):
-        """Test unsupported CUDA cooperative-groups collectives are explicit."""
         code = """
         __global__ void sync_grid(float* out) {
             auto grid = cooperative_groups::this_grid();
@@ -675,7 +648,6 @@ class TestCudaCodeGen:
         assert "cooperative_groups::coalesced_threads" not in result
 
     def test_cooperative_groups_async_copy_wait_emit_diagnostics(self):
-        """Test cooperative-groups async copy and wait stay explicit."""
         code = """
         namespace cg = cooperative_groups;
 
@@ -708,7 +680,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_cuda_barrier_pipeline_async_copy_emit_diagnostics(self):
-        """Test CUDA barrier/pipeline async copy helpers stay explicit."""
         code = """
         __global__ void async_copy(int* shared, const int* global, int* out) {
             __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
@@ -795,7 +766,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_cuda_pipeline_primitive_intrinsics_emit_diagnostics(self):
-        """Test CUDA pipeline primitive intrinsics stay explicit."""
         code = """
         __global__ void primitive_async_copy(
             int* shared,
@@ -833,7 +803,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_inverse_trig_builtins_convert_to_crossgl(self):
-        """Test CUDA inverse trig functions convert back to CrossGL names."""
         code = """
         __global__ void inverse(float* out, float x) {
             out[0] = asinf(x);
@@ -857,7 +826,6 @@ class TestCudaCodeGen:
         assert "atanf" not in result
 
     def test_hyperbolic_builtins_convert_to_crossgl(self):
-        """Test CUDA hyperbolic functions convert back to CrossGL names."""
         code = """
         __global__ void hyper(float* out, float x) {
             out[0] = sinhf(x);
@@ -881,7 +849,6 @@ class TestCudaCodeGen:
         assert "tanhf" not in result
 
     def test_extended_math_builtins_convert_to_crossgl(self):
-        """Test CUDA extended math functions convert back to CrossGL names."""
         code = """
         __global__ void math(float* out, double* precise, float x, double d) {
             out[0] = rsqrtf(x);
@@ -914,7 +881,6 @@ class TestCudaCodeGen:
         assert "log2f" not in result
 
     def test_kernel_launch_conversion(self):
-        """Test CUDA kernel launch configuration conversion"""
         code = """
         void host(float* data, int stream) {
             dim3 grid(16);
@@ -934,7 +900,6 @@ class TestCudaCodeGen:
         assert "// Arguments: data, 1" in result
 
     def test_templated_kernel_launch_conversion(self):
-        """Test CUDA template-id kernel launch conversion"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -957,7 +922,6 @@ class TestCudaCodeGen:
         assert "// Arguments: data, 2.0f" in result
 
     def test_computed_kernel_launch_config_conversion(self):
-        """Test CUDA computed kernel launch configuration conversion"""
         code = """
         void host(float* data, int n, int stream) {
             int blockSize = 128;
@@ -982,7 +946,6 @@ class TestCudaCodeGen:
         assert "// Arguments: data, n" in result
 
     def test_cuda_launch_kernel_api_conversion(self):
-        """Test cudaLaunchKernel converts through kernel launch metadata"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1005,7 +968,6 @@ class TestCudaCodeGen:
         assert "cudaLaunchKernel" not in result
 
     def test_user_defined_cuda_launch_kernel_call_is_not_kernel_launch(self):
-        """Test user-defined cudaLaunchKernel calls are not launch metadata"""
         code = """
         void cudaLaunchKernel(float* out, int grid, int block, void* args, int shared, int stream) {
             return;
@@ -1029,7 +991,6 @@ class TestCudaCodeGen:
         assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_user_defined_cuda_launch_kernel_declared_later_is_not_kernel_launch(self):
-        """Test later user-defined cudaLaunchKernel shadows launch metadata."""
         code = """
         void host(float* out, int grid, int block, void* args) {
             cudaLaunchKernel(out, grid, block, args, 0, 0);
@@ -1053,7 +1014,6 @@ class TestCudaCodeGen:
         assert "// Kernel launch: out<<<grid, block, 0, 0>>>()" not in result
 
     def test_cuda_launch_kernel_casted_packed_args_conversion(self):
-        """Test casted packed args still expand in cudaLaunchKernel"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1076,7 +1036,6 @@ class TestCudaCodeGen:
         assert "ptr<ptr<void>>(packedArgs)" not in result
 
     def test_cuda_launch_kernel_compound_literal_args_conversion(self):
-        """Test compound literal packed args expand in cudaLaunchKernel"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1098,7 +1057,6 @@ class TestCudaCodeGen:
         assert "array<ptr<void>>({(&data), (&n)})" not in result
 
     def test_compound_literal_packed_args_declaration_conversion(self):
-        """Test local compound literal packed args can be reused"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -1122,7 +1080,6 @@ class TestCudaCodeGen:
         assert "// Arguments: data, n" in result
 
     def test_initializer_arrays_do_not_expand_as_launch_args(self):
-        """Test only void pointer packed args expand in kernel launches"""
         code = """
         void host() {
             dim3 grid(16);
@@ -1144,7 +1101,6 @@ class TestCudaCodeGen:
         assert "// Arguments: 1.0f, 2.0f" not in result
 
     def test_cuda_runtime_memory_api_conversion(self):
-        """Test CUDA runtime memory API calls emit metadata comments"""
         code = """
         void host(float* h, int n) {
             float* d;
@@ -1183,7 +1139,6 @@ class TestCudaCodeGen:
         assert "err = cudaDeviceSynchronize();" not in result
 
     def test_cuda_runtime_memset_async_conversion(self):
-        """Test cudaMemsetAsync emits metadata comments and status success"""
         code = """
         void host(float* d, int n, cudaStream_t stream) {
             cudaMemsetAsync(d, 0, n * sizeof(float), stream);
@@ -1210,7 +1165,6 @@ class TestCudaCodeGen:
         assert "cudaMemsetAsync(" not in result
 
     def test_cuda_runtime_last_error_query_conversion(self):
-        """Test CUDA runtime error query calls emit metadata comments"""
         code = """
         void host() {
             cudaGetLastError();
@@ -1234,7 +1188,6 @@ class TestCudaCodeGen:
         assert "cudaPeekAtLastError(" not in result
 
     def test_cuda_texture_object_descriptor_query_conversion(self):
-        """Test CUDA texture-object descriptor queries emit metadata comments."""
         code = """
         void queryTextureObject(cudaTextureObject_t objectTex) {
             cudaResourceDesc resourceDesc;
@@ -1275,7 +1228,6 @@ class TestCudaCodeGen:
         assert "cudaGetTextureObjectResourceViewDesc(" not in result
 
     def test_cuda_surface_object_descriptor_query_conversion(self):
-        """Test CUDA surface-object descriptor queries emit metadata comments."""
         code = """
         void querySurfaceObject(cudaSurfaceObject_t surfaceObj) {
             cudaResourceDesc resourceDesc;
@@ -1304,7 +1256,6 @@ class TestCudaCodeGen:
         assert "cudaGetSurfaceObjectResourceDesc(" not in result
 
     def test_cuda_external_memory_runtime_conversion(self):
-        """Test CUDA external-memory APIs emit metadata comments."""
         code = """
         void importExternalMemory(cudaExternalMemoryHandleDesc handleDesc) {
             cudaExternalMemory_t memory;
@@ -1355,7 +1306,6 @@ class TestCudaCodeGen:
         assert "cudaDestroyExternalMemory(" not in result
 
     def test_cuda_external_semaphore_runtime_conversion(self):
-        """Test CUDA external-semaphore APIs emit metadata comments."""
         code = """
         void syncExternalSemaphore(
             cudaExternalSemaphoreHandleDesc handleDesc,
@@ -1409,7 +1359,6 @@ class TestCudaCodeGen:
         assert "cudaDestroyExternalSemaphore(" not in result
 
     def test_cuda_graph_lifecycle_runtime_conversion(self):
-        """Test CUDA graph lifecycle APIs emit metadata comments."""
         code = """
         void runGraph(cudaStream_t stream, unsigned long long flags) {
             cudaGraph_t graph;
@@ -1487,7 +1436,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_lifecycle_runtime_conversion(self):
-        """Test CUDA driver graph lifecycle APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -1594,7 +1542,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_instantiate_update_params_runtime_conversion(self):
-        """Test modern CUDA graph instantiate/update params emit metadata."""
         code = """
         void refreshGraph(cudaGraph_t graph, cudaGraphExec_t exec) {
             cudaGraphExec_t newExec;
@@ -1634,7 +1581,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_device_graph_launch_runtime_conversion(self):
-        """Test CUDA device graph launch APIs emit typed metadata."""
         code = """
         __global__ void launchDeviceGraphs(cudaGraphExec_t child) {
             cudaGraphExec_t current = cudaGetCurrentGraphExec();
@@ -1678,7 +1624,6 @@ class TestCudaCodeGen:
         assert "cudaGraphLaunch(" not in result
 
     def test_cuda_device_graph_kernel_node_update_runtime_conversion(self):
-        """Test CUDA device graph kernel-node update APIs emit metadata."""
         code = """
         __device__ void updateDeviceGraphKernelNode(
             cudaGraphDeviceNode_t node,
@@ -1725,7 +1670,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_conditional_runtime_conversion(self):
-        """Test CUDA graph conditional APIs emit metadata comments."""
         code = """
         __device__ void setConditional(
             cudaGraphConditionalHandle handle,
@@ -1820,7 +1764,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_node_update_runtime_conversion(self):
-        """Test CUDA graph node parameter/update APIs emit metadata comments."""
         code = """
         void updateGraph(
             cudaGraph_t graph,
@@ -1949,7 +1892,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_kernel_node_attribute_runtime_conversion(self):
-        """Test CUDA graph kernel node attribute APIs emit metadata."""
         code = """
         void updateKernelAttributes(
             cudaGraphNode_t kernelNode,
@@ -2001,7 +1943,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_exec_memcpy_convenience_update_runtime_conversion(self):
-        """Test CUDA graph exec memcpy convenience update APIs emit metadata."""
         code = """
         void updateExecMemcpy(
             cudaGraphExec_t exec,
@@ -2073,7 +2014,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_memcpy_convenience_node_update_runtime_conversion(self):
-        """Test CUDA graph memcpy convenience node update APIs emit metadata."""
         code = """
         void updateMemcpyNode(
             cudaGraphNode_t memcpyNode,
@@ -2141,7 +2081,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_batch_mem_op_node_runtime_conversion(self):
-        """Test CUDA driver graph batch memory operation node APIs emit metadata."""
         code = """
         void updateBatchMemOpNode(
             CUgraph graph,
@@ -2200,7 +2139,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_stream_memory_operation_runtime_conversion(self):
-        """Test CUDA driver stream memory operation APIs emit metadata."""
         code = """
         void scheduleStreamMemOps(
             CUstream stream,
@@ -2270,7 +2208,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_stream_attribute_query_runtime_conversion(self):
-        """Test CUDA driver stream attribute and query APIs emit metadata."""
         code = """
         void inspectStreamAttributes(
             CUstream stream,
@@ -2383,7 +2320,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_stream_lifecycle_synchronization_runtime_conversion(self):
-        """Test CUDA driver stream lifecycle and synchronization APIs emit metadata."""
         code = """
         CUresult controlStream(
             CUstream stream,
@@ -2481,7 +2417,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_profiler_stream_callback_runtime_conversion(self):
-        """Test CUDA driver profiler and stream callback APIs emit metadata."""
         code = """
         CUresult profileStream(
             CUstream stream,
@@ -2550,7 +2485,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_event_lifecycle_query_runtime_conversion(self):
-        """Test CUDA driver event lifecycle and query APIs emit metadata."""
         code = """
         CUresult controlEvents(CUstream stream) {
             CUevent start;
@@ -2618,7 +2552,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_memory_allocation_copy_runtime_conversion(self):
-        """Test CUDA driver memory allocation/copy APIs emit metadata."""
         code = """
         CUresult driverMemory(
             CUstream stream,
@@ -2781,7 +2714,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_uva_memory_range_runtime_conversion(self):
-        """Test CUDA driver UVA and memory range APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -2900,7 +2832,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_memory_pool_async_runtime_conversion(self):
-        """Test CUDA driver memory pool and async allocation APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3031,7 +2962,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_memory_pool_ipc_runtime_conversion(self):
-        """Test CUDA driver memory pool IPC/share APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3149,7 +3079,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_virtual_memory_runtime_conversion(self):
-        """Test CUDA driver virtual memory APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3285,7 +3214,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_external_memory_semaphore_runtime_conversion(self):
-        """Test CUDA driver external memory/semaphore APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3406,7 +3334,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_array_mipmapped_array_runtime_conversion(self):
-        """Test CUDA driver array and mipmapped-array APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3554,7 +3481,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_texture_surface_object_runtime_conversion(self):
-        """Test CUDA driver texture/surface object APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3669,7 +3595,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_texture_reference_runtime_conversion(self):
-        """Test CUDA driver legacy texture-reference APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -3936,7 +3861,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_module_surface_reference_runtime_conversion(self):
-        """Test CUDA driver module texture/surface reference APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -4022,7 +3946,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graphics_resource_runtime_conversion(self):
-        """Test CUDA driver graphics resource APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -4213,7 +4136,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_legacy_opengl_interop_runtime_conversion(self):
-        """Test legacy CUDA driver OpenGL interop APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -4364,7 +4286,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_module_launch_runtime_conversion(self):
-        """Test CUDA driver module/function launch APIs emit metadata."""
         code = """
         CUresult driverLaunch(
             const char* path,
@@ -4547,7 +4468,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_linker_runtime_conversion(self):
-        """Test CUDA driver linker APIs emit metadata."""
         code = """
         CUresult linkModule(
             const char* path,
@@ -4657,7 +4577,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_function_configuration_runtime_conversion(self):
-        """Test CUDA driver function configuration APIs emit metadata."""
         code = """
         CUresult configureFunction(CUfunction function) {
             int maxThreads;
@@ -4733,7 +4652,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_context_lifecycle_runtime_conversion(self):
-        """Test CUDA driver context lifecycle APIs emit metadata."""
         code = """
         CUresult manageContext(CUdevice device, CUcontext peer) {
             CUcontext context;
@@ -4901,7 +4819,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_device_inventory_runtime_conversion(self):
-        """Test CUDA driver initialization/device inventory APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -5013,7 +4930,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_device_property_query_runtime_conversion(self):
-        """Test CUDA driver device property/peer/PCI queries emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -5103,7 +5019,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_node_creation_dependency_runtime_conversion(self):
-        """Test CUDA graph node creation/dependency APIs emit metadata comments."""
         code = """
         void buildGraph(
             cudaGraph_t graph,
@@ -5233,7 +5148,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_node_creation_dependency_runtime_conversion(self):
-        """Test CUDA driver graph node creation/dependency APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -5369,7 +5283,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_external_event_child_runtime_conversion(self):
-        """Test CUDA driver graph external semaphore/event/child APIs."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -5582,7 +5495,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_memory_user_object_runtime_conversion(self):
-        """Test CUDA driver graph memory/user-object APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -5742,7 +5654,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_memcpy_upload_memory_runtime_conversion(self):
-        """Test CUDA graph memcpy/upload/memory APIs emit metadata comments."""
         code = """
         void configureGraph(
             cudaGraph_t graph,
@@ -5865,7 +5776,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_user_object_memory_attribute_runtime_conversion(self):
-        """Test CUDA graph user-object and memory attributes emit metadata."""
         code = """
         void manageGraphResources(
             cudaGraph_t graph,
@@ -5967,7 +5877,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_external_semaphore_event_node_runtime_conversion(self):
-        """Test CUDA graph external semaphore/event node APIs emit metadata."""
         code = """
         void configureInteropGraph(
             cudaGraph_t graph,
@@ -6128,7 +6037,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_graph_generic_node_query_runtime_conversion(self):
-        """Test generic CUDA graph node/query APIs emit metadata comments."""
         code = """
         void inspectGraph(
             cudaGraph_t graph,
@@ -6317,7 +6225,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_query_update_runtime_conversion(self):
-        """Test CUDA driver graph query/update APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -6484,7 +6391,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_conditional_instantiate_runtime_conversion(self):
-        """Test CUDA driver graph conditional and instantiate APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -6590,7 +6496,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_driver_graph_specialized_node_params_runtime_conversion(self):
-        """Test CUDA driver graph specialized node param APIs emit metadata."""
         code = """
         bool checkStatus(CUresult status) {
             return status == CUDA_SUCCESS;
@@ -6811,7 +6716,6 @@ class TestCudaCodeGen:
             assert f"{function_name}(" not in result
 
     def test_cuda_runtime_event_api_conversion(self):
-        """Test CUDA stream and event API calls emit metadata comments"""
         code = """
         void bench() {
             cudaStream_t stream;
@@ -6857,7 +6761,6 @@ class TestCudaCodeGen:
         assert "cudaStreamCreateWithFlags(" not in result
 
     def test_cuda_runtime_stream_create_with_priority_status_conversion(self):
-        """Test cudaStreamCreateWithPriority emits priority metadata"""
         code = """
         void bench() {
             cudaStream_t stream;
@@ -6886,7 +6789,6 @@ class TestCudaCodeGen:
         assert "cudaStreamCreateWithPriority(" not in result
 
     def test_std_chrono_benchmark_expression_conversion(self):
-        """Test std::chrono benchmark expressions convert"""
         code = """
         void bench() {
             auto start = std::chrono::high_resolution_clock::now();
@@ -6916,7 +6818,6 @@ class TestCudaCodeGen:
         assert "var ordered: bool = (1 < 2);" in result
 
     def test_std_vector_host_buffer_conversion(self):
-        """Test std::vector host buffers convert in memory copy metadata"""
         code = """
         void host(float* d, int n) {
             std::vector<float> h(n);
@@ -6943,7 +6844,6 @@ class TestCudaCodeGen:
         assert "std::chrono::high_resolution_clock::now();" in result
 
     def test_std_array_host_buffer_conversion(self):
-        """Test std::array host buffers convert in memory copy metadata"""
         code = """
         void host(float* d) {
             std::array<float, 4> h{1.0f, 2.0f, 3.0f, 4.0f};
@@ -6968,7 +6868,6 @@ class TestCudaCodeGen:
         ) in result
 
     def test_host_index_fill_scalar_constructor_conversion(self):
-        """Test host-side scalar type constructors convert to CrossGL types"""
         code = """
         void host(int n) {
             std::vector<float> h(n);
@@ -6989,7 +6888,6 @@ class TestCudaCodeGen:
         assert "h[i] = f32(i);" in result
 
     def test_reference_host_helper_parameters_conversion(self):
-        """Test host helper reference parameters lower to value types"""
         code = """
         void prepare(std::vector<float>& h) {
             std::fill(h.begin(), h.end(), 1.0f);
@@ -7012,7 +6910,6 @@ class TestCudaCodeGen:
         assert "return h.size();" in result
 
     def test_multi_declarator_host_setup_conversion(self):
-        """Test comma-separated host setup declarations convert separately"""
         code = """
         void host(int n) {
             std::vector<float> a(n), b(n), c(n);
@@ -7041,7 +6938,6 @@ class TestCudaCodeGen:
         assert "var bias: f32 = 3.0f;" in result
 
     def test_multi_declarator_for_initializer_conversion(self):
-        """Test comma-separated for initializers lower into scoped declarations"""
         code = """
         void host(float* a, float* b, int n) {
             for (int i = 0, j = n; i < j; ++i) {
@@ -7069,7 +6965,6 @@ class TestCudaCodeGen:
         assert "for (var i: i32 = 0, var j:" not in result
 
     def test_multi_expression_for_update_conversion(self):
-        """Test comma-separated for updates lower into one header"""
         code = """
         void host(int n) {
             for (int i = 0, j = n; i < j; ++i, --j) {
@@ -7089,7 +6984,6 @@ class TestCudaCodeGen:
         assert "sink(i);" in result
 
     def test_grid_stride_for_update_compound_assignment_conversion(self):
-        """Test CUDA grid-stride for-loop updates lower into CrossGL"""
         code = """
         __global__ void kernel(float* data, int n) {
             for (int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -7115,7 +7009,6 @@ class TestCudaCodeGen:
         assert "data[i] = 0.0f;" in result
 
     def test_assignment_expression_conversion(self):
-        """Test nested CUDA assignment expressions convert without stray output"""
         code = """
         void f() {
             int a = 0;
@@ -7140,7 +7033,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_auto_pointer_reference_local_declarations_conversion(self):
-        """Test auto pointer and reference declarations convert"""
         code = """
         void host(std::vector<float>& h, float* data) {
             int value = 2;
@@ -7168,7 +7060,6 @@ class TestCudaCodeGen:
         assert "var r: ptr<auto> = data;" in result
 
     def test_device_lambda_expression_conversion(self):
-        """Test CUDA device lambdas convert to CrossGL pseudo-lambda calls."""
         code = """
         void host() {
             auto folded = fold(values, 0,
@@ -7198,7 +7089,6 @@ class TestCudaCodeGen:
         )
 
     def test_restrict_pointer_qualifier_conversion(self):
-        """Test __restrict__ pointer qualifiers are stripped during conversion"""
         code = """
         __global__ void kernel(const float* __restrict__ input,
                                float __restrict__* output) {
@@ -7227,7 +7117,6 @@ class TestCudaCodeGen:
         assert "__restrict__" not in result
 
     def test_rvalue_reference_declarations_conversion(self):
-        """Test rvalue references are stripped during conversion"""
         code = """
         void consume(float&& value, const float&& other) {
             sink(value);
@@ -7259,7 +7148,6 @@ class TestCudaCodeGen:
         assert "&&" not in result.replace("(true && false)", "")
 
     def test_cpp_named_casts_conversion(self):
-        """Test C++ named casts lower through CastNode conversion"""
         code = """
         void host(const float* input, float* data, int i, int n) {
             float x = static_cast<float>(i);
@@ -7283,7 +7171,6 @@ class TestCudaCodeGen:
         assert "reinterpret_cast" not in result
 
     def test_new_delete_host_allocation_conversion(self):
-        """Test C++ new/delete host allocation conversion"""
         code = """
         void host(int n) {
             float* h = new float[n];
@@ -7311,7 +7198,6 @@ class TestCudaCodeGen:
         assert "array<delete>" not in result
 
     def test_unique_ptr_host_allocation_conversion(self):
-        """Test common std::unique_ptr host allocation conversion"""
         code = """
         void host(int n) {
             std::unique_ptr<float[]> h = std::make_unique<float[]>(n);
@@ -7349,7 +7235,6 @@ class TestCudaCodeGen:
         assert "std::make_unique" not in result
 
     def test_non_std_unique_ptr_helpers_do_not_lower_to_host_allocation(self):
-        """Test non-std unique_ptr helpers remain ordinary qualified calls."""
         code = """
         void host(int n) {
             auto p = my::make_unique<float[]>(n);
@@ -7374,7 +7259,6 @@ class TestCudaCodeGen:
         assert "var q: ptr<f32>" not in result
 
     def test_qualified_template_argument_spacing_conversion(self):
-        """Test template arguments keep spaces during conversion"""
         code = """
         struct ResourceHolder {
             cudaTextureObject_t sharedName;
@@ -7740,7 +7624,6 @@ class TestCudaCodeGen:
         assert "constunsigned" not in result
 
     def test_resource_object_pointer_and_legacy_texture_template_conversion(self):
-        """Test CUDA resource object pointers and legacy texture refs convert."""
         code = """
         texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
         surface<void, cudaSurfaceType2D> surfaceRef;
@@ -7838,7 +7721,6 @@ class TestCudaCodeGen:
         assert "surf2Dwrite" not in result
 
     def test_cuda_texture_gather_helpers_convert(self):
-        """Test CUDA tex2Dgather helpers convert to CrossGL textureGather."""
         code = """
         void gatherOps(
             texture<float4, cudaTextureType2D> tex,
@@ -7897,7 +7779,6 @@ class TestCudaCodeGen:
         assert "tex2Dgather<float4>(" not in result
 
     def test_cuda_texture_fetch_helpers_convert(self):
-        """Test CUDA tex1Dfetch helpers convert to CrossGL texelFetch."""
         code = """
         void fetchOps(
             texture<float4, cudaTextureType1D> lineTex,
@@ -7929,7 +7810,6 @@ class TestCudaCodeGen:
         assert "tex1Dfetch<float4>(" not in result
 
     def test_cuda_sparse_texture_fetch_helpers_emit_diagnostics(self):
-        """Test sparse CUDA 2D texture fetches import as diagnostics."""
         code = """
         void sparseFetchOps(
             cudaTextureObject_t objectTex,
@@ -7983,7 +7863,6 @@ class TestCudaCodeGen:
         assert "tex2DGrad<float4>(" not in result
 
     def test_cuda_sparse_layered_texture_helpers_emit_diagnostics(self):
-        """Test sparse CUDA 2D layered texture fetches import as diagnostics."""
         code = """
         void sparseLayeredFetchOps(
             cudaTextureObject_t objectLayers,
@@ -8041,7 +7920,6 @@ class TestCudaCodeGen:
         assert "tex2DLayeredGrad<float4>(" not in result
 
     def test_cuda_sparse_3d_texture_helpers_emit_diagnostics(self):
-        """Test sparse CUDA 3D texture fetches import as diagnostics."""
         code = """
         void sparseVolumeFetchOps(
             cudaTextureObject_t objectVolume,
@@ -8098,7 +7976,6 @@ class TestCudaCodeGen:
         assert "tex3DGrad<float4>(" not in result
 
     def test_cuda_sparse_1d_and_cube_texture_helpers_emit_diagnostics(self):
-        """Test sparse CUDA 1D and cubemap texture fetches import as diagnostics."""
         code = """
         void sparseLineAndCubeFetchOps(
             cudaTextureObject_t objectLine,
@@ -8232,7 +8109,6 @@ class TestCudaCodeGen:
             assert f"{helper}<float4>(" not in result
 
     def test_qualified_resource_object_pointer_array_conversion(self):
-        """Test qualified CUDA resource object arrays retain inferred shapes."""
         code = """
         const cudaTextureObject_t globalConstTextures[2];
         cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
@@ -8335,7 +8211,6 @@ class TestCudaCodeGen:
         assert "surf2Dwrite" not in result
 
     def test_struct_resource_object_members_infer_crossgl_resource_types(self):
-        """Test CUDA resource calls infer struct member resource types."""
         code = """
         struct ResourcePair {
             cudaTextureObject_t tex;
@@ -8410,7 +8285,6 @@ class TestCudaCodeGen:
         assert "surf2Dwrite" not in result
 
     def test_nested_struct_resource_object_members_infer_crossgl_resource_types(self):
-        """Test nested struct member chains infer CUDA resource handle types."""
         code = """
         struct ResourcePair {
             cudaTextureObject_t tex;
@@ -8486,7 +8360,6 @@ class TestCudaCodeGen:
         assert "surf2Dwrite" not in result
 
     def test_cast_and_dereference_resource_object_members_infer_crossgl_types(self):
-        """Test casted and dereferenced struct resource handles infer types."""
         code = """
         struct ResourcePair {
             cudaTextureObject_t tex;
@@ -8541,7 +8414,6 @@ class TestCudaCodeGen:
         assert "surf2Dwrite" not in result
 
     def test_nested_template_argument_conversion(self):
-        """Test nested template and pointer-qualified unique_ptr conversion"""
         code = """
         void host(int n) {
             std::vector<std::array<unsigned int, 4>> table;
@@ -8568,7 +8440,6 @@ class TestCudaCodeGen:
         assert "unsignedint" not in result
 
     def test_type_alias_conversion(self):
-        """Test typedef and using aliases survive host conversion"""
         code = """
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
@@ -8602,7 +8473,6 @@ class TestCudaCodeGen:
         assert "using namespace" not in result
 
     def test_typedef_multi_declarator_alias_conversion(self):
-        """Test multi-declarator typedef aliases with pointers and arrays"""
         code = """
         typedef float Real, *RealPtr;
         typedef float Tile[16];
@@ -8640,7 +8510,6 @@ class TestCudaCodeGen:
         assert "array<std::unique_ptr" not in result
 
     def test_type_alias_c_style_cast_conversion(self):
-        """Test C-style casts to typedef aliases convert without stray statements"""
         code = """
         typedef unsigned int LaneMask;
 
@@ -8662,7 +8531,6 @@ class TestCudaCodeGen:
         assert "x;" not in result
 
     def test_range_based_for_loop_conversion(self):
-        """Test C++ range-based for loops lower to CrossGL for-in loops"""
         code = """
         void host(std::vector<float>& h) {
             for (auto& x : h) {
@@ -8693,7 +8561,6 @@ class TestCudaCodeGen:
         assert "sink(y);" in result
 
     def test_empty_program(self):
-        """Test empty program conversion"""
         code = ""
         lexer = CudaLexer(code)
         tokens = lexer.tokenize()
@@ -8706,7 +8573,6 @@ class TestCudaCodeGen:
         assert "// CUDA to CrossGL conversion" in result
 
     def test_fixed_array_initializer_conversion(self):
-        """Test fixed arrays and brace initializer conversion"""
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};
 
@@ -8734,7 +8600,6 @@ class TestCudaCodeGen:
         assert "var local: array<f32, 2> = {1.0f, 2.0f};" in result
 
     def test_designated_initializer_conversion(self):
-        """Test C99 designated initializer conversion"""
         code = """
         struct Pair {
             float x;
@@ -8765,7 +8630,6 @@ class TestCudaCodeGen:
         ) in result
 
     def test_kernel_pointer_parameters_lower_to_storage_arrays(self):
-        """Test pointer kernel params lower to storage arrays of element type"""
         code = """
         __global__ void kernel(float* data, const int* indices, float value) {
             data[indices[0]] = value;
@@ -8800,7 +8664,6 @@ class TestCudaCodeGen:
         assert "data[indices[0] as usize] = value;" in result
 
     def test_qualified_declaration_conversion(self):
-        """Test const, unsigned, and static declaration conversion"""
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
@@ -8829,7 +8692,6 @@ class TestCudaCodeGen:
         assert "var tmp: f32 = 0.0f;" in result
 
     def test_qualified_and_pointer_return_function_conversion(self):
-        """Test qualified scalar and pointer return conversion"""
         code = """
         unsigned int lane_mask() { return 3u; }
         float* get_data(float* data) { return data; }
@@ -8850,7 +8712,6 @@ class TestCudaCodeGen:
         assert "u32 helper(u32 x)" in result
 
     def test_expression_statements_and_for_header_conversion(self):
-        """Test expression statements and for headers are preserved"""
         code = """
         void helper(float* data, int n) {
             int i = 0;
@@ -8877,7 +8738,6 @@ class TestCudaCodeGen:
         assert "None" not in result
 
     def test_local_pointer_declarations_and_unary_pointer_conversion(self):
-        """Test local pointer declarations, address-of, and dereference"""
         code = """
         void helper(float* data, unsigned int* ids) {
             float* p = data;
@@ -8907,7 +8767,6 @@ class TestCudaCodeGen:
         assert "UnaryOpNode" not in result
 
     def test_pointer_member_access_operator_conversion(self):
-        """Test pointer and value member access preserve their operators"""
         code = """
         struct Item { int value; };
         void helper(Item* p, Item v) {
@@ -8929,7 +8788,6 @@ class TestCudaCodeGen:
         assert "p->value = b;" in result
 
     def test_bitwise_logical_and_shift_expression_conversion(self):
-        """Test bitwise, shift, logical, and compound shift conversion"""
         code = """
         unsigned int helper(unsigned int a, unsigned int b) {
             unsigned int x = (a & b) | (a ^ b);
@@ -8959,7 +8817,6 @@ class TestCudaCodeGen:
         assert "BinaryOpNode" not in result
 
     def test_numeric_literal_conversion(self):
-        """Test integer mask and float suffix literals are preserved"""
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
@@ -8986,7 +8843,6 @@ class TestCudaCodeGen:
         assert "return ((mask | bits) | oct);" in result
 
     def test_long_long_type_conversion(self):
-        """Test scalar long long CUDA types convert to 64-bit CrossGL types"""
         code = """
         __global__ void kernel(unsigned long long* out, long long x) {
             unsigned long long y = 1ull;
@@ -9011,7 +8867,6 @@ class TestCudaCodeGen:
         assert "out[0] = (y + z);" in result
 
     def test_control_flow_and_cast_expression_conversion(self):
-        """Test do-while, switch, ternary, and casts are emitted"""
         code = """
         int helper(float x, int n) {
             int i = 0;
@@ -9049,7 +8904,6 @@ class TestCudaCodeGen:
         assert "CastNode" not in result
 
     def test_empty_default_switch_codegen_emits_default_label(self):
-        """Test empty default labels are emitted instead of dropped."""
         code = """
         void f(int value) {
             switch (value) {
@@ -9073,7 +8927,6 @@ class TestCudaCodeGen:
         assert result.index("case 0:") < result.index("default:")
 
     def test_switch_codegen_preserves_default_before_later_case_order(self):
-        """Test default labels are not reordered behind later case labels."""
         code = """
         void f(int value) {
             switch (value) {

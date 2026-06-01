@@ -88,8 +88,8 @@ class KernelLaunchNode(ASTNode):
         self.kernel_name = kernel_name
         self.blocks = blocks
         self.threads = threads
-        self.shared_mem = shared_mem  # Optional shared memory size
-        self.stream = stream  # Optional stream
+        self.shared_mem = shared_mem
+        self.stream = stream
         self.args = args or []
 
     def __repr__(self):
@@ -101,7 +101,7 @@ class AtomicOperationNode(FunctionCallNode):
 
     def __init__(self, operation, args):
         super().__init__(operation, args)
-        self.operation = operation  # atomicAdd, atomicSub, etc.
+        self.operation = operation
 
     def __repr__(self):
         return f"AtomicOperationNode(operation={self.operation}, args={self.args})"
@@ -111,8 +111,8 @@ class CudaBuiltinNode(ASTNode):
     """Node representing CUDA built-in variables (threadIdx, blockIdx, etc.)"""
 
     def __init__(self, builtin_name, component=None):
-        self.builtin_name = builtin_name  # threadIdx, blockIdx, etc.
-        self.component = component  # x, y, z component
+        self.builtin_name = builtin_name
+        self.component = component
 
     def __repr__(self):
         if self.component:
@@ -136,7 +136,7 @@ class SharedMemoryNode(VariableNode):
 
     def __init__(self, vtype, name, size=None):
         super().__init__(vtype, name, qualifiers=["__shared__"])
-        self.size = size  # For dynamic shared memory
+        self.size = size
 
     def __repr__(self):
         return (

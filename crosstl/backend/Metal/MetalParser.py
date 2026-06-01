@@ -101,7 +101,6 @@ class MetalParser:
     """Parse Metal tokens into the Metal backend shader AST."""
 
     def __init__(self, tokens):
-        """Initialize the parser with a token stream from ``MetalLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = (
@@ -190,7 +189,6 @@ class MetalParser:
         }
 
     def skip_comments(self):
-        """Advance past comment tokens before parsing syntax."""
         while self.pos < len(self.tokens) and self.current_token[0] in [
             "COMMENT_SINGLE",
             "COMMENT_MULTI",
@@ -201,7 +199,6 @@ class MetalParser:
             )
 
     def eat(self, token_type):
-        """Consume the current token when it matches ``token_type``."""
         if self.current_token[0] == token_type:
             self.pos += 1
             self.current_token = (
@@ -212,20 +209,17 @@ class MetalParser:
             raise SyntaxError(f"Expected {token_type}, got {self.current_token[0]}")
 
     def peek(self, offset=1):
-        """Return a lookahead token without advancing the parser."""
         idx = self.pos + offset
         if idx < len(self.tokens):
             return self.tokens[idx]
         return ("EOF", None)
 
     def parse(self):
-        """Parse the complete token stream into a shader node."""
         shader = self.parse_shader()
         self.eat("EOF")
         return shader
 
     def parse_shader(self):
-        """Parse top-level Metal declarations, functions, and preprocessor nodes."""
         functions = []
         preprocessors = []
         structs = []
@@ -250,7 +244,6 @@ class MetalParser:
                 if self.current_token[0] == "STRUCT":
                     structs.append(self.parse_struct(alignas_specs))
                 else:
-                    # Treat as global variable with alignas
                     global_variables.append(
                         self.parse_global_variable(pre_alignas=alignas_specs)
                     )
@@ -274,7 +267,7 @@ class MetalParser:
                 else:
                     global_variables.append(self.parse_global_variable())
             else:
-                self.eat(self.current_token[0])  # Skip unknown tokens
+                self.eat(self.current_token[0])
 
         return ShaderNode(
             includes=preprocessors,
@@ -1288,7 +1281,6 @@ class MetalParser:
                 self.eat("COLON")
                 default_statements = []
 
-                # Parse statements until next case/default or end of switch
                 while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
                     if self.current_token[0] == "BREAK":
                         self.eat("BREAK")
@@ -1313,7 +1305,6 @@ class MetalParser:
 
         statements = []
 
-        # Parse statements until next case/default/break or end of switch
         while self.current_token[0] not in ["CASE", "DEFAULT", "RBRACE", "EOF"]:
             if self.current_token[0] == "BREAK":
                 self.eat("BREAK")

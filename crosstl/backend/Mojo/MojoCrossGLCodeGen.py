@@ -24,7 +24,6 @@ class MojoToCrossGLConverter:
     }
 
     def __init__(self):
-        """Initialize Mojo-to-CrossGL type, semantic, and function mappings."""
         self.user_function_names = set()
         self.user_function_arities = {}
         self.scoped_value_names = []
@@ -152,7 +151,6 @@ class MojoToCrossGLConverter:
         }
 
     def generate(self, ast):
-        """Generate complete CrossGL source from a parsed Mojo AST."""
         self.user_function_arities = self.collect_user_function_arities(ast)
         self.user_function_names = set(self.user_function_arities)
         self.scoped_value_names = []

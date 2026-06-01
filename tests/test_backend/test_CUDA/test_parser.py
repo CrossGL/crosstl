@@ -1,5 +1,3 @@
-"""Test CUDA Parser"""
-
 import pytest
 
 from crosstl.backend.CUDA.CudaAst import (
@@ -35,7 +33,6 @@ from crosstl.backend.CUDA.CudaParser import CudaParser
 
 class TestCudaParser:
     def test_simple_kernel_parsing(self):
-        """Test parsing a simple CUDA kernel"""
         code = """
         __global__ void simple_kernel(float* data) {
             int idx = threadIdx.x;
@@ -52,7 +49,6 @@ class TestCudaParser:
         assert ast.kernels[0].name == "simple_kernel"
 
     def test_device_function_parsing(self):
-        """Test parsing a device function"""
         code = """
         __device__ float add(float a, float b) {
             return a + b;
@@ -69,7 +65,6 @@ class TestCudaParser:
         assert "__device__" in ast.functions[0].qualifiers
 
     def test_shared_memory_parsing(self):
-        """Test parsing shared memory declaration"""
         code = """
         __global__ void kernel() {
             __shared__ float shared_data[256];
@@ -84,7 +79,6 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
 
     def test_builtin_variables_parsing(self):
-        """Test parsing CUDA built-in variables"""
         code = """
         __global__ void kernel() {
             int x = threadIdx.x;
@@ -100,7 +94,6 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
 
     def test_vector_types_parsing(self):
-        """Test parsing CUDA vector types"""
         code = """
         __global__ void kernel(float2* data) {
             float4 vec = make_float4(1.0f, 2.0f, 3.0f, 4.0f);
@@ -115,7 +108,6 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
 
     def test_constructor_style_vector_declarations_parsing(self):
-        """Test CUDA constructor-style local vector declarations"""
         code = """
         void launch() {
             dim3 grid(16, 8, 1);
@@ -145,7 +137,6 @@ class TestCudaParser:
         assert body[4].value.name == "uchar2"
 
     def test_kernel_launch_parsing(self):
-        """Test CUDA kernel launch configuration parsing"""
         code = """
         void host(float* data, int stream) {
             dim3 grid(16);
@@ -168,7 +159,6 @@ class TestCudaParser:
         assert launch.args == ["data", "1"]
 
     def test_templated_kernel_launch_parsing(self):
-        """Test CUDA template-id kernel launch parsing"""
         code = """
         template <typename T>
         __global__ void scale(T* data, T factor) {
@@ -195,7 +185,6 @@ class TestCudaParser:
         assert launch.args == ["data", "2.0f"]
 
     def test_computed_kernel_launch_config_parsing(self):
-        """Test CUDA computed kernel launch configuration parsing"""
         code = """
         void host(float* data, int n, int stream) {
             int blockSize = 128;
@@ -224,7 +213,6 @@ class TestCudaParser:
         assert launch.args == ["data", "n"]
 
     def test_cuda_launch_kernel_api_parsing(self):
-        """Test cudaLaunchKernel parses as a kernel launch"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -258,7 +246,6 @@ class TestCudaParser:
         assert ast.functions[0].body[4].name == "cudaLaunchKernel"
 
     def test_cuda_launch_kernel_casted_packed_args_parsing(self):
-        """Test casted packed args parse in cudaLaunchKernel"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -285,7 +272,6 @@ class TestCudaParser:
         assert launch.args[0].expression == "packedArgs"
 
     def test_cuda_launch_kernel_compound_literal_args_parsing(self):
-        """Test compound literal packed args parse in cudaLaunchKernel"""
         code = """
         void host(float* data, int n, int stream) {
             dim3 grid(16);
@@ -310,7 +296,6 @@ class TestCudaParser:
         assert launch.args[0].expression.elements[1].operand == "n"
 
     def test_std_chrono_benchmark_expressions_parsing(self):
-        """Test namespace-qualified chrono timing expressions"""
         code = """
         void bench() {
             auto start = std::chrono::high_resolution_clock::now();
@@ -343,7 +328,6 @@ class TestCudaParser:
         assert body[4].value.op == "<"
 
     def test_device_lambda_expression_parsing(self):
-        """Test CUDA device lambdas parse into CrossGL pseudo-lambda calls."""
         code = """
         void host() {
             auto folded = fold(values, 0,
@@ -379,7 +363,6 @@ class TestCudaParser:
         assert mapped_lambda.args[-1] == "{ prepare(color); return color; }"
 
     def test_std_vector_host_buffer_parsing(self):
-        """Test scoped template host vector declarations and methods"""
         code = """
         void host(float* d, int n) {
             std::vector<float> h(n);
@@ -411,7 +394,6 @@ class TestCudaParser:
         assert body[3].name == "std::chrono::high_resolution_clock::now"
 
     def test_std_array_host_buffer_parsing(self):
-        """Test scoped template host array declarations and methods"""
         code = """
         void host(float* d) {
             std::array<float, 4> h{1.0f, 2.0f, 3.0f, 4.0f};
@@ -449,7 +431,6 @@ class TestCudaParser:
         assert copy_call.args[2].left.name.member == "size"
 
     def test_host_index_fill_scalar_constructor_parsing(self):
-        """Test benchmark-style host fills with scalar type constructors"""
         code = """
         void host(int n) {
             std::vector<float> h(n);
@@ -472,7 +453,6 @@ class TestCudaParser:
         assert assignment.right.args == ["i"]
 
     def test_reference_host_helper_parameters_parsing(self):
-        """Test STL host helper parameters with lvalue references"""
         code = """
         void prepare(std::vector<float>& h) {
             std::fill(h.begin(), h.end(), 1.0f);
@@ -491,7 +471,6 @@ class TestCudaParser:
         assert ast.functions[1].params[0].vtype == "const std::vector<float> &"
 
     def test_restrict_pointer_qualifier_parsing(self):
-        """Test __restrict__ pointer qualifiers in parameters and locals"""
         code = """
         __global__ void kernel(const float* __restrict__ input,
                                float __restrict__* output) {
@@ -523,7 +502,6 @@ class TestCudaParser:
         assert [var.name for var in body] == ["p", "cp", "a", "b"]
 
     def test_rvalue_reference_declarations_parsing(self):
-        """Test rvalue references in parameters, locals, and range loops"""
         code = """
         void consume(float&& value, const float&& other) {
             sink(value);
@@ -560,7 +538,6 @@ class TestCudaParser:
         assert body[4].vtype == "auto &&"
 
     def test_cpp_named_casts_parse_as_cast_nodes(self):
-        """Test C++ named casts parse into CastNode"""
         code = """
         void host(const float* input, float* data, int i, int n) {
             float x = static_cast<float>(i);
@@ -586,7 +563,6 @@ class TestCudaParser:
         assert body[2].args[0].expression.operand == "data"
 
     def test_new_delete_host_allocation_parsing(self):
-        """Test C++ new/delete host allocation syntax"""
         code = """
         void host(int n) {
             float* h = new float[n];
@@ -621,7 +597,6 @@ class TestCudaParser:
         assert body[5].is_array is False
 
     def test_unique_ptr_host_allocation_parsing(self):
-        """Test common std::unique_ptr host allocation syntax"""
         code = """
         void host(int n) {
             std::unique_ptr<float[]> h = std::make_unique<float[]>(n);
@@ -651,7 +626,6 @@ class TestCudaParser:
         assert body[3].value.name.member == "get"
 
     def test_qualified_template_argument_spacing_parsing(self):
-        """Test template arguments preserve spaces between type tokens"""
         code = """
         void host(int n) {
             std::unique_ptr<const float[]> h =
@@ -696,7 +670,6 @@ class TestCudaParser:
         assert body[11].vtype == "cudaArray *"
 
     def test_resource_object_pointer_and_legacy_texture_template_parsing(self):
-        """Test CUDA resource object pointers and three-argument textures parse."""
         code = """
         texture<float4, cudaTextureType2D, cudaReadModeElementType> texRef;
         surface<void, cudaSurfaceType2D> surfaceRef;
@@ -774,7 +747,6 @@ class TestCudaParser:
         assert body[4].value.args[0] == "legacySurface"
 
     def test_cuda_texture_gather_helper_parsing(self):
-        """Test CUDA tex2Dgather helper overloads parse."""
         code = """
         void gatherOps(
             texture<float4, cudaTextureType2D> tex,
@@ -831,7 +803,6 @@ class TestCudaParser:
         assert body[2].value.args[3:] == ["resident", "3"]
 
     def test_cuda_texture_fetch_helper_parsing(self):
-        """Test CUDA tex1Dfetch helper overloads parse."""
         code = """
         void fetchOps(
             texture<float4, cudaTextureType1D> lineTex,
@@ -863,7 +834,6 @@ class TestCudaParser:
         assert body[2].value.args == ["objectTex", "x", "resident"]
 
     def test_qualified_resource_object_pointer_array_parsing(self):
-        """Test global CUDA resource object pointer arrays with qualifiers parse."""
         code = """
         const cudaTextureObject_t globalConstTextures[2];
         cudaSurfaceObject_t *__restrict__ globalSurfaceRows[2];
@@ -955,7 +925,6 @@ class TestCudaParser:
         assert body[7].value.args[0].array.array == "globalSurfaceRows"
 
     def test_nested_template_argument_parsing(self):
-        """Test nested template arguments that close with >>"""
         code = """
         void host(int n) {
             std::vector<std::array<unsigned int, 4>> table;
@@ -981,7 +950,6 @@ class TestCudaParser:
         assert isinstance(body[3].value.args[0], NewNode)
 
     def test_type_alias_parsing(self):
-        """Test typedef and using aliases for host helper types"""
         code = """
         using HostBuffer = std::unique_ptr<float[]>;
         typedef std::vector<std::array<unsigned int, 4>> Table;
@@ -1019,7 +987,6 @@ class TestCudaParser:
         assert body[5].name == "consume"
 
     def test_typedef_multi_declarator_alias_parsing(self):
-        """Test multi-declarator typedef aliases with pointers and arrays"""
         code = """
         typedef float Real, *RealPtr;
         typedef float Tile[16];
@@ -1059,7 +1026,6 @@ class TestCudaParser:
         assert function.body[5].name == "consume"
 
     def test_type_alias_c_style_cast_parsing(self):
-        """Test C-style casts to typedef aliases parse as cast nodes"""
         code = """
         typedef unsigned int LaneMask;
 
@@ -1080,7 +1046,6 @@ class TestCudaParser:
         assert body[0].value.expression == "x"
 
     def test_auto_pointer_reference_local_declarations_parsing(self):
-        """Test auto pointer and reference local declarations"""
         code = """
         void host(std::vector<float>& h, float* data) {
             int value = 2;
@@ -1112,7 +1077,6 @@ class TestCudaParser:
         assert [var.value for var in body[4:]] == ["data", "data", "data", "data"]
 
     def test_multi_declarator_host_setup_parsing(self):
-        """Test comma-separated host setup declarations"""
         code = """
         void host(int n) {
             std::vector<float> a(n), b(n), c(n);
@@ -1153,7 +1117,6 @@ class TestCudaParser:
         assert body[9].value == "3.0f"
 
     def test_multi_declarator_for_initializer_parsing(self):
-        """Test comma-separated declarations in for initializers"""
         code = """
         void host(float* a, float* b, int n) {
             for (int i = 0, j = n; i < j; ++i) {
@@ -1183,7 +1146,6 @@ class TestCudaParser:
         assert second_loop.init[1].value == "b"
 
     def test_multi_expression_for_update_parsing(self):
-        """Test comma-separated expressions in for updates"""
         code = """
         void host(int n) {
             for (int i = 0, j = n; i < j; ++i, --j) {
@@ -1208,7 +1170,6 @@ class TestCudaParser:
         assert loop.update[1].operand == "j"
 
     def test_grid_stride_for_update_compound_assignment_parsing(self):
-        """Test CUDA grid-stride for-loop updates"""
         code = """
         __global__ void kernel(float* data, int n) {
             for (int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1238,7 +1199,6 @@ class TestCudaParser:
         assert loop.update.right.right.component == "x"
 
     def test_assignment_expression_is_right_associative(self):
-        """Test assignments parse inside expressions and associate to the right"""
         code = """
         void f() {
             int a = 0;
@@ -1275,7 +1235,6 @@ class TestCudaParser:
         assert call.args[0].right == "1"
 
     def test_range_based_for_loop_parsing(self):
-        """Test C++ range-based for declarations"""
         code = """
         void host(std::vector<float>& h) {
             for (auto& x : h) {
@@ -1303,7 +1262,6 @@ class TestCudaParser:
         ]
 
     def test_atomic_operations_parsing(self):
-        """Test parsing atomic operations"""
         code = """
         __global__ void kernel(int* counter) {
             atomicAdd(counter, 1);
@@ -1318,7 +1276,6 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
 
     def test_atomic_address_taken_pointer_array_and_shared_targets_parsing(self):
-        """Test CUDA atomics preserve address-taken lvalue target shape."""
         code = """
         __global__ void kernel(int* values, int* expected, int* desired, int index) {
             __shared__ int sharedCounts[32];
@@ -1364,7 +1321,6 @@ class TestCudaParser:
         assert shared_target.index.component == "x"
 
     def test_bitwise_atomic_operations_parsing(self):
-        """Test CUDA bitwise atomic operations parse as atomic nodes."""
         code = """
         __global__ void kernel(unsigned int* values, unsigned int mask, int index) {
             __shared__ unsigned int sharedMasks[32];
@@ -1405,7 +1361,6 @@ class TestCudaParser:
         assert isinstance(atomic_xor.args[0].operand, ArrayAccessNode)
 
     def test_bounded_wrap_atomic_operations_parsing(self):
-        """Test CUDA atomicInc/atomicDec parse as bounded atomic nodes."""
         code = """
         __global__ void kernel(unsigned int* values, unsigned int limit, int index) {
             __shared__ unsigned int sharedCounters[32];
@@ -1439,7 +1394,6 @@ class TestCudaParser:
         assert shared_target.index.builtin_name == "threadIdx"
 
     def test_user_defined_atomic_name_is_not_parsed_as_builtin_atomic(self):
-        """Test user-defined atomic names shadow CUDA atomic parsing."""
         code = """
         int atomicExch(int value) {
             return value + 1;
@@ -1493,7 +1447,6 @@ class TestCudaParser:
         assert isinstance(builtin_call, AtomicOperationNode)
 
     def test_sync_parsing(self):
-        """Test parsing synchronization functions"""
         code = """
         __global__ void kernel() {
             __syncthreads();
@@ -1508,7 +1461,6 @@ class TestCudaParser:
         assert len(ast.kernels) == 1
 
     def test_masked_syncwarp_parsing(self):
-        """Test parsing masked and unmasked CUDA warp synchronization."""
         code = """
         __global__ void kernel(unsigned int mask) {
             __syncwarp(mask);
@@ -1531,7 +1483,6 @@ class TestCudaParser:
         assert unmasked_sync.args == []
 
     def test_cooperative_groups_thread_block_parsing(self):
-        """Test parsing CUDA cooperative-groups thread-block handles."""
         code = """
         __global__ void kernel() {
             cooperative_groups::thread_block block =
@@ -1557,7 +1508,6 @@ class TestCudaParser:
         assert sync_call.name.member == "sync"
 
     def test_cooperative_groups_rank_and_tile_parsing(self):
-        """Test parsing CUDA cooperative-groups rank and tile helpers."""
         code = """
         __global__ void kernel() {
             cooperative_groups::thread_block block =
@@ -1596,7 +1546,6 @@ class TestCudaParser:
             assert declaration.value.name.member == member
 
     def test_cooperative_groups_sync_and_member_alias_parsing(self):
-        """Test parsing cooperative-groups sync and current member aliases."""
         code = """
         namespace cg = cooperative_groups;
 
@@ -1636,7 +1585,6 @@ class TestCudaParser:
             assert declaration.value.name.member == member
 
     def test_cooperative_groups_async_copy_wait_parsing(self):
-        """Test parsing cooperative-groups async copy and wait collectives."""
         code = """
         namespace cg = cooperative_groups;
 
@@ -1675,7 +1623,6 @@ class TestCudaParser:
         assert wait_prior.args == ["block"]
 
     def test_cuda_barrier_pipeline_async_copy_parsing(self):
-        """Test parsing CUDA barrier/pipeline async copy helpers."""
         code = """
         __global__ void kernel(int* shared, const int* global) {
             __shared__ cuda::pipeline_shared_state<cuda::thread_scope_block, 2> state;
@@ -1749,7 +1696,6 @@ class TestCudaParser:
         assert wait.name.member == "consumer_wait"
 
     def test_cuda_pipeline_primitive_intrinsic_parsing(self):
-        """Test parsing CUDA pipeline primitive intrinsic calls."""
         code = """
         __global__ void kernel(int* shared, const int* global, __mbarrier_t* barrier) {
             __pipeline_memcpy_async(shared, global, 16);
@@ -1801,7 +1747,6 @@ class TestCudaParser:
         assert arrive.args == ["barrier"]
 
     def test_fixed_arrays_and_initializer_lists_parsing(self):
-        """Test fixed arrays and brace initializer lists"""
         code = """
         float weights[4] = {1.0f, 2.0f, 3.0f, 4.0f};
 
@@ -1828,7 +1773,6 @@ class TestCudaParser:
         assert isinstance(ast.kernels[0].body[0].value, InitializerListNode)
 
     def test_designated_initializer_lists_parsing(self):
-        """Test C99 designated initializer lists"""
         code = """
         struct Pair {
             float x;
@@ -1870,7 +1814,6 @@ class TestCudaParser:
         assert points[1].value == "3.0f"
 
     def test_qualified_declarations_parsing(self):
-        """Test const, unsigned, and static declarations"""
         code = """
         static float cached = 1.0f;
         unsigned int mask = 3u;
@@ -1896,7 +1839,6 @@ class TestCudaParser:
         assert ast.kernels[0].body[2].vtype == "float"
 
     def test_identifier_multiply_expression_is_not_declaration(self):
-        """Test expression statements using * are not parsed as declarations"""
         code = """
         __global__ void kernel() {
             a * b;
@@ -1910,7 +1852,6 @@ class TestCudaParser:
         assert isinstance(ast.kernels[0].body[0], BinaryOpNode)
 
     def test_local_pointer_declarations_and_unary_pointer_expressions(self):
-        """Test local pointer declarations, address-of, and dereference"""
         code = """
         void helper(float* data, unsigned int* ids) {
             float* p = data;
@@ -1940,7 +1881,6 @@ class TestCudaParser:
         assert body[5].right.op == "*"
 
     def test_long_long_type_parsing(self):
-        """Test scalar long long and unsigned long long declarations"""
         code = """
         __global__ void kernel(unsigned long long* out, long long x) {
             unsigned long long y = 1ull;
@@ -1962,7 +1902,6 @@ class TestCudaParser:
         assert kernel.body[1].value.target_type == "long long"
 
     def test_pointer_member_access_operator_parsing(self):
-        """Test pointer and value member access preserve their operators"""
         code = """
         struct Item { int value; };
         void helper(Item* p, Item v) {
@@ -1995,7 +1934,6 @@ class TestCudaParser:
         assert pointer_write.is_pointer is True
 
     def test_resource_member_access_through_cast_and_dereference_parsing(self):
-        """Test casted and dereferenced struct resource member access parsing."""
         code = """
         struct ResourcePair {
             cudaTextureObject_t tex;
@@ -2047,7 +1985,6 @@ class TestCudaParser:
         assert write_target.object.expression == "raw"
 
     def test_bitwise_logical_and_shift_expression_parsing(self):
-        """Test bitwise, shift, logical, and compound shift expressions"""
         code = """
         unsigned int helper(unsigned int a, unsigned int b) {
             unsigned int x = (a & b) | (a ^ b);
@@ -2078,7 +2015,6 @@ class TestCudaParser:
         assert body[3].if_body[1].operator == ">>="
 
     def test_numeric_literal_parsing(self):
-        """Test integer mask and float suffix literals parse intact"""
         code = """
         unsigned int helper() {
             unsigned int mask = 0xffu;
@@ -2102,7 +2038,6 @@ class TestCudaParser:
         assert body[4].value == ".5f"
 
     def test_qualified_and_pointer_return_functions_parsing(self):
-        """Test qualified scalar and pointer return types"""
         code = """
         unsigned int lane_mask() { return 3u; }
         float* get_data(float* data) { return data; }
@@ -2124,7 +2059,6 @@ class TestCudaParser:
         assert "inline" in ast.functions[3].qualifiers
 
     def test_control_flow_and_cast_expression_parsing(self):
-        """Test CUDA control-flow nodes and cast expressions"""
         code = """
         int helper(float x, int n) {
             int i = 0;
@@ -2156,7 +2090,6 @@ class TestCudaParser:
         assert isinstance(body[3].value.true_expr, CastNode)
 
     def test_empty_default_switch_parsing_preserves_default_case(self):
-        """Test empty default labels remain distinguishable from no default"""
         code = """
         void f(int value) {
             switch (value) {
@@ -2177,7 +2110,6 @@ class TestCudaParser:
         assert switch.default_case == []
 
     def test_switch_parsing_preserves_default_before_later_case_order(self):
-        """Test source switch label order is retained when default is first."""
         code = """
         void f(int value) {
             switch (value) {
@@ -2200,7 +2132,6 @@ class TestCudaParser:
         assert len(switch.default_case) == 1
 
     def test_switch_parsing_rejects_duplicate_default_labels(self):
-        """Test duplicate switch default labels are rejected."""
         code = """
         void f(int value) {
             switch (value) {

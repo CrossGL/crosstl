@@ -44,11 +44,9 @@ class HipProgramNode(ASTNode):
     """Root node representing a complete HIP program"""
 
     def __init__(self, statements=None):
-        """Initialize the program node with top-level statements."""
         self.statements = statements or []
 
     def __repr__(self):
-        """Return a developer-readable program representation."""
         return f"HipProgramNode(statements={self.statements})"
 
 
@@ -167,7 +165,6 @@ class HipParser:
     RESOURCE_TYPE_TOKENS = {"TEXTURE", "SURFACE", "HIPARRAY", "HIPARRAYT"}
 
     def __init__(self, tokens: List[Token]):
-        """Initialize the parser with a token stream from ``HipLexer``."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = self.tokens[0] if tokens else None
@@ -234,7 +231,6 @@ class HipParser:
         return None
 
     def error(self, message: str):
-        """Raise a syntax error annotated with the current token."""
         token_info = (
             f"at token '{self.current_token.value}'"
             if self.current_token
@@ -243,7 +239,6 @@ class HipParser:
         raise SyntaxError(f"Parse error {token_info}: {message}")
 
     def advance(self):
-        """Advance to the next token or mark the parser as finished."""
         if self.pos < len(self.tokens) - 1:
             self.pos += 1
             self.current_token = self.tokens[self.pos]
@@ -251,14 +246,12 @@ class HipParser:
             self.current_token = None
 
     def peek(self, offset: int = 1):
-        """Look ahead at the next token without advancing"""
         peek_pos = self.pos + offset
         if peek_pos < len(self.tokens):
             return self.tokens[peek_pos]
         return None
 
     def consume(self, expected_type: str):
-        """Consume and return the current token when its type matches."""
         if not self.current_token:
             self.error(f"Expected {expected_type} but reached end of input")
 
@@ -296,7 +289,6 @@ class HipParser:
         return HipBuiltinNode(builtin_name, component)
 
     def skip_newlines(self):
-        """Advance past newline tokens between declarations/statements."""
         while self.match("NEWLINE"):
             self.advance()
 
@@ -323,7 +315,6 @@ class HipParser:
         return allow_identifier and token.type == "IDENTIFIER"
 
     def parse(self):
-        """Parse the entire HIP program into a ``HipProgramNode``."""
         statements = []
 
         while self.current_token:
@@ -341,23 +332,19 @@ class HipParser:
         return HipProgramNode(statements)
 
     def parse_statement(self):
-        """Parse a single statement"""
         if not self.current_token:
             return None
 
-        # Skip newlines and semicolons
         if self.match("NEWLINE", "SEMICOLON"):
             self.advance()
             return None
 
-        # Parse preprocessor directives
         if self.match("HASH"):
             return self.parse_preprocessor()
 
         if self.match("TEMPLATE"):
             return self.parse_template_prefixed_declaration()
 
-        # Parse device/host/global qualifiers
         if self.match(
             "__DEVICE__",
             "__HOST__",
@@ -368,22 +355,18 @@ class HipParser:
         ):
             return self.parse_function_with_qualifier()
 
-        # Parse struct definitions
         if self.match("STRUCT"):
             return self.parse_struct()
 
-        # Parse class definitions
         if self.match("CLASS"):
             return self.parse_class()
 
         if self.is_type_alias_start():
             return self.parse_type_alias()
 
-        # Parse return statements
         if self.match("RETURN"):
             return self.parse_return_statement()
 
-        # Parse control flow statements
         if self.match("IF"):
             return self.parse_if_statement()
         elif self.match("FOR"):
@@ -412,7 +395,6 @@ class HipParser:
         if self.is_identifier_value("delete"):
             return self.parse_delete_statement()
 
-        # Try to parse function or variable declaration
         if self.block_depth > 0 and self.is_variable_declaration():
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
@@ -422,7 +404,6 @@ class HipParser:
             declarations = self.parse_variable_declaration_list()
             return declarations if len(declarations) > 1 else declarations[0]
         else:
-            # Parse expression statement
             return self.parse_expression_statement()
 
     def parse_template_prefixed_declaration(self):
@@ -516,7 +497,6 @@ class HipParser:
         return DeleteNode(expression, is_array)
 
     def parse_preprocessor(self):
-        """Parse preprocessor directives"""
         self.consume("HASH")
 
         if not self.current_token:
@@ -525,7 +505,6 @@ class HipParser:
         directive = self.current_token.value
         self.advance()
 
-        # Parse the rest of the line
         content = []
         while self.current_token and not self.match("NEWLINE"):
             content.append(self.current_token.value)
@@ -567,7 +546,6 @@ class HipParser:
 
         function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
 
-        # __global__ qualifier marks a kernel
         if "__global__" in qualifiers:
             return KernelNode(return_type, name, params, body, attributes)
 
@@ -653,7 +631,6 @@ class HipParser:
         return StructNode(name, members)
 
     def parse_class(self):
-        """Parse class definitions (treat similar to struct for now)"""
         self.consume("CLASS")
 
         name = self.consume("IDENTIFIER").value
@@ -667,7 +644,6 @@ class HipParser:
                     self.advance()
                     continue
 
-                # Skip access specifiers
                 if self.match("PUBLIC", "PRIVATE", "PROTECTED"):
                     self.advance()
                     if self.match("COLON"):
@@ -1689,7 +1665,6 @@ class HipParser:
             name = self.current_token.value
             self.advance()
 
-            # Check for HIP built-in variables
             if name in ["threadIdx", "blockIdx", "blockDim", "gridDim"]:
                 component = None
                 if self.match("DOT"):

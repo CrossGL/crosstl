@@ -9,7 +9,6 @@ IGNORED_TOKEN_TYPES = {"EOF", "NEWLINE", "NL"}
 
 
 def tokenize_code(code: str):
-    """Helper function to tokenize GLSL code."""
     lexer = GLSLLexer(code)
     return lexer.tokenize()
 

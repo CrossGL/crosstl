@@ -8,7 +8,6 @@ class ASTNode:
     """Base class for all AST nodes with common functionality."""
 
     def __init__(self, source_location=None, annotations=None):
-        """Initialize source metadata shared by all AST nodes."""
         self.source_location = source_location
         self.annotations = annotations or {}
         self.parent = None
@@ -83,11 +82,6 @@ def iter_ast_child_nodes(value):
     if isinstance(value, (list, tuple, set)):
         for item in value:
             yield from iter_ast_child_nodes(item)
-
-
-# ============================================================================
-# TYPE SYSTEM
-# ============================================================================
 
 
 class TypeNode(ASTNode):
@@ -206,11 +200,6 @@ class NamedType(TypeNode):
 
     def __repr__(self):
         return f"NamedType(name={self.name}, generic_args={self.generic_args})"
-
-
-# ============================================================================
-# SHADER/PROGRAM STRUCTURE
-# ============================================================================
 
 
 class ShaderStage(Enum):
@@ -378,11 +367,6 @@ class PreprocessorNode(ASTNode):
 
     def __repr__(self):
         return f"PreprocessorNode(directive={self.directive}, content={self.content})"
-
-
-# ============================================================================
-# DECLARATIONS
-# ============================================================================
 
 
 class StructNode(ASTNode):
@@ -638,11 +622,6 @@ class LayoutQualifierNode(ASTNode):
         return f"LayoutQualifierNode(direction={self.direction}, entries={len(self.entries)})"
 
 
-# ============================================================================
-# STATEMENTS
-# ============================================================================
-
-
 class StatementNode(ASTNode):
     """Base class for all statements."""
 
@@ -895,11 +874,6 @@ class ContinueNode(StatementNode):
         return f"ContinueNode(label={self.label})"
 
 
-# ============================================================================
-# EXPRESSIONS
-# ============================================================================
-
-
 class ExpressionNode(ASTNode):
     """Base class for all expressions."""
 
@@ -1147,11 +1121,6 @@ class LambdaNode(ExpressionNode):
         return f"LambdaNode(parameters={len(self.parameters)})"
 
 
-# ============================================================================
-# PATTERN MATCHING
-# ============================================================================
-
-
 class PatternNode(ASTNode):
     """Base class for patterns in pattern matching."""
 
@@ -1214,11 +1183,6 @@ class StructPatternNode(PatternNode):
 
     def __repr__(self):
         return f"StructPatternNode(type_name={self.type_name})"
-
-
-# ============================================================================
-# GPU/GRAPHICS SPECIFIC NODES
-# ============================================================================
 
 
 class TextureNode(ExpressionNode):
@@ -1310,11 +1274,6 @@ class BuiltinVariableNode(ExpressionNode):
 
     def __repr__(self):
         return f"BuiltinVariableNode(builtin_name={self.builtin_name}, component={self.component})"
-
-
-# ============================================================================
-# MEMORY AND RESOURCE MANAGEMENT
-# ============================================================================
 
 
 class BufferNode(ASTNode):
@@ -1460,10 +1419,6 @@ class MeshOpNode(ExpressionNode):
         return f"MeshOpNode(operation={self.operation})"
 
 
-# ============================================================================
-# LEGACY COMPATIBILITY HELPERS
-# ============================================================================
-
 CbufferNode = StructNode
 VectorConstructorNode = ConstructorNode
 
@@ -1485,7 +1440,6 @@ class ArrayNode(VariableNode):
     """Legacy array node for backward compatibility."""
 
     def __init__(self, element_type, name, size=None, semantic=None, **kwargs):
-        """Initialize an array variable using the older ArrayNode shape."""
         array_type = ArrayType(element_type, size)
         super().__init__(name, array_type, **kwargs)
         self.element_type = element_type

@@ -6,7 +6,6 @@ from crosstl.translator.lexer import Lexer
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.get_tokens()
 

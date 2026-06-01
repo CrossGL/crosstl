@@ -6,13 +6,11 @@ from crosstl.backend.Metal.MetalLexer import MetalLexer
 
 
 def tokenize_code(code: str) -> List:
-    """Tokenize Metal code."""
     lexer = MetalLexer(code)
     return lexer.tokenize()
 
 
 def token_values(tokens: List) -> List[str]:
-    """Return token values as strings for flexible assertions."""
     values = []
 
     def split_top_level(text: str) -> List[str]:

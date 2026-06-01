@@ -8,14 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:
-    """Parse an array type string into base type and size.
-
-    Args:
-        type_name: The array type string (e.g., "float[4]", "vec3[]")
-
-    Returns:
-        Tuple of (base_type, size) where size is None for dynamic arrays
-    """
+    """Parse an array type string into base type and size, returning None size for dynamic arrays."""
     if not type_name or "[" not in type_name:
         return type_name, None
 
@@ -38,16 +31,7 @@ def parse_array_type(type_name: str) -> Tuple[str, Optional[int]]:
 def format_array_type(
     base_type: str, size: Optional[int], lang_style: str = "glsl"
 ) -> str:
-    """Format an array type according to the target language style.
-
-    Args:
-        base_type: The base type of the array (e.g., "float", "vec3")
-        size: The size of the array, or None for dynamic arrays
-        lang_style: The language style ('glsl', 'hlsl', 'metal', 'spirv')
-
-    Returns:
-        The formatted array type string for the target language
-    """
+    """Format an array type for a target language style ('glsl', 'hlsl', 'metal', 'spirv')."""
     if lang_style == "hlsl":
         if size is None:
             return f"{base_type}[1024]"
@@ -132,15 +116,7 @@ def _struct_member_type_name(member, type_name_string) -> str:
 def detect_array_element_type(
     array_type: str, type_mapping: Dict[str, Any] = None
 ) -> str:
-    """Detect the element type of an array based on its type string.
-
-    Args:
-        array_type: The array type string
-        type_mapping: Optional mapping of types to use for lookups
-
-    Returns:
-        The detected element type string
-    """
+    """Return the element type of an array type string, optionally remapped."""
     base_type, _ = parse_array_type(array_type)
 
     if type_mapping and base_type in type_mapping:
@@ -150,14 +126,7 @@ def detect_array_element_type(
 
 
 def get_array_size_from_node(node) -> Optional[int]:
-    """Extract array size from an AST ArrayNode.
-
-    Args:
-        node: The ArrayNode to extract size from
-
-    Returns:
-        The array size as an integer, or None for dynamic arrays
-    """
+    """Return the integer array size from an AST ArrayNode, or None for dynamic arrays."""
     if not hasattr(node, "size"):
         return None
 

@@ -19,7 +19,6 @@ from crosstl.backend.Rust.RustParser import RustParser
 
 
 def parse_and_generate(code: str) -> str:
-    """Helper function to parse Rust code and generate CrossGL."""
     lexer = RustLexer(code)
     tokens = lexer.tokenize()
     parser = RustParser(tokens)
@@ -7559,7 +7558,6 @@ def test_math_functions_conversion():
 
 
 def test_error_handling():
-    """Test that the code generator handles edge cases gracefully"""
     edge_cases = [
         "fn empty() {}",
         "struct Empty {}",

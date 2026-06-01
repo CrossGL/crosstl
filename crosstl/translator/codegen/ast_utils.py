@@ -90,7 +90,6 @@ class ASTUtils:
 
     @staticmethod
     def _map_primitive_type(type_name: str, backend: str) -> str:
-        """Map primitive type names to backend-specific types."""
         type_mappings = {
             "generic": {
                 "void": "void",
@@ -181,7 +180,6 @@ class ASTUtils:
 
     @staticmethod
     def _map_vector_type(element_type: str, size: int, backend: str) -> str:
-        """Map vector types to backend-specific representations."""
         if backend == "metal":
             return f"{element_type}{size}"
         elif backend == "directx":
@@ -206,7 +204,6 @@ class ASTUtils:
 
     @staticmethod
     def _map_matrix_type(element_type: str, rows: int, cols: int, backend: str) -> str:
-        """Map matrix types to backend-specific representations."""
         if backend == "metal":
             return f"{element_type}{cols}x{rows}"
         elif backend == "directx":
@@ -227,7 +224,6 @@ class ASTUtils:
 
     @staticmethod
     def _map_pointer_type(pointee_type: str, is_mutable: bool, backend: str) -> str:
-        """Map pointer types to backend-specific representations."""
         if backend == "rust":
             return f"*{'mut' if is_mutable else 'const'} {pointee_type}"
         elif backend in ["cuda", "hip"]:
@@ -239,7 +235,6 @@ class ASTUtils:
     def _map_reference_type(
         referenced_type: str, is_mutable: bool, backend: str
     ) -> str:
-        """Map reference types to backend-specific representations."""
         if backend == "rust":
             return f"&{'mut ' if is_mutable else ''}{referenced_type}"
         else:
@@ -249,7 +244,6 @@ class ASTUtils:
     def _map_function_type(
         return_type: str, param_types: List[str], backend: str
     ) -> str:
-        """Map function types to backend-specific representations."""
         params = ", ".join(param_types)
         if backend == "rust":
             return f"fn({params}) -> {return_type}"

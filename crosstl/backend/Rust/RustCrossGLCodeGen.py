@@ -88,7 +88,6 @@ class RustToCrossGLConverter:
     )
 
     def __init__(self):
-        """Initialize Rust-to-CrossGL type and semantic mappings."""
         self.type_map = {
             # Rust primitive types to CrossGL
             "()": "void",
@@ -494,7 +493,6 @@ class RustToCrossGLConverter:
         self.local_callable_scopes = []
 
     def get_indent(self):
-        """Return whitespace for the current indentation level."""
         return "    " * self.indentation
 
     def visit(self, node):
@@ -523,7 +521,6 @@ class RustToCrossGLConverter:
         return self.generate_expression(node)
 
     def generate(self, ast):
-        """Generate complete CrossGL source from a parsed Rust AST."""
         self.type_aliases = {}
         self.imported_type_aliases = {}
         self.imported_module_aliases = {}

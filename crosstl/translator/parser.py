@@ -242,7 +242,6 @@ class Parser:
     """Recursive-descent parser for CrossGL Universal IR tokens."""
 
     def __init__(self, tokens):
-        """Initialize parser state from a token sequence."""
         self.tokens = tokens
         self.pos = 0
         self.current_token = (
@@ -250,7 +249,6 @@ class Parser:
         )
 
     def skip_comments(self):
-        """Consume single-line and multi-line comment tokens."""
         while self.current_token[0] in ["COMMENT_SINGLE", "COMMENT_MULTI"]:
             self.eat(self.current_token[0])
 
@@ -268,14 +266,12 @@ class Parser:
             )
 
     def peek(self, offset=1):
-        """Return a lookahead token without advancing the parser."""
         peek_pos = self.pos + offset
         if peek_pos < len(self.tokens):
             return self.tokens[peek_pos]
         return ("EOF", None)
 
     def finalize_shader(self, shader):
-        """Run final validation hooks before returning a shader AST."""
         return validate_shader_cbuffers(shader)
 
     def parse(self):
@@ -748,7 +744,6 @@ class Parser:
         return ImportNode(path=path, alias=alias, items=items)
 
     def parse_import_path(self, allow_string=True):
-        """Parse a module or file path in import declarations."""
         if allow_string and self.current_token[0] == "STRING_LITERAL":
             value = self.current_token[1]
             self.eat("STRING_LITERAL")
@@ -1129,7 +1124,6 @@ class Parser:
         return PreprocessorNode("precision", content)
 
     def parse_attributed_cbuffer(self, leading_attributes=None):
-        """Parse attributes that appear before a cbuffer declaration."""
         attributes = list(leading_attributes or [])
         attributes.extend(self.parse_attribute_annotations())
         return self.parse_cbuffer_as_struct(attributes)
@@ -1152,7 +1146,6 @@ class Parser:
             self.current_token = saved_token
 
     def parse_attributed_struct(self):
-        """Parse attributes that appear before a struct declaration."""
         attributes = self.parse_attribute_annotations()
         return self.parse_struct(attributes)
 

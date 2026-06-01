@@ -460,7 +460,6 @@ class CudaLexer:
         max_expansion_depth: int = 64,
         file_path: Optional[str] = None,
     ):
-        """Initialize the lexer and optionally preprocess CUDA source text."""
         if preprocess:
             preprocessor = CudaPreprocessor(
                 include_paths=include_paths,
@@ -475,11 +474,9 @@ class CudaLexer:
         self.reserved_keywords = KEYWORDS
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        """Tokenize the input code and return list of tokens"""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        """Generator function that yields tokens one at a time"""
         pos = 0
         while pos < self._length:
             token = self._next_token(pos)
@@ -500,7 +497,6 @@ class CudaLexer:
         yield ("EOF", "")
 
     def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        """Find the next token starting at the given position"""
         for token_type, pattern in self._token_patterns:
             match = pattern.match(self.code, pos)
             if match:
@@ -516,8 +512,7 @@ class CudaLexer:
         defines: Optional[Dict[str, str]] = None,
         strict_preprocessor: bool = False,
         max_expansion_depth: int = 64,
-    ) -> "CudaLexer":
-        """Create a lexer instance from a file"""
+    ):
         with open(filepath, encoding="utf-8") as f:
             return cls(
                 f.read(),
@@ -535,13 +530,11 @@ class Lexer:
     """Compatibility wrapper around CudaLexer"""
 
     def __init__(self, input_str):
-        """Tokenize ``input_str`` and prepare cursor-based access."""
         self.lexer = CudaLexer(input_str)
         self.tokens = self.lexer.tokenize()
         self.current_pos = 0
 
     def next(self):
-        """Return the next token and advance the cursor."""
         if self.current_pos < len(self.tokens):
             token = self.tokens[self.current_pos]
             self.current_pos += 1
@@ -549,7 +542,6 @@ class Lexer:
         return ("EOF", "")
 
     def peek(self):
-        """Return the next token without advancing the cursor."""
         if self.current_pos < len(self.tokens):
             return self.tokens[self.current_pos]
         return ("EOF", "")

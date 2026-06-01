@@ -1,14 +1,3 @@
-<!--
-Hey there! Thanks for opening a PR.
-
-This file is a template for pull requests.
-The comments (in <!-- -\->) are only visible in the raw markdown,
-
-so they won't show up in the final PR description.
-
-Fill out each section briefly. Keep it simple.
--->
-
 ### Summary
 
 <!--

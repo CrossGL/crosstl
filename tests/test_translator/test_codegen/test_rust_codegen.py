@@ -60,7 +60,6 @@ from crosstl.translator.parser import Parser
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = Lexer(code)
     return lexer.get_tokens()
 
@@ -23322,12 +23321,7 @@ def test_rust_type_conversions():
         pytest.fail("Rust type conversions not implemented")
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
-    """Ensure an empty vertex stage still generates valid code with the shader attribute."""
     code = """
     shader EmptyVertex {
         vertex {
@@ -23345,7 +23339,6 @@ def test_rust_invalid_shader_empty_vertex_stage(tmp_path):
 
 
 def test_rust_invalid_shader_no_stages(tmp_path):
-    """A shader with no stages should still produce valid header code without crashing."""
     code = """
     shader NoStages {
         struct Data {
@@ -23364,7 +23357,6 @@ def test_rust_invalid_shader_no_stages(tmp_path):
 
 
 def test_rust_invalid_shader_missing_return_type(tmp_path):
-    """Vertex stage with void return type should still produce valid Rust code."""
     code = """
     shader VoidVertex {
         vertex {
@@ -23383,12 +23375,7 @@ def test_rust_invalid_shader_missing_return_type(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_cbuffer_basic_uniform_buffer():
-    """Verify cbuffer with multiple typed fields generates correct Rust struct and statics."""
     code = """
     cbuffer SceneData {
         mat4 viewProjection;
@@ -23410,7 +23397,6 @@ def test_rust_cbuffer_basic_uniform_buffer():
 
 
 def test_rust_cbuffer_with_arrays():
-    """Verify cbuffer with fixed-size arrays generates proper Rust array fields."""
     code = """
     cbuffer LightBuffer {
         vec4 lightPositions[8];
@@ -23430,7 +23416,6 @@ def test_rust_cbuffer_with_arrays():
 
 
 def test_rust_cbuffer_multiple_buffers():
-    """Multiple cbuffers should each produce their own struct."""
     code = """
     cbuffer PerFrame {
         float time;
@@ -23454,7 +23439,6 @@ def test_rust_cbuffer_multiple_buffers():
 
 
 def test_rust_cbuffer_used_in_vertex_stage():
-    """Verify cbuffer values are accessible in shader stage code."""
     code = """
     shader CbufferUsage {
         cbuffer Transform {
@@ -23485,12 +23469,7 @@ def test_rust_cbuffer_used_in_vertex_stage():
     assert "pub fn main(" in generated_code
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_struct_member_semantic_position():
-    """Struct members with POSITION semantic should produce a comment annotation."""
     code = """
     shader main {
         struct VSInput {
@@ -23518,7 +23497,6 @@ def test_rust_struct_member_semantic_position():
 
 
 def test_rust_struct_member_semantic_color():
-    """Struct members with COLOR semantic should generate mapped annotation."""
     code = """
     shader main {
         struct VSOutput {
@@ -23546,7 +23524,6 @@ def test_rust_struct_member_semantic_color():
 
 
 def test_rust_struct_member_multiple_texcoords():
-    """Struct with multiple TEXCOORD slots generates distinct mapped semantics."""
     code = """
     shader main {
         struct VertexInput {
@@ -23572,12 +23549,7 @@ def test_rust_struct_member_multiple_texcoords():
     assert "// texcoord(2)" in generated_code
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_stage_parameter_input_struct():
-    """Stage function receiving struct parameter should handle it correctly."""
     code = """
     shader main {
         struct VSInput {
@@ -23608,7 +23580,6 @@ def test_rust_stage_parameter_input_struct():
 
 
 def test_rust_stage_parameter_output_semantic():
-    """Fragment stage with output semantic annotation should use fragment_shader attribute."""
     code = """
     shader main {
         struct FSInput {
@@ -23631,7 +23602,6 @@ def test_rust_stage_parameter_output_semantic():
 
 
 def test_rust_stage_parameter_multiple_params():
-    """Stage function with multiple parameters should pass them all through."""
     code = """
     shader main {
         struct VSInput {
@@ -23653,12 +23623,7 @@ def test_rust_stage_parameter_multiple_params():
     assert "-> Vec4<f32>" in generated_code
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_fragment_stage_basic():
-    """Basic fragment stage generates fragment_shader attribute and correct signature."""
     code = """
     shader FragShader {
         fragment {
@@ -23678,7 +23643,6 @@ def test_rust_fragment_stage_basic():
 
 
 def test_rust_fragment_stage_with_texture_sampling():
-    """Fragment stage using texture sampling maps to Rust sample function."""
     code = """
     shader TexturedFrag {
         sampler2D diffuseTexture;
@@ -23702,7 +23666,6 @@ def test_rust_fragment_stage_with_texture_sampling():
 
 
 def test_rust_fragment_stage_with_discard():
-    """Fragment stage with conditional discard generates Rust discard equivalent."""
     code = """
     shader AlphaTest {
         struct FSInput {
@@ -23728,7 +23691,6 @@ def test_rust_fragment_stage_with_discard():
 
 
 def test_rust_fragment_stage_multiple_render_targets():
-    """Fragment stage can output multiple render targets via struct."""
     code = """
     shader MRT {
         struct GBuffer {
@@ -23759,12 +23721,7 @@ def test_rust_fragment_stage_multiple_render_targets():
     assert "// target(2)" in generated_code
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_vertex_stage_basic():
-    """Basic vertex stage generates vertex_shader attribute."""
     code = """
     shader VertShader {
         struct VSInput {
@@ -23786,7 +23743,6 @@ def test_rust_vertex_stage_basic():
 
 
 def test_rust_vertex_stage_with_transform():
-    """Vertex stage with matrix transform produces correct codegen."""
     code = """
     shader TransformVert {
         cbuffer Transforms {
@@ -23821,7 +23777,6 @@ def test_rust_vertex_stage_with_transform():
 
 
 def test_rust_vertex_stage_passthrough():
-    """Vertex stage that passes data directly to fragment outputs."""
     code = """
     shader Passthrough {
         struct VSInput {
@@ -23858,7 +23813,6 @@ def test_rust_vertex_stage_passthrough():
 
 
 def test_rust_vertex_and_fragment_pipeline():
-    """Full vertex+fragment pipeline generates both stage attributes and correct structs."""
     code = """
     shader FullPipeline {
         cbuffer Material {
@@ -23906,12 +23860,7 @@ def test_rust_vertex_and_fragment_pipeline():
     assert "// Constant Buffers" in generated_code
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_cbuffer_repr_c_and_derive():
-    """cbuffer declarations must produce #[repr(C)] and derive traits on the struct."""
     code = """
     cbuffer CameraData {
         mat4 view;
@@ -23938,7 +23887,6 @@ def test_rust_cbuffer_repr_c_and_derive():
 
 
 def test_rust_struct_member_semantics_tangent_binormal():
-    """Struct members with TANGENT and BINORMAL semantics produce mapped comments."""
     code = """
     shader main {
         struct VertexData {
@@ -23970,7 +23918,6 @@ def test_rust_struct_member_semantics_tangent_binormal():
 
 
 def test_rust_multiple_cbuffers_in_shader():
-    """Multiple cbuffers inside a single shader produce separate structs."""
     code = """
     shader MultiBuffer {
         cbuffer PerFrame {
@@ -24015,7 +23962,6 @@ def test_rust_multiple_cbuffers_in_shader():
 
 
 def test_rust_structured_buffer_type_mapping():
-    """StructuredBuffer and RWStructuredBuffer types map to correct Rust aliases."""
     code = """
     shader ComputeShader {
         struct Particle {
@@ -24045,7 +23991,6 @@ def test_rust_structured_buffer_type_mapping():
 
 
 def test_rust_struct_semantic_fragment_outputs():
-    """Fragment output struct with gl_FragColor semantics produces target annotations."""
     code = """
     shader main {
         struct GBufferOutput {
@@ -24081,7 +24026,6 @@ def test_rust_struct_semantic_fragment_outputs():
 
 
 def test_rust_struct_semantics_validate_builtin_types_and_stage_context():
-    """Rust validates builtin output semantics on returned structs."""
     valid_code = """
     shader StructSemantics {
         struct FSOutput {
@@ -24150,7 +24094,6 @@ def test_rust_struct_semantics_validate_builtin_types_and_stage_context():
 
 
 def test_rust_return_semantics_validate_builtin_types_and_stage_context():
-    """Rust validates builtin direct return semantics before emitting code."""
     invalid_depth_type = """
     shader BadDepthType {
         fragment {
@@ -24189,7 +24132,6 @@ def test_rust_return_semantics_validate_builtin_types_and_stage_context():
 
 
 def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
-    """Rust direct return semantics are preserved as deterministic comments."""
     color_code = """
     shader RustDirectReturnSemantics {
         vertex {
@@ -24232,12 +24174,7 @@ def test_rust_direct_return_semantics_emit_metadata_and_compile(tmp_path):
     assert_generated_rust_smoke_compiles(depth_generated_code, tmp_path)
 
 
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-
-
 def test_rust_vertex_stage_position_output(tmp_path):
-    """Vertex shader produces correct Rust struct with position output."""
     code = """
     shader VertexPosition {
         struct VSOutput {
@@ -24265,7 +24202,6 @@ def test_rust_vertex_stage_position_output(tmp_path):
 
 
 def test_rust_fragment_stage_color_output(tmp_path):
-    """Fragment shader produces correct Rust struct with color output."""
     code = """
     shader FragmentColor {
         struct PSOutput {
@@ -24337,7 +24273,6 @@ def test_rust_stage_io_semantics_sv_position_sv_target(tmp_path):
 
 
 def test_rust_vertex_multiple_attributes(tmp_path):
-    """Multiple vertex attributes (position, normal, texcoord) are handled."""
     code = """
     shader MultiAttrib {
         struct VertexIn {
@@ -24383,7 +24318,6 @@ def test_rust_vertex_multiple_attributes(tmp_path):
 
 
 def test_rust_fragment_stage_with_texture_sampling(tmp_path):
-    """Fragment shader with texture sampling produces correct Rust."""
     code = """
     shader TexturedFragment {
         sampler2D diffuseTex;
@@ -24410,13 +24344,10 @@ def test_rust_fragment_stage_with_texture_sampling(tmp_path):
     assert "-> Vec4<f32>" in generated_code
 
 
-# ---------------------------------------------------------------------------
 # Invalid shader shape validation and stage parameter semantics
-# ---------------------------------------------------------------------------
 
 
 def test_rust_invalid_shader_completely_empty(tmp_path):
-    """A shader with absolutely no content emits the standard header and compiles."""
     code = """
     shader Empty {
     }
@@ -24435,7 +24366,6 @@ def test_rust_invalid_shader_completely_empty(tmp_path):
 
 
 def test_rust_invalid_shader_vertex_stage_no_body(tmp_path):
-    """Vertex stage with empty main body still produces shader attribute and compiles."""
     code = """
     shader NoBody {
         vertex {
@@ -24455,7 +24385,6 @@ def test_rust_invalid_shader_vertex_stage_no_body(tmp_path):
 
 
 def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
-    """Shader with only structs and no stages produces struct code but no shader attributes."""
     code = """
     shader StructOnly {
         struct Vertex {
@@ -25084,7 +25013,6 @@ def test_rust_ray_stage_parameter_semantics_validate_builtin_stage_type_and_dupl
 
 
 def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
-    """All standard semantics (POSITION, NORMAL, TANGENT, TEXCOORD0-3, COLOR0-1) map correctly."""
     code = """
     shader SemanticsFull {
         struct FullInput {
@@ -25136,7 +25064,6 @@ def test_rust_stage_parameter_semantics_all_mappings(tmp_path):
 
 
 def test_rust_stage_parameter_builtin_semantics_emit_metadata_and_compile(tmp_path):
-    """Builtin stage parameter semantics are preserved as Rust comments."""
     code = """
     shader RustBuiltinStageParameters {
         vertex {
@@ -25489,7 +25416,6 @@ def test_rust_stage_parameter_semantics_validate_builtin_stage_type_and_duplicat
 
 
 def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
-    """Multiple parameters with bindings produce correct Rust function signature."""
     code = """
     shader MultiParam {
         struct VSInput {
@@ -25535,7 +25461,6 @@ def test_rust_stage_parameter_multiple_bindings_attribute_syntax(tmp_path):
 
 
 def test_rust_stage_parameter_generate_param_attributes_unit():
-    """Unit test for generate_param_attributes covering all semantic branches."""
     codegen = RustCodeGen()
 
     class MockParam:

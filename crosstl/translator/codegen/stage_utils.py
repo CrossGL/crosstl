@@ -171,21 +171,18 @@ def stage_layout_entry_value(stage, name, direction=None, default=None):
 
 
 def normalize_layout_direction(direction):
-    """Normalize a layout direction token."""
     if direction is None:
         return None
     return str(direction).split(".")[-1].lower()
 
 
 def normalize_layout_entry_name(name):
-    """Normalize a layout entry name for lookup."""
     if name is None:
         return None
     return str(name).lower()
 
 
 def layout_argument_value(argument):
-    """Return a simple value from a layout argument expression."""
     op = getattr(argument, "op", None)
     if op is not None and hasattr(argument, "left") and hasattr(argument, "right"):
         left = layout_argument_value(argument.left)
@@ -359,7 +356,6 @@ def compute_local_size(execution_config=None):
 
 
 def compute_local_size_value(value):
-    """Return a string representation for a local-size dimension value."""
     if hasattr(value, "value"):
         return str(value.value)
     return str(value)

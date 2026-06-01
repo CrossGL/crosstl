@@ -2045,7 +2045,6 @@ class VulkanSPIRVCodeGen:
         """Call a function with arguments."""
         function_reference = self.resolve_function_reference(function_name)
         if function_reference is None:
-            # Handle built-in function
             return self.call_builtin_function(function_name, args)
 
         function_id, (return_type, param_types) = function_reference
@@ -8091,8 +8090,6 @@ class VulkanSPIRVCodeGen:
             component_type_name, component_count = vector_info
             component_type = self.register_primitive_type(component_type_name)
             vector_type = self.register_vector_type(component_type, component_count)
-
-            # If no arguments are provided, construct a default vector
             if not args:
                 if component_type_name == "bool":
                     zero_value = False
@@ -8108,7 +8105,6 @@ class VulkanSPIRVCodeGen:
                 component_zero = self.register_constant(zero_value, component_type)
                 component_one = self.register_constant(one_value, component_type)
 
-                # Create default vector components
                 default_args = [component_zero] * component_count
                 if component_count > 0:
                     default_args[0] = component_one
@@ -8139,13 +8135,10 @@ class VulkanSPIRVCodeGen:
             vector_type = self.register_vector_type(component_type, rows)
             matrix_type = self.register_matrix_type(vector_type, cols)
 
-            # If no arguments provided, create identity matrix
             if not args:
-                # Create identity matrix: 1's on diagonal, 0's elsewhere
                 zero_value = self.register_constant(0.0, component_type)
                 one_value = self.register_constant(1.0, component_type)
 
-                # Create column vectors
                 col_vectors = []
                 for col in range(cols):
                     col_components = []
@@ -8184,7 +8177,6 @@ class VulkanSPIRVCodeGen:
             component_type = self.scalar_or_vector_component_type(args[0].type)
             result_type = self.register_primitive_type(component_type)
 
-            # Generate a direct OpDot instruction
             id_value = self.get_id()
             self.emit(
                 f"%{id_value} = OpDot %{result_type.id} %{args[0].id} %{args[1].id}"
@@ -8201,7 +8193,6 @@ class VulkanSPIRVCodeGen:
 
         # GLSL standard library functions
         else:
-            # Determine result type based on the function name
             float_type = self.primitive_types["float"]
             glsl_std450_map = {
                 "sin": "Sin",
@@ -8306,10 +8297,8 @@ class VulkanSPIRVCodeGen:
                 self.emit(warning)
                 return self.default_value_for_type(fallback_type)
 
-            # Default to float if we can't determine or no args provided
             result_type = float_type.type
 
-            # Try to infer result type from arguments if available
             if args:
                 if function_name in [
                     "sin",
@@ -10475,10 +10464,8 @@ class VulkanSPIRVCodeGen:
             return self.register_resource_type(type_str)
 
         if type_str in self.struct_types:
-            # Struct type (reference to existing struct)
             return self.struct_types[type_str]
         else:
-            # If type is unknown, return a default float type
             self.emit(f"; WARNING: Unknown type {type_str}, using float as default")
             return self.register_primitive_type("float")
 
@@ -16826,7 +16813,6 @@ class VulkanSPIRVCodeGen:
             if self.emit_invalid_vector_swizzle_warning(base_pointer, member_name):
                 return
 
-            # Default handling if member not found
             struct_type = self.struct_type_name_from_pointer(base_pointer)
             self.emit(
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
@@ -18112,7 +18098,6 @@ class VulkanSPIRVCodeGen:
                         pass
 
                 self.emit(f"; WARNING: Unknown variable {expr}")
-                # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -18159,14 +18144,12 @@ class VulkanSPIRVCodeGen:
                     return self.get_variable_value(builtin)
 
                 self.emit(f"; WARNING: Unknown variable {expr.name}")
-                # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
         elif isinstance(expr, ArrayLiteralNode):
             return self.process_array_literal(expr)
 
-        # Array access
         elif isinstance(expr, ArrayAccessNode):
             index = self.process_expression(expr.index)
 
@@ -18193,11 +18176,9 @@ class VulkanSPIRVCodeGen:
             right = self.process_expression(expr.right)
 
             if left is None or right is None:
-                # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
-            # Determine result type
             result_type = left.type  # Default to left operand's type
 
             return self.binary_operation(
@@ -18210,7 +18191,6 @@ class VulkanSPIRVCodeGen:
 
             operand = self.process_expression(expr.operand)
             if operand is None:
-                # Return a default value instead of None
                 float_type = self.register_primitive_type("float")
                 return self.register_constant(0.0, float_type)
 
@@ -18326,7 +18306,6 @@ class VulkanSPIRVCodeGen:
                     inline_storage_buffer_function, expr.args
                 )
 
-            # Evaluate arguments
             args = []
             has_errors = False
             mesh_output_arg_indices = (
@@ -18341,18 +18320,15 @@ class VulkanSPIRVCodeGen:
                         f"; WARNING: Failed to evaluate argument for {callee_name or callee_expr}"
                     )
                     has_errors = True
-                    # Create a default argument
                     float_type = self.register_primitive_type("float")
                     arg_value = self.register_constant(0.0, float_type)
                 args.append(arg_value)
 
             if has_errors and callee_name == "vec2":
-                # Special handling for vec2 constructor with errors
                 float_type = self.register_primitive_type("float")
                 vector_type = self.register_vector_type(float_type, 2)
                 id_value = self.get_id()
 
-                # Create default values if needed
                 while len(args) < 2:
                     args.append(self.register_constant(0.0, float_type))
 
@@ -18425,7 +18401,6 @@ class VulkanSPIRVCodeGen:
                 )
                 return None
 
-            # Default handling if member not found
             self.emit(
                 f"; WARNING: Could not find member {member_name} in {struct_type}"
             )
@@ -18985,24 +18960,20 @@ class VulkanSPIRVCodeGen:
 
         array_type = array_id.type.base_type
 
-        # Check if it's a known array type in our registry
         for (element_type_id, _), arr_type_id in self.array_types.items():
             if arr_type_id.type.base_type == array_type:
                 return self.find_registered_type_by_id(element_type_id)
 
-        # If it's a pointer type, extract the base type
         if array_type.startswith("ptr_"):
             base_type = array_type.replace("ptr_", "", 1)
             for (element_type_id, _), arr_type_id in self.array_types.items():
                 if arr_type_id.type.base_type == base_type:
                     return self.find_registered_type_by_id(element_type_id)
 
-            # Look for array type pattern in the base type
             match = re.search(r"array_([^_]+)_", base_type)
             if match:
                 element_type_name = match.group(1)
 
-                # Look up the element type ID
                 for type_dict in [
                     self.primitive_types,
                     self.vector_types,
@@ -19019,11 +18990,9 @@ class VulkanSPIRVCodeGen:
             self.matrix_types,
         ]:
             for type_id in type_dict.values():
-                # Check if type name is a substring of the array type
                 if type_id.type.base_type in array_type:
                     return type_id
 
-        # Default to float if we can't determine the element type
         return self.primitive_types["float"]
 
     def get_function_qualifier(self, func) -> Optional[str]:

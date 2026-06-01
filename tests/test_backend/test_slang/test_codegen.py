@@ -18,13 +18,11 @@ def generate_code(ast_node):
 
 
 def tokenize_code(code: str) -> List:
-    """Helper function to tokenize code."""
     lexer = SlangLexer(code)
     return lexer.tokenize()
 
 
 def parse_code(tokens: List):
-    """Helper function to parse tokens into an AST."""
     parser = SlangParser(tokens)
     return parser.parse()
 

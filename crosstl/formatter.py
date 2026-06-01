@@ -30,7 +30,6 @@ class CodeFormatter:
     """Formats shader code using appropriate external tools"""
 
     def __init__(self, clang_format_path=None, spirv_tools_path=None):
-        """Discover external formatter tools or use explicit tool paths."""
         self.clang_format_path = clang_format_path or shutil.which("clang-format")
         self.spirv_as_path = spirv_tools_path or shutil.which("spirv-as")
         self.spirv_dis_path = spirv_tools_path or shutil.which("spirv-dis")
@@ -49,7 +48,6 @@ class CodeFormatter:
             )
 
     def detect_language(self, file_path):
-        """Detect shader language from file extension"""
         ext = Path(file_path).suffix.lower()
 
         if ext in [".hlsl", ".fx"]:
@@ -72,7 +70,6 @@ class CodeFormatter:
             return ShaderLanguage.UNKNOWN
 
     def format_code(self, code, language=None, file_path=None):
-        """Format source text for a shader language, falling back to input text."""
         if language is None and file_path:
             language = self.detect_language(file_path)
 
@@ -99,7 +96,6 @@ class CodeFormatter:
             return code
 
     def _format_with_clang(self, code, language):
-        """Format C-like shader code with clang-format."""
         if not self.has_clang:
             logger.warning("clang-format not available for code formatting")
             return code
@@ -155,7 +151,6 @@ class CodeFormatter:
                     pass
 
     def _format_spirv(self, code):
-        """Format SPIR-V assembly code using spirv-as and spirv-dis."""
         if not self.has_spirv_tools:
             logger.warning("SPIRV-Tools not available for SPIR-V formatting")
             return code
@@ -226,7 +221,6 @@ class CodeFormatter:
         return "\n".join(result)
 
     def validate_spirv(self, code):
-        """Validate SPIR-V code."""
         if not self.has_spirv_tools:
             logger.warning("SPIRV-Tools not available for validation")
             return False, "SPIRV-Tools not available"

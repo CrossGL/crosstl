@@ -1,9 +1,7 @@
 Backend Guides
 ==============
 
-These pages document the product-level behavior of individual translation
-backends. Each backend page is intentionally isolated so multiple contributors
-can expand different products or targets without editing the same file.
+These pages document the behavior of individual translation backends.
 
 .. toctree::
    :maxdepth: 1

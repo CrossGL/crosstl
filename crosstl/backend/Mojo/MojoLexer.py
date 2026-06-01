@@ -134,16 +134,13 @@ class MojoLexer:
     """Tokenize Mojo source for the Mojo backend parser."""
 
     def __init__(self, code: str):
-        """Initialize the lexer with raw Mojo source text."""
         self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
         self.code = code
 
     def tokenize(self) -> List[Tuple[str, str]]:
-        """Return the full token stream as ``(token_type, text)`` tuples."""
         return list(self.token_generator())
 
     def token_generator(self) -> Iterator[Tuple[str, str]]:
-        """Yield Mojo tokens, including layout tokens for indentation blocks."""
         indent_stack = [0]
         layout_code = self._remove_multiline_comments(self.code)
 

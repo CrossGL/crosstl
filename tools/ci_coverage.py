@@ -192,7 +192,7 @@ SUPPORT_MATRIX_REQUIRED_POLICIES = {
     "docs_probe_on_schedule": "github.event_name == 'schedule'",
     "docs_probe_on_dispatch": "github.event_name == 'workflow_dispatch'",
     "docs_probe_command": (
-        "python tools/support_matrix.py docs --output "
+        "python tools/support_signals.py docs --output "
         "support/generated/backend-docs-report.json"
     ),
     "docs_probe_artifact": "backend-docs-report",

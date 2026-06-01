@@ -16,19 +16,16 @@ from crosstl.translator.parser import Parser as CrossGLParser
 
 
 def tokenize_code(code: str) -> List:
-    """Tokenize Metal code."""
     lexer = MetalLexer(code)
     return lexer.tokenize()
 
 
 def parse_code(tokens: List):
-    """Parse tokens into an AST."""
     parser = MetalParser(tokens)
     return parser.parse()
 
 
 def generate_code(ast_node):
-    """Generate CrossGL code from an AST."""
     codegen = MetalToCrossGLConverter()
     return codegen.generate(ast_node)
 

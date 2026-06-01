@@ -9,14 +9,7 @@ from .source_registry import SOURCE_REGISTRY, SourceSpec, register_default_sourc
 
 
 def parse(shader_code):
-    """Parse shader code and return the AST.
-
-    Args:
-        shader_code (str): The shader code to parse
-
-    Returns:
-        The abstract syntax tree
-    """
+    """Parse shader code and return the AST."""
     lexer = Lexer(shader_code)
     tokens = lexer.tokens
     parser = Parser(tokens)
@@ -34,7 +27,6 @@ def register_backend_spec(spec: BackendSpec, *, overwrite: bool = False) -> Back
 
 
 def get_backend_spec(name: str):
-    """Lookup a backend codegen spec."""
     return get_backend(name)
 
 
